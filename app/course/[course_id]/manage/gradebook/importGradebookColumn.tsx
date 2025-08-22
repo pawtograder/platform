@@ -285,8 +285,13 @@ export default function ImportGradebookColumns() {
                                     .getRosterWithUserInfo()
                                     .data.find((r) => r.users.email === identifier)?.private_profile_id ?? null;
                               } else if (idType === "sid") {
-                                const sid = Number(identifier ?? 0);
-                                studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                const trimmedIdentifier = (identifier ?? "").trim();
+                                const sid = parseInt(trimmedIdentifier, 10);
+                                if (isNaN(sid)) {
+                                  studentPrivateProfileId = null;
+                                } else {
+                                  studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                }
                               }
                               let oldValue = null;
                               if (existingCol && studentPrivateProfileId) {
@@ -323,8 +328,16 @@ export default function ImportGradebookColumns() {
                   <>
                     {/* Error reporting */}
                     {(() => {
+                      // Helper function to normalize identifiers
+                      const normalizeIdentifier = (id: string, isEmail: boolean): string => {
+                        const trimmed = id.trim();
+                        return isEmail && trimmed.includes("@") ? trimmed.toLowerCase() : trimmed;
+                      };
+
                       let importIdentifiers = previewData.previewCols[0]?.students.map((s) => s.identifier) || [];
-                      importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
+                      importIdentifiers = importIdentifiers
+                        .filter((id): id is string => !!id)
+                        .map((id) => normalizeIdentifier(id, previewData.idType === "email"));
 
                       // Precompute roster data once to avoid repeated lookups
                       const rosterData = courseController.getRosterWithUserInfo().data;
@@ -342,13 +355,13 @@ export default function ImportGradebookColumns() {
                         if (!rosterEntry) return;
 
                         if (previewData.idType === "email" && rosterEntry.users.email) {
-                          const email = String(rosterEntry.users.email).trim();
-                          rosterIdentifiers.add(email);
-                          rosterEmailToId.set(email, s.id);
+                          const normalizedEmail = normalizeIdentifier(String(rosterEntry.users.email), true);
+                          rosterIdentifiers.add(normalizedEmail);
+                          rosterEmailToId.set(normalizedEmail, s.id);
                         } else if (previewData.idType === "sid" && rosterEntry.users.sis_user_id != null) {
-                          const sid = String(rosterEntry.users.sis_user_id).trim();
-                          rosterIdentifiers.add(sid);
-                          rosterSidToId.set(sid, s.id);
+                          const normalizedSid = normalizeIdentifier(String(rosterEntry.users.sis_user_id), false);
+                          rosterIdentifiers.add(normalizedSid);
+                          rosterSidToId.set(normalizedSid, s.id);
                         }
                       });
 
@@ -668,7 +681,12 @@ export default function ImportGradebookColumns() {
                                       .getRosterWithUserInfo()
                                       .data.some((r) => r.users.email === s.identifier);
                                   } else if (previewData.idType === "sid") {
-                                    return courseController.getProfileBySisId(Number(s.identifier))?.id !== null;
+                                    const trimmedIdentifier = (s.identifier ?? "").trim();
+                                    const sid = parseInt(trimmedIdentifier, 10);
+                                    if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
+                                      return false;
+                                    }
+                                    return courseController.getProfileBySisId(sid)?.id != null;
                                   }
                                   return false;
                                 });
@@ -682,8 +700,13 @@ export default function ImportGradebookColumns() {
                                           .getRosterWithUserInfo()
                                           .data.find((r) => r.users.email === s.identifier)?.private_profile_id ?? null;
                                     } else if (previewData.idType === "sid") {
-                                      const sid = Number(s.identifier ?? 0);
-                                      studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                      const trimmedIdentifier = (s.identifier ?? "").trim();
+                                      const sid = parseInt(trimmedIdentifier, 10);
+                                      if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
+                                        studentPrivateProfileId = null;
+                                      } else {
+                                        studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                      }
                                     }
                                     if (!studentPrivateProfileId) return null;
                                     // Find the gradebook_column_students row for this student/column

@@ -37,6 +37,8 @@ DECLARE
     v_public_profile_id uuid;
     v_private_profile_id uuid;
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_created_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -131,6 +133,8 @@ CREATE OR REPLACE FUNCTION admin_update_class(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_updated_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -164,6 +168,8 @@ CREATE OR REPLACE FUNCTION admin_delete_class(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_deleted_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -198,6 +204,8 @@ RETURNS TABLE (
     archived boolean
 ) AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -246,6 +254,8 @@ RETURNS bigint AS $$
 DECLARE
     v_section_id bigint;
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_created_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -322,6 +332,8 @@ RETURNS bigint AS $$
 DECLARE
     v_section_id bigint;
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_created_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -396,6 +408,8 @@ CREATE OR REPLACE FUNCTION admin_update_class_section(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_updated_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -424,6 +438,8 @@ CREATE OR REPLACE FUNCTION admin_update_lab_section(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_updated_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -451,6 +467,8 @@ CREATE OR REPLACE FUNCTION admin_delete_class_section(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_deleted_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -470,6 +488,8 @@ CREATE OR REPLACE FUNCTION admin_delete_lab_section(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_deleted_by) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -497,6 +517,8 @@ RETURNS TABLE (
     member_count bigint
 ) AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -932,6 +954,8 @@ CREATE OR REPLACE FUNCTION admin_set_user_role_disabled(
 )
 RETURNS boolean AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_admin_user_id) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -1083,6 +1107,8 @@ ALTER FUNCTION "public"."authorizeforinstructororgraderofstudent"("_user_id" uui
 CREATE OR REPLACE FUNCTION handle_user_sis_id_update()
 RETURNS TRIGGER AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Only proceed if sis_user_id was just set (was NULL, now has value)
     IF OLD.sis_user_id IS NULL AND NEW.sis_user_id IS NOT NULL THEN
         -- Insert new enrollments for classes where user has no existing role
@@ -1108,7 +1134,7 @@ BEGIN
             i.class_section_id,
             i.lab_section_id,
             false,  -- Start as active user
-            CASE WHEN NEW.sis_user_id ~ '^[0-9]+$' THEN NEW.sis_user_id::numeric ELSE NULL END  -- Store SIS ID as canvas_id for sync tracking
+            NEW.sis_user_id::numeric  -- Store SIS ID as canvas_id for sync tracking
         FROM public.invitations i
         WHERE i.sis_user_id = NEW.sis_user_id 
           AND i.status = 'pending'
@@ -1130,7 +1156,7 @@ BEGIN
             class_section_id = i.class_section_id,
             lab_section_id = i.lab_section_id,
             disabled = false,  -- Ensure reactivated if was disabled
-            canvas_id = CASE WHEN NEW.sis_user_id ~ '^[0-9]+$' THEN NEW.sis_user_id::numeric ELSE NULL END  -- Update sync tracking ID
+            canvas_id = NEW.sis_user_id::numeric  -- Update sync tracking ID
         FROM public.invitations i
         WHERE user_roles.user_id = NEW.user_id 
           AND user_roles.class_id = i.class_id
@@ -1167,6 +1193,8 @@ RETURNS TABLE (
     profile_name text
 ) AS $$
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -1203,6 +1231,8 @@ RETURNS integer AS $$
 DECLARE
     v_updated_count integer;
 BEGIN
+    SET LOCAL search_path = pg_catalog, public;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin(p_admin_user_id) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';

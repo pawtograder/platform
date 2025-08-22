@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Label } from "@/components/ui/label";
 import { Select } from "chakra-react-select";
 
@@ -21,7 +21,7 @@ export function TermSelector({ value, onChange, label = "Term", required = false
   const [selectedTerm, setSelectedTerm] = useState<TermOption | null>(null);
 
   // Generate all term options (past 5 years + current year + next year, with all semesters)
-  const termOptions: TermOption[] = (() => {
+  const termOptions: TermOption[] = useMemo(() => {
     const currentYear = new Date().getFullYear();
     const options: TermOption[] = [];
 
@@ -36,7 +36,7 @@ export function TermSelector({ value, onChange, label = "Term", required = false
     }
 
     return options;
-  })();
+  }, []);
 
   // Set the selected term when value changes
   useEffect(() => {
@@ -51,12 +51,15 @@ export function TermSelector({ value, onChange, label = "Term", required = false
     }
   }, [value, termOptions]);
 
-  const handleTermChange = (option: TermOption | null) => {
-    setSelectedTerm(option);
-    if (option) {
-      onChange(option.value);
-    }
-  };
+  const handleTermChange = useCallback(
+    (option: TermOption | null) => {
+      setSelectedTerm(option);
+      if (option) {
+        onChange(option.value);
+      }
+    },
+    [onChange]
+  );
 
   return (
     <div className={className}>

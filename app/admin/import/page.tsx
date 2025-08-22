@@ -11,6 +11,7 @@ import { Checkbox } from "@chakra-ui/react";
 import { Download, Users, GraduationCap, BookOpen, MapPin, Clock, AlertCircle } from "lucide-react";
 import { courseImportSis, invitationCreate } from "@/lib/edgeFunctions";
 import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
+import { TermSelector } from "@/components/ui/term-selector";
 
 // Use shared types
 type CourseImportData = FunctionTypes.CourseImportResponse;
@@ -50,7 +51,7 @@ type ImportSummary = {
 };
 
 export default function CourseImportPage() {
-  const [semester, setSemester] = useState("");
+  const [semester, setSemester] = useState(202610);
   const [mainCourseCode, setMainCourseCode] = useState("");
   const [labCourseCode, setLabCourseCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -347,7 +348,7 @@ export default function CourseImportPage() {
   };
 
   const handleImport = async () => {
-    if (!semester.trim() || !mainCourseCode.trim()) {
+    if (!semester || !mainCourseCode.trim()) {
       toaster.create({
         title: "Validation Error",
         description: "Semester and main course code are required",
@@ -366,7 +367,7 @@ export default function CourseImportPage() {
     try {
       const response = await courseImportSis(
         {
-          term: semester.trim(),
+          term: semester.toString(),
           mainCourseCode: mainCourseCode.trim().toUpperCase(),
           labCourseCode: labCourseCode.trim().toUpperCase() || ""
         },
@@ -384,7 +385,7 @@ export default function CourseImportPage() {
       setSelectedSections(new Set(result.sections.map((s) => s.crn)));
 
       // Check for existing class with same title and term
-      const existingClassResult = await findExistingClass(result.courseInfo.title, semester.trim());
+      const existingClassResult = await findExistingClass(result.courseInfo.title, semester.toString());
       setExistingClass(existingClassResult);
 
       // If there's an existing class, check for existing sections
@@ -433,19 +434,20 @@ export default function CourseImportPage() {
 
     try {
       // Extract year and term from semester code (e.g., 202610 -> Fall 2026)
-      const year = Math.floor(parseInt(semester) / 1000);
-      const termCode = parseInt(semester) % 1000;
+      const year = Math.floor(semester / 1000);
+      const termCode = semester % 1000;
       const termMap: { [key: number]: string } = {
         10: "fa",
         20: "sp",
         30: "su1",
         40: "su2"
       };
+      console.log(year, termCode, termMap[termCode]);
 
       // Create the class
       const { data: classId, error: classError } = await supabase.rpc("admin_create_class", {
         p_name: importData.courseInfo.course,
-        p_term: parseInt(semester),
+        p_term: semester,
         p_description: `${importData.courseInfo.title} - ${importData.courseInfo.campus} Campus`,
         p_course_title: importData.courseInfo.title,
         p_start_date: importData.courseInfo.startDate,
@@ -562,7 +564,7 @@ export default function CourseImportPage() {
 
       // Reset form
       setImportData(null);
-      setSemester("");
+      setSemester(202610);
       setMainCourseCode("");
       setLabCourseCode("");
       setSelectedSections(new Set());
@@ -700,12 +702,12 @@ export default function CourseImportPage() {
             <VStack gap={4}>
               <HStack gap={4} w="full">
                 <VStack align="start" flex={1}>
-                  <Label htmlFor="semester">Semester Code *</Label>
-                  <Input
-                    id="semester"
+                  <Label htmlFor="semester">Term *</Label>
+                  <TermSelector
                     value={semester}
-                    onChange={(e) => setSemester(e.target.value)}
-                    placeholder="e.g., 202610 (Fall 2026)"
+                    onChange={(value: number) => setSemester(value)}
+                    label="Semester"
+                    required
                   />
                   <Text fontSize="xs" color="fg.subtle">
                     Banner format: YYYYTT (e.g., 202610 = Fall 2026)
@@ -737,7 +739,7 @@ export default function CourseImportPage() {
                 </VStack>
               </HStack>
 
-              <Button type="submit" loading={isLoading} disabled={!semester.trim() || !mainCourseCode.trim()} size="lg">
+              <Button type="submit" loading={isLoading} disabled={!semester || !mainCourseCode.trim()} size="lg">
                 <HStack gap={2}>
                   <Download size={20} />
                   <Text>{isLoading ? "Importing..." : "Import from SIS"}</Text>

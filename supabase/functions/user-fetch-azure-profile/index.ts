@@ -193,11 +193,58 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       );
     }
 
+    // Validate that employeeId is a valid numeric string
+    if (!/^\d+$/.test(azureProfile.employeeId)) {
+      scope?.addBreadcrumb({
+        message: "Invalid employeeId format",
+        category: "warning",
+        data: { employeeId: azureProfile.employeeId }
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Invalid employee ID format - must be a numeric string"
+        }),
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    }
+
+    // Convert to number and validate it's finite
+    const employeeIdNumber = Number(azureProfile.employeeId);
+    if (!Number.isFinite(employeeIdNumber)) {
+      scope?.addBreadcrumb({
+        message: "employeeId is not a finite number",
+        category: "warning",
+        data: { employeeId: azureProfile.employeeId, converted: employeeIdNumber }
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Invalid employee ID - not a valid number"
+        }),
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    }
+
     // Update user with sis_user_id
     const { error: updateError } = await adminSupabase
       .from("users")
       .update({
-        sis_user_id: Number(azureProfile.employeeId)
+        sis_user_id: employeeIdNumber
       })
       .eq("user_id", user.id);
 
