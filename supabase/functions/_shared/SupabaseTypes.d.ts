@@ -3628,6 +3628,48 @@ export type Database = {
         };
         Relationships: [];
       };
+      notification_preferences: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
+          id: number;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
+          id?: number;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
+          id?: number;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "notification_preferences_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "notification_preferences_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       notifications: {
         Row: {
           body: Json;
@@ -8561,6 +8603,7 @@ export type Database = {
         | "deck_progress_reset_all"
         | "deck_progress_reset_card";
       help_queue_type: "text" | "video" | "in_person";
+      help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
@@ -8699,6 +8742,7 @@ export const Constants = {
         "deck_progress_reset_card"
       ],
       help_queue_type: ["text", "video", "in_person"],
+      help_request_creation_notification: ["all", "only_active_queue", "none"],
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
