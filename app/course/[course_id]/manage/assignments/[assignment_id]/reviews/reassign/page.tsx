@@ -30,7 +30,8 @@ import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
+import type { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
+import * as Sentry from "@sentry/nextjs";
 
 type ReviewAssignmentForRef = {
   assignee_profile_id: string;
@@ -487,88 +488,101 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     }
 
     setIsGeneratingReviews(true);
-    const historicalWorkload = new Map<string, number>();
-    const graderPreferences = buildGraderPreferenceMap();
-    const graderExclusions = buildGraderExclusionMap();
+    try {
+      const historicalWorkload = new Map<string, number>();
+      const graderPreferences = buildGraderPreferenceMap();
+      const graderExclusions = buildGraderExclusionMap();
 
-    if (baseOnAll) {
-      baseOnAllCalculator(historicalWorkload);
-    }
-
-    // Show feedback about preferences and exclusions
-    if (graderPreferences.size > 0) {
-      const rubricInfo = selectedReferenceRubric ? ` (${selectedReferenceRubric.name} rubric)` : "";
-      toaster.create({
-        title: "Grader Preferences Applied",
-        description: `Using grader preferences from ${selectedReferenceAssignment?.title}${rubricInfo} for ${graderPreferences.size} students.`,
-        type: "info"
-      });
-    }
-
-    if (graderExclusions.size > 0) {
-      const totalExclusions = Array.from(graderExclusions.values()).reduce((sum, set) => sum + set.size, 0);
-      const rubricInfo = selectedExclusionRubric ? ` (${selectedExclusionRubric.name} rubric)` : "";
-      toaster.create({
-        title: "Grader Exclusions Applied",
-        description: `Excluding ${totalExclusions} grader-student pairs from ${selectedExclusionAssignment?.title}${rubricInfo}.`,
-        type: "info"
-      });
-    }
-
-    // Filter users to create temporary conflicts based on exclusions
-    const usersWithExclusions = users.map((user) => {
-      const userCopy = { ...user } as UserRoleWithConflictsAndName;
-      // Add the exclusions as temporary conflicts
-      if (!userCopy.profiles.grading_conflicts) {
-        userCopy.profiles.grading_conflicts = [] as unknown as GradingConflictWithPopulatedProfiles[];
+      if (baseOnAll) {
+        baseOnAllCalculator(historicalWorkload);
       }
 
-      // For each student in the exclusion map, check if this grader should be excluded
-      graderExclusions.forEach((excludedGraders, studentId) => {
-        if (excludedGraders.has(user.private_profile_id)) {
-          const tempConflict: GradingConflictWithPopulatedProfiles = {
-            id: -1,
-            grader_profile_id: user.private_profile_id,
-            student_profile_id: studentId,
-            class_id: Number(course_id),
-            created_at: new Date().toISOString(),
-            created_by_profile_id: user.private_profile_id,
-            reason: `Excluded based on ${selectedExclusionAssignment?.title} - ${selectedExclusionRubric?.name}`
-          } as GradingConflictWithPopulatedProfiles;
-          (userCopy.profiles.grading_conflicts as unknown as GradingConflictWithPopulatedProfiles[]).push(tempConflict);
-        }
+      // Show feedback about preferences and exclusions
+      if (graderPreferences.size > 0) {
+        const rubricInfo = selectedReferenceRubric ? ` (${selectedReferenceRubric.name} rubric)` : "";
+        toaster.create({
+          title: "Grader Preferences Applied",
+          description: `Using grader preferences from ${selectedReferenceAssignment?.title}${rubricInfo} for ${graderPreferences.size} students.`,
+          type: "info"
+        });
+      }
+
+      if (graderExclusions.size > 0) {
+        const totalExclusions = Array.from(graderExclusions.values()).reduce((sum, set) => sum + set.size, 0);
+        const rubricInfo = selectedExclusionRubric ? ` (${selectedExclusionRubric.name} rubric)` : "";
+        toaster.create({
+          title: "Grader Exclusions Applied",
+          description: `Excluding ${totalExclusions} grader-student pairs from ${selectedExclusionAssignment?.title}${rubricInfo}.`,
+          type: "info"
+        });
+      }
+
+      // Filter users to create temporary conflicts based on exclusions
+      const usersWithExclusions = users.map((user) => {
+        const conflicts: GradingConflictWithPopulatedProfiles[] = Array.isArray(user.profiles.grading_conflicts)
+          ? [...user.profiles.grading_conflicts]
+          : [];
+
+        // For each student in the exclusion map, check if this grader should be excluded
+        graderExclusions.forEach((excludedGraders, studentId) => {
+          if (excludedGraders.has(user.private_profile_id)) {
+            const tempConflict: GradingConflictWithPopulatedProfiles = {
+              id: -1,
+              grader_profile_id: user.private_profile_id,
+              student_profile_id: studentId,
+              class_id: Number(course_id),
+              created_at: new Date().toISOString(),
+              created_by_profile_id: user.private_profile_id,
+              reason: `Excluded based on ${selectedExclusionAssignment?.title} - ${selectedExclusionRubric?.name}`
+            };
+            conflicts.push(tempConflict);
+          }
+        });
+
+        return {
+          ...user,
+          profiles: {
+            ...user.profiles,
+            grading_conflicts: conflicts
+          }
+        } as UserRoleWithConflictsAndName;
       });
 
-      return userCopy;
-    });
-
-    if (assignmentMode === "by_rubric_part") {
-      const reviewAssignments = generateReviewsByRubricPart(
-        usersWithExclusions,
-        submissionsToDo,
-        historicalWorkload,
-        graderPreferences
-      );
-      setDraftReviews(reviewAssignments);
-    } else if (assignmentMode === "by_filtered_parts") {
-      const reviewAssignments = generateReviewsByFilteredParts(
-        usersWithExclusions,
-        submissionsToDo,
-        historicalWorkload,
-        graderPreferences
-      );
-      setDraftReviews(reviewAssignments);
-    } else {
-      // For "by_submission" mode, preserve the original rubric parts that were assigned
-      const reviewAssignments = generateReviewsByRubric(
-        usersWithExclusions,
-        submissionsToDo,
-        historicalWorkload,
-        graderPreferences
-      );
-      setDraftReviews(reviewAssignments);
+      if (assignmentMode === "by_rubric_part") {
+        const reviewAssignments = generateReviewsByRubricPart(
+          usersWithExclusions,
+          submissionsToDo,
+          historicalWorkload,
+          graderPreferences
+        );
+        setDraftReviews(reviewAssignments);
+      } else if (assignmentMode === "by_filtered_parts") {
+        const reviewAssignments = generateReviewsByFilteredParts(
+          usersWithExclusions,
+          submissionsToDo,
+          historicalWorkload,
+          graderPreferences
+        );
+        setDraftReviews(reviewAssignments);
+      } else {
+        // For "by_submission" mode, preserve the original rubric parts that were assigned
+        const reviewAssignments = generateReviewsByRubric(
+          usersWithExclusions,
+          submissionsToDo,
+          historicalWorkload,
+          graderPreferences
+        );
+        setDraftReviews(reviewAssignments);
+      }
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.error({
+        title: "Error drafting reviews",
+        description: e instanceof Error ? e.message : String(e)
+      });
+    } finally {
+      setIsGeneratingReviews(false);
     }
-    setIsGeneratingReviews(false);
   };
 
   const generateReviewsByRubric = (

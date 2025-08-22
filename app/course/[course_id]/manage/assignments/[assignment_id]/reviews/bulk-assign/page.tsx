@@ -22,6 +22,7 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
+import type { CrudFilters } from "@refinedev/core";
 import { MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -193,16 +194,21 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   });
 
   // Fetch review assignments from reference assignment to understand previous grader assignments
+  const referenceFilters: CrudFilters = [
+    { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
+    { field: "class_id", operator: "eq", value: course_id }
+  ];
+  if (selectedReferenceRubric) {
+    referenceFilters.push({ field: "rubric_id", operator: "eq", value: selectedReferenceRubric.id });
+  }
+
   const { data: referenceReviewAssignments } = useList({
     resource: "review_assignments",
     meta: {
       select:
-        "assignee_profile_id, submission_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
+        "assignee_profile_id, submission_id, rubric_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
     },
-    filters: [
-      { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
-      { field: "class_id", operator: "eq", value: course_id }
-    ],
+    filters: referenceFilters,
     queryOptions: {
       enabled: !!selectedReferenceAssignment && !!course_id
     },
@@ -593,11 +599,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
     // Filter users to create temporary conflicts based on exclusions
     const usersWithExclusions = users.map((user) => {
-      const userCopy = { ...user };
-      // Add the exclusions as temporary conflicts
-      if (!userCopy.profiles.grading_conflicts) {
-        userCopy.profiles.grading_conflicts = [];
-      }
+      const userCopy = {
+        ...user,
+        profiles: {
+          ...user.profiles,
+          grading_conflicts: [...(user.profiles.grading_conflicts ?? [])]
+        }
+      };
 
       // For each student in the exclusion map, check if this grader should be excluded
       graderExclusions.forEach((excludedGraders, studentId) => {

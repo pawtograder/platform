@@ -12,6 +12,11 @@ drop type "public"."review_round__old_version_to_be_dropped";
 
 set check_function_bodies = off;
 
+-- ensure uniqueness of gradebook_columns per (class_id, slug) to prevent
+-- duplicates from concurrent inserts
+create unique index if not exists idx_gradebook_columns_unique_class_slug
+on public.gradebook_columns (class_id, slug);
+
 CREATE OR REPLACE FUNCTION public.create_gradebook_column_for_code_walk_rubric()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -46,8 +51,13 @@ BEGIN
       RETURN NEW;
     END IF;
 
-    -- Get the gradebook for the class
-    SELECT g.id INTO gradebook_id FROM public.gradebooks g WHERE g.class_id = assignment_class_id;
+    -- Get the gradebook for the class deterministically in case multiples exist
+    SELECT g.id
+      INTO gradebook_id
+      FROM public.gradebooks g
+     WHERE g.class_id = assignment_class_id
+     ORDER BY g.id
+     LIMIT 1;
 
     IF gradebook_id IS NULL THEN
       RETURN NEW;
@@ -55,11 +65,6 @@ BEGIN
 
     new_slug := 'assignment-' || assignment_slug || '-code-walk';
 
-    -- Only create if a column with this slug doesn't already exist
-    IF NOT EXISTS (
-      SELECT 1 FROM public.gradebook_columns gc
-      WHERE gc.class_id = assignment_class_id AND gc.slug = new_slug
-    ) THEN
       INSERT INTO public.gradebook_columns (
         name,
         max_score,
@@ -71,15 +76,15 @@ BEGIN
         dependencies
       ) VALUES (
         COALESCE('Code Walk: ' || assignment_title, 'Code Walk'),
-        assignment_total_points,
+        COALESCE(assignment_total_points, 0),
         new_slug,
         assignment_class_id,
         gradebook_id,
         'assignments("' || assignment_slug || '", "code-walk")',
         false,
         jsonb_build_object('assignments', jsonb_build_array(NEW.assignment_id))
-      );
-    END IF;
+      )
+      ON CONFLICT (class_id, slug) DO NOTHING;
   END IF;
 
   RETURN NEW;
