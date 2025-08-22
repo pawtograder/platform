@@ -3632,31 +3632,25 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
-          email_digest_frequency: Database["public"]["Enums"]["email_digest_frequency"];
-          help_request_message_notifications: Database["public"]["Enums"]["notification_type"];
-          help_request_notifications: Database["public"]["Enums"]["notification_type"];
+          help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id: number;
-          updated_at: string | null;
+          updated_at: string;
           user_id: string;
         };
         Insert: {
           class_id: number;
           created_at?: string;
-          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
-          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
-          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
+          help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
-          updated_at?: string | null;
+          updated_at?: string;
           user_id: string;
         };
         Update: {
           class_id?: number;
           created_at?: string;
-          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
-          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
-          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
+          help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
-          updated_at?: string | null;
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -8598,7 +8592,6 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
-      email_digest_frequency: "daily" | "weekly" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -8610,10 +8603,10 @@ export type Database = {
         | "deck_progress_reset_all"
         | "deck_progress_reset_card";
       help_queue_type: "text" | "video" | "in_person";
+      help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
-      notification_type: "immediate" | "digest" | "disabled";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
@@ -8737,7 +8730,6 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
-      email_digest_frequency: ["daily", "weekly", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",
@@ -8750,10 +8742,10 @@ export const Constants = {
         "deck_progress_reset_card"
       ],
       help_queue_type: ["text", "video", "in_person"],
+      help_request_creation_notification: ["all", "only_active_queue", "none"],
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
-      notification_type: ["immediate", "digest", "disabled"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
       review_round: ["self-review", "grading-review", "meta-grading-review"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
