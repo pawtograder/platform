@@ -16,7 +16,7 @@ import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
  * Component for managing user notification preferences for help requests.
  * Allows users to choose between immediate, digest, or disabled notifications.
  */
-export default function NotificationPreferences() {
+export default function NotificationPreferencesPanel() {
   const { course_id } = useParams();
   const { user } = useAuthState();
 
