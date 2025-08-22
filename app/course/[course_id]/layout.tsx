@@ -19,6 +19,7 @@ const ProtectedLayout = async ({
 }>) => {
   const { course_id } = await params;
   const user_role = await getUserRolesForCourse(Number.parseInt(course_id));
+  console.log(user_role);
   if (!user_role) {
     redirect("/");
   }

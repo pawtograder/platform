@@ -21,7 +21,7 @@ export default async function ProtectedPage() {
   const courses = await supabase
     .from("classes")
     .select("*")
-    .order("semester", { ascending: false })
+    .order("term", { ascending: false })
     .order("name", { ascending: true });
 
   if (courses.data?.length === 1) {
@@ -45,7 +45,7 @@ export default async function ProtectedPage() {
                   <Card.Body>
                     <Card.Title>{course.name}</Card.Title>
                     <Card.Description>
-                      Semester: <SemesterText semester={course.semester} />
+                      Semester: <SemesterText semester={course.term} />
                     </Card.Description>
                   </Card.Body>
                 </Card.Root>

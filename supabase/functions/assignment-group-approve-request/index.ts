@@ -47,7 +47,7 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
   // Make sure that there is a spot in the group
   const max_group_size = data.assignment_groups.assignments.max_group_size;
   const curCount = data.assignment_groups.assignment_groups_members.length;
-  if (curCount >= max_group_size) {
+  if (!max_group_size || curCount >= max_group_size) {
     throw new Error("Group is full");
   }
   // Add user to group
