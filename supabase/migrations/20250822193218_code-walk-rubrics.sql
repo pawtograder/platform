@@ -87,6 +87,76 @@ END;
 $function$
 ;
 
+-- Backfill submission reviews when a code-walk rubric is created
+CREATE OR REPLACE FUNCTION public.create_submission_reviews_for_code_walk_rubric()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  submission_record RECORD;
+  assignment_class_id bigint;
+BEGIN
+  -- Only process for code-walk rubrics with an assignment
+  IF NEW.assignment_id IS NOT NULL AND NEW.review_round::text = 'code-walk' THEN
+    
+    -- Handle INSERT: always create submission reviews for all existing submissions
+    -- Handle UPDATE: only if review_round changed TO code-walk or assignment_id changed
+    IF TG_OP = 'INSERT' OR 
+       (TG_OP = 'UPDATE' AND 
+        ((OLD.review_round IS DISTINCT FROM NEW.review_round AND NEW.review_round::text = 'code-walk') OR
+         (OLD.assignment_id IS DISTINCT FROM NEW.assignment_id))) THEN
+      
+      -- Get the class_id from the assignment
+      SELECT a.class_id INTO assignment_class_id
+      FROM public.assignments a
+      WHERE a.id = NEW.assignment_id;
+      
+      -- Loop through all existing submissions for this assignment
+      FOR submission_record IN
+        SELECT s.id as submission_id, s.class_id
+        FROM public.submissions s
+        WHERE s.assignment_id = NEW.assignment_id
+      LOOP
+        -- Check if a submission review already exists for this rubric and submission
+        -- This prevents duplicate reviews if the trigger runs multiple times
+        IF NOT EXISTS (
+          SELECT 1 
+          FROM public.submission_reviews sr
+          WHERE sr.submission_id = submission_record.submission_id 
+            AND sr.rubric_id = NEW.id
+        ) THEN
+          -- Create the submission review for this code-walk rubric
+          INSERT INTO public.submission_reviews (
+            total_score, 
+            tweak, 
+            class_id, 
+            submission_id, 
+            name, 
+            rubric_id, 
+            total_autograde_score, 
+            released
+          ) VALUES (
+            0, 
+            0, 
+            submission_record.class_id, 
+            submission_record.submission_id, 
+            COALESCE(NEW.name, 'Code Walk'), 
+            NEW.id, 
+            0, 
+            false
+          );
+        END IF;
+      END LOOP;
+    END IF;
+  END IF;
+  
+  RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.submissions_after_insert_hook()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -159,5 +229,8 @@ $function$
 CREATE TRIGGER trigger_create_gradebook_column_for_code_walk_rubric_insert AFTER INSERT ON public.rubrics FOR EACH ROW EXECUTE FUNCTION create_gradebook_column_for_code_walk_rubric();
 
 CREATE TRIGGER trigger_create_gradebook_column_for_code_walk_rubric_update AFTER UPDATE OF review_round, assignment_id ON public.rubrics FOR EACH ROW EXECUTE FUNCTION create_gradebook_column_for_code_walk_rubric();
+
+-- Backfill submission reviews when a code-walk rubric is created
+CREATE TRIGGER trigger_create_submission_reviews_for_code_walk_rubric AFTER INSERT OR UPDATE OF review_round, assignment_id ON public.rubrics FOR EACH ROW EXECUTE FUNCTION create_submission_reviews_for_code_walk_rubric();
 
 
