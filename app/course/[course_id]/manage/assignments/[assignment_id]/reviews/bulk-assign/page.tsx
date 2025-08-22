@@ -997,35 +997,49 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    */
   const submissionReviewIdForReview = useCallback(
     async (review: DraftReviewAssignment) => {
-      let submissionReviewId: number | undefined;
-      // Prefer in-memory submission reviews if available and matching rubric
+      // 1) Prefer in-memory match for the selected rubric
       const localMatch = review.submission.submission_reviews?.find((sr) => sr.rubric_id === selectedRubric?.id);
-      if (localMatch) {
-        submissionReviewId = localMatch.id;
-      } else {
-        // Lookup existing submission review (auto-created by trigger or backfilled)
-        const { data: sr, error } = await supabase
-          .from("submission_reviews")
-          .select("id")
-          .eq("submission_id", review.submission.id)
-          .eq("rubric_id", Number(selectedRubric?.id))
-          .single();
-        if (!error && sr) {
-          submissionReviewId = sr.id as number;
-        }
+      if (localMatch?.id) {
+        return Number(localMatch.id);
       }
-      if (!submissionReviewId || isNaN(Number(submissionReviewId))) {
+
+      // 2) Try fetching an existing row
+      const { data: sr, error: fetchErr } = await supabase
+        .from("submission_reviews")
+        .select("id")
+        .eq("submission_id", review.submission.id)
+        .eq("rubric_id", Number(selectedRubric?.id))
+        .single();
+      if (!fetchErr && sr?.id) {
+        return Number(sr.id);
+      }
+
+      // 3) Fallback: create it
+      const { data: created, error: insertErr } = await supabase
+        .from("submission_reviews")
+        .insert({
+          total_score: 0,
+          total_autograde_score: 0,
+          tweak: 0,
+          class_id: Number(course_id),
+          submission_id: review.submission.id,
+          name: selectedRubric?.name ?? "Review",
+          rubric_id: Number(selectedRubric?.id)
+        })
+        .select("id")
+        .single();
+      if (insertErr || !created?.id) {
         toaster.error({
-          title: "Error creating review assignments",
+          title: "Error creating submission review",
           description:
-            `Failed to find submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}. ` +
-            `Please ensure the rubric exists for this assignment.`
+            insertErr?.message ??
+            `Failed to create submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}`
         });
         return 0;
       }
-      return Number(submissionReviewId);
+      return Number(created.id);
     },
-    [selectedRubric, supabase]
+    [selectedRubric, supabase, course_id]
   );
 
   useEffect(() => {
