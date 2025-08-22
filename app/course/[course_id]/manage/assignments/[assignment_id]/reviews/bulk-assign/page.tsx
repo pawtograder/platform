@@ -34,6 +34,7 @@ import { useLabSections } from "@/hooks/useCourseController";
 import { Alert } from "@/components/ui/alert";
 import { addDays } from "date-fns";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 
 // Main Page Component
 export default function BulkAssignGradingPage() {
@@ -122,6 +123,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }>
   >([]);
   const [selectedReferenceAssignment, setSelectedReferenceAssignment] = useState<Assignment>();
+  const [selectedReferenceRubric, setSelectedReferenceRubric] = useState<RubricWithParts>();
+  const [selectedExclusionAssignment, setSelectedExclusionAssignment] = useState<Assignment>();
+  const [selectedExclusionRubric, setSelectedExclusionRubric] = useState<RubricWithParts>();
   const [numGradersToSelect, setNumGradersToSelect] = useState<number>(0);
   const [isGraderListExpanded, setIsGraderListExpanded] = useState<boolean>(false);
 
@@ -201,6 +205,54 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     ],
     queryOptions: {
       enabled: !!selectedReferenceAssignment && !!course_id
+    },
+    pagination: {
+      pageSize: 1000
+    }
+  });
+
+  const { data: referenceRubrics } = useList<RubricWithParts>({
+    resource: "rubrics",
+    meta: {
+      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id }
+    ],
+    queryOptions: {
+      enabled: !!selectedReferenceAssignment && !!course_id
+    }
+  });
+
+  const { data: exclusionRubrics } = useList<RubricWithParts>({
+    resource: "rubrics",
+    meta: {
+      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedExclusionAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id }
+    ],
+    queryOptions: {
+      enabled: !!selectedExclusionAssignment && !!course_id
+    }
+  });
+
+  // For exclusions, we also need the review assignments
+  const { data: exclusionReviewAssignments } = useList({
+    resource: "review_assignments",
+    meta: {
+      select:
+        "assignee_profile_id, submission_id, rubric_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedExclusionAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "rubric_id", operator: "eq", value: selectedExclusionRubric?.id }
+    ],
+    queryOptions: {
+      enabled: !!selectedExclusionAssignment && !!selectedExclusionRubric && !!course_id
     },
     pagination: {
       pageSize: 1000
@@ -342,6 +394,11 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
 
     referenceReviewAssignments.data.forEach((reviewAssignment) => {
+      // Filter by selected rubric if one is chosen
+      if (selectedReferenceRubric && reviewAssignment.rubric_id !== selectedReferenceRubric.id) {
+        return; // Skip this assignment if it's not for the selected rubric
+      }
+
       const submission = reviewAssignment.submissions;
       if (submission) {
         // Handle individual submissions
@@ -359,7 +416,42 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     });
 
     return preferenceMap;
-  }, [selectedReferenceAssignment, referenceReviewAssignments]);
+  }, [selectedReferenceAssignment, selectedReferenceRubric, referenceReviewAssignments]);
+
+  const buildGraderExclusionMap = useCallback(() => {
+    const exclusionMap = new Map<string, Set<string>>(); // student -> Set of graders to exclude
+
+    if (!selectedExclusionAssignment || !selectedExclusionRubric || !exclusionReviewAssignments?.data) {
+      return exclusionMap;
+    }
+
+    exclusionReviewAssignments.data.forEach((reviewAssignment) => {
+      const submission = reviewAssignment.submissions;
+      if (submission) {
+        // Helper function to add exclusion
+        const addExclusion = (studentId: string, graderId: string) => {
+          if (!exclusionMap.has(studentId)) {
+            exclusionMap.set(studentId, new Set<string>());
+          }
+          exclusionMap.get(studentId)!.add(graderId);
+        };
+
+        // Handle individual submissions
+        if (submission.profile_id) {
+          addExclusion(submission.profile_id, reviewAssignment.assignee_profile_id);
+        }
+
+        // Handle group submissions
+        if (submission.assignment_groups?.assignment_groups_members) {
+          submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
+            addExclusion(member.profile_id, reviewAssignment.assignee_profile_id);
+          });
+        }
+      }
+    });
+
+    return exclusionMap;
+  }, [selectedExclusionAssignment, selectedExclusionRubric, exclusionReviewAssignments]);
 
   /**
    * Creates a list of the users who will be assigned submissions to grade based on category.
@@ -473,23 +565,63 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     setIsGeneratingReviews(true);
     const historicalWorkload = new Map<string, number>();
     const graderPreferences = buildGraderPreferenceMap();
+    const graderExclusions = buildGraderExclusionMap();
 
     if (baseOnAll) {
       baseOnAllCalculator(historicalWorkload);
     }
 
-    // Show feedback about grader preferences if they're being used
+    // Show feedback about preferences and exclusions
     if (graderPreferences.size > 0) {
+      const rubricInfo = selectedReferenceRubric ? ` (${selectedReferenceRubric.name} rubric)` : "";
       toaster.create({
         title: "Grader Preferences Applied",
-        description: `Using grader preferences from ${selectedReferenceAssignment?.title} for ${graderPreferences.size} students.`,
+        description: `Using grader preferences from ${selectedReferenceAssignment?.title}${rubricInfo} for ${graderPreferences.size} students.`,
         type: "info"
       });
     }
 
+    if (graderExclusions.size > 0) {
+      const totalExclusions = Array.from(graderExclusions.values()).reduce((sum, set) => sum + set.size, 0);
+      const rubricInfo = selectedExclusionRubric ? ` (${selectedExclusionRubric.name} rubric)` : "";
+      toaster.create({
+        title: "Grader Exclusions Applied",
+        description: `Excluding ${totalExclusions} grader-student pairs from ${selectedExclusionAssignment?.title}${rubricInfo}.`,
+        type: "info"
+      });
+    }
+
+    // Filter users to create temporary conflicts based on exclusions
+    const usersWithExclusions = users.map((user) => {
+      const userCopy = { ...user };
+      // Add the exclusions as temporary conflicts
+      if (!userCopy.profiles.grading_conflicts) {
+        userCopy.profiles.grading_conflicts = [];
+      }
+
+      // For each student in the exclusion map, check if this grader should be excluded
+      graderExclusions.forEach((excludedGraders, studentId) => {
+        if (excludedGraders.has(user.private_profile_id)) {
+          // Add a temporary conflict
+          const tempConflict: GradingConflictWithPopulatedProfiles = {
+            id: -1,
+            grader_profile_id: user.private_profile_id,
+            student_profile_id: studentId,
+            class_id: Number(course_id),
+            created_at: new Date().toISOString(),
+            created_by_profile_id: user.private_profile_id,
+            reason: `Excluded based on ${selectedExclusionAssignment?.title} - ${selectedExclusionRubric?.name}`
+          };
+          userCopy.profiles.grading_conflicts.push(tempConflict);
+        }
+      });
+
+      return userCopy;
+    });
+
     if (assignmentMode === "by_rubric_part") {
       const reviewAssignments = generateReviewsByRubricPart(
-        users,
+        usersWithExclusions,
         submissionsToDo,
         historicalWorkload,
         graderPreferences
@@ -497,7 +629,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       setDraftReviews(reviewAssignments);
     } else {
       const reviewAssignments = generateReviewsBySubmission(
-        users,
+        usersWithExclusions,
         submissionsToDo,
         historicalWorkload,
         graderPreferences
@@ -906,28 +1038,30 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   );
 
   const invalidate = useInvalidate();
+
   /**
    * Clear state data
    */
   const clearStateData = useCallback(() => {
     setSelectedRubric(gradingRubric);
-    // setSubmissionsToDo(undefined);
-    // setRole("Graders");
     setDraftReviews([]);
-    // setDueDate("");
-    // setBaseOnAll(false);
-    // setAssignmentMode("by_submission");
-    // setSelectedRubricPartsForFilter([]);
     setSelectedTags([]);
     setSelectedUsers([]);
     setSelectedClassSections([]);
     setSelectedLabSections([]);
     setSelectedStudentTags([]);
     setSelectedReferenceAssignment(undefined);
+    setSelectedReferenceRubric(undefined);
+    setSelectedExclusionAssignment(undefined);
+    setSelectedExclusionRubric(undefined);
     setNumGradersToSelect(0);
     setIsGraderListExpanded(false);
     invalidate({ resource: "submissions", invalidates: ["all"] });
   }, [invalidate, gradingRubric]);
+
+  /**
+   * Returns a list of rubrics that are not self-review rubrics.
+   */
   const availableRubrics = useMemo(() => {
     return rubrics
       .filter((rubric) => rubric.review_round !== "self-review")
@@ -1317,7 +1451,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                       }
                     : undefined
                 }
-                onChange={(e) => setSelectedReferenceAssignment(e?.value)}
+                onChange={(e) => {
+                  setSelectedReferenceAssignment(e?.value);
+                  setSelectedReferenceRubric(undefined); // Reset rubric when assignment changes
+                }}
                 options={
                   allAssignments?.data
                     .filter((assign) => assign.id !== Number(assignment_id))
@@ -1331,9 +1468,96 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               />
               <Field.HelperText>
                 When possible, assign students to the same grader who reviewed their work on the selected assignment.
-                This feature will still try to balance the workload across graders, so some students may shift.
               </Field.HelperText>
             </Field.Root>
+
+            {selectedReferenceAssignment && (
+              <Field.Root>
+                <Field.Label>Select rubric from reference assignment (optional)</Field.Label>
+                <Select
+                  value={
+                    selectedReferenceRubric
+                      ? {
+                          label: selectedReferenceRubric.name,
+                          value: selectedReferenceRubric
+                        }
+                      : undefined
+                  }
+                  onChange={(e) => setSelectedReferenceRubric(e?.value)}
+                  options={
+                    referenceRubrics?.data.map((rubric) => ({
+                      label: rubric.name,
+                      value: rubric
+                    })) || []
+                  }
+                  isClearable
+                  placeholder="All rubrics"
+                />
+                <Field.HelperText>
+                  If selected, only use grader assignments from this specific rubric. Leave empty to use all rubrics.
+                </Field.HelperText>
+              </Field.Root>
+            )}
+
+            <Separator my={1} />
+
+            <Heading size="sm">Grader Exclusions</Heading>
+            <Field.Root>
+              <Field.Label>Exclude graders from a previous assignment</Field.Label>
+              <Select
+                value={
+                  selectedExclusionAssignment
+                    ? {
+                        label: selectedExclusionAssignment.title,
+                        value: selectedExclusionAssignment
+                      }
+                    : undefined
+                }
+                onChange={(e) => {
+                  setSelectedExclusionAssignment(e?.value);
+                  setSelectedExclusionRubric(undefined); // Reset rubric when assignment changes
+                }}
+                options={
+                  allAssignments?.data
+                    .filter((assign) => assign.id !== Number(assignment_id))
+                    .map((assign) => ({
+                      label: assign.title,
+                      value: assign
+                    })) || []
+                }
+                isClearable
+                placeholder="Select an assignment..."
+              />
+              <Field.HelperText>
+                Prevent students from being assigned to the same grader who reviewed their work on the selected
+                assignment. Useful for meta-grading where the meta-grader should not be the original grader.
+              </Field.HelperText>
+            </Field.Root>
+
+            {selectedExclusionAssignment && (
+              <Field.Root>
+                <Field.Label>Select rubric to exclude from</Field.Label>
+                <Select
+                  value={
+                    selectedExclusionRubric
+                      ? {
+                          label: selectedExclusionRubric.name,
+                          value: selectedExclusionRubric
+                        }
+                      : undefined
+                  }
+                  onChange={(e) => setSelectedExclusionRubric(e?.value)}
+                  options={
+                    exclusionRubrics?.data.map((rubric) => ({
+                      label: rubric.name,
+                      value: rubric
+                    })) || []
+                  }
+                  placeholder="Select a rubric..."
+                />
+                <Field.HelperText>Required: Select which rubric&apos;s grader assignments to exclude.</Field.HelperText>
+              </Field.Root>
+            )}
 
             <Separator my={1} />
 
