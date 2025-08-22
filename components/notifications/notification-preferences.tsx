@@ -19,6 +19,7 @@ import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 export default function NotificationPreferencesPanel() {
   const { course_id } = useParams();
   const { user } = useAuthState();
+  const classId = Number(course_id);
 
   const [preferences, setPreferences] = useState<NotificationPreferences>({
     /*
@@ -28,7 +29,7 @@ export default function NotificationPreferencesPanel() {
     id: 0,
     created_at: new Date().toISOString(),
     user_id: user?.id || "",
-    class_id: Number(course_id),
+    class_id: classId,
     help_request_creation_notification: "all",
     updated_at: new Date().toISOString()
   });
@@ -40,9 +41,12 @@ export default function NotificationPreferencesPanel() {
     resource: "notification_preferences",
     filters: [
       { field: "user_id", operator: "eq", value: user?.id },
-      { field: "class_id", operator: "eq", value: course_id }
+      { field: "class_id", operator: "eq", value: classId }
     ],
-    pagination: { pageSize: 1 }
+    pagination: { pageSize: 1 },
+    queryOptions: {
+      enabled: Boolean(user?.id) && Number.isFinite(classId)
+    }
   });
 
   const { mutateAsync: createPreferences } = useCreate();
@@ -83,7 +87,7 @@ export default function NotificationPreferencesPanel() {
           resource: "notification_preferences",
           values: {
             user_id: user.id,
-            class_id: Number(course_id),
+            class_id: classId,
             help_request_creation_notification: preferences.help_request_creation_notification
           }
         });
