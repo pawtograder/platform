@@ -1369,7 +1369,7 @@ export class GradebookController {
         userProfile.data.name ?? "Unknown",
         student.users.email ?? "Unknown",
         student.canvas_id,
-        userProfile?.data?.sis_user_id,
+        student.users.sis_user_id,
         ...gradesForStudent
       ];
       result.push(row);

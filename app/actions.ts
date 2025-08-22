@@ -3,15 +3,15 @@
 import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
+import { env } from "process";
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.verifyOtp({
+  const { error } = await supabase.auth.verifyOtp({
     token_hash: token_hash as string,
     type: "email"
   });
-  console.log(data);
   if (error) {
     return encodedRedirect("error", "/auth/confirm", error.message);
   }
@@ -137,18 +137,18 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
-  const { data, error } = await supabase.auth.signInWithOAuth({
+  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback?next=/course`;
+  const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
-    options: { scopes: "email", redirectTo }
+    options: { scopes: "email User.Read", redirectTo }
   });
 
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
-  if (data.url) {
-    console.log(`Redirecting to ${data.url}`);
-    return redirect(data.url);
+
+  if (authData.url) {
+    return redirect(authData.url);
   }
 
   return redirect("/course");
@@ -167,10 +167,6 @@ export const linkGitHubAction = async () => {
   if (!session) {
     return redirect("/sign-in");
   }
-  console.log("Linking GitHub");
-  console.log(session);
-  const { data, error } = await supabase.auth.linkIdentity({ provider: "github" });
-  console.log(data);
-  console.log(error);
+  const { data } = await supabase.auth.linkIdentity({ provider: "github" });
   if (data.url) return redirect(data.url);
 };

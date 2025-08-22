@@ -280,9 +280,9 @@ function LabSectionsTable() {
       id: labSection.id,
       name: labSection.name,
       day_of_week: labSection.day_of_week as DayOfWeek,
-      start_time: labSection.start_time,
+      start_time: labSection.start_time || "",
       end_time: labSection.end_time || undefined,
-      lab_leader_id: labSection.lab_leader_id,
+      lab_leader_id: labSection.lab_leader_id || "",
       description: labSection.description || undefined
     });
   };
@@ -364,9 +364,9 @@ function LabSectionsTable() {
                   </Table.Cell>
                   <Table.Cell>
                     <VStack gap={1} align="start">
-                      <Text>{getDayDisplayName(labSection.day_of_week)}</Text>
+                      <Text>{labSection.day_of_week ? getDayDisplayName(labSection.day_of_week) : "N/A"}</Text>
                       <Text fontSize="sm" color="fg.muted">
-                        {formatTime(labSection.start_time)}
+                        {labSection.start_time ? formatTime(labSection.start_time) : "N/A"}
                         {labSection.end_time && ` - ${formatTime(labSection.end_time)}`}
                       </Text>
                     </VStack>
