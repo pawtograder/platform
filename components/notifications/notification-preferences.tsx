@@ -123,7 +123,7 @@ export default function NotificationPreferences() {
         <Fieldset.Content>
           <Stack spaceY={6}>
             <Field
-              label="Help Request Notifications"
+              label="Help Request Creation Notifications"
               helperText="Choose how you want to be notified when new help requests are created in your class"
             >
               <NativeSelect.Root>
@@ -136,9 +136,11 @@ export default function NotificationPreferences() {
                     }))
                   }
                 >
-                  <option value="immediate">Immediate - Get notified right away</option>
-                  <option value="digest">Digest - Get a summary daily/weekly</option>
-                  <option value="disabled">Disabled - No notifications</option>
+                  <option value="all">All: Get notified for all help request creations.</option>
+                  <option value="only_active_queue">
+                    Only active queue: Get notified for help requests in your active queue.
+                  </option>
+                  <option value="none">None: No notifications for help request creations.</option>
                 </NativeSelect.Field>
               </NativeSelect.Root>
             </Field>
