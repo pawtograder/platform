@@ -34,10 +34,10 @@ export default function EnrollmentsPage() {
       <Heading my="4">Enrollments</Heading>
       <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4">
         <Heading size="sm" mb={3}>
-          Canvas Links
+          University Student Information System (SIS) Links
         </Heading>
         <Text fontSize="sm" color="fg.muted" mb={3}>
-          Enrollments in this course are linked to the following Canvas sections:
+          Enrollments in this course are linked to the following SIS sections:
         </Text>
         <List.Root as="ul" pl="4" mb={3}>
           {sections?.map((section: ClassSection) => (

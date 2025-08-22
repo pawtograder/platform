@@ -21,6 +21,7 @@ export async function getUserRolesForCourse(course_id: number): Promise<UserRole
     .select("role, class_id, public_profile_id, private_profile_id")
     .eq("class_id", course_id)
     .eq("user_id", user.id)
+    .eq("disabled", false)
     .single();
 
   return userRole || undefined;
@@ -40,7 +41,8 @@ async function getRolesForCourse(course_id: number): Promise<UserRoleData["role"
     .from("user_roles")
     .select("role")
     .eq("class_id", course_id)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .eq("disabled", false);
 
   if (error) {
     console.error("Failed to fetch user roles from database:", error);
@@ -64,6 +66,7 @@ export async function getPrivateProfileId(course_id: number) {
     .select("private_profile_id")
     .eq("class_id", course_id)
     .eq("user_id", user.id)
+    .eq("disabled", false)
     .single();
 
   if (error) {
@@ -75,7 +78,7 @@ export async function getPrivateProfileId(course_id: number) {
 }
 export async function getCourse(course_id: number) {
   const client = await createClient();
-  const course = await client.from("classes").select("*").eq("id", course_id).single();
+  const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
   return course.data;
 }
 export async function isInstructor(course_id: number) {

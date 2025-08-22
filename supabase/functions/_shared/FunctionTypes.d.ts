@@ -274,3 +274,105 @@ export type AssignmentDeleteRequest = {
 export type AssignmentDeleteResponse = {
   message: string;
 };
+
+// Course Import SIS Types
+export type CourseImportRequest = {
+  term: string;
+  mainCourseCode: string;
+  labCourseCode?: string;
+};
+
+export type ProcessedSection = {
+  crn: number;
+  sectionType: "class" | "lab";
+  sectionName: string;
+  meetingInfo: string;
+  location: string;
+  instructors: Array<{
+    sis_user_id: string;
+    name: string;
+    role: "instructor";
+  }>;
+  tas: Array<{
+    sis_user_id: string;
+    name: string;
+    role: "grader";
+  }>;
+  students: Array<{
+    sis_user_id: string;
+    name: string;
+    role: "student";
+  }>;
+};
+
+export type CourseImportResponse = {
+  success: boolean;
+  courseInfo: {
+    course: string;
+    title: string;
+    startDate: string;
+    endDate: string;
+    campus: string;
+  };
+  sections: ProcessedSection[];
+  totalUsers: {
+    instructors: number;
+    graders: number;
+    students: number;
+  };
+  enrollmentStatus: {
+    instructors: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+    graders: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+    students: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+  };
+};
+
+// Invitation Creation Types
+export type InvitationRequestItem = {
+  sis_user_id: string;
+  role: "student" | "grader" | "instructor";
+  email?: string;
+  name?: string;
+  class_section_id?: number;
+  lab_section_id?: number;
+};
+
+export type CreateInvitationRequest = {
+  courseId: number;
+  invitations: InvitationRequestItem[];
+};
+
+export type CreateInvitationResponse = {
+  success: boolean;
+  invitations: Array<{
+    id: number;
+    sis_user_id: string;
+    role: string;
+    email?: string;
+    name?: string;
+    status: string;
+    created_at: string;
+    expires_at: string;
+    class_section_id?: number;
+    lab_section_id?: number;
+  }>;
+  errors?: Array<{
+    sis_user_id: string;
+    error: string;
+  }>;
+};

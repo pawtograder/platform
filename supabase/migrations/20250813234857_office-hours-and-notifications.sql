@@ -1350,26 +1350,26 @@ end;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.custom_access_token_hook(event jsonb)
- RETURNS jsonb
- LANGUAGE plv8
- STABLE
-AS $function$var user_roles;
+-- CREATE OR REPLACE FUNCTION public.custom_access_token_hook(event jsonb)
+--  RETURNS jsonb
+--  LANGUAGE plv8
+--  STABLE
+-- AS $function$var user_roles;
 
-  // Fetch the current user's user_role from the public user_roles table.
-  var result = plv8.execute("select role, class_id,public_profile_id,private_profile_id from public.user_roles where user_id = $1", [event.user_id]);
-  // Check if 'claims' exists in the event object; if not, initialize it
-  if (!event.claims) {
-    event.claims = {};
-  }
+--   // Fetch the current user's user_role from the public user_roles table.
+--   var result = plv8.execute("select role, class_id,public_profile_id,private_profile_id from public.user_roles where user_id = $1", [event.user_id]);
+--   // Check if 'claims' exists in the event object; if not, initialize it
+--   if (!event.claims) {
+--     event.claims = {};
+--   }
 
-  //Find ther user's github identity, if one exists
-  var ghResult = plv8.execute("select identity_data from identities where provider='github' and user_id=$1",[event.user_id]);
-  event.claims.github = ghResult;
-  // Update the level in the claims
-  event.claims.user_roles = result;
-  return event;$function$
-;
+--   //Find ther user's github identity, if one exists
+--   var ghResult = plv8.execute("select identity_data from identities where provider='github' and user_id=$1",[event.user_id]);
+--   event.claims.github = ghResult;
+--   // Update the level in the claims
+--   event.claims.user_roles = result;
+--   return event;$function$
+-- ;
 
 CREATE OR REPLACE FUNCTION public.discussion_thread_root_patch()
  RETURNS trigger

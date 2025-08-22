@@ -144,7 +144,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!repoData) {
     const { data: handoutAssignments, error: handoutLookupError } = await adminSupabase
       .from("assignments")
-      .select("id, title, slug, classes(name, semester)")
+      .select("id, title, slug, classes(name, term)")
       .eq("template_repo", repository);
     if (handoutLookupError) {
       scope?.setTag("db_error", "handout_lookup_failed");
@@ -164,7 +164,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             title: a.title,
             slug: a.slug,
             class_name: a.classes?.name,
-            semester: a.classes?.semester
+            semester: a.classes?.term
           }))
         }
       };

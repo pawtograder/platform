@@ -673,3 +673,19 @@ entrypoint = "./functions/autograder-reinvite-to-class-org/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/assignment-delete/index.ts"
+
+[functions.course-import-sis]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/course-import-sis/index.ts"
+
+[functions.invitation-create]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/invitation-create/index.ts"
+
+[functions.user-fetch-azure-profile]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/user-fetch-azure-profile/index.ts"
+

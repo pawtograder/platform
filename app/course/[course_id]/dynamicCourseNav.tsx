@@ -94,8 +94,8 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
     }
   });
   const courseSorter = (a: Course, b: Course) => {
-    if (a.semester && b.semester) {
-      const ret = b.semester - a.semester;
+    if (a.term && b.term) {
+      const ret = b.term - a.term;
       if (ret !== 0) {
         return ret;
       }
@@ -123,7 +123,7 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
                   {course.name}
                 </Link>
                 <Text fontSize="sm" color="gray.500">
-                  <SemesterText semester={course.semester} />
+                  <SemesterText semester={course.term} />
                 </Text>
               </Fragment>
             ))}
