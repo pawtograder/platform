@@ -298,7 +298,6 @@ REVOKE ALL ON TABLE "public"."invitations" FROM "anon";
 REVOKE ALL ON TABLE "public"."lab_section_meetings" FROM "anon";
 REVOKE ALL ON TABLE "public"."lab_sections" FROM "anon";
 REVOKE ALL ON TABLE "public"."name_generation_words" FROM "anon";
-REVOKE ALL ON TABLE "public"."notification_preferences" FROM "anon";
 REVOKE ALL ON TABLE "public"."notifications" FROM "anon";
 REVOKE ALL ON TABLE "public"."permissions" FROM "anon";
 REVOKE ALL ON TABLE "public"."poll_question_answers" FROM "anon";
