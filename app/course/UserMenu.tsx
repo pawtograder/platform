@@ -15,28 +15,29 @@ import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
   Box,
-  Button,
   CloseButton,
   Dialog,
   Drawer,
   Flex,
   HStack,
-  Icon,
   IconButton,
   Menu,
   Portal,
   Text,
   VStack
 } from "@chakra-ui/react";
+import { Button } from "@/components/ui/button";
 import { useInvalidate, useList, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
+import { RiChatSettingsFill } from "react-icons/ri";
 import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
 import { PiSignOut } from "react-icons/pi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../actions";
+import NotificationPreferences from "@/components/notifications/notification-preferences";
 
 function SupportMenu() {
   return (
@@ -341,8 +342,16 @@ const ProfileChangesMenu = () => {
       <Toaster />
       <Dialog.Root size={"md"} placement={"center"}>
         <Dialog.Trigger asChild>
-          <Button variant="ghost" colorPalette={"gray"} w="100%" justifyContent="flex-start" size="sm" py={0}>
-            <Icon as={FaCircleUser} size="md" />
+          <Button
+            variant="ghost"
+            colorPalette={"gray"}
+            width="100%"
+            justifyContent="flex-start"
+            size="sm"
+            textAlign="left"
+            py={0}
+          >
+            <FaCircleUser />
             Edit Avatar
           </Button>
         </Dialog.Trigger>
@@ -402,6 +411,48 @@ const ProfileChangesMenu = () => {
         </Portal>
       </Dialog.Root>
     </>
+  );
+};
+
+/**
+ * Dialog component to allow users to manage their notification preferences.
+ */
+const NotificationPreferencesMenu = () => {
+  return (
+    <Dialog.Root size={"md"} placement={"center"}>
+      <Dialog.Trigger asChild>
+        <Button
+          variant="ghost"
+          colorPalette="gray"
+          width="100%"
+          justifyContent="flex-start"
+          textAlign="left"
+          size="sm"
+          py={0}
+        >
+          <RiChatSettingsFill />
+          Notification Settings
+        </Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content maxHeight="80vh" overflowY="auto">
+            <Dialog.Header>
+              <Dialog.Title>Notification Settings</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <NotificationPreferences />
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline">Close</Button>
+              </Dialog.ActionTrigger>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
   );
 };
 
@@ -496,7 +547,7 @@ function UserSettingsMenu() {
                     </VStack>
                   </HStack>
                   <Drawer.CloseTrigger asChild>
-                    <CloseButton size="sm" />
+                    <CloseButton size="sm" aria-label="Close" />
                   </Drawer.CloseTrigger>
                 </HStack>
 
@@ -504,13 +555,14 @@ function UserSettingsMenu() {
                   <Button
                     onClick={linkGitHub}
                     colorPalette="gray"
-                    w="100%"
+                    width="100%"
+                    textAlign="left"
                     variant="ghost"
                     size="sm"
                     justifyContent="flex-start"
                     py={0}
                   >
-                    <Icon as={FaGithub} size="md" />
+                    <FaGithub />
                     Link GitHub
                   </Button>
                 )}
@@ -523,14 +575,15 @@ function UserSettingsMenu() {
                           variant="ghost"
                           colorPalette="red"
                           size="sm"
-                          w="100%"
+                          textAlign="left"
+                          width="100%"
                           disabled={true}
                           alignItems="center"
                           gap={2}
                           justifyContent="flex-start"
                           py={0}
                         >
-                          <Icon as={FaUnlink} size="md" />
+                          <FaUnlink />
                           Unlink GitHub
                         </Button>
                       }
@@ -543,12 +596,13 @@ function UserSettingsMenu() {
                   </>
                 )}
                 <ProfileChangesMenu />
+                <NotificationPreferencesMenu />
                 <Button
                   variant="ghost"
-                  pl={0}
                   onClick={signOutAction}
                   width="100%"
                   textAlign="left"
+                  size="sm"
                   justifyContent="flex-start"
                 >
                   <PiSignOut />
@@ -574,7 +628,7 @@ function ObfuscatedGradesModePicker() {
         aria-label="Toggle obfuscated grades mode"
         css={{ _icon: { width: "5", height: "5" } }}
       >
-        <Icon as={isObfuscated ? TbSpyOff : TbSpy} />
+        {isObfuscated ? <TbSpyOff /> : <TbSpy />}
       </IconButton>
     </Tooltip>
   );
