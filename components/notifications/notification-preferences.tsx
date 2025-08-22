@@ -105,6 +105,15 @@ export default function NotificationPreferences() {
 
   const isInstructorOrGrader = useIsGraderOrInstructor();
 
+  // This will probably be refactored in the future.
+  if (!isInstructorOrGrader) {
+    return (
+      <Box>
+        <Text>No specific notification preferences have been implemented for students yet.</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Heading size="md" mb={4}>
@@ -113,34 +122,26 @@ export default function NotificationPreferences() {
       <Fieldset.Root>
         <Fieldset.Content>
           <Stack spaceY={6}>
-            {/* Only show this field to instructors and graders */}
-            {isInstructorOrGrader && (
-              <Field
-                label="Help Request Notifications"
-                helperText="Choose how you want to be notified when new help requests are created in your class"
-              >
-                <NativeSelect.Root>
-                  <NativeSelect.Field
-                    value={preferences.help_request_creation_notification}
-                    onChange={(e) =>
-                      setPreferences((prev) => ({
-                        ...prev,
-                        help_request_creation_notification: e.target.value as "all" | "only_active_queue" | "none"
-                      }))
-                    }
-                  >
-                    <option value="immediate">Immediate - Get notified right away</option>
-                    <option value="digest">Digest - Get a summary daily/weekly</option>
-                    <option value="disabled">Disabled - No notifications</option>
-                  </NativeSelect.Field>
-                </NativeSelect.Root>
-              </Field>
-            )}
-
-            {/* If no fields are available, show a message explaining why */}
-            {!isInstructorOrGrader && (
-              <Text>No specific notification preferences have been implemented for students yet.</Text>
-            )}
+            <Field
+              label="Help Request Notifications"
+              helperText="Choose how you want to be notified when new help requests are created in your class"
+            >
+              <NativeSelect.Root>
+                <NativeSelect.Field
+                  value={preferences.help_request_creation_notification}
+                  onChange={(e) =>
+                    setPreferences((prev) => ({
+                      ...prev,
+                      help_request_creation_notification: e.target.value as "all" | "only_active_queue" | "none"
+                    }))
+                  }
+                >
+                  <option value="immediate">Immediate - Get notified right away</option>
+                  <option value="digest">Digest - Get a summary daily/weekly</option>
+                  <option value="disabled">Disabled - No notifications</option>
+                </NativeSelect.Field>
+              </NativeSelect.Root>
+            </Field>
           </Stack>
           <Button onClick={handleSave} loading={isLoading}>
             Save Preferences
