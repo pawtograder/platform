@@ -285,6 +285,35 @@ export async function assignmentDelete(
   }
   return data as FunctionTypes.AssignmentDeleteResponse;
 }
+
+export async function courseImportSis(params: FunctionTypes.CourseImportRequest, supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("course-import-sis", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.CourseImportResponse;
+}
+
+export async function invitationCreate(
+  params: FunctionTypes.CreateInvitationRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("invitation-create", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.CreateInvitationResponse;
+}
+
+export async function userFetchAzureProfile(params: { accessToken: string }, supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("user-fetch-azure-profile", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;

@@ -41,7 +41,7 @@ import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
+import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes } from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -58,6 +58,12 @@ type RemoveStudentModalData = {
   userName: string | null | undefined;
   role: UserRoleWithPrivateProfileAndUser["role"];
 };
+
+// Invitation type for display
+type InvitationRow = Database["public"]["Tables"]["invitations"]["Row"] & { type: "invitation" };
+
+// Combined type for table rows
+type EnrollmentTableRow = (UserRoleWithPrivateProfileAndUser & { type: "enrollment" }) | InvitationRow;
 
 /**
  * Client component rendering the enrollments management table for a course.
@@ -78,9 +84,10 @@ export default function EnrollmentsTable() {
   );
 
   const [isDeletingUserRole, setIsDeletingUserRole] = useState(false);
-  const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
-    new Set<UserRoleWithPrivateProfileAndUser>()
-  );
+  const [checkedBoxes, setCheckedBoxes] = useState<Set<EnrollmentTableRow>>(new Set<EnrollmentTableRow>());
+
+  // Invitations state
+  const [invitations, setInvitations] = useState<InvitationRow[]>([]);
 
   const { tags: tagData } = useTags();
 
@@ -132,13 +139,13 @@ export default function EnrollmentsTable() {
     [deleteUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
 
-  const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
+  const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
 
-  const handleSingleCheckboxChange = useCallback((user: UserRoleWithPrivateProfileAndUser, checked: boolean) => {
+  const handleSingleCheckboxChange = useCallback((row: EnrollmentTableRow, checked: boolean) => {
     if (checked === true) {
-      checkedBoxesRef.current.add(user);
+      checkedBoxesRef.current.add(row);
     } else {
-      checkedBoxesRef.current.delete(user);
+      checkedBoxesRef.current.delete(row);
     }
     setCheckedBoxes(new Set(checkedBoxesRef.current));
   }, []);
@@ -153,25 +160,90 @@ export default function EnrollmentsTable() {
     if (error) throw error;
   };
 
+  // Fetch invitations
+  const fetchInvitations = useCallback(async () => {
+    if (!course_id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("invitations")
+        .select("*")
+        .eq("class_id", parseInt(course_id as string))
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const invitationRows: InvitationRow[] = (data || []).map((invitation) => ({
+        ...invitation,
+        type: "invitation" as const
+      }));
+
+      setInvitations(invitationRows);
+    } catch (error) {
+      toaster.create({
+        title: "Error fetching invitations",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error"
+      });
+    }
+  }, [course_id, supabase]);
+
+  // Cancel invitation
+  const cancelInvitation = useCallback(
+    async (invitationId: number) => {
+      try {
+        const { error } = await supabase.from("invitations").update({ status: "cancelled" }).eq("id", invitationId);
+
+        if (error) throw error;
+
+        // Refresh invitations
+        await fetchInvitations();
+
+        toaster.create({
+          title: "Invitation Cancelled",
+          description: "The invitation has been cancelled successfully.",
+          type: "success"
+        });
+      } catch (error) {
+        toaster.create({
+          title: "Error cancelling invitation",
+          description: error instanceof Error ? error.message : "Unknown error",
+          type: "error"
+        });
+      }
+    },
+    [supabase, fetchInvitations]
+  );
+
+  // Load invitations on mount
+  useEffect(() => {
+    fetchInvitations();
+  }, [fetchInvitations]);
+
   useEffect(() => {
     if (checkedBoxes.size === 0) {
       setStrategy("none");
     }
   }, [checkedBoxes]);
 
-  const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
+  const columns = useMemo<ColumnDef<EnrollmentTableRow>[]>(
     () => [
       {
         id: "checkbox",
         header: "",
         cell: ({ row }) => {
+          const isChecked =
+            Array.from(checkedBoxesRef.current).find((box) => {
+              if (row.original.type === "invitation") {
+                return box.type === "invitation" && box.id === row.original.id;
+              } else {
+                return box.type === "enrollment" && box.private_profile_id === row.original.private_profile_id;
+              }
+            }) !== undefined;
+
           return (
             <Checkbox.Root
-              checked={
-                Array.from(checkedBoxesRef.current).find((box) => {
-                  return box.private_profile_id === row.original.private_profile_id;
-                }) != undefined
-              }
+              checked={isChecked}
               onCheckedChange={(checked) => handleSingleCheckboxChange(row.original, checked.checked.valueOf() == true)}
             >
               <Checkbox.HiddenInput />
@@ -183,13 +255,44 @@ export default function EnrollmentsTable() {
         }
       },
       {
-        id: "class_id",
-        accessorKey: "class_id",
-        header: "Class ID",
-        enableColumnFilter: true,
-        enableHiding: true,
+        id: "status",
+        header: "Status",
+        cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            const invitation = row.original;
+            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
+            const statusColor =
+              invitation.status === "pending"
+                ? isExpired
+                  ? "orange.500"
+                  : "blue.500"
+                : invitation.status === "accepted"
+                  ? "green.500"
+                  : "red.500";
+
+            return (
+              <Flex alignItems="center" gap={2}>
+                <Icon as={FaClock} color={statusColor} />
+                <Text color={statusColor} fontWeight="medium">
+                  {invitation.status === "pending" && isExpired ? "Expired" : invitation.status}
+                </Text>
+              </Flex>
+            );
+          }
+          return (
+            <Flex alignItems="center" gap={2}>
+              <Icon as={CheckIcon} color="green.500" />
+              <Text color="green.500" fontWeight="medium">
+                Enrolled
+              </Text>
+            </Flex>
+          );
+        },
         filterFn: (row, id, filterValue) => {
-          return String(row.original.class_id) === String(filterValue);
+          if (row.original.type === "invitation") {
+            return row.original.status.toLowerCase().includes(filterValue.toLowerCase());
+          }
+          return "enrolled".includes(filterValue.toLowerCase());
         }
       },
       {
@@ -198,6 +301,9 @@ export default function EnrollmentsTable() {
         header: "Name",
         enableColumnFilter: true,
         cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return row.original.name || row.original.sis_user_id || "N/A";
+          }
           const profile = row.original.profiles;
           if (profile && profile.name) {
             return profile.name;
@@ -205,9 +311,13 @@ export default function EnrollmentsTable() {
           return "N/A";
         },
         filterFn: (row, id, filterValue) => {
+          const filterString = String(filterValue).toLowerCase();
+          if (row.original.type === "invitation") {
+            const invitationName = row.original.name || `${row.original.sis_user_id}` || "";
+            return invitationName.toLowerCase().includes(filterString);
+          }
           const name = row.original.profiles?.name;
           if (!name) return false;
-          const filterString = String(filterValue).toLowerCase();
           return name.toLowerCase().includes(filterString);
         }
       },
@@ -216,10 +326,21 @@ export default function EnrollmentsTable() {
         accessorKey: "users.email",
         header: "Email",
         enableColumnFilter: true,
+        cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return row.original.email || "N/A";
+          }
+          return row.original.users?.email || "N/A";
+        },
         filterFn: (row, id, filterValue) => {
+          const filterString = String(filterValue).toLowerCase();
+          if (row.original.type === "invitation") {
+            const email = row.original.email;
+            if (!email) return false;
+            return email.toLowerCase().includes(filterString);
+          }
           const email = row.original.users?.email;
           if (!email) return false;
-          const filterString = String(filterValue).toLowerCase();
           return email.toLowerCase().includes(filterString);
         }
       },
@@ -227,6 +348,9 @@ export default function EnrollmentsTable() {
         id: "role",
         header: "Role",
         accessorKey: "role",
+        cell: ({ row }) => {
+          return row.original.role;
+        },
         filterFn: (row, id, filterValue) => {
           const role = row.original.role;
           if (!role) return false;
@@ -237,8 +361,14 @@ export default function EnrollmentsTable() {
       {
         id: "github_username",
         header: "Github Username",
-        accessorKey: "users.github_username",
+        cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return "N/A";
+          }
+          return row.original.users?.github_username || "N/A";
+        },
         filterFn: (row, id, filterValue) => {
+          if (row.original.type === "invitation") return false;
           const username = row.original.users?.github_username;
           if (!username) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -250,6 +380,9 @@ export default function EnrollmentsTable() {
         header: "Canvas Link",
         accessorKey: "canvas_id",
         cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return null;
+          }
           if (row.original.canvas_id) {
             return <Icon aria-label="Linked to Canvas" as={FaLink} />;
           }
@@ -261,10 +394,14 @@ export default function EnrollmentsTable() {
         header: "Tags",
         accessorKey: "tags",
         filterFn: (row, id, filterValue) => {
+          if (row.original.type === "invitation") {
+            return false; // Invitations don't have tags
+          }
+          const enrollment = row.original;
           const profileTagNames = tagData
             .filter((tag) => {
               return (
-                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
+                tag.profile_id === enrollment.private_profile_id || tag.profile_id === enrollment.public_profile_id
               );
             })
             .map((tag) => {
@@ -273,6 +410,13 @@ export default function EnrollmentsTable() {
           return profileTagNames.includes(filterValue);
         },
         cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return (
+              <Text color="gray.500" fontSize="sm">
+                N/A (Pending)
+              </Text>
+            );
+          }
           return (
             <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
               <PersonTags profile_id={row.original.private_profile_id} showRemove />
@@ -285,6 +429,35 @@ export default function EnrollmentsTable() {
         id: "actions",
         header: "Actions",
         cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            const invitation = row.original;
+            const isPending = invitation.status === "pending";
+            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
+            const canCancel = isPending && !isExpired;
+
+            return (
+              <HStack gap={2} justifyContent="center">
+                {canCancel && (
+                  <Tooltip content="Cancel invitation">
+                    <Icon
+                      as={FaTimes}
+                      aria-label="Cancel invitation"
+                      cursor="pointer"
+                      color="red.500"
+                      onClick={() => cancelInvitation(invitation.id)}
+                    />
+                  </Tooltip>
+                )}
+                {!canCancel && (
+                  <Text fontSize="sm" color="gray.500">
+                    {isExpired ? "Expired" : invitation.status}
+                  </Text>
+                )}
+              </HStack>
+            );
+          }
+
+          // Enrolled user actions
           const profile = row.original.profiles;
           const studentProfileId = profile?.id;
           const userRoleEntry = row.original;
@@ -369,16 +542,27 @@ export default function EnrollmentsTable() {
       openEditUserRoleModal,
       openRemoveStudentModal,
       tagData,
-      handleSingleCheckboxChange
+      handleSingleCheckboxChange,
+      cancelInvitation
     ]
   );
 
   // Get user roles data from CourseController (realtime)
   const userRolesData = useUserRolesWithProfiles();
 
+  // Combine enrollment and invitation data
+  const combinedData = useMemo<EnrollmentTableRow[]>(() => {
+    const enrollmentRows: EnrollmentTableRow[] = userRolesData.map((role) => ({
+      ...role,
+      type: "enrollment" as const
+    }));
+
+    return [...enrollmentRows, ...invitations];
+  }, [userRolesData, invitations]);
+
   // Create local table using react-table
   const table = useReactTable({
-    data: userRolesData,
+    data: combinedData,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -569,16 +753,19 @@ export default function EnrollmentsTable() {
                     addTag={async (name: string, color?: string) => {
                       try {
                         await Promise.all(
-                          Array.from(checkedBoxes).map((profile) =>
-                            addTag({
-                              name: name.startsWith("~") ? name.slice(1) : name,
-                              color: color || "gray",
-                              visible: !name.startsWith("~"),
-                              profile_id: profile.private_profile_id,
-                              class_id: parseInt(course_id as string),
-                              creator_id: currentUser?.id || ""
-                            })
-                          )
+                          Array.from(checkedBoxes)
+                            .filter((row) => row.type === "enrollment")
+                            .map((profile) =>
+                              addTag({
+                                name: name.startsWith("~") ? name.slice(1) : name,
+                                color: color || "gray",
+                                visible: !name.startsWith("~"),
+                                profile_id: (profile as UserRoleWithPrivateProfileAndUser & { type: "enrollment" })
+                                  .private_profile_id,
+                                class_id: parseInt(course_id as string),
+                                creator_id: currentUser?.id || ""
+                              })
+                            )
                         );
                         setStrategy("none");
                       } catch (error) {
@@ -590,7 +777,11 @@ export default function EnrollmentsTable() {
                     }}
                     currentTags={tagData.filter((tag) => {
                       return Array.from(checkedBoxes)
-                        .map((row) => row.private_profile_id)
+                        .filter((row) => row.type === "enrollment")
+                        .map(
+                          (row) =>
+                            (row as UserRoleWithPrivateProfileAndUser & { type: "enrollment" }).private_profile_id
+                        )
                         .includes(tag.profile_id);
                     })}
                     allowExpand={true}
@@ -612,7 +803,12 @@ export default function EnrollmentsTable() {
                               }, new Map())
                               .values()
                           ).filter((tag) => {
-                            const checkedProfileIds = Array.from(checkedBoxes).map((box) => box.private_profile_id);
+                            const checkedProfileIds = Array.from(checkedBoxes)
+                              .filter((row) => row.type === "enrollment")
+                              .map(
+                                (box) =>
+                                  (box as UserRoleWithPrivateProfileAndUser & { type: "enrollment" }).private_profile_id
+                              );
 
                             return checkedProfileIds.every((profileId) =>
                               tagData.some(
@@ -627,27 +823,33 @@ export default function EnrollmentsTable() {
                     }
                     removeTag={(tagName: string, tagColor: string, tagVisibility: boolean) => {
                       Promise.all(
-                        Array.from(checkedBoxes).map(async (profile) => {
-                          const findTag = tagData.find((tag) => {
-                            return (
-                              tag.name === tagName &&
-                              tag.color === tagColor &&
-                              tagVisibility === tag.visible &&
-                              tag.profile_id === profile.private_profile_id
-                            );
-                          });
-                          if (!findTag) {
-                            toaster.error({
-                              title: "Error removing tag",
-                              description: "Tag not found on profile " + (profile.profiles?.name || "Unknown")
+                        Array.from(checkedBoxes)
+                          .filter((row) => row.type === "enrollment")
+                          .map(async (profile) => {
+                            const enrollmentProfile = profile as UserRoleWithPrivateProfileAndUser & {
+                              type: "enrollment";
+                            };
+                            const findTag = tagData.find((tag) => {
+                              return (
+                                tag.name === tagName &&
+                                tag.color === tagColor &&
+                                tagVisibility === tag.visible &&
+                                tag.profile_id === enrollmentProfile.private_profile_id
+                              );
                             });
-                            return;
-                          }
-                          return deleteMutation({
-                            resource: "tags",
-                            id: findTag.id
-                          });
-                        })
+                            if (!findTag) {
+                              toaster.error({
+                                title: "Error removing tag",
+                                description:
+                                  "Tag not found on profile " + (enrollmentProfile.profiles?.name || "Unknown")
+                              });
+                              return;
+                            }
+                            return deleteMutation({
+                              resource: "tags",
+                              id: findTag.id
+                            });
+                          })
                       )
                         .then(() => {
                           setStrategy("none");

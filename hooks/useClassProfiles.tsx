@@ -2,13 +2,11 @@
 import { signOutAction } from "@/app/actions";
 import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
-import TableController from "@/lib/TableController";
 import { CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext } from "react";
 import useAuthState from "./useAuthState";
-import { createClient } from "@/utils/supabase/client";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { useList } from "@refinedev/core";
