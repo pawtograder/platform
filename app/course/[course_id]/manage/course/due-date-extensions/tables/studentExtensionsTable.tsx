@@ -8,10 +8,10 @@ import { useAllStudentProfiles, useStudentDeadlineExtensions } from "@/hooks/use
 import useModalManager from "@/hooks/useModalManager";
 import { createClient } from "@/utils/supabase/client";
 import { StudentDeadlineExtension, UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { Box, Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VStack } from "@chakra-ui/react";
+import { Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VStack } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 
 type ExtensionForm = {
@@ -29,8 +29,8 @@ export default function StudentExtensionsTable() {
   const { course_id } = useParams<{ course_id: string }>();
   const supabase = createClient();
 
-  const [createOpen, setCreateOpen] = useModalManager<ExtensionForm>();
-  const [editOpen, setEditOpen] = useModalManager<StudentDeadlineExtension>();
+  const createOpen = useModalManager<ExtensionForm>();
+  const editOpen = useModalManager<StudentDeadlineExtension>();
 
   const studentOptions = useMemo(
     () => (students || []).map((s: UserProfile) => ({ value: s.id, label: s.name || s.id })),
@@ -99,7 +99,7 @@ export default function StudentExtensionsTable() {
     <VStack gap={4} align="stretch" w="100%">
       <HStack justifyContent="space-between">
         <Heading size="md">Student-Wide Extensions</Heading>
-        <Button onClick={() => setCreateOpen.openModal({ hours: 24, includes_lab: false })}>
+        <Button onClick={() => createOpen.openModal({ hours: 24, includes_lab: false })}>
           <Icon as={FaPlus} /> Add Extension
         </Button>
       </HStack>
@@ -125,7 +125,7 @@ export default function StudentExtensionsTable() {
               <Table.Cell>{new Date(row.updated_at).toLocaleString()}</Table.Cell>
               <Table.Cell>
                 <HStack gap={2}>
-                  <Button size="xs" variant="ghost" onClick={() => setEditOpen.openModal(row)}>
+                  <Button size="xs" variant="ghost" onClick={() => editOpen.openModal(row)}>
                     <Icon as={FaEdit} />
                   </Button>
                   <PopConfirm
@@ -164,8 +164,9 @@ export default function StudentExtensionsTable() {
                       value={studentOptions.find((o) => o.value === createOpen.modalData?.studentId) || null}
                       onChange={(opt) =>
                         createOpen.openModal({
-                          ...createOpen.modalData,
-                          studentId: (opt as { value: string } | null)?.value
+                          studentId: (opt as { value: string } | null)?.value,
+                          hours: createOpen.modalData?.hours ?? 24,
+                          includes_lab: createOpen.modalData?.includes_lab ?? false
                         })
                       }
                       placeholder="Select student"
@@ -178,7 +179,11 @@ export default function StudentExtensionsTable() {
                       step={1}
                       value={createOpen.modalData?.hours ?? 24}
                       onChange={(e) =>
-                        createOpen.openModal({ ...createOpen.modalData, hours: parseInt(e.target.value || "0", 10) })
+                        createOpen.openModal({
+                          studentId: createOpen.modalData?.studentId,
+                          hours: parseInt(e.target.value || "0", 10),
+                          includes_lab: createOpen.modalData?.includes_lab ?? false
+                        })
                       }
                     />
                   </Field>
@@ -186,7 +191,11 @@ export default function StudentExtensionsTable() {
                     <Checkbox.Root
                       checked={!!createOpen.modalData?.includes_lab}
                       onCheckedChange={(c) =>
-                        createOpen.openModal({ ...createOpen.modalData, includes_lab: c.checked.valueOf() === true })
+                        createOpen.openModal({
+                          studentId: createOpen.modalData?.studentId,
+                          hours: createOpen.modalData?.hours ?? 24,
+                          includes_lab: c.checked.valueOf() === true
+                        })
                       }
                     >
                       <Checkbox.HiddenInput />
