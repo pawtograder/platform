@@ -8,15 +8,11 @@ import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
-import { getUserRolesForCourse, getCourse } from "@/lib/ssrUtils";
-import { Metadata } from "next";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
 
-export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }): Promise<Metadata> {
-  const { course_id } = await params;
-  const course = await getCourse(Number.parseInt(course_id));
-
+export async function generateMetadata({ params }: { params: { course_id: string } }) {
   return {
-    title: course?.name ? `${course.name} - Pawtograder` : "Course - Pawtograder"
+    title: `Course ${params.course_id} - Pawtograder`
   };
 }
 
@@ -25,10 +21,11 @@ const ProtectedLayout = async ({
   params
 }: Readonly<{
   children: React.ReactNode;
-  params: Promise<{ course_id: string }>;
+  params: { course_id: string };
 }>) => {
-  const { course_id } = await params;
+  const { course_id } = params;
   const user_role = await getUserRolesForCourse(Number.parseInt(course_id));
+  console.log(user_role);
   if (!user_role) {
     redirect("/");
   }

@@ -11,12 +11,13 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { FaClock, FaExternalLinkAlt } from "react-icons/fa";
+import { toaster } from "@/components/ui/toaster";
 
 interface ClassLateTokenUpdateFormData {
   late_tokens_per_student: number;
 }
 
-function AssignmentDueDateExceptionRow({ assignment, courseId }: { assignment: Assignment; courseId: number }) {
+function AssignmentDueDateExceptionRow({ assignment, timeZone, courseId }: { assignment: Assignment; timeZone: string; courseId: number }) {
   return (
     <Card.Root>
       <Card.Body>
@@ -25,7 +26,7 @@ function AssignmentDueDateExceptionRow({ assignment, courseId }: { assignment: A
             <Heading size="sm">{assignment.title}</Heading>
             <HStack gap={4}>
               <Text fontSize="sm" color="fg.muted">
-                Due: {assignment.due_date ? new Date(assignment.due_date).toLocaleString() : "No due date"}
+                Due: {assignment.due_date ? new Date(assignment.due_date).toLocaleString("en-US", { timeZone }) : "No due date"}
               </Text>
               <Text fontSize="sm" color="fg.muted">
                 Max Late Tokens: {assignment.max_late_tokens}
@@ -83,13 +84,35 @@ export default function DueDateExceptionsManagement() {
       }
 
       setIsEditingTokens(false);
+      
+      // Invalidate related resources so dependent UIs refresh
       invalidate({
         resource: "user_roles",
         invalidates: ["all"]
       });
-    } catch {
-      // In a real app, you'd want to show a toast or error message to the user
-      // For now, we silently handle the error
+      invalidate({
+        resource: "classes",
+        invalidates: ["all"]
+      });
+      invalidate({
+        resource: "assignments",
+        invalidates: ["all"]
+      });
+
+      toaster.success({
+        title: "Success",
+        description: "Late tokens updated successfully"
+      });
+    } catch (err) {
+      // Log the full error for debugging
+      console.error("Error updating late tokens:", err);
+      
+      // Surface error to user with RPC error details
+      const errorMessage = err instanceof Error ? err.message : "Failed to update late tokens";
+      toaster.error({
+        title: "Failed to update late tokens",
+        description: errorMessage
+      });
     }
   });
 
@@ -202,6 +225,7 @@ export default function DueDateExceptionsManagement() {
                 <AssignmentDueDateExceptionRow
                   key={assignment.id}
                   assignment={assignment}
+                  timeZone={course.time_zone}
                   courseId={Number.parseInt(course_id as string)}
                 />
               ))}
