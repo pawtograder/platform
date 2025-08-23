@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
-import { encodedRedirect } from "@/utils/utils";
+import { isSignupsEnabled } from "@/lib/features";
 
 export async function login(formData: FormData) {
   const supabase = await createClient();
@@ -29,15 +29,13 @@ export async function login(formData: FormData) {
 }
 
 export async function signup(formData: FormData) {
-  // Check if signups are enabled
-  if (process.env.ENABLE_SIGNUPS !== "true") {
-    return encodedRedirect("error", "/sign-in", "Sign ups are currently disabled");
+  if (!isSignupsEnabled()) {
+    // Redirect to error page with message
+    redirect("/error?message=" + encodeURIComponent("Signups are currently disabled"));
   }
 
   const supabase = await createClient();
 
-  // type-casting here for convenience
-  // in practice, you should validate your inputs
   const data = {
     email: formData.get("email") as string,
     password: formData.get("password") as string

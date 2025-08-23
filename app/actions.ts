@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
 import { env } from "process";
+import { isSignupsEnabled } from "@/lib/features";
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
@@ -82,12 +83,6 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");
-
-  // Check if signups are enabled for signup actions
-  if (action === "signup" && process.env.NEXT_PUBLIC_ENABLE_SIGNUPS !== "true") {
-    return encodedRedirect("error", "/sign-in", "Sign ups are currently disabled");
-  }
-
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string);
   } else if (action === "signup") {
@@ -118,6 +113,10 @@ export const signInWithEmailAction = async (email: string, password: string) => 
   }
 };
 export const signUpWithEmailAction = async (email: string, password: string) => {
+  if (!isSignupsEnabled()) {
+    return encodedRedirect("error", "/sign-in", "Signups are currently disabled");
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email,

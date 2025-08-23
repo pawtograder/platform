@@ -4,11 +4,12 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import Logo from "@/components/ui/logo";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 import { BsMicrosoft } from "react-icons/bs";
+import { isSignupsEnabled } from "@/lib/features";
 
 type SearchParams = Message & { email?: string; code?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, ...message } = await props.searchParams;
-  const enableSignup = process.env.NEXT_PUBLIC_ENABLE_SIGNUPS === "true";
+  const enableSignup = isSignupsEnabled();
 
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>

@@ -80,13 +80,13 @@ function parseMeetingTimes(meetingTimes: string, scope?: Sentry.Scope): ParsedMe
     }
 
     // Day mapping
-    const dayMap: { [key: string]: string } = {
+    const dayMap = {
       M: "monday",
       T: "tuesday",
       W: "wednesday",
       R: "thursday",
       F: "friday"
-    };
+    } as const satisfies Record<string, Database["public"]["Enums"]["day_of_week"]>;
 
     // Try multiple time pattern variations
     const timePatterns = [
@@ -225,9 +225,11 @@ function parseMeetingTimes(meetingTimes: string, scope?: Sentry.Scope): ParsedMe
 
     // Extract first day for day_of_week field
     let dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null = null;
-    for (const [abbrev, fullName] of Object.entries(dayMap)) {
-      if (meetingTimes.includes(abbrev)) {
-        dayOfWeek = fullName as Database["public"]["Enums"]["day_of_week"];
+    // Iterate through meetingTimes string in order to find the first day that appears
+    for (let i = 0; i < meetingTimes.length; i++) {
+      const char = meetingTimes[i];
+      if (char in dayMap) {
+        dayOfWeek = dayMap[char as keyof typeof dayMap];
         break;
       }
     }
@@ -787,28 +789,22 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           // Parse meeting times for lab sections to extract start/end times
           const parsedTimes = parseMeetingTimes(sectionMeta.meeting_times || "", scope);
 
-          const labUpdateData: {
-            meeting_location: string;
-            meeting_times: string;
-            updated_at: string;
-            start_time?: string;
-            end_time?: string;
-            day_of_week?: Database["public"]["Enums"]["day_of_week"];
-          } = {
+          const labUpdateData: Database["public"]["Tables"]["lab_sections"]["Update"] = {
             meeting_location: sectionMeta.meeting_location,
             meeting_times: sectionMeta.meeting_times,
             updated_at: new Date().toISOString()
           };
-
-          // Add parsed time fields if successfully parsed
-          if (parsedTimes.startTime) {
+          const mt = sectionMeta.meeting_times?.trim() ?? "";
+          if (!mt) {
+            // SIS cleared times; clear derived fields too
+            labUpdateData.start_time = null;
+            labUpdateData.end_time = null;
+            labUpdateData.day_of_week = null;
+          } else if (parsedTimes.startTime && parsedTimes.endTime) {
+            // Only write when we have both ends
             labUpdateData.start_time = parsedTimes.startTime;
-          }
-          if (parsedTimes.endTime) {
             labUpdateData.end_time = parsedTimes.endTime;
-          }
-          if (parsedTimes.dayOfWeek) {
-            labUpdateData.day_of_week = parsedTimes.dayOfWeek;
+            labUpdateData.day_of_week = parsedTimes.dayOfWeek ?? null;
           }
 
           const { error: updateError } = await adminSupabase

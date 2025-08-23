@@ -166,16 +166,73 @@ export default function NotificationForm({
     [setFormData]
   );
 
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      await onSubmit(formData);
+      setValidationError(null);
+
+      // Trim all string fields
+      const sanitizedData = {
+        ...formData,
+        title: formData.title.trim(),
+        message: formData.message.trim(),
+        icon: formData.icon.trim(),
+        expires_at: formData.expires_at.trim(),
+        campaign_id: formData.campaign_id.trim(),
+        max_width: formData.max_width.trim(),
+        user_ids: formData.user_ids.trim()
+      };
+
+      // Validate title is non-empty
+      if (!sanitizedData.title) {
+        setValidationError("Title is required");
+        return;
+      }
+
+      // Validate message is not blank (strip HTML/markdown and check plain text length)
+      const plainTextMessage = sanitizedData.message
+        .replace(/<[^>]*>/g, "")
+        .replace(/[#*`~]/g, "")
+        .trim();
+      if (!plainTextMessage) {
+        setValidationError("Message is required");
+        return;
+      }
+
+      // Normalize user_ids: filter out falsy values, convert to canonical type, and deduplicate
+      const normalizedUserIds = sanitizedData.user_ids
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+        .filter((id, index, arr) => arr.indexOf(id) === index); // Remove duplicates
+
+      // Dedupe course_ids: remove duplicates and falsy entries
+      const normalizedCourseIds = sanitizedData.course_ids
+        .filter((id) => id && id > 0) // Remove falsy and invalid IDs
+        .filter((id, index, arr) => arr.indexOf(id) === index); // Remove duplicates
+
+      const finalData = {
+        ...sanitizedData,
+        user_ids: normalizedUserIds.join(", "),
+        course_ids: normalizedCourseIds
+      };
+
+      await onSubmit(finalData);
     },
     [formData, onSubmit]
   );
 
   return (
     <form id="notification-form" onSubmit={handleSubmit}>
+      {validationError && (
+        <Box p={3} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md">
+          <Text color="red.600" fontSize="sm">
+            {validationError}
+          </Text>
+        </Box>
+      )}
       <VStack gap={4} align="stretch">
         {/* Basic Information */}
         <Box>
@@ -206,7 +263,7 @@ export default function NotificationForm({
               <Field label="Display Mode">
                 <SelectRoot
                   collection={displayModeCollection}
-                  defaultValue={[formData.display]}
+                  value={[formData.display]}
                   onValueChange={(details: { value: string[] }) =>
                     handleInputChange("display", details.value[0] as "default" | "modal" | "banner")
                   }
@@ -229,7 +286,7 @@ export default function NotificationForm({
               <Field label="Severity">
                 <SelectRoot
                   collection={severityCollection}
-                  defaultValue={[formData.severity]}
+                  value={[formData.severity]}
                   onValueChange={(details: { value: string[] }) =>
                     handleInputChange("severity", details.value[0] as "info" | "success" | "warning" | "error")
                   }
@@ -439,7 +496,7 @@ export default function NotificationForm({
                 <Field label="Position">
                   <SelectRoot
                     collection={positionCollection}
-                    defaultValue={[formData.position]}
+                    value={[formData.position]}
                     onValueChange={(details: { value: string[] }) =>
                       handleInputChange("position", details.value[0] as "top" | "bottom" | "center")
                     }
