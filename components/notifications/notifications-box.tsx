@@ -27,8 +27,8 @@ export default function NotificationsBox() {
         // Filter out notifications where the author is the current user
         const body = n.body as { author_profile_id?: string };
         return (
-          body.author_profile_id !== classRole.private_profile_id &&
-          body.author_profile_id !== classRole.public_profile_id
+          body.author_profile_id !== classRole?.private_profile_id &&
+          body.author_profile_id !== classRole?.public_profile_id
         );
       }) || [],
     [notifications, classRole]
