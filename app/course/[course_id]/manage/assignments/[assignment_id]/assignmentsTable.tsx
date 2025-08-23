@@ -99,7 +99,9 @@ function ScoreLink({
   if (isObfuscated && !canShowGradeFor) {
     return <Skeleton w="50px" h="1em" />;
   }
-  return <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
+  return (
+    <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>
+  );
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
