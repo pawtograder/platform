@@ -17,7 +17,15 @@ interface ClassLateTokenUpdateFormData {
   late_tokens_per_student: number;
 }
 
-function AssignmentDueDateExceptionRow({ assignment, timeZone, courseId }: { assignment: Assignment; timeZone: string; courseId: number }) {
+function AssignmentDueDateExceptionRow({
+  assignment,
+  timeZone,
+  courseId
+}: {
+  assignment: Assignment;
+  timeZone: string;
+  courseId: number;
+}) {
   return (
     <Card.Root>
       <Card.Body>
@@ -26,7 +34,10 @@ function AssignmentDueDateExceptionRow({ assignment, timeZone, courseId }: { ass
             <Heading size="sm">{assignment.title}</Heading>
             <HStack gap={4}>
               <Text fontSize="sm" color="fg.muted">
-                Due: {assignment.due_date ? new Date(assignment.due_date).toLocaleString("en-US", { timeZone }) : "No due date"}
+                Due:{" "}
+                {assignment.due_date
+                  ? new Date(assignment.due_date).toLocaleString("en-US", { timeZone })
+                  : "No due date"}
               </Text>
               <Text fontSize="sm" color="fg.muted">
                 Max Late Tokens: {assignment.max_late_tokens}
@@ -84,7 +95,7 @@ export default function DueDateExceptionsManagement() {
       }
 
       setIsEditingTokens(false);
-      
+
       // Invalidate related resources so dependent UIs refresh
       invalidate({
         resource: "user_roles",
@@ -106,7 +117,7 @@ export default function DueDateExceptionsManagement() {
     } catch (err) {
       // Log the full error for debugging
       console.error("Error updating late tokens:", err);
-      
+
       // Surface error to user with RPC error details
       const errorMessage = err instanceof Error ? err.message : "Failed to update late tokens";
       toaster.error({

@@ -113,7 +113,7 @@ function SubmissionReviewScoreTweak() {
         return;
       }
       await submissionController.submission_reviews.update(review.id, {
-        tweak: current
+        tweak: current ?? 0
       });
       setIsEditing(false);
     } catch (err) {

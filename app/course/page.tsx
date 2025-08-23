@@ -2,11 +2,7 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { termToTermText } from "@/components/ui/semesterText";
 import { createClient } from "@/utils/supabase/server";
-import { Card, Flex, Heading, Stack, Text, VStack } from "@chakra-ui/react";
-// Remove the lucide-react import...
-- import { Box } from "lucide-react";
-// ...and merge Box into the existing Chakra UI import
- import { Card, Flex, Heading, Stack, Text, VStack, Box } from "@chakra-ui/react";
+import { Card, Flex, Heading, Stack, Text, VStack, Box } from "@chakra-ui/react";
 import { redirect } from "next/navigation";
 import { signOutAction } from "../actions";
 
