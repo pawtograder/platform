@@ -175,8 +175,13 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       params.delete("ignore_review");
     } else {
       params.set("selected_review_id", String(id));
-      // Selecting an arbitrary review implies ignoring RA context
-      params.set("ignore_review", "true");
+      // Only set ignore_review=true if there ARE assigned reviews that we're choosing to ignore
+      const hasAssignedReviews = myAssignedReviews.length > 0;
+      if (hasAssignedReviews) {
+        params.set("ignore_review", "true");
+      } else {
+        params.delete("ignore_review");
+      }
       params.delete("review_assignment_id");
     }
     const qs = params.toString();

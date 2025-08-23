@@ -8,7 +8,6 @@ import { useParams } from "next/navigation";
 import { Controller } from "react-hook-form";
 import { RadioCardRoot, RadioCardItem } from "@/components/ui/radio-card";
 export default function HelpRequestForm() {
-  console.log("HelpRequestForm");
   const { course_id } = useParams();
   const {
     refineCore: { formLoading, query },
@@ -16,18 +15,11 @@ export default function HelpRequestForm() {
     control,
     formState: { errors }
   } = useForm<HelpRequest>({ refineCoreProps: { resource: "help_requests", action: "create" } });
-  console.log(course_id);
   const { data: queues, error: queuesError } = useList<HelpQueue>({
     resource: "help_queues",
-    meta: { select: "*" }
-    // filters:
-    //     [
-    //         { field: "class", operator: "eq", value: course_id }
-    //     ]
+    meta: { select: "*" },
+    filters: [{ field: "class", operator: "eq", value: course_id }]
   });
-  console.log("Queues stuff");
-  console.log(queuesError);
-  console.log(queues?.total);
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
   }
