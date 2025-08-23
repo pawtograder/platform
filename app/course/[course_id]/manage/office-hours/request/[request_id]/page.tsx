@@ -7,6 +7,8 @@ import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/rea
 import { Alert } from "@/components/ui/alert";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
 import { useHelpRequest, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useEffect } from "react";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -82,6 +84,13 @@ export default function HelpRequestPage() {
   // Get help request data and connection status using individual hooks
   const request = useHelpRequest(Number(request_id));
   const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
+  const course = useCourseController();
+
+  useEffect(() => {
+    if (course?.course) {
+      document.title = `${course.course.course_title} - Office Hours #${request_id} - Pawtograder`;
+    }
+  }, [course?.course, request_id]);
 
   if (realtimeLoading || !request) {
     return <Skeleton />;

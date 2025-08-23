@@ -1,28 +1,18 @@
+export function termToTermText(term: number) {
+  const year = Math.floor(term / 100);
+  const termCode = term % 100;
+  const termMap: { [key: number]: string } = {
+    10: "Fall",
+    20: "Spring",
+    30: "Summer 1",
+    40: "Summer 2"
+  };
+
+  return `${termMap[termCode]} ${year}`;
+}
 export default function SemesterText({ semester }: { semester: number | null }) {
   if (!semester) {
     return <></>;
   }
-  const semString = semester.toString();
-  const year = semString.substring(0, 4);
-  const semKey = semString.substring(4);
-  let semKeyText = "";
-  switch (semKey) {
-    case "1":
-      semKeyText = "Spring";
-      break;
-    case "2":
-      semKeyText = "Summer";
-      break;
-    case "3":
-      semKeyText = "Fall";
-      break;
-    default:
-      semKeyText = "Unknown";
-      break;
-  }
-  return (
-    <>
-      {semKeyText} {year}
-    </>
-  );
+  return termToTermText(semester);
 }

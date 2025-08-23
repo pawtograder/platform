@@ -8561,6 +8561,10 @@ export type Database = {
         };
         Returns: undefined;
       };
+      update_class_late_tokens_per_student: {
+        Args: { p_class_id: number; p_late_tokens_per_student: number };
+        Returns: undefined;
+      };
       update_regrade_request_status: {
         Args: {
           regrade_request_id: number;

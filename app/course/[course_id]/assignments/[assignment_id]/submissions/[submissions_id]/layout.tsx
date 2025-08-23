@@ -38,7 +38,7 @@ import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useMemo, useRef, useState } from "react";
+import { ElementType as ReactElementType, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -49,6 +49,7 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
+import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -553,6 +554,15 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const assignment = useAssignmentController();
+  useEffect(() => {
+    if (isGraderOrInstructor) {
+      document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
+    } else if (!isGraderOrInstructor) {
+      document.title = `${assignment?.assignment?.title} - Submission #${submission.ordinal} - Pawtograder`;
+    }
+  }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
     <Flex direction="column" minW="0px">
       <SubmissionReviewToolbar />
