@@ -13,7 +13,7 @@ import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaGift, FaPlus, FaTrash } from "react-icons/fa";
-import AddExtensionModal, { AddExtensionDefaults } from "../modals/addExtensionModal";
+import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
 import GiftTokenModal, { GiftTokenDefaults } from "../modals/giftTokenModal";
 
 /**
@@ -240,7 +240,7 @@ export default function DueDateExceptionsTable() {
         );
       })}
 
-      <AddExtensionModal isOpen={addOpen.isOpen} onClose={addOpen.closeModal} defaults={addOpen.modalData || {}} />
+      <AddExceptionModal isOpen={addOpen.isOpen} onClose={addOpen.closeModal} defaults={addOpen.modalData || {}} />
       <GiftTokenModal isOpen={giftOpen.isOpen} onClose={giftOpen.closeModal} defaults={giftOpen.modalData || {}} />
       <Toaster />
     </VStack>

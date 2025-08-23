@@ -4992,8 +4992,15 @@ export type Database = {
             foreignKeyName: "student_deadline_extensions_student_id_fkey";
             columns: ["student_id"];
             isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_deadline_extensions_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };

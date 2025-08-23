@@ -21,7 +21,7 @@ alter table "public"."student_deadline_extensions" add constraint "student_deadl
 
 alter table "public"."student_deadline_extensions" validate constraint "student_deadline_extensions_class_id_fkey";
 
-alter table "public"."student_deadline_extensions" add constraint "student_deadline_extensions_student_id_fkey" FOREIGN KEY (student_id) REFERENCES users(user_id) ON UPDATE CASCADE ON DELETE CASCADE not valid;
+alter table "public"."student_deadline_extensions" add constraint "student_deadline_extensions_student_id_fkey" FOREIGN KEY (student_id) REFERENCES profiles(id) ON UPDATE CASCADE ON DELETE CASCADE not valid;
 
 alter table "public"."student_deadline_extensions" validate constraint "student_deadline_extensions_student_id_fkey";
 
@@ -82,7 +82,8 @@ BEGIN
     
     RETURN NEW;
 END;
-$function$;
+$function$
+;
 
 CREATE OR REPLACE FUNCTION public.create_assignment_exceptions_from_extension()
  RETURNS trigger
@@ -154,15 +155,10 @@ BEGIN
     
     RETURN NEW;
 END;
-$function$;
+$function$
+;
 
-CREATE OR REPLACE FUNCTION public.gift_tokens_to_student(
-    p_student_id uuid, 
-    p_class_id bigint, 
-    p_assignment_id bigint, 
-    p_tokens_to_gift integer, 
-    p_note text DEFAULT 'Tokens gifted by instructor'::text
-)
+CREATE OR REPLACE FUNCTION public.gift_tokens_to_student(p_student_id uuid, p_class_id bigint, p_assignment_id bigint, p_tokens_to_gift integer, p_note text DEFAULT 'Tokens gifted by instructor'::text)
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -210,7 +206,8 @@ BEGIN
         p_note
     );
 END;
-$function$;
+$function$
+;
 
 grant delete on table "public"."student_deadline_extensions" to "anon";
 
@@ -265,15 +262,8 @@ with check (authorizeforclassgrader(class_id));
 
 CREATE TRIGGER on_assignment_created_apply_extensions AFTER INSERT ON public.assignments FOR EACH ROW EXECUTE FUNCTION apply_extensions_to_new_assignment();
 
+CREATE TRIGGER broadcast_student_deadline_extensions_realtime AFTER INSERT OR DELETE OR UPDATE ON public.student_deadline_extensions FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();
+
 CREATE TRIGGER on_student_deadline_extension_created AFTER INSERT ON public.student_deadline_extensions FOR EACH ROW EXECUTE FUNCTION create_assignment_exceptions_from_extension();
-
--- Add after all the table creation and policy definitions
-CREATE TRIGGER broadcast_student_deadline_extensions_realtime
-  AFTER INSERT OR DELETE OR UPDATE
-  ON public.student_deadline_extensions
-  FOR EACH ROW
-  EXECUTE FUNCTION broadcast_course_table_change_unified();
-
-
 
 

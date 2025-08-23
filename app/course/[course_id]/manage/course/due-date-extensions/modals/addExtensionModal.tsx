@@ -3,26 +3,24 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles } from "@/hooks/useCourseController";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Assignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { Dialog, HStack, Input, Portal, Textarea, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
+import { Checkbox, Dialog, HStack, Input, Portal, Text, VStack } from "@chakra-ui/react";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-type ADEInsert = Database["public"]["Tables"]["assignment_due_date_exceptions"]["Insert"];
+type SDEInsert = Database["public"]["Tables"]["student_deadline_extensions"]["Insert"];
 
 export type AddExtensionDefaults = {
-  assignmentId?: number;
   studentId?: string;
+  hours?: number;
+  includes_lab?: boolean;
 };
 
 /**
- * Modal to create a new assignment_due_date_exceptions row.
+ * Modal to create a new student-wide deadline extension (student_deadline_extensions).
  */
 export default function AddExtensionModal({
   isOpen,
@@ -34,46 +32,28 @@ export default function AddExtensionModal({
   defaults?: AddExtensionDefaults;
 }) {
   const { course_id } = useParams<{ course_id: string }>();
-  const { private_profile_id } = useClassProfiles();
-
-  const students = useAllStudentProfiles();
-
-  // Load all assignments for this class
-  const { data: assignmentsData } = useList<Assignment>({
-    resource: "assignments",
-    filters: [{ field: "class_id", operator: "eq", value: Number(course_id) }],
-    pagination: { pageSize: 1000 },
-    sorters: [
-      { field: "due_date", order: "asc" },
-      { field: "id", order: "asc" }
-    ]
-  });
-
-  const assignmentOptions = useMemo(
-    () =>
-      (assignmentsData?.data || []).map((a) => ({
-        value: a.id,
-        label: a.title || `Assignment #${a.id}`
-      })),
-    [assignmentsData?.data]
-  );
+  const allUserRoles = useUserRolesWithProfiles();
 
   const studentOptions = useMemo(
     () =>
-      (students || []).map((s: UserProfile) => ({
-        value: s.id,
-        label: s.name || s.id
-      })),
-    [students]
+      allUserRoles
+        .filter((role) => role.role === "student" && !role.disabled)
+        .map((role) => ({
+          value: role.user_id,
+          label: role.profiles?.name || role.users?.name || role.user_id
+        })),
+    [allUserRoles]
   );
 
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | undefined>(defaults?.assignmentId);
   const [selectedStudentId, setSelectedStudentId] = useState<string | undefined>(defaults?.studentId);
+  const [includeLab, setIncludeLab] = useState<boolean>(defaults?.includes_lab ?? false);
+  const [defaultHours, setDefaultHours] = useState<number>(defaults?.hours ?? 24);
 
   useEffect(() => {
-    setSelectedAssignmentId(defaults?.assignmentId);
     setSelectedStudentId(defaults?.studentId);
-  }, [defaults?.assignmentId, defaults?.studentId]);
+    setIncludeLab(defaults?.includes_lab ?? false);
+    setDefaultHours(defaults?.hours ?? 24);
+  }, [defaults?.studentId, defaults?.includes_lab, defaults?.hours]);
 
   const {
     register,
@@ -82,7 +62,7 @@ export default function AddExtensionModal({
     setValue,
     formState: { errors, isSubmitting },
     refineCore
-  } = useForm<ADEInsert>({ refineCoreProps: { resource: "assignment_due_date_exceptions", action: "create" } });
+  } = useForm<SDEInsert>({ refineCoreProps: { resource: "student_deadline_extensions", action: "create" } });
 
   const onCloseInternal = () => {
     reset();
@@ -91,23 +71,19 @@ export default function AddExtensionModal({
 
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!selectedAssignmentId || !selectedStudentId) {
-      toaster.error({
-        title: "Missing data",
-        description: !selectedAssignmentId ? "Please select an assignment." : "Please select a student."
-      });
+    if (!selectedStudentId) {
+      toaster.error({ title: "Missing data", description: "Please select a student." });
       return;
     }
     setValue("class_id", Number(course_id));
-    setValue("assignment_id", selectedAssignmentId);
     setValue("student_id", selectedStudentId);
-    setValue("creator_id", private_profile_id || "");
+    setValue("includes_lab", includeLab);
     handleSubmit(async (values) => {
       try {
         await refineCore.onFinish?.(values);
         toaster.create({
           title: "Extension added",
-          description: "The due date exception has been created.",
+          description: "The student-wide extension has been created.",
           type: "success"
         });
         onCloseInternal();
@@ -127,63 +103,39 @@ export default function AddExtensionModal({
         <Dialog.Positioner>
           <Dialog.Content as="form" onSubmit={onSubmit}>
             <Dialog.Header>
-              <Dialog.Title>Add Due Date Exception</Dialog.Title>
+              <Dialog.Title>Add Student-Wide Extension</Dialog.Title>
               <Dialog.CloseTrigger onClick={onCloseInternal} />
             </Dialog.Header>
             <Dialog.Body>
               <VStack gap={4} align="stretch">
-                <Field label="Assignment" required>
-                  <Select
-                    options={assignmentOptions}
-                    value={assignmentOptions.find((o) => o.value === selectedAssignmentId) || null}
-                    onChange={(opt) => setSelectedAssignmentId((opt as { value: number } | null)?.value)}
-                    placeholder="Select assignment"
-                  />
-                </Field>
                 <Field label="Student" required>
                   <Select
                     options={studentOptions}
                     value={studentOptions.find((o) => o.value === selectedStudentId) || null}
-                    onChange={(opt) => setSelectedStudentId((opt as { value: string } | null)?.value)}
+                    onChange={(opt) => setSelectedStudentId((opt as { value: string } | undefined | null)?.value)}
                     placeholder="Select student"
+                    isClearable
                   />
                 </Field>
-                <HStack gap={3} alignItems="flex-start">
-                  <Field label="Hours" errorText={errors.hours?.message?.toString()} invalid={!!errors.hours} required>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      {...register("hours", { valueAsNumber: true, min: 0, required: true })}
-                    />
-                  </Field>
-                  <Field label="Minutes" errorText={errors.minutes?.message?.toString()} invalid={!!errors.minutes}>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={59}
-                      step={1}
-                      defaultValue={0}
-                      {...register("minutes", { valueAsNumber: true, min: 0, max: 59 })}
-                    />
-                  </Field>
-                  <Field
-                    label="Tokens Consumed"
-                    errorText={errors.tokens_consumed?.message?.toString()}
-                    invalid={!!errors.tokens_consumed}
-                  >
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      defaultValue={0}
-                      {...register("tokens_consumed", { valueAsNumber: true, min: 0 })}
-                    />
-                  </Field>
-                </HStack>
-                <Field label="Note" errorText={errors.note?.message?.toString()} invalid={!!errors.note}>
-                  <Textarea placeholder="Optional note" {...register("note")} />
+                <Field label="Hours" errorText={errors.hours?.message?.toString()} invalid={!!errors.hours} required>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    defaultValue={defaultHours}
+                    {...register("hours", { valueAsNumber: true, min: 0, required: true })}
+                  />
                 </Field>
+                <HStack>
+                  <Checkbox.Root
+                    checked={!!includeLab}
+                    onCheckedChange={(c) => setIncludeLab(c.checked.valueOf() === true)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control />
+                    <Text ml={2}>Include lab assignments</Text>
+                  </Checkbox.Root>
+                </HStack>
               </VStack>
             </Dialog.Body>
             <Dialog.Footer>
@@ -192,7 +144,7 @@ export default function AddExtensionModal({
                   Cancel
                 </Button>
                 <Button colorPalette="green" type="submit" loading={isSubmitting}>
-                  Add Exception
+                  Add Extension
                 </Button>
               </HStack>
             </Dialog.Footer>

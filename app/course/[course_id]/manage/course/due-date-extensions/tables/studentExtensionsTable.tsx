@@ -7,18 +7,11 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAllStudentProfiles, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { createClient } from "@/utils/supabase/client";
-import { StudentDeadlineExtension, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { StudentDeadlineExtension } from "@/utils/supabase/DatabaseTypes";
 import { Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VStack } from "@chakra-ui/react";
-import { Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
-import { useMemo } from "react";
-import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 
-type ExtensionForm = {
-  studentId?: string;
-  hours: number;
-  includes_lab: boolean;
-};
+import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
+import AddExtensionModal, { AddExtensionDefaults } from "../modals/addExtensionModal";
 
 /**
  * Table of student-wide extensions (applies to all assignments), with dialog to add/edit/delete.
@@ -26,42 +19,12 @@ type ExtensionForm = {
 export default function StudentExtensionsTable() {
   const extensions = useStudentDeadlineExtensions();
   const students = useAllStudentProfiles();
-  const { course_id } = useParams<{ course_id: string }>();
   const supabase = createClient();
 
-  const createOpen = useModalManager<ExtensionForm>();
+  const createOpen = useModalManager<AddExtensionDefaults>();
   const editOpen = useModalManager<StudentDeadlineExtension>();
 
-  const studentOptions = useMemo(
-    () => (students || []).map((s: UserProfile) => ({ value: s.id, label: s.name || s.id })),
-    [students]
-  );
-
   const studentName = (id: string) => students.find((s) => s.id === id)?.name || id;
-
-  const handleCreate = async (form: ExtensionForm) => {
-    if (!form.studentId || form.hours === undefined) {
-      toaster.error({ title: "Missing data", description: "Select a student and provide hours." });
-      return;
-    }
-    try {
-      const { error } = await supabase.from("student_deadline_extensions").insert({
-        student_id: form.studentId,
-        class_id: Number(course_id),
-        hours: form.hours,
-        includes_lab: !!form.includes_lab
-      });
-      if (error) throw error;
-      toaster.create({
-        title: "Extension created",
-        description: "Applied to all existing assignments.",
-        type: "success"
-      });
-      createOpen.closeModal();
-    } catch (err) {
-      toaster.error({ title: "Create failed", description: err instanceof Error ? err.message : "Unknown error" });
-    }
-  };
 
   const handleUpdate = async (row: StudentDeadlineExtension, updates: { hours?: number; includes_lab?: boolean }) => {
     try {
@@ -146,88 +109,11 @@ export default function StudentExtensionsTable() {
         </Table.Body>
       </Table.Root>
 
-      {/* Create dialog */}
-      <Dialog.Root open={createOpen.isOpen} onOpenChange={(d) => !d.open && createOpen.closeModal()}>
-        <Portal>
-          <Dialog.Backdrop />
-          <Dialog.Positioner>
-            <Dialog.Content>
-              <Dialog.Header>
-                <Dialog.Title>Add Student-Wide Extension</Dialog.Title>
-                <Dialog.CloseTrigger onClick={createOpen.closeModal} />
-              </Dialog.Header>
-              <Dialog.Body>
-                <VStack gap={4} align="stretch">
-                  <Field label="Student" required>
-                    <Select
-                      options={studentOptions}
-                      value={studentOptions.find((o) => o.value === createOpen.modalData?.studentId) || null}
-                      onChange={(opt) =>
-                        createOpen.openModal({
-                          studentId: (opt as { value: string } | null)?.value,
-                          hours: createOpen.modalData?.hours ?? 24,
-                          includes_lab: createOpen.modalData?.includes_lab ?? false
-                        })
-                      }
-                      placeholder="Select student"
-                    />
-                  </Field>
-                  <Field label="Hours" required>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={createOpen.modalData?.hours ?? 24}
-                      onChange={(e) =>
-                        createOpen.openModal({
-                          studentId: createOpen.modalData?.studentId,
-                          hours: parseInt(e.target.value || "0", 10),
-                          includes_lab: createOpen.modalData?.includes_lab ?? false
-                        })
-                      }
-                    />
-                  </Field>
-                  <HStack>
-                    <Checkbox.Root
-                      checked={!!createOpen.modalData?.includes_lab}
-                      onCheckedChange={(c) =>
-                        createOpen.openModal({
-                          studentId: createOpen.modalData?.studentId,
-                          hours: createOpen.modalData?.hours ?? 24,
-                          includes_lab: c.checked.valueOf() === true
-                        })
-                      }
-                    >
-                      <Checkbox.HiddenInput />
-                      <Checkbox.Control />
-                      <Text ml={2}>Include lab assignments</Text>
-                    </Checkbox.Root>
-                  </HStack>
-                </VStack>
-              </Dialog.Body>
-              <Dialog.Footer>
-                <HStack gap={3} justifyContent="flex-end">
-                  <Button variant="outline" colorPalette="red" onClick={createOpen.closeModal}>
-                    Cancel
-                  </Button>
-                  <Button
-                    colorPalette="green"
-                    onClick={() =>
-                      handleCreate({
-                        studentId: createOpen.modalData?.studentId,
-                        hours: createOpen.modalData?.hours ?? 24,
-                        includes_lab: !!createOpen.modalData?.includes_lab
-                      })
-                    }
-                  >
-                    Create
-                  </Button>
-                </HStack>
-              </Dialog.Footer>
-            </Dialog.Content>
-          </Dialog.Positioner>
-        </Portal>
-      </Dialog.Root>
+      <AddExtensionModal
+        isOpen={createOpen.isOpen}
+        onClose={createOpen.closeModal}
+        defaults={createOpen.modalData || {}}
+      />
 
       {/* Edit dialog */}
       {editOpen.modalData && (
