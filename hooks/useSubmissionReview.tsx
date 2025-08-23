@@ -195,7 +195,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       router.push(qs ? `${pathname}?${qs}` : pathname);
       return;
     }
-    
+
     // Validate that the submission review belongs to the current submission
     const validReviewIds = writableReviews?.map((wr) => wr.id) || [];
     if (submission.grading_review_id) validReviewIds.push(submission.grading_review_id);
@@ -203,7 +203,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       // Invalid review ID for current submission - don't navigate
       return;
     }
-    
+
     // If this review maps to an assigned, incomplete review, prefer RA in URL
     const ra = myAssignedReviews.find((r) => r.submission_review_id === id && !r.completed_at);
     if (ra) {
