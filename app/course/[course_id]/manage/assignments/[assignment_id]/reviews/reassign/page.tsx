@@ -501,8 +501,8 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       if (graderPreferences.size > 0) {
         const rubricInfo = selectedReferenceRubric ? ` (${selectedReferenceRubric.name} rubric)` : "";
         toaster.create({
-          title: "Grader Preferences Applied",
-          description: `Using grader preferences from ${selectedReferenceAssignment?.title}${rubricInfo} for ${graderPreferences.size} students.`,
+          title: "Strict Grader Preferences Enabled",
+          description: `Will enforce exact grader assignments from ${selectedReferenceAssignment?.title}${rubricInfo} for ${graderPreferences.size} students, overriding all load balancing.`,
           type: "info"
         });
       }
@@ -1206,130 +1206,161 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
               </Field.HelperText>
             </Field.Root>
 
-            <Separator my={1} />
+            <Separator my={2} />
 
-            <Heading size="sm">Grader Preferences</Heading>
+            {/* Grader Assignment Rules Section */}
+            <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
+              <Fieldset.Legend>
+                <Heading size="md">Grader Assignment Rules</Heading>
+              </Fieldset.Legend>
+              <Fieldset.Content m={0}>
+                <VStack align="flex-start" maxW={"2xl"} gap={3}>
+                  {/* Preferences Subsection */}
+                  <Box w="100%">
+                    <VStack align="flex-start" gap={2}>
+                      <Heading size="sm">Strict Grader Preferences</Heading>
+                      <Text fontSize="sm" color="text.muted" mb={1}>
+                        Force specific student-grader pairings (overrides all load balancing)
+                      </Text>
+
+                      <Field.Root w="100%">
+                        <Field.Label>Copy grader assignments from</Field.Label>
+                        <Select
+                          value={
+                            selectedReferenceAssignment
+                              ? {
+                                  label: selectedReferenceAssignment.title,
+                                  value: selectedReferenceAssignment
+                                }
+                              : undefined
+                          }
+                          onChange={(e) => {
+                            setSelectedReferenceAssignment(e?.value);
+                            setSelectedReferenceRubric(undefined);
+                          }}
+                          options={
+                            allAssignments?.data.map((assign) => ({
+                              label: assign.title,
+                              value: assign
+                            })) || []
+                          }
+                          isClearable
+                          placeholder="Select an assignment to copy from..."
+                        />
+                        <Field.HelperText>
+                          Students will be assigned to the exact same graders from the selected assignment. Choose
+                          current assignment to copy from a different rubric.
+                        </Field.HelperText>
+                      </Field.Root>
+
+                      {selectedReferenceAssignment && (
+                        <Field.Root w="100%">
+                          <Field.Label>Specific rubric to copy from</Field.Label>
+                          <Select
+                            value={
+                              selectedReferenceRubric
+                                ? {
+                                    label: selectedReferenceRubric.name,
+                                    value: selectedReferenceRubric
+                                  }
+                                : undefined
+                            }
+                            onChange={(e) => setSelectedReferenceRubric(e?.value)}
+                            options={
+                              referenceRubrics?.data?.map((rubric) => ({
+                                label: rubric.name,
+                                value: rubric
+                              })) || []
+                            }
+                            isClearable
+                            placeholder="All rubrics (recommended)"
+                          />
+                          <Field.HelperText>
+                            Optional: Narrow down to a specific rubric. Example: Copy from &quot;grading review&quot;
+                            when assigning &quot;code walk review&quot;.
+                          </Field.HelperText>
+                        </Field.Root>
+                      )}
+                    </VStack>
+                  </Box>
+
+                  <Separator w="100%" />
+
+                  {/* Exclusions Subsection */}
+                  <Box w="100%">
+                    <VStack align="flex-start" gap={2}>
+                      <Heading size="sm">Grader Exclusions</Heading>
+                      <Text fontSize="sm" color="text.muted" mb={1}>
+                        Prevent certain student-grader pairings (useful for meta-grading)
+                      </Text>
+
+                      <Field.Root w="100%">
+                        <Field.Label>Exclude grader assignments from</Field.Label>
+                        <Select
+                          value={
+                            selectedExclusionAssignment
+                              ? {
+                                  label: selectedExclusionAssignment.title,
+                                  value: selectedExclusionAssignment
+                                }
+                              : undefined
+                          }
+                          onChange={(e) => {
+                            setSelectedExclusionAssignment(e?.value);
+                            setSelectedExclusionRubric(undefined);
+                          }}
+                          options={
+                            allAssignments?.data.map((assign) => ({
+                              label: assign.title,
+                              value: assign
+                            })) || []
+                          }
+                          isClearable
+                          placeholder="Select an assignment to exclude from..."
+                        />
+                        <Field.HelperText>
+                          Students will NOT be assigned to graders who reviewed their work on the selected assignment.
+                        </Field.HelperText>
+                      </Field.Root>
+
+                      {selectedExclusionAssignment && (
+                        <Field.Root w="100%">
+                          <Field.Label>Specific rubric to exclude from</Field.Label>
+                          <Select
+                            value={
+                              selectedExclusionRubric
+                                ? {
+                                    label: selectedExclusionRubric.name,
+                                    value: selectedExclusionRubric
+                                  }
+                                : undefined
+                            }
+                            onChange={(e) => setSelectedExclusionRubric(e?.value)}
+                            options={
+                              exclusionRubrics?.data?.map((rubric) => ({
+                                label: rubric.name,
+                                value: rubric
+                              })) || []
+                            }
+                            placeholder="Select a rubric..."
+                          />
+                          <Field.HelperText>
+                            Required: Choose which rubric&apos;s assignments to exclude. Example: Exclude &quot;grading
+                            review&quot; graders when assigning &quot;meta-grading review&quot;.
+                          </Field.HelperText>
+                        </Field.Root>
+                      )}
+                    </VStack>
+                  </Box>
+                </VStack>
+              </Fieldset.Content>
+            </Fieldset.Root>
+
+            <Separator my={2} />
+
+            <Heading size="sm">Load Balancing & Due Date</Heading>
             <Field.Root>
-              <Field.Label>Prefer to use same grader as from a previous assignment</Field.Label>
-              <Select
-                value={
-                  selectedReferenceAssignment
-                    ? {
-                        label: selectedReferenceAssignment.title,
-                        value: selectedReferenceAssignment
-                      }
-                    : undefined
-                }
-                onChange={(e) => {
-                  setSelectedReferenceAssignment(e?.value);
-                  setSelectedReferenceRubric(undefined);
-                }}
-                options={
-                  allAssignments?.data
-                    .filter((assign) => assign.id !== Number(assignment_id))
-                    .map((assign) => ({
-                      label: assign.title,
-                      value: assign
-                    })) || []
-                }
-                isClearable
-                placeholder="Select an assignment..."
-              />
-              <Field.HelperText>
-                When possible, assign students to the same grader who reviewed their work on the selected assignment.
-              </Field.HelperText>
-            </Field.Root>
-
-            {selectedReferenceAssignment && (
-              <Field.Root>
-                <Field.Label>Select rubric from reference assignment (optional)</Field.Label>
-                <Select
-                  value={
-                    selectedReferenceRubric
-                      ? {
-                          label: selectedReferenceRubric.name,
-                          value: selectedReferenceRubric
-                        }
-                      : undefined
-                  }
-                  onChange={(e) => setSelectedReferenceRubric(e?.value)}
-                  options={
-                    referenceRubrics?.data?.map((rubric) => ({
-                      label: rubric.name,
-                      value: rubric
-                    })) || []
-                  }
-                  isClearable
-                  placeholder="All rubrics"
-                />
-                <Field.HelperText>
-                  If selected, only use grader assignments from this specific rubric. Leave empty to use all rubrics.
-                </Field.HelperText>
-              </Field.Root>
-            )}
-
-            <Separator my={1} />
-
-            <Heading size="sm">Grader Exclusions</Heading>
-            <Field.Root>
-              <Field.Label>Exclude graders from a previous assignment</Field.Label>
-              <Select
-                value={
-                  selectedExclusionAssignment
-                    ? {
-                        label: selectedExclusionAssignment.title,
-                        value: selectedExclusionAssignment
-                      }
-                    : undefined
-                }
-                onChange={(e) => {
-                  setSelectedExclusionAssignment(e?.value);
-                  setSelectedExclusionRubric(undefined);
-                }}
-                options={
-                  allAssignments?.data
-                    .filter((assign) => assign.id !== Number(assignment_id))
-                    .map((assign) => ({
-                      label: assign.title,
-                      value: assign
-                    })) || []
-                }
-                isClearable
-                placeholder="Select an assignment..."
-              />
-              <Field.HelperText>
-                Prevent students from being assigned to the same grader who reviewed their work on the selected
-                assignment. Useful for meta-grading where the meta-grader should not be the original grader.
-              </Field.HelperText>
-            </Field.Root>
-
-            {selectedExclusionAssignment && (
-              <Field.Root>
-                <Field.Label>Select rubric to exclude from</Field.Label>
-                <Select
-                  value={
-                    selectedExclusionRubric
-                      ? {
-                          label: selectedExclusionRubric.name,
-                          value: selectedExclusionRubric
-                        }
-                      : undefined
-                  }
-                  onChange={(e) => setSelectedExclusionRubric(e?.value)}
-                  options={
-                    exclusionRubrics?.data?.map((rubric) => ({
-                      label: rubric.name,
-                      value: rubric
-                    })) || []
-                  }
-                  placeholder="Select a rubric..."
-                />
-                <Field.HelperText>Required: Select which rubric&apos;s grader assignments to exclude.</Field.HelperText>
-              </Field.Root>
-            )}
-
-            <Heading size="sm">Load balancing</Heading>
-            <Field.Root>
+              <Field.Label>Load balancing strategy</Field.Label>
               <Select
                 value={
                   baseOnAll
