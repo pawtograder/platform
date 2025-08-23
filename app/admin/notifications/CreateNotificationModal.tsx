@@ -45,7 +45,15 @@ export default function CreateNotificationModal({ children }: CreateNotification
         p_backdrop_dismiss: formData.backdrop_dismiss,
         p_target_roles: formData.roles.length > 0 ? formData.roles : null,
         p_target_course_ids: formData.course_ids.length > 0 ? formData.course_ids : null,
-        p_target_user_ids: formData.user_ids ? formData.user_ids.split(",").map((id) => id.trim()) : null
+        p_target_user_ids: formData.user_ids
+          ? (() => {
+              const trimmedIds = formData.user_ids
+                .split(",")
+                .map((id) => id.trim())
+                .filter((id) => id !== "");
+              return trimmedIds.length > 0 ? trimmedIds : null;
+            })()
+          : null
       };
 
       // @ts-expect-error - RPC function not yet in generated types

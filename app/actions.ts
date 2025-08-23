@@ -82,6 +82,12 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");
+
+  // Check if signups are enabled for signup actions
+  if (action === "signup" && process.env.NEXT_PUBLIC_ENABLE_SIGNUPS !== "true") {
+    return encodedRedirect("error", "/sign-in", "Sign ups are currently disabled");
+  }
+
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string);
   } else if (action === "signup") {

@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 
 export default function NotificationsTable() {
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
+  const table = useNotificationsTable({ onDelete: handleDelete });
 
-  const handleDelete = async (notificationId: number) => {
+  async function handleDelete(notificationId: number) {
     if (deletingIds.has(notificationId)) return;
 
     const confirmed = confirm("Are you sure you want to delete this notification? This action cannot be undone.");
@@ -28,6 +29,9 @@ export default function NotificationsTable() {
       if (error) {
         throw error;
       }
+
+      // Refresh the table to remove the deleted row from the UI
+      await table.controller.refetchAll();
 
       toaster.success({
         title: "Notification deleted",
@@ -45,9 +49,7 @@ export default function NotificationsTable() {
         return newSet;
       });
     }
-  };
-
-  const table = useNotificationsTable({ onDelete: handleDelete });
+  }
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {

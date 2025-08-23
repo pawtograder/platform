@@ -63,7 +63,8 @@ export const defaultNotificationFormData: NotificationFormData = {
 export default function NotificationForm({
   initialData = {},
   onSubmit,
-  showAudienceTargeting = true
+  showAudienceTargeting = true,
+  isSubmitting = false
 }: NotificationFormProps) {
   const [classes, setClasses] = useState<ClassOption[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(false);
@@ -188,6 +189,7 @@ export default function NotificationForm({
                 onChange={(e) => handleInputChange("title", e.target.value)}
                 placeholder="Enter notification title"
                 required
+                disabled={isSubmitting}
               />
             </Field>
 
@@ -195,7 +197,8 @@ export default function NotificationForm({
               <MdEditor
                 value={formData.message}
                 style={{ minWidth: "100%", width: "100%" }}
-                onChange={(value) => handleInputChange("message", value || "")}
+                onChange={isSubmitting ? undefined : (value) => handleInputChange("message", value || "")}
+                preview={isSubmitting ? "preview" : "edit"}
               />
             </Field>
 
@@ -208,6 +211,7 @@ export default function NotificationForm({
                     handleInputChange("display", details.value[0] as "default" | "modal" | "banner")
                   }
                   size="md"
+                  disabled={isSubmitting}
                 >
                   <SelectTrigger>
                     <SelectValueText placeholder="Select display mode" />
@@ -230,6 +234,7 @@ export default function NotificationForm({
                     handleInputChange("severity", details.value[0] as "info" | "success" | "warning" | "error")
                   }
                   size="md"
+                  disabled={isSubmitting}
                 >
                   <SelectTrigger>
                     <SelectValueText placeholder="Select severity" />
@@ -250,6 +255,7 @@ export default function NotificationForm({
                 value={formData.icon}
                 onChange={(e) => handleInputChange("icon", e.target.value)}
                 placeholder="🎉"
+                disabled={isSubmitting}
               />
             </Field>
           </VStack>
@@ -377,6 +383,7 @@ export default function NotificationForm({
               <Switch
                 checked={formData.persistent}
                 onCheckedChange={(details: { checked: boolean }) => handleInputChange("persistent", details.checked)}
+                disabled={isSubmitting}
               />
             </HStack>
 

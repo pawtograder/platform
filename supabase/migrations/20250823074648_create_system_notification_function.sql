@@ -133,6 +133,7 @@ BEGIN
         JOIN public.user_roles ur ON ur.user_id = target_user.user_id
         WHERE (p_target_roles IS NULL OR ur.role = ANY(p_target_roles))
           AND (p_target_course_ids IS NULL OR ur.class_id = ANY(p_target_course_ids))
+          AND (ur.disabled IS NULL OR ur.disabled = FALSE)
         GROUP BY target_user.user_id, ur.class_id; -- Avoid duplicates if user has multiple roles
         
         GET DIAGNOSTICS v_notification_count = ROW_COUNT;
@@ -148,7 +149,8 @@ BEGIN
             now()
         FROM public.user_roles ur
         WHERE (p_target_roles IS NULL OR ur.role = ANY(p_target_roles))
-          AND (p_target_course_ids IS NULL OR ur.class_id = ANY(p_target_course_ids));
+          AND (p_target_course_ids IS NULL OR ur.class_id = ANY(p_target_course_ids))
+          AND (ur.disabled IS NULL OR ur.disabled = FALSE);
         
         GET DIAGNOSTICS v_notification_count = ROW_COUNT;
         
@@ -161,7 +163,8 @@ BEGIN
             jsonb_build_object('title', trim(p_title)),
             v_system_notification_body,
             now()
-        FROM public.user_roles ur;
+        FROM public.user_roles ur
+        WHERE (ur.disabled IS NULL OR ur.disabled = FALSE);
         
         GET DIAGNOSTICS v_notification_count = ROW_COUNT;
     END IF;

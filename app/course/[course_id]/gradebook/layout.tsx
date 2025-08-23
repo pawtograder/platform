@@ -5,11 +5,16 @@ import { GradebookProvider } from "@/hooks/useGradebook";
 import { useEffect } from "react";
 
 export default function GradebookLayout({ children }: { children: React.ReactNode }) {
-  const course = useCourseController();
+  const controller = useCourseController();
   useEffect(() => {
-    if (course?.course) {
-      document.title = `${course.course.course_title || course.course.name} - Gradebook - Pawtograder`;
+    try {
+      const courseData = controller?.course;
+      if (courseData) {
+        document.title = `${courseData.course_title || courseData.name} - Gradebook - Pawtograder`;
+      }
+    } catch {
+      // Course data not available yet, skip setting title
     }
-  }, [course?.course]);
+  }, [controller]);
   return <GradebookProvider>{children}</GradebookProvider>;
 }

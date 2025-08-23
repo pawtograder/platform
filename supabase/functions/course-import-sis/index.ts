@@ -266,7 +266,7 @@ interface ProcessedSection {
   parsedMeetingTimes?: {
     startTime: string | null;
     endTime: string | null;
-    dayOfWeek: string | null;
+    dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null;
   };
   instructors: Array<{
     sis_user_id: number;

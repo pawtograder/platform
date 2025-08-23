@@ -47,6 +47,7 @@ export async function setSystemSetting<K extends SystemSettingKey>(
   value: SystemSettingValue<K>
 ): Promise<SystemSetting<K>> {
   const supabase = createClient();
+  const currentUser = (await supabase.auth.getUser()).data.user;
 
   // Check if setting already exists
   const existing = await getSystemSetting(key);
@@ -57,7 +58,8 @@ export async function setSystemSetting<K extends SystemSettingKey>(
       .from("system_settings")
       .update({
         value: value,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        updated_by: currentUser?.id
       })
       .eq("key", key)
       .select()
@@ -66,19 +68,41 @@ export async function setSystemSetting<K extends SystemSettingKey>(
     if (error) throw error;
     return data as SystemSetting<K>;
   } else {
-    // Create new setting
-    const { data, error } = await supabase
-      .from("system_settings")
-      .insert({
-        key: key,
-        value: value,
-        created_by: (await supabase.auth.getUser()).data.user?.id
-      })
-      .select()
-      .single();
+    // Create new setting - with race condition handling
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .insert({
+          key: key,
+          value: value,
+          created_by: currentUser?.id
+        })
+        .select()
+        .single();
 
-    if (error) throw error;
-    return data as SystemSetting<K>;
+      if (error) throw error;
+      return data as SystemSetting<K>;
+    } catch (error: any) {
+      // Handle unique constraint violation (duplicate key race condition)
+      if (error?.code === "23505") {
+        // Another process created the setting, update it instead
+        const { data, error: updateError } = await supabase
+          .from("system_settings")
+          .update({
+            value: value,
+            updated_at: new Date().toISOString(),
+            updated_by: currentUser?.id
+          })
+          .eq("key", key)
+          .select()
+          .single();
+
+        if (updateError) throw updateError;
+        return data as SystemSetting<K>;
+      }
+      // Surface other errors as before
+      throw error;
+    }
   }
 }
 

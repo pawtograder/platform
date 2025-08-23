@@ -8,7 +8,7 @@ import { BsMicrosoft } from "react-icons/bs";
 type SearchParams = Message & { email?: string; code?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, ...message } = await props.searchParams;
-  const enableSignup = process.env.NODE_ENV === "development";
+  const enableSignup = process.env.NEXT_PUBLIC_ENABLE_SIGNUPS === "true";
 
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
