@@ -482,8 +482,8 @@ function AssignmentControllerCreator({
   useEffect(() => {
     if (assignmentQuery.data?.data) {
       controller.assignment = assignmentQuery.data.data;
+      controller.rubrics = assignmentQuery.data.data.rubrics || [];
     }
-    controller.rubrics = assignmentQuery.data?.data.rubrics || [];
 
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
       setReady(true);

@@ -98,6 +98,30 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 SIS Sync
               </Link>
               <Link
+                href="/admin/notifications"
+                color="blue.600"
+                _hover={{ color: "blue.800" }}
+                px={3}
+                py={2}
+                rounded="md"
+                fontSize="sm"
+                fontWeight="medium"
+              >
+                Notifications
+              </Link>
+              <Link
+                href="/admin/signup-welcome"
+                color="blue.600"
+                _hover={{ color: "blue.800" }}
+                px={3}
+                py={2}
+                rounded="md"
+                fontSize="sm"
+                fontWeight="medium"
+              >
+                Welcome Message
+              </Link>
+              <Link
                 href="/course"
                 color="fg.muted"
                 _hover={{ color: "fg" }}

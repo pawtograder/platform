@@ -616,7 +616,14 @@ eventHandler.on("organization", async ({ payload }) => {
 
 async function handleWorkflowCompletionErrors(
   adminSupabase: SupabaseClient<Database>,
-  workflowRun: { id: number; head_sha: string; run_number: number; run_attempt: number; conclusion: string; status: string },
+  workflowRun: {
+    id: number;
+    head_sha: string;
+    run_number: number;
+    run_attempt: number;
+    conclusion: string;
+    status: string;
+  },
   repository: { full_name: string; owner: { login: string }; name: string },
   repositoryId: number,
   classId: number,
@@ -624,12 +631,14 @@ async function handleWorkflowCompletionErrors(
 ) {
   scope.setTag("error_handler", "workflow_completion");
   scope.setTag("workflow_conclusion", workflowRun.conclusion);
- 
+
   try {
     // First, look for submissions that match this specific workflow run
     const { data: submissions, error: submissionsError } = await adminSupabase
       .from("submissions")
-      .select("id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs(check_run_id)")
+      .select(
+        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs(check_run_id)"
+      )
       .eq("repository_id", repositoryId)
       .eq("sha", workflowRun.head_sha)
       .eq("run_number", workflowRun.id)
@@ -661,69 +670,71 @@ async function handleWorkflowCompletionErrors(
 
         if (!hasGraderResult) {
           const sentryMessage = "Workflow terminated without creating a grader result.";
-          const userErrorMessage = "The grading container failed to terminate cleanly. This may indicate that the grading script ran out of memory or encountered an unexpected error. Please contact your instructor for assistance.";
+          const userErrorMessage =
+            "The grading container failed to terminate cleanly. This may indicate that the grading script ran out of memory or encountered an unexpected error. Please contact your instructor for assistance.";
 
           scope.setTag("error_type", "missing_grader_result");
           scope.setTag("workflow_run_id", workflowRun.id.toString());
           scope.setTag("submission_id", submission.id.toString());
-          scope.setTag("github_actions_run_url", `https://github.com/${repository.owner.login}/${repository.name}/actions/runs/${workflowRun.id}`);
+          scope.setTag(
+            "github_actions_run_url",
+            `https://github.com/${repository.owner.login}/${repository.name}/actions/runs/${workflowRun.id}`
+          );
           if (submission.repository_check_runs?.check_run_id) {
             scope.setTag("check_run_id", submission.repository_check_runs.check_run_id.toString());
           }
 
           // Create workflow_run_error record
-          const { error: insertError } = await adminSupabase
-            .from("workflow_run_error")
-            .insert({
-              repository_id: repositoryId,
-              class_id: classId,
-              submission_id: submission.id,
-              run_number: workflowRun.id,
-              run_attempt: workflowRun.run_attempt,
-              name: userErrorMessage,
-              data: {
-                workflow_run_id: workflowRun.id,
-                workflow_conclusion: workflowRun.conclusion,
-                workflow_status: workflowRun.status,
-                check_run_id: submission.repository_check_runs?.check_run_id,
-                repository_name: repository.full_name,
-                sha: workflowRun.head_sha,
-                error_type: "missing_grader_result",
-                detected_at: new Date().toISOString(),
-                technical_details: sentryMessage
-              }
-            });
-
-            if (insertError) {
-              Sentry.captureException(insertError, scope);
-            } else {
-              scope.setTag("workflow_run_error_created", "true");
+          const { error: insertError } = await adminSupabase.from("workflow_run_error").insert({
+            repository_id: repositoryId,
+            class_id: classId,
+            submission_id: submission.id,
+            run_number: workflowRun.id,
+            run_attempt: workflowRun.run_attempt,
+            name: userErrorMessage,
+            data: {
+              workflow_run_id: workflowRun.id,
+              workflow_conclusion: workflowRun.conclusion,
+              workflow_status: workflowRun.status,
+              check_run_id: submission.repository_check_runs?.check_run_id,
+              repository_name: repository.full_name,
+              sha: workflowRun.head_sha,
+              error_type: "missing_grader_result",
+              detected_at: new Date().toISOString(),
+              technical_details: sentryMessage
             }
+          });
 
-            // Update check run to failed if we have the check run ID
-            if (submission.repository_check_runs?.check_run_id) {
-              try {
-                await updateCheckRun({
-                  owner: repository.owner.login,
-                  repo: repository.name,
-                  check_run_id: submission.repository_check_runs.check_run_id,
-                  status: "completed",
-                  conclusion: "failure",
-                  output: {
-                    title: "Grading Failed",
-                    summary: userErrorMessage,
-                    text: "The autograder encountered an error during execution. This submission could not be graded automatically."
-                  },
-                  actions: []
-                });
-                scope.setTag("check_run_updated_to_failed", "true");
-              } catch (checkRunError) {
-                Sentry.captureException(checkRunError, scope);
-              }
+          if (insertError) {
+            Sentry.captureException(insertError, scope);
+          } else {
+            scope.setTag("workflow_run_error_created", "true");
+          }
+
+          // Update check run to failed if we have the check run ID
+          if (submission.repository_check_runs?.check_run_id) {
+            try {
+              await updateCheckRun({
+                owner: repository.owner.login,
+                repo: repository.name,
+                check_run_id: submission.repository_check_runs.check_run_id,
+                status: "completed",
+                conclusion: "failure",
+                output: {
+                  title: "Grading Failed",
+                  summary: userErrorMessage,
+                  text: "The autograder encountered an error during execution. This submission could not be graded automatically."
+                },
+                actions: []
+              });
+              scope.setTag("check_run_updated_to_failed", "true");
+            } catch (checkRunError) {
+              Sentry.captureException(checkRunError, scope);
             }
+          }
 
-            // Log to Sentry
-            Sentry.captureMessage(sentryMessage, scope);
+          // Log to Sentry
+          Sentry.captureMessage(sentryMessage, scope);
         }
       }
     }
@@ -737,7 +748,7 @@ async function handleWorkflowCompletionErrors(
 eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const payload = payloadBroken as any;
-  
+
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "workflow_run", payload);
 
@@ -843,14 +854,7 @@ eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
 
     // Add error detection for completed workflows
     if (eventType === "completed" && repositoryId && classId) {
-      await handleWorkflowCompletionErrors(
-        adminSupabase,
-        workflowRun,
-        repository,
-        repositoryId,
-        classId,
-        scope
-      );
+      await handleWorkflowCompletionErrors(adminSupabase, workflowRun, repository, repositoryId, classId, scope);
     }
   } catch (error) {
     Sentry.captureException(error, scope);

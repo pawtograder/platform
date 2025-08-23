@@ -6654,6 +6654,48 @@ export type Database = {
           }
         ];
       };
+      system_settings: {
+        Row: {
+          created_at: string;
+          created_by: string | null;
+          key: string;
+          updated_at: string;
+          updated_by: string | null;
+          value: Json;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string | null;
+          key: string;
+          updated_at?: string;
+          updated_by?: string | null;
+          value?: Json;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string | null;
+          key?: string;
+          updated_at?: string;
+          updated_by?: string | null;
+          value?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "system_settings_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
+            foreignKeyName: "system_settings_updated_by_fkey";
+            columns: ["updated_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       tags: {
         Row: {
           class_id: number;
@@ -8359,6 +8401,27 @@ export type Database = {
         Args: { user_id: string; class_id?: number };
         Returns: undefined;
       };
+      create_system_notification: {
+        Args: {
+          p_title: string;
+          p_message: string;
+          p_display?: string;
+          p_severity?: string;
+          p_icon?: string;
+          p_persistent?: boolean;
+          p_expires_at?: string;
+          p_campaign_id?: string;
+          p_track_engagement?: boolean;
+          p_max_width?: string;
+          p_position?: string;
+          p_backdrop_dismiss?: boolean;
+          p_target_roles?: Database["public"]["Enums"]["app_role"][];
+          p_target_course_ids?: number[];
+          p_target_user_ids?: string[];
+          p_created_by?: string;
+        };
+        Returns: number;
+      };
       custom_access_token_hook: {
         Args: { event: Json };
         Returns: Json;
@@ -8366,6 +8429,10 @@ export type Database = {
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
+      };
+      delete_system_notifications_by_campaign: {
+        Args: { p_campaign_id: string; p_deleted_by?: string };
+        Returns: number;
       };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
@@ -8382,6 +8449,16 @@ export type Database = {
       get_gradebook_records_for_all_students_array: {
         Args: { class_id: number };
         Returns: Json;
+      };
+      get_system_notification_stats: {
+        Args: { p_requested_by?: string };
+        Returns: {
+          total_notifications: number;
+          active_notifications: number;
+          notifications_by_severity: Json;
+          notifications_by_display: Json;
+          recent_campaigns: Json;
+        }[];
       };
       get_user_id_by_email: {
         Args: { email: string };
@@ -8514,6 +8591,10 @@ export type Database = {
       send_gradebook_recalculation_messages: {
         Args: { messages: Json[] };
         Returns: undefined;
+      };
+      send_signup_welcome_message: {
+        Args: { p_user_id: string };
+        Returns: boolean;
       };
       submission_set_active: {
         Args: { _submission_id: number };

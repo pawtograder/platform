@@ -306,6 +306,11 @@ function isInternalTestEmail(email: string): boolean {
 
 // Classify notifications to handle help request digests
 function classifyNotification(body: NotificationEnvelope): "help_request_created" | "skip" | "standard" {
+  // Skip system notifications - they should not generate emails
+  if (body.type === "system") {
+    return "skip";
+  }
+
   if (body.type === "help_request") {
     const action = (body as unknown as { action?: string }).action;
     if (action === "created") return "help_request_created";
