@@ -40,7 +40,7 @@ import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useMemo, useState } from "react";
-import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
 function StudentNameCell({
@@ -63,26 +63,17 @@ function StudentNameCell({
 
   return (
     <HStack w="100%">
-      <PersonName uid={uid} size="2xs" />
+      {activeSubmissionId ? (
+        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
+          <PersonName uid={uid} size="2xs" />
+        </Link>
+      ) : (
+        <PersonName uid={uid} size="2xs" />
+      )}
       <Box flex="1" display="flex" justifyContent="flex-end">
         {isObfuscated && (
           <IconButton variant="ghost" colorPalette="gray" size="sm" onClick={toggleOnlyShowGradesFor}>
             <Icon as={canShowGradeFor ? TbEyeOff : TbEye} />
-          </IconButton>
-        )}
-        {activeSubmissionId && (
-          <IconButton
-            variant="ghost"
-            colorPalette="gray"
-            size="sm"
-            onClick={() => {
-              window.open(
-                `/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`,
-                "_blank"
-              );
-            }}
-          >
-            <Icon as={FaExternalLinkAlt} />
           </IconButton>
         )}
       </Box>

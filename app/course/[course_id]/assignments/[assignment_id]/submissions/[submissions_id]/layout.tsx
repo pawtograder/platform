@@ -38,7 +38,7 @@ import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useEffect, useMemo, useRef, useState } from "react";
+import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -72,7 +72,153 @@ const iconMap: { [key: string]: ReactElementType } = {
   FiSend,
   PiSignOut
 };
+function SubmissionReviewScoreTweak() {
+  const submission = useSubmission();
+  const reviewId = submission.grading_review_id;
+  if (!reviewId) {
+    throw new Error("No grading review ID found");
+  }
+  const review = useSubmissionReviewOrGradingReview(reviewId);
+  const isInstructor = useIsInstructor();
+  const [tweakValue, setTweakValue] = useState<number | undefined>(review?.tweak);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submissionController = useSubmissionController();
 
+  const handleTweakChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val === "") {
+      setTweakValue(undefined);
+    } else {
+      const num = Number(val);
+      if (!isNaN(num)) {
+        setTweakValue(num);
+      }
+    }
+  }, []);
+
+  const handleTweakSave = useCallback(async () => {
+    if (!review) {
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      await submissionController.submission_reviews.update(review.id, {
+        tweak: tweakValue
+      });
+      setIsEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save tweak");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [review, tweakValue, submissionController]);
+
+  const handleCancel = useCallback(() => {
+    setTweakValue(review?.tweak);
+    setIsEditing(false);
+    setError(null);
+  }, [review?.tweak]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        handleTweakSave();
+      } else if (e.key === "Escape") {
+        handleCancel();
+      }
+    },
+    [handleTweakSave, handleCancel]
+  );
+
+  if (!review) {
+    return <></>;
+  }
+
+  if (!isInstructor) {
+    if (review.tweak) {
+      return <Text>Includes instructor&apos;s tweak {review.tweak}</Text>;
+    }
+    return <></>;
+  }
+
+  if (isEditing) {
+    return (
+      <Box mt={2} mb={2}>
+        <HStack align="center" gap={2}>
+          <Text fontWeight="bold" fontSize="sm">
+            Tweak:
+          </Text>
+          <input
+            type="number"
+            step="any"
+            value={tweakValue ?? ""}
+            onChange={handleTweakChange}
+            onKeyDown={handleKeyDown}
+            autoFocus
+            style={{
+              width: "80px",
+              padding: "4px 8px",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              fontSize: "14px"
+            }}
+            aria-label="Tweak score"
+          />
+          <Button size="sm" variant="surface" onClick={handleTweakSave} loading={isSaving} disabled={isSaving}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" onClick={handleCancel} disabled={isSaving}>
+            Cancel
+          </Button>
+        </HStack>
+        {error && (
+          <Text color="red.500" fontSize="sm" mt={1}>
+            {error}
+          </Text>
+        )}
+      </Box>
+    );
+  }
+
+  // Display mode - show current tweak or placeholder
+  return (
+    <Box mt={2} mb={2}>
+      <HStack align="center" gap={2}>
+        <Text fontWeight="bold" fontSize="sm">
+          Tweak:
+        </Text>
+        {review.tweak !== null && review.tweak !== undefined ? (
+          <Text
+            as="span"
+            cursor="pointer"
+            color="blue.500"
+            textDecoration="underline"
+            _hover={{ color: "blue.600" }}
+            onClick={() => setIsEditing(true)}
+            aria-label="Click to edit tweak"
+          >
+            {review.tweak}
+          </Text>
+        ) : (
+          <Text
+            as="span"
+            cursor="pointer"
+            color="gray.500"
+            fontStyle="italic"
+            _hover={{ color: "gray.600" }}
+            onClick={() => setIsEditing(true)}
+            aria-label="Click to add tweak"
+          >
+            Click to add tweak
+          </Text>
+        )}
+      </HStack>
+    </Box>
+  );
+}
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
   const pathname = usePathname();
   const invalidate = useInvalidate();
@@ -522,6 +668,7 @@ function RubricView() {
               Overall Score ({gradingReview.total_score}/{submission.assignments.total_points})
             </Heading>
           )}
+        <SubmissionReviewScoreTweak />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
