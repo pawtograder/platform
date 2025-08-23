@@ -26,6 +26,7 @@ import {
   FiAlertCircle,
   FiBookOpen,
   FiClipboard,
+  FiClock,
   FiCompass,
   FiMenu,
   FiMessageSquare,
@@ -73,6 +74,7 @@ const LinkItems = (courseID: number) => [
       { name: "Lab Sections", icon: MdOutlineScience, target: `/course/${courseID}/manage/course/lab-sections` },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
+      { name: "Due Date Exceptions", icon: FiClock, target: `/course/${courseID}/manage/course/due-date-exceptions` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
       { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` },
       { name: "Workflow Runs", icon: FaRobot, target: `/course/${courseID}/manage/workflow-runs` }
@@ -198,7 +200,7 @@ export default function DynamicCourseNav() {
               )}
               <Text fontSize="md" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
-                  {enrollment.classes.name}
+                  {enrollment.classes.course_title ?? enrollment.classes.name}
                 </Link>
               </Text>
             </HStack>
@@ -301,7 +303,7 @@ export default function DynamicCourseNav() {
               )}
               <Text fontSize="xl" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
-                  {enrollment.classes.name}
+                  {enrollment.classes.course_title ?? enrollment.classes.name}
                 </Link>
               </Text>
             </HStack>

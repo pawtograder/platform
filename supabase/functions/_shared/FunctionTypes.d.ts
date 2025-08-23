@@ -288,18 +288,24 @@ export type ProcessedSection = {
   sectionName: string;
   meetingInfo: string;
   location: string;
+  // Parsed meeting time fields for lab sections
+  parsedMeetingTimes?: {
+    startTime: string | null;
+    endTime: string | null;
+    dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null;
+  };
   instructors: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     name: string;
     role: "instructor";
   }>;
   tas: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     name: string;
     role: "grader";
   }>;
   students: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     name: string;
     role: "student";
   }>;

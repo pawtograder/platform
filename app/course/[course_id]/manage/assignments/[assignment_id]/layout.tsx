@@ -1,5 +1,5 @@
 "use client";
-import { AssignmentProvider } from "@/hooks/useAssignment";
+import { AssignmentProvider, useAssignmentController } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
@@ -7,7 +7,7 @@ import { useOne } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
@@ -44,6 +44,16 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaPooStorm
   }
 ];
+
+function AssignmentWindowTitle() {
+  const assignment = useAssignmentController();
+  useEffect(() => {
+    if (assignment?.assignment) {
+      document.title = `${assignment.assignment.title} - Pawtograder`;
+    }
+  }, [assignment?.assignment]);
+  return null;
+}
 /**
  * Provides a responsive layout for assignment management pages, including navigation and content display.
  *
@@ -64,6 +74,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
 
   return (
     <AssignmentProvider assignment_id={Number(assignment_id)}>
+      <AssignmentWindowTitle />
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box w="xs" pr={2} flex={0}>
           <VStack align="flex-start">

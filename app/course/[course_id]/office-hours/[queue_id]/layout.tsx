@@ -6,6 +6,8 @@ import Link from "next/link";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { useQueueData } from "@/hooks/useQueueData";
 import { useHelpQueue } from "@/hooks/useOfficeHoursRealtime";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useEffect } from "react";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -15,6 +17,7 @@ export default function QueueLayout({ children }: LayoutProps) {
   const { queue_id, course_id } = useParams();
   const pathname = usePathname();
   const helpQueue = useHelpQueue(Number(queue_id));
+  const course = useCourseController();
 
   const { queueRequests, userRequests, similarQuestions, resolvedRequests, isLoading, connectionStatus } = useQueueData(
     {
@@ -22,6 +25,19 @@ export default function QueueLayout({ children }: LayoutProps) {
       queueId: Number(queue_id)
     }
   );
+
+  const title = (() => {
+    try {
+      const c = course.course; // may throw until loaded
+      return `${c.course_title || c.name} - Office Hours - Pawtograder`;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  useEffect(() => {
+    if (title) document.title = title;
+  }, [title]);
 
   if (isLoading) {
     return <div>Loading...</div>;

@@ -174,8 +174,9 @@ export function useDiscussionThreadReadStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
   const predicate = useMemo(
-    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_id === threadId,
-    [threadId]
+    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) =>
+      data.discussion_thread_id === threadId && data.user_id === user?.id,
+    [threadId, user?.id]
   );
   const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
 

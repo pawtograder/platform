@@ -33,6 +33,7 @@ interface CreateLabSectionData {
   start_time: string;
   end_time?: string;
   lab_leader_id: string;
+  meeting_location?: string;
   description?: string;
 }
 
@@ -74,6 +75,7 @@ function CreateLabSectionModal({
       start_time: "10:00",
       end_time: "11:00",
       lab_leader_id: "",
+      meeting_location: "",
       description: ""
     }
   });
@@ -107,6 +109,7 @@ function CreateLabSectionModal({
         start_time: initialData.start_time,
         end_time: initialData.end_time,
         lab_leader_id: initialData.lab_leader_id,
+        meeting_location: initialData.meeting_location,
         description: initialData.description
       });
     } else {
@@ -116,6 +119,7 @@ function CreateLabSectionModal({
         start_time: "10:00",
         end_time: "11:00",
         lab_leader_id: "",
+        meeting_location: "",
         description: ""
       });
     }
@@ -221,6 +225,12 @@ function CreateLabSectionModal({
                     <Field.ErrorText>{errors.lab_leader_id?.message}</Field.ErrorText>
                   </Field.Root>
 
+                  <Field.Root invalid={!!errors.meeting_location}>
+                    <Field.Label>Room Location (Optional)</Field.Label>
+                    <Input placeholder="e.g., Room 101, Building A" {...register("meeting_location")} />
+                    <Field.ErrorText>{errors.meeting_location?.message}</Field.ErrorText>
+                  </Field.Root>
+
                   <Field.Root invalid={!!errors.description}>
                     <Field.Label>Description (Optional)</Field.Label>
                     <Input placeholder="Optional description" {...register("description")} />
@@ -265,6 +275,9 @@ function LabSectionsTable() {
     meta: {
       select: "*, profiles!lab_sections_lab_leader_id_fkey(*)"
     },
+    pagination: {
+      pageSize: 1000
+    },
     sorters: [
       { field: "day_of_week", order: "asc" },
       { field: "start_time", order: "asc" }
@@ -283,6 +296,7 @@ function LabSectionsTable() {
       start_time: labSection.start_time || "",
       end_time: labSection.end_time || undefined,
       lab_leader_id: labSection.lab_leader_id || "",
+      meeting_location: labSection.meeting_location || undefined,
       description: labSection.description || undefined
     });
   };
@@ -344,6 +358,7 @@ function LabSectionsTable() {
               <Table.Row>
                 <Table.ColumnHeader>Name</Table.ColumnHeader>
                 <Table.ColumnHeader>Schedule</Table.ColumnHeader>
+                <Table.ColumnHeader>Room Location</Table.ColumnHeader>
                 <Table.ColumnHeader>Lab Leader</Table.ColumnHeader>
                 <Table.ColumnHeader>Students</Table.ColumnHeader>
                 <Table.ColumnHeader>Actions</Table.ColumnHeader>
@@ -370,6 +385,9 @@ function LabSectionsTable() {
                         {labSection.end_time && ` - ${formatTime(labSection.end_time)}`}
                       </Text>
                     </VStack>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Text>{labSection.meeting_location || "Not specified"}</Text>
                   </Table.Cell>
                   <Table.Cell>
                     <Text>{labSection.profiles?.name}</Text>

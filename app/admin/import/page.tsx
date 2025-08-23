@@ -434,8 +434,8 @@ export default function CourseImportPage() {
 
     try {
       // Extract year and term from semester code (e.g., 202610 -> Fall 2026)
-      const year = Math.floor(semester / 1000);
-      const termCode = semester % 1000;
+      const year = Math.floor(semester / 100);
+      const termCode = semester % 100;
       const termMap: { [key: number]: string } = {
         10: "fa",
         20: "sp",
@@ -493,7 +493,7 @@ export default function CourseImportPage() {
         // Add users from this section
         [...section.instructors, ...section.tas, ...section.students].forEach((user) => {
           allInvitations.push({
-            sis_user_id: user.sis_user_id,
+            sis_user_id: user.sis_user_id.toString(),
             role: user.role,
             name: user.name,
             class_section_id: sectionId
@@ -503,15 +503,32 @@ export default function CourseImportPage() {
 
       // Create lab sections
       for (const section of labSections) {
-        const { data: sectionId, error: sectionError } = await supabase.rpc("admin_create_lab_section", {
+        if (
+          !section.parsedMeetingTimes ||
+          !section.parsedMeetingTimes.dayOfWeek ||
+          !section.parsedMeetingTimes.startTime ||
+          !section.parsedMeetingTimes.endTime
+        ) {
+          summary.errors.push(`Failed to create lab section ${section.sectionName}: No meeting times`);
+          continue;
+        }
+        const createLabParams = {
           p_class_id: classId,
           p_name: section.sectionName,
           p_meeting_location: section.location,
           p_meeting_times: section.meetingInfo,
           p_campus: importData.courseInfo.campus,
           p_sis_crn: section.crn,
-          p_description: `CRN ${section.crn}`
-        });
+          p_description: `CRN ${section.crn}`,
+          p_start_time: section.parsedMeetingTimes.startTime,
+          p_end_time: section.parsedMeetingTimes.endTime,
+          p_day_of_week: section.parsedMeetingTimes.dayOfWeek
+        };
+
+        const { data: sectionId, error: sectionError } = await supabase.rpc(
+          "admin_create_lab_section",
+          createLabParams
+        );
 
         if (sectionError) {
           summary.errors.push(`Failed to create lab section ${section.sectionName}: ${sectionError.message}`);
@@ -523,7 +540,7 @@ export default function CourseImportPage() {
         // Add users from this section
         [...section.instructors, ...section.tas, ...section.students].forEach((user) => {
           allInvitations.push({
-            sis_user_id: user.sis_user_id,
+            sis_user_id: user.sis_user_id.toString(),
             role: user.role,
             name: user.name,
             lab_section_id: sectionId

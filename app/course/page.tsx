@@ -1,11 +1,11 @@
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
-import SemesterText from "@/components/ui/semesterText";
+import { termToTermText } from "@/components/ui/semesterText";
 import { createClient } from "@/utils/supabase/server";
-import { Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
-import { Box } from "lucide-react";
+import { Card, Flex, Heading, Stack, Text, VStack, Box } from "@chakra-ui/react";
 import { redirect } from "next/navigation";
 import { signOutAction } from "../actions";
+
 export default async function ProtectedPage() {
   const supabase = await createClient();
 
@@ -18,14 +18,17 @@ export default async function ProtectedPage() {
   }
 
   //list identities
-  const courses = await supabase
-    .from("classes")
-    .select("*")
-    .order("term", { ascending: false })
-    .order("name", { ascending: true });
+  const roles = await supabase.from("user_roles").select("role, classes(*)").eq("user_id", user.id);
 
-  if (courses.data?.length === 1) {
-    return redirect(`/course/${courses.data[0].id}`);
+  const sortedRoles = roles.data?.sort((a, b) => {
+    if (!a.classes.term || !b.classes.term) {
+      return 0;
+    }
+    return b.classes.term - a.classes.term;
+  });
+
+  if (sortedRoles?.length === 1) {
+    return redirect(`/course/${sortedRoles[0].classes.id}`);
   }
   return (
     <VStack>
@@ -39,13 +42,17 @@ export default async function ProtectedPage() {
         <Heading size="xl">Your courses</Heading>
         <Flex>
           <Stack gap="4" direction="row" wrap="wrap">
-            {courses.data!.map((course) => (
-              <Link key={course.id} href={`/course/${course.id}`}>
-                <Card.Root key={course.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
+            {sortedRoles!.map((role) => (
+              <Link key={role.classes.id} href={`/course/${role.classes.id}`}>
+                <Card.Root key={role.classes.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
                   <Card.Body>
-                    <Card.Title>{course.name}</Card.Title>
+                    <Card.Title>
+                      {role.classes.name}, {termToTermText(role.classes.term ?? 0)}
+                    </Card.Title>
                     <Card.Description>
-                      Semester: <SemesterText semester={course.term} />
+                      <Text fontSize="sm" color="text.muted">
+                        {role.classes.course_title ?? role.classes.name}
+                      </Text>
                     </Card.Description>
                   </Card.Body>
                 </Card.Root>
