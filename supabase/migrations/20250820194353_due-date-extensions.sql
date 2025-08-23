@@ -34,7 +34,27 @@ CREATE OR REPLACE FUNCTION public.apply_extensions_to_new_assignment()
  LANGUAGE plpgsql
  SECURITY DEFINER
 AS $function$
+DECLARE
+    v_creator_profile_id uuid;
 BEGIN
+    -- Get the profile_id for the current user in this class context
+    -- Typically, we'd use the private_profile_id from user_roles
+    SELECT private_profile_id INTO v_creator_profile_id
+    FROM user_roles
+    WHERE user_id = auth.uid()
+      AND class_id = NEW.class_id
+      AND disabled = false
+    LIMIT 1;
+    
+    -- If no profile found (shouldn't happen in normal operation), 
+    -- we could either skip or use a system profile
+    IF v_creator_profile_id IS NULL THEN
+        -- Option 1: Skip the insert
+        RETURN NEW;
+        -- Option 2: Raise an exception
+        -- RAISE EXCEPTION 'No profile found for user % in class %', auth.uid(), NEW.class_id;
+    END IF;
+    
     -- Only proceed if this is a regular assignment or a lab assignment with extensions that include labs
     INSERT INTO assignment_due_date_exceptions (
         assignment_id,
@@ -50,7 +70,7 @@ BEGIN
         NEW.id,
         sde.student_id,
         NEW.class_id,
-        auth.uid(),
+        v_creator_profile_id,
         sde.hours,
         0,
         0,
@@ -62,15 +82,43 @@ BEGIN
     
     RETURN NEW;
 END;
-$function$
-;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.create_assignment_exceptions_from_extension()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
 AS $function$
+DECLARE
+    v_creator_profile_id uuid;
 BEGIN
+    -- Get the profile_id for the current user in this class context
+    SELECT private_profile_id INTO v_creator_profile_id
+    FROM user_roles
+    WHERE user_id = auth.uid()
+      AND class_id = NEW.class_id
+      AND disabled = false
+    LIMIT 1;
+    
+    -- If no profile found, try to handle gracefully
+    IF v_creator_profile_id IS NULL THEN
+        -- For system-triggered operations, you might want to use a default
+        -- instructor profile or skip the operation
+        -- For now, we'll try to get any instructor profile for the class
+        SELECT private_profile_id INTO v_creator_profile_id
+        FROM user_roles
+        WHERE class_id = NEW.class_id
+          AND role IN ('instructor', 'admin')
+          AND disabled = false
+        LIMIT 1;
+        
+        -- If still no profile, we have to bail out
+        IF v_creator_profile_id IS NULL THEN
+            RAISE WARNING 'No suitable profile found for creating extension exceptions in class %', NEW.class_id;
+            RETURN NEW;
+        END IF;
+    END IF;
+    
     -- Insert exceptions for all assignments in the class
     -- Skip lab assignments if includes_lab is false
     INSERT INTO assignment_due_date_exceptions (
@@ -87,7 +135,7 @@ BEGIN
         a.id,
         NEW.student_id,
         NEW.class_id,
-        auth.uid(), -- Current user as creator
+        v_creator_profile_id,
         NEW.hours,
         0, -- No additional minutes
         0, -- No tokens consumed for instructor-granted extensions
@@ -106,18 +154,38 @@ BEGIN
     
     RETURN NEW;
 END;
-$function$
-;
+$function$;
 
-CREATE OR REPLACE FUNCTION public.gift_tokens_to_student(p_student_id uuid, p_class_id bigint, p_assignment_id bigint, p_tokens_to_gift integer, p_note text DEFAULT 'Tokens gifted by instructor'::text)
+CREATE OR REPLACE FUNCTION public.gift_tokens_to_student(
+    p_student_id uuid, 
+    p_class_id bigint, 
+    p_assignment_id bigint, 
+    p_tokens_to_gift integer, 
+    p_note text DEFAULT 'Tokens gifted by instructor'::text
+)
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
 AS $function$
+DECLARE
+    v_creator_profile_id uuid;
 BEGIN
     -- Verify instructor authorization
     IF NOT authorizeforclassinstructor(p_class_id) THEN
         RAISE EXCEPTION 'Unauthorized: Only instructors can gift tokens';
+    END IF;
+    
+    -- Get the profile_id for the current user (instructor) in this class
+    SELECT private_profile_id INTO v_creator_profile_id
+    FROM user_roles
+    WHERE user_id = auth.uid()
+      AND class_id = p_class_id
+      AND disabled = false
+    LIMIT 1;
+    
+    -- Validate we found a profile
+    IF v_creator_profile_id IS NULL THEN
+        RAISE EXCEPTION 'Could not find profile for current user in class %', p_class_id;
     END IF;
     
     -- Create a negative token consumption entry
@@ -135,15 +203,14 @@ BEGIN
         p_assignment_id,
         p_student_id,
         p_class_id,
-        auth.uid(),
+        v_creator_profile_id,
         0,
         0,
         -p_tokens_to_gift, -- Negative value represents gifted tokens
         p_note
     );
 END;
-$function$
-;
+$function$;
 
 grant delete on table "public"."student_deadline_extensions" to "anon";
 
