@@ -38,9 +38,9 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const myAssignedReviews = useMyReviewAssignments();
-  const writableReviews = useWritableSubmissionReviews();
   const submission = useSubmission();
+  const myAssignedReviews = useMyReviewAssignments(submission?.id);
+  const writableReviews = useWritableSubmissionReviews();
   const assignmentController = useAssignmentController();
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
 
@@ -81,6 +81,32 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       }
     }
 
+    // Validate selected_rubric_id
+    if (selectedRubricIdParam) {
+      const selectedRubricId = parseInt(selectedRubricIdParam, 10);
+      if (Number.isFinite(selectedRubricId)) {
+        const validRubricIds = [];
+        // Add rubric IDs from review assignments
+        myAssignedReviews.forEach((ra) => {
+          if (ra.rubric_id) validRubricIds.push(ra.rubric_id);
+        });
+        // Add rubric IDs from writable reviews
+        writableReviews?.forEach((wr) => {
+          if (wr.rubric_id) validRubricIds.push(wr.rubric_id);
+        });
+        // Add assignment's grading rubric ID
+        if (assignmentController.assignment.grading_rubric_id) {
+          validRubricIds.push(assignmentController.assignment.grading_rubric_id);
+        }
+        // Remove duplicates
+        const uniqueValidRubricIds = [...new Set(validRubricIds)];
+        if (!uniqueValidRubricIds.includes(selectedRubricId)) {
+          params.delete("selected_rubric_id");
+          changed = true;
+        }
+      }
+    }
+
     if (changed) {
       const qs = params.toString();
       router.replace(qs ? `${pathname}?${qs}` : pathname);
@@ -88,9 +114,11 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   }, [
     activeReviewAssignmentId,
     selectedReviewIdParam,
+    selectedRubricIdParam,
     myAssignedReviews,
     writableReviews,
     submission.grading_review_id,
+    assignmentController.assignment.grading_rubric_id,
     searchParams,
     pathname,
     router
@@ -167,9 +195,20 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       router.push(qs ? `${pathname}?${qs}` : pathname);
       return;
     }
+    
+    // Validate that the submission review belongs to the current submission
+    const validReviewIds = writableReviews?.map((wr) => wr.id) || [];
+    if (submission.grading_review_id) validReviewIds.push(submission.grading_review_id);
+    if (!validReviewIds.includes(id)) {
+      // Invalid review ID for current submission - don't navigate
+      return;
+    }
+    
     // If this review maps to an assigned, incomplete review, prefer RA in URL
     const ra = myAssignedReviews.find((r) => r.submission_review_id === id && !r.completed_at);
     if (ra) {
+      // Double-check: ensure this review assignment actually belongs to current submission
+      // (myAssignedReviews is already scoped to submission, but be explicit)
       params.set("review_assignment_id", String(ra.id));
       params.delete("selected_review_id");
       params.delete("ignore_review");
