@@ -86,11 +86,20 @@ export default function HelpRequestPage() {
   const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
   const course = useCourseController();
 
-  useEffect(() => {
-    if (course?.course) {
-      document.title = `${course.course.course_title} - Office Hours #${request_id} - Pawtograder`;
+  const title = (() => {
+    try {
+      const c = course.course; // may throw until loaded
+      return `${c.course_title || c.name} - Office Hours #${request_id} - Pawtograder`;
+    } catch {
+      return undefined;
     }
-  }, [course?.course, request_id]);
+  })();
+
+  useEffect(() => {
+    if (title) {
+      document.title = title;
+    }
+  }, [title]);
 
   if (realtimeLoading || !request) {
     return <Skeleton />;

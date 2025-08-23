@@ -105,8 +105,15 @@ function SubmissionReviewScoreTweak() {
     setIsSaving(true);
     setError(null);
     try {
+      // Normalize undefined → null and skip if no change
+      const original = review.tweak ?? null;
+      const current = tweakValue ?? null;
+      if (original === current) {
+        setIsEditing(false);
+        return;
+      }
       await submissionController.submission_reviews.update(review.id, {
-        tweak: tweakValue
+        tweak: current
       });
       setIsEditing(false);
     } catch (err) {

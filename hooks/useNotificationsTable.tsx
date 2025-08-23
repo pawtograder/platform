@@ -8,8 +8,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 
 export function useNotificationsTableController() {
-  const supabase = createClient();
-
+  const supabase = useMemo(() => createClient(), []);
   return useMemo(() => {
     const query = supabase
       .from("notifications")

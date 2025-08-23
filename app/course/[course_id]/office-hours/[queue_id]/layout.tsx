@@ -26,11 +26,18 @@ export default function QueueLayout({ children }: LayoutProps) {
     }
   );
 
-  useEffect(() => {
-    if (course?.course) {
-      document.title = `${course.course.course_title} - Office Hours - Pawtograder`;
+  const title = (() => {
+    try {
+      const c = course.course; // may throw until loaded
+      return `${c.course_title || c.name} - Office Hours - Pawtograder`;
+    } catch {
+      return undefined;
     }
-  }, [course?.course]);
+  })();
+
+  useEffect(() => {
+    if (title) document.title = title;
+  }, [title]);
 
   if (isLoading) {
     return <div>Loading...</div>;

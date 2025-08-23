@@ -7,11 +7,17 @@ import { useEffect } from "react";
 
 export default function GradebookLayout({ children }: { children: React.ReactNode }) {
   const course = useCourseController();
-  useEffect(() => {
-    if (course?.course) {
-      document.title = `${course.course.course_title || course.course.name} - Gradebook - Pawtograder`;
+  const title = (() => {
+    try {
+      const c = course.course; // may throw until loaded
+      return `${c.course_title || c.name} - Gradebook - Pawtograder`;
+    } catch {
+      return undefined;
     }
-  }, [course?.course]);
+  })();
+  useEffect(() => {
+    if (title) document.title = title;
+  }, [title]);
   return (
     <GradebookProvider>
       <Box w="100vw" overflowX="hidden">
