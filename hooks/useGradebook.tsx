@@ -508,7 +508,6 @@ export class GradebookCellController {
   }
 
   private _handleGradebookColumnStudentChange(message: BroadcastMessage): void {
-    console.log("handleGradebookColumnStudentChange", message);
     if (message.table !== "gradebook_column_students") return;
 
     const data = message.data as GradebookColumnStudent | undefined;

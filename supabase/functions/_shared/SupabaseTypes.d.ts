@@ -8608,7 +8608,7 @@ export type Database = {
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
-      review_round: "self-review" | "grading-review" | "meta-grading-review";
+      review_round: "self-review" | "grading-review" | "meta-grading-review" | "code-walk";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
       student_help_activity_type:
         | "request_created"
@@ -8747,7 +8747,7 @@ export const Constants = {
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
-      review_round: ["self-review", "grading-review", "meta-grading-review"],
+      review_round: ["self-review", "grading-review", "meta-grading-review", "code-walk"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
       student_help_activity_type: [
         "request_created",

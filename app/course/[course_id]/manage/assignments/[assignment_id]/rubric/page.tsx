@@ -41,7 +41,8 @@ import * as YAML from "yaml";
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
   "grading-review",
-  "meta-grading-review"
+  "meta-grading-review",
+  "code-walk"
 ];
 
 function findChanges<T extends { id: number | undefined | null }>(
