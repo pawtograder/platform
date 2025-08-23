@@ -39,7 +39,7 @@ export default function AddExtensionModal({
       allUserRoles
         .filter((role) => role.role === "student" && !role.disabled)
         .map((role) => ({
-          value: role.user_id,
+          value: role.private_profile_id,
           label: role.profiles?.name || role.users?.name || role.user_id
         })),
     [allUserRoles]
