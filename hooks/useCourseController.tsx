@@ -324,6 +324,7 @@ export class CourseController {
   private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
+  private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -457,6 +458,18 @@ export class CourseController {
       });
     }
     return this._studentDeadlineExtensions;
+  }
+
+  get assignmentDueDateExceptions(): TableController<"assignment_due_date_exceptions"> {
+    if (!this._assignmentDueDateExceptions) {
+      this._assignmentDueDateExceptions = new TableController({
+        client: this._client,
+        table: "assignment_due_date_exceptions",
+        query: this._client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._assignmentDueDateExceptions;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -865,7 +878,7 @@ export class CourseController {
     this._labSections?.close();
     this._labSectionMeetings?.close();
     this._studentDeadlineExtensions?.close();
-
+    this._assignmentDueDateExceptions?.close();
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
     }
@@ -1094,12 +1107,12 @@ export function useAssignmentDueDate(
 
   useEffect(() => {
     if (assignment.due_date) {
-      const { data: dueDateExceptions, unsubscribe } = controller.listGenericData<AssignmentDueDateException>(
-        "assignment_due_date_exceptions",
-        (data) => setDueDateExceptions(data.filter((e) => e.assignment_id === assignment.id))
-      );
-      setDueDateExceptions(dueDateExceptions.filter((e) => e.assignment_id === assignment.id));
-      return () => unsubscribe();
+      const { data, unsubscribe } = controller.assignmentDueDateExceptions.list((data) => {
+        const filtered = data.filter((e) => e.assignment_id === assignment.id);
+        setDueDateExceptions(filtered);
+      });
+      setDueDateExceptions(data.filter((e) => e.assignment_id === assignment.id));
+      return unsubscribe;
     }
   }, [assignment, controller]);
 
@@ -1208,21 +1221,24 @@ export function useAssignmentDueDate(
 
 export function useLateTokens() {
   const controller = useCourseController();
-  const [lateTokens, setLateTokens] = useState<AssignmentDueDateException[]>();
+  const [lateTokens, setLateTokens] = useState<AssignmentDueDateException[]>([]);
+
   useEffect(() => {
-    const { data: lateTokens, unsubscribe } = controller.listGenericData<AssignmentDueDateException>(
-      "assignment_due_date_exceptions",
-      (data) => setLateTokens(data)
-    );
-    setLateTokens(lateTokens);
-    return () => unsubscribe();
+    const { data, unsubscribe } = controller.assignmentDueDateExceptions.list((data) => {
+      setLateTokens(data);
+    });
+    setLateTokens(data);
+    return unsubscribe;
   }, [controller]);
+
   return lateTokens;
 }
+
 export function useCourse() {
   const { role } = useClassProfiles();
   return role.classes;
 }
+
 export function useCourseController() {
   const controller = useContext(CourseControllerContext);
   if (!controller) {
