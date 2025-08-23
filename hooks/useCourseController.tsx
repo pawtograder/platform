@@ -350,6 +350,9 @@ export class CourseController {
     // These are accessed frequently and should be ready
     void this.profiles; // Triggers lazy creation
     void this.userRolesWithProfiles; // Triggers lazy creation
+    // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
+    void this.assignmentDueDateExceptions; // Triggers lazy creation
+    void this.studentDeadlineExtensions; // Triggers lazy creation
   }
 
   get classRealTimeController(): ClassRealTimeController {

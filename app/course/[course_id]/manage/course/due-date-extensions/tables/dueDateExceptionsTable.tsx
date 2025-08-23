@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import PersonName from "@/components/ui/person-name";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useCourse } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourse, useLateTokens } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { Assignment, AssignmentDueDateException, UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, HStack, Icon, NativeSelect, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { Box, Heading, HStack, Icon, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { useDelete, useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
@@ -24,17 +24,8 @@ export default function DueDateExceptionsTable() {
   const { course_id } = useParams<{ course_id: string }>();
   const course = useCourse();
   const { mutateAsync: deleteException } = useDelete();
+  const exceptions = useLateTokens();
 
-  const { data: exceptionsResult, isLoading } = useList<AssignmentDueDateException>({
-    resource: "assignment_due_date_exceptions",
-    liveMode: "auto",
-    pagination: { pageSize: 1000 },
-    filters: [{ field: "class_id", operator: "eq", value: Number(course_id) }],
-    sorters: [
-      { field: "assignment_id", order: "asc" },
-      { field: "created_at", order: "desc" }
-    ]
-  });
   const { data: assignmentsResult } = useList<Assignment>({
     resource: "assignments",
     pagination: { pageSize: 1000 },
@@ -65,7 +56,6 @@ export default function DueDateExceptionsTable() {
     [students]
   );
 
-  const exceptions = exceptionsResult?.data || [];
   const filtered = exceptions.filter((e) => {
     const aPass = assignmentFilter.modalData ? e.assignment_id === assignmentFilter.modalData : true;
     const sPass = studentFilter.modalData ? e.student_id === studentFilter.modalData : true;
@@ -89,8 +79,6 @@ export default function DueDateExceptionsTable() {
   }, [filtered]);
 
   const studentName = (id: string) => students.find((s) => s.id === id)?.name || id;
-
-  if (isLoading) return <Skeleton height="300px" width="100%" />;
 
   return (
     <VStack align="stretch" gap={4} w="100%">
