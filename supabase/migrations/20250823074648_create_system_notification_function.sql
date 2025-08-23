@@ -514,6 +514,11 @@ begin
 
   -- CRITICAL: Add advisory lock to prevent race conditions during concurrent score updates
   -- This ensures only one trigger can update the same submission_review at a time
+  -- Skip advisory lock if no submission review ID is available
+  IF existing_submission_review_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
   perform pg_advisory_xact_lock(existing_submission_review_id);
 
   -- Check if this is the grading review (connected to a grading review rubric)

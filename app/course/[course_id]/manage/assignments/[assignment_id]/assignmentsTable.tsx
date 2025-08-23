@@ -2,6 +2,7 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
+import Link from "@/components/ui/link";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
@@ -25,7 +26,6 @@ import {
   Icon,
   IconButton,
   Input,
-  Link,
   NativeSelect,
   Popover,
   Skeleton,
@@ -63,8 +63,8 @@ function StudentNameCell({
 
   return (
     <HStack w="100%">
-      {activeSubmissionId ? (
-        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
+      {activeSubmissionId !== null ? (
+        <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
           <PersonName uid={uid} size="2xs" />
         </Link>
       ) : (
@@ -99,7 +99,7 @@ function ScoreLink({
   if (isObfuscated && !canShowGradeFor) {
     return <Skeleton w="50px" h="1em" />;
   }
-  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
+  return <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
