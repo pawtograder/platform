@@ -27,11 +27,13 @@ export function TermSelector({ value, onChange, label = "Term", required = false
 
     // Past 5 years + current year + next year
     for (let year = currentYear - 5; year <= currentYear + 1; year++) {
-      // Spring (30), Summer (20), Fall (10)
+      // Fall (10), Spring (30), Summer 1 (40), Summer Full (50), Summer 2 (60)
       options.push(
+        { value: parseInt(`${year}10`), label: `Fall ${year - 1}` },
         { value: parseInt(`${year}30`), label: `Spring ${year}` },
-        { value: parseInt(`${year}20`), label: `Summer ${year}` },
-        { value: parseInt(`${year}10`), label: `Fall ${year}` }
+        { value: parseInt(`${year}40`), label: `Summer 1 ${year}` },
+        { value: parseInt(`${year}50`), label: `Summer Full ${year}` },
+        { value: parseInt(`${year}60`), label: `Summer 2 ${year}` }
       );
     }
 

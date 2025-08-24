@@ -16,8 +16,30 @@ export async function GET(request: Request) {
     if (!error) {
       if (data.session) {
         // Check if this was an Azure OAuth login and if user needs SIS ID populated
-        const provider = data.session.user?.app_metadata?.provider;
-        if (provider === "azure") {
+        // Decode provider_token JWT to determine issuer (iss) and check if Azure
+        let isAzure = false;
+        const providerToken = data.session.provider_token;
+        if (providerToken) {
+          // JWT format: header.payload.signature
+          const parts = providerToken.split(".");
+          if (parts.length === 3) {
+            try {
+              const b64url = parts[1];
+              const b64 = b64url
+                .replace(/-/g, "+")
+                .replace(/_/g, "/")
+                .padEnd(Math.ceil(b64url.length / 4) * 4, "=");
+              const payload = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+              // Azure AD tokens typically have iss like "https://sts.windows.net/{tenantid}/"
+              if (payload.iss && typeof payload.iss === "string" && payload.iss.includes("sts.windows.net")) {
+                isAzure = true;
+              }
+            } catch (e) {
+              console.error("Failed to decode provider_token JWT:", e);
+            }
+          }
+        }
+        if (isAzure) {
           try {
             // Check if user already has sis_user_id
             const { data: userData } = await supabase

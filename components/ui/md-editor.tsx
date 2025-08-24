@@ -1,11 +1,8 @@
 "use client";
 import MDEditor from "@uiw/react-md-editor";
 import { useCallback } from "react";
-import "@uiw/react-md-editor/markdown-editor.css";
-import "@uiw/react-markdown-preview/markdown.css";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
-import "katex/dist/katex.min.css";
 import { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";

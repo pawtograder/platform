@@ -280,6 +280,7 @@ export type CourseImportRequest = {
   term: string;
   mainCourseCode: string;
   labCourseCode?: string;
+  existingClassId?: number; // ID of existing class to sync to instead of creating new one
 };
 
 export type ProcessedSection = {
@@ -346,6 +347,7 @@ export type CourseImportResponse = {
       newInvitations: number;
     };
   };
+  existingClassId?: number | null; // ID of existing class if one was specified
 };
 
 // Invitation Creation Types

@@ -24,12 +24,25 @@ export default function NotificationsBox() {
         // Keep notifications without a body (if any exist)
         if (!n.body || typeof n.body !== "object") return true;
 
-        // Filter out notifications where the author is the current user
-        const body = n.body as { author_profile_id?: string };
-        return (
-          body.author_profile_id !== classRole?.private_profile_id &&
-          body.author_profile_id !== classRole?.public_profile_id
-        );
+        const body = n.body as { author_profile_id?: string; type?: string; expires_at?: string };
+
+        // Filter out expired system notifications
+        if (body.type === "system" && body.expires_at) {
+          const expiresAt = new Date(body.expires_at);
+          const now = new Date();
+          if (expiresAt < now) return false;
+        }
+
+        // Only filter out self-authored items when BOTH classRole is defined AND the notification has a defined author_profile_id
+        if (classRole && body.author_profile_id) {
+          return (
+            body.author_profile_id !== classRole.private_profile_id &&
+            body.author_profile_id !== classRole.public_profile_id
+          );
+        }
+
+        // If classRole is undefined or author_profile_id is undefined, allow the item
+        return true;
       }) || [],
     [notifications, classRole]
   );
@@ -185,40 +198,39 @@ export default function NotificationsBox() {
       </PopoverRoot>
 
       {/* Modal System Notifications */}
-      {modalNotifications.map((notification) => {
-        const body = notification.body as SystemNotification;
-        return (
-          <DialogRoot
-            key={notification.id}
-            open={true}
-            onOpenChange={() => {
-              set_read(notification, true);
-              setModalNotifications((prev) => prev.filter((n) => n.id !== notification.id));
-            }}
-            size="md"
-          >
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{body.title}</DialogTitle>
-              </DialogHeader>
-              <DialogBody>
-                <Markdown>{body.message}</Markdown>
-              </DialogBody>
-              <DialogFooter>
-                <Button
-                  variant="solid"
-                  onClick={() => {
-                    set_read(notification, true);
-                    setModalNotifications((prev) => prev.filter((n) => n.id !== notification.id));
-                  }}
-                >
-                  OK
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </DialogRoot>
-        );
-      })}
+      {modalNotifications.length > 0 &&
+        (() => {
+          const notification = modalNotifications[0];
+          const body = notification.body as SystemNotification;
+
+          const handleModalDismiss = () => {
+            set_read(notification, true);
+            setModalNotifications((prev) => prev.filter((n) => n.id !== notification.id));
+          };
+
+          return (
+            <DialogRoot
+              key={notification.id}
+              open={true}
+              onOpenChange={body.backdrop_dismiss !== false ? handleModalDismiss : undefined}
+              size="md"
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{body.title}</DialogTitle>
+                </DialogHeader>
+                <DialogBody>
+                  <Markdown>{body.message}</Markdown>
+                </DialogBody>
+                <DialogFooter>
+                  <Button variant="solid" onClick={handleModalDismiss} colorPalette="green">
+                    OK
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </DialogRoot>
+          );
+        })()}
 
       {/* Banner System Notifications */}
       {bannerNotifications.length > 0 && (
@@ -235,10 +247,10 @@ export default function NotificationsBox() {
 
                     // Determine background color based on severity
                     const severityBg = {
-                      info: "blue.subtle",
-                      success: "green.subtle",
-                      warning: "orange.subtle",
-                      error: "red.subtle"
+                      info: "blue.50",
+                      success: "green.50",
+                      warning: "orange.50",
+                      error: "red.50"
                     };
 
                     return (

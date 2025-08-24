@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { termToTermText } from "@/components/ui/semesterText";
 import { createClient } from "@/utils/supabase/server";
-import { Card, Flex, Heading, Stack, Text, VStack, Box } from "@chakra-ui/react";
+import { Box, Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
 import { redirect } from "next/navigation";
 import { signOutAction } from "../actions";
 
@@ -18,7 +18,11 @@ export default async function ProtectedPage() {
   }
 
   //list identities
-  const roles = await supabase.from("user_roles").select("role, classes(*)").eq("user_id", user.id);
+  const roles = await supabase
+    .from("user_roles")
+    .select("role, classes(*)")
+    .eq("user_id", user.id)
+    .eq("disabled", false);
 
   const sortedRoles = roles.data?.sort((a, b) => {
     if (!a.classes.term || !b.classes.term) {
@@ -49,11 +53,7 @@ export default async function ProtectedPage() {
                     <Card.Title>
                       {role.classes.name}, {termToTermText(role.classes.term ?? 0)}
                     </Card.Title>
-                    <Card.Description>
-                      <Text fontSize="sm" color="text.muted">
-                        {role.classes.course_title ?? role.classes.name}
-                      </Text>
-                    </Card.Description>
+                    <Card.Description>{role.classes.course_title ?? role.classes.name}</Card.Description>
                   </Card.Body>
                 </Card.Root>
               </Link>

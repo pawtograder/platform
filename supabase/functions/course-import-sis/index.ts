@@ -44,6 +44,7 @@ interface CourseImportRequest {
   term: string;
   mainCourseCode: string;
   labCourseCode?: string;
+  existingClassId?: number; // ID of existing class to sync to instead of creating new one
 }
 
 interface ParsedMeetingTime {
@@ -322,6 +323,7 @@ interface CourseImportResponse {
       newInvitations: number;
     };
   };
+  existingClassId?: number | null; // ID of existing class if one was specified
 }
 
 /**
@@ -791,8 +793,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
           const labUpdateData: Database["public"]["Tables"]["lab_sections"]["Update"] = {
             meeting_location: sectionMeta.meeting_location,
-            meeting_times: sectionMeta.meeting_times,
-            updated_at: new Date().toISOString()
+            meeting_times: sectionMeta.meeting_times
           };
           const mt = sectionMeta.meeting_times?.trim() ?? "";
           if (!mt) {
@@ -963,9 +964,10 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 // function constructSemesterCode(term: string, year: number): string {
 //   const termMap: { [key: string]: string } = {
 //     Fall: "10",
-//     Spring: "20",
-//     "Summer 1": "30",
-//     "Summer 2": "40"
+//     Spring: "30",
+//     "Summer 1": "40",
+//     "Summer": "50",
+//     "Summer 2": "60"
 //   };
 
 //   const termCode = termMap[term] || "10";
@@ -1016,7 +1018,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
   // Direct user call - import new course
   scope?.setTag("source", "user-direct");
 
-  const { term, mainCourseCode, labCourseCode } = (await req.json()) as CourseImportRequest;
+  const { term, mainCourseCode, labCourseCode, existingClassId } = (await req.json()) as CourseImportRequest;
 
   // Validate required inputs for new course import
   if (!term?.trim()) {
@@ -1029,6 +1031,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
   scope?.setTag("term", term);
   scope?.setTag("mainCourseCode", mainCourseCode);
   scope?.setTag("labCourseCode", labCourseCode || "none");
+  scope?.setTag("existingClassId", existingClassId || "none");
 
   // Validate admin authorization for direct user calls
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -1048,6 +1051,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  // If existingClassId is provided, validate that the class exists and belongs to the same term
+  if (existingClassId) {
+    const { data: existingClass, error: classError } = await adminSupabase
+      .from("classes")
+      .select("id, term, course_title")
+      .eq("id", existingClassId)
+      .eq("archived", false)
+      .single();
+
+    if (classError || !existingClass) {
+      throw new UserVisibleError(`Existing class with ID ${existingClassId} not found`);
+    }
+
+    if (existingClass.term !== parseInt(term)) {
+      throw new UserVisibleError(`Existing class term (${existingClass.term}) does not match import term (${term})`);
+    }
+
+    scope?.setTag("existingClassTitle", existingClass.course_title);
+  }
 
   const { data: isAdmin } = await adminSupabase.rpc("authorize_for_admin", {
     p_user_id: user.id
@@ -1275,7 +1298,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
       courseInfo,
       sections,
       totalUsers,
-      enrollmentStatus
+      enrollmentStatus,
+      existingClassId: existingClassId || null
     };
   } catch (error) {
     scope?.captureException(error);

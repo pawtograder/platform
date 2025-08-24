@@ -142,7 +142,7 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback?next=/course`;
+  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email User.Read", redirectTo }

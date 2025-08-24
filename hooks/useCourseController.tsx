@@ -318,6 +318,7 @@ export class CourseController {
   // Lazily created TableController instances to avoid realtime subscription bursts
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
+  private _discussionThreadWatchers?: TableController<"discussion_thread_watchers">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
@@ -392,6 +393,23 @@ export class CourseController {
       });
     }
     return this._discussionThreadReadStatus;
+  }
+
+  get discussionThreadWatchers(): TableController<"discussion_thread_watchers"> {
+    if (!this._discussionThreadWatchers) {
+      this._discussionThreadWatchers = new TableController({
+        client: this._client,
+        table: "discussion_thread_watchers",
+        query: this._client
+          .from("discussion_thread_watchers")
+          .select("*")
+          .eq("user_id", this._userId)
+          .eq("class_id", this.courseId),
+        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreadWatchers;
   }
 
   get tags(): TableController<"tags"> {
@@ -845,6 +863,7 @@ export class CourseController {
     this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
+    this._discussionThreadWatchers?.close();
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
@@ -1002,13 +1021,11 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      let _courseController: CourseController | null = null;
-
+      const _courseController = new CourseController(role, course_id, client, realTimeController, userId);
+      setCourseController(_courseController);
       const start = async () => {
         try {
           await realTimeController.start();
-
-          _courseController = new CourseController(role, course_id, client, realTimeController, userId);
 
           if (cancelled) {
             _courseController?.close();
@@ -1019,7 +1036,6 @@ export function CourseControllerProvider({
           // Initialize the critical controllers now that everything is stable
           _courseController.initializeEagerControllers();
 
-          setCourseController(_courseController);
           setClassRealTimeController(realTimeController);
         } catch (e) {
           // eslint-disable-next-line no-console

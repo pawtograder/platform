@@ -1,8 +1,9 @@
 import { Box, Flex } from "@chakra-ui/react";
 import HelpRequestList from "./helpRequestList";
 import { getCourse } from "@/lib/ssrUtils";
-export async function generateMetadata({ params }: { params: { course_id: string } }) {
-  const course = await getCourse(Number(params.course_id));
+export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
+  const { course_id } = await params;
+  const course = await getCourse(Number(course_id));
   if (!course) {
     return {
       title: "Office Hours - Pawtograder"
