@@ -254,7 +254,10 @@ export default function NotificationForm({
               <MdEditor
                 value={formData.message}
                 style={{ minWidth: "100%", width: "100%" }}
-                onChange={isSubmitting ? undefined : (value) => handleInputChange("message", value || "")}
+                onChange={(value) => {
+                  if (isSubmitting) return;
+                  handleInputChange("message", value || "");
+                }}
                 preview={isSubmitting ? "preview" : "edit"}
               />
             </Field>

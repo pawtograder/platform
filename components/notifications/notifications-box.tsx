@@ -223,7 +223,7 @@ export default function NotificationsBox() {
                   <Markdown>{body.message}</Markdown>
                 </DialogBody>
                 <DialogFooter>
-                  <Button variant="solid" onClick={handleModalDismiss}>
+                  <Button variant="solid" onClick={handleModalDismiss} colorPalette="green">
                     OK
                   </Button>
                 </DialogFooter>

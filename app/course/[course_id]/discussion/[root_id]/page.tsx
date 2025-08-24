@@ -17,7 +17,7 @@ import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { FaEye, FaEyeSlash, FaPencilAlt, FaReply } from "react-icons/fa";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {

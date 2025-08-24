@@ -31,7 +31,9 @@ export function TermSelector({ value, onChange, label = "Term", required = false
       options.push(
         { value: parseInt(`${year}10`), label: `Fall ${year - 1}` },
         { value: parseInt(`${year}30`), label: `Spring ${year}` },
-        { value: parseInt(`${year}20`), label: `Summer ${year}` }
+        { value: parseInt(`${year}40`), label: `Summer 1 ${year}` },
+        { value: parseInt(`${year}50`), label: `Summer Full ${year}` },
+        { value: parseInt(`${year}60`), label: `Summer 2 ${year}` }
       );
     }
 

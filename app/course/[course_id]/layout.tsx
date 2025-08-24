@@ -14,7 +14,7 @@ export async function generateMetadata({ params }: { params: Promise<{ course_id
   const { course_id } = await params;
   const course = await getCourse(Number(course_id));
   return {
-    title: `${course?.course_title || course?.name} - Pawtograder`
+    title: `${course?.course_title || course?.name || "Course"} - Pawtograder`
   };
 }
 

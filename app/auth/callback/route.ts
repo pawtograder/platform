@@ -24,7 +24,12 @@ export async function GET(request: Request) {
           const parts = providerToken.split(".");
           if (parts.length === 3) {
             try {
-              const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
+              const b64url = parts[1];
+              const b64 = b64url
+                .replace(/-/g, "+")
+                .replace(/_/g, "/")
+                .padEnd(Math.ceil(b64url.length / 4) * 4, "=");
+              const payload = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
               // Azure AD tokens typically have iss like "https://sts.windows.net/{tenantid}/"
               if (payload.iss && typeof payload.iss === "string" && payload.iss.includes("sts.windows.net")) {
                 isAzure = true;

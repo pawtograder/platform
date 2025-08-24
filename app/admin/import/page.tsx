@@ -532,9 +532,10 @@ export default function CourseImportPage() {
         const termCode = semester % 100;
         const termMap: { [key: number]: string } = {
           10: "fa",
-          20: "sp",
-          30: "su1",
-          40: "su2"
+          30: "sp",
+          40: "su1",
+          50: "su",
+          60: "su2"
         };
         if (termCode === 10) {
           //Apparently Banner made the brilliant decision that Fall is the next year so it sorts right.
