@@ -21,24 +21,46 @@ const additionalStyles = `
   }
   .wmde-markdown {
     background: transparent !important;
+    color: inherit !important;
   }
   .wmde-markdown * {
     background: transparent !important;
   }
   .wmde-markdown p {
     background: transparent !important;
+    color: inherit !important;
   }
   .wmde-markdown div {
     background: transparent !important;
+    color: inherit !important;
   }
   .wmde-markdown blockquote {
     background: transparent !important;
+    color: inherit !important;
   }
   .wmde-markdown pre {
     background: transparent !important;
+    color: inherit !important;
   }
   .wmde-markdown code {
     background: transparent !important;
+    color: inherit !important;
+  }
+  .wmde-markdown h1,
+  .wmde-markdown h2,
+  .wmde-markdown h3,
+  .wmde-markdown h4,
+  .wmde-markdown h5,
+  .wmde-markdown h6 {
+    color: inherit !important;
+  }
+  .wmde-markdown strong,
+  .wmde-markdown b {
+    color: inherit !important;
+  }
+  .wmde-markdown em,
+  .wmde-markdown i {
+    color: inherit !important;
   }
 `;
 

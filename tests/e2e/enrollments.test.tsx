@@ -39,7 +39,6 @@ test.describe("Enrollments Page", () => {
   });
   test("Instructors can view enrollments", async ({ page }) => {
     // Check Enrollments Page Contents
-    await argosScreenshot(page, "Enrollments Page");
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Name" }).first()).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Email" }).first()).toBeVisible();
@@ -55,6 +54,7 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(student1?.private_profile_name ?? "")).toBeVisible();
     await expect(page.getByText(instructor1?.email ?? "")).toBeVisible();
     await expect(page.getByText(instructor1?.private_profile_name ?? "")).toBeVisible();
+    await argosScreenshot(page, "Enrollments Page");
   });
 
   // Note: Creating users is expensive and can overwhelm supabase auth connections.
