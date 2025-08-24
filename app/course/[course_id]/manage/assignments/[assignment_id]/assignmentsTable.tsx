@@ -64,7 +64,7 @@ function StudentNameCell({
   return (
     <HStack w="100%">
       {activeSubmissionId !== null ? (
-        <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
+        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
           <PersonName uid={uid} size="2xs" />
         </Link>
       ) : (

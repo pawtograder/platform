@@ -14,13 +14,24 @@ import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
-  { label: "Edit Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`, icon: FaEdit },
+  {
+    label: "Edit Assignment",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`,
+    icon: FaEdit,
+    instructorsOnly: true
+  },
   {
     label: "Configure Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/autograder`,
-    icon: FaCode
+    icon: FaCode,
+    instructorsOnly: true
   },
-  { label: "Configure Rubric", href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`, icon: FaPen },
+  {
+    label: "Configure Rubric",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`,
+    icon: FaPen,
+    instructorsOnly: true
+  },
   {
     label: "Manage Due Date Exceptions",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/due-date-exceptions`,
@@ -29,9 +40,15 @@ const LinkItems = (courseId: number, assignmentId: number) => [
   {
     label: "Grading Assignments",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
-    icon: FaSearch
+    icon: FaSearch,
+    instructorsOnly: true
   },
-  { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
+  {
+    label: "Manage Groups",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`,
+    icon: FaUsers,
+    instructorsOnly: true
+  },
   {
     label: "Manage Regrade Requests",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
@@ -41,7 +58,8 @@ const LinkItems = (courseId: number, assignmentId: number) => [
   {
     label: "Rerun Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
-    icon: FaPooStorm
+    icon: FaPooStorm,
+    instructorsOnly: true
   }
 ];
 
@@ -78,30 +96,34 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
-            {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string)).map((item) => (
-              <Button
-                key={item.label}
-                variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
-                w="100%"
-                size="xs"
-                pt="0"
-                fontSize="sm"
-                justifyContent="flex-start"
-                asChild
-              >
-                <NextLink href={item.href} prefetch={true}>
-                  <HStack textAlign="left" w="100%" justify="flex-start">
-                    {React.createElement(item.icon)}
-                    {item.label}
-                  </HStack>
-                </NextLink>
-              </Button>
-            ))}
-            <CreateGitHubRepos
-              courseId={Number.parseInt(course_id as string)}
-              assignmentId={Number.parseInt(assignment_id as string)}
-              releaseDate={assignment?.data?.release_date}
-            />
+            {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string))
+              .filter((item) => !item.instructorsOnly || isInstructor)
+              .map((item) => (
+                <Button
+                  key={item.label}
+                  variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
+                  w="100%"
+                  size="xs"
+                  pt="0"
+                  fontSize="sm"
+                  justifyContent="flex-start"
+                  asChild
+                >
+                  <NextLink href={item.href} prefetch={true}>
+                    <HStack textAlign="left" w="100%" justify="flex-start">
+                      {React.createElement(item.icon)}
+                      {item.label}
+                    </HStack>
+                  </NextLink>
+                </Button>
+              ))}
+            {isInstructor && (
+              <CreateGitHubRepos
+                courseId={Number.parseInt(course_id as string)}
+                assignmentId={Number.parseInt(assignment_id as string)}
+                releaseDate={assignment?.data?.release_date}
+              />
+            )}
             {isInstructor && (
               <DeleteAssignmentButton
                 assignmentId={Number.parseInt(assignment_id as string)}

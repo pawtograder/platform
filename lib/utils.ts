@@ -13,7 +13,9 @@ export function dueDateAdvice(date: string | null, courseTimezone?: string) {
   let advice = "";
   if (courseTimezone && date) {
     const hoursUntilDue = differenceInHours(new TZDate(date), TZDate.tz(courseTimezone));
-    if (hoursUntilDue < 36) {
+    if (hoursUntilDue < 0) {
+      advice = ` (Overdue: ${formatDistance(new TZDate(date), TZDate.tz(courseTimezone))} ago)`;
+    } else if (hoursUntilDue < 36) {
       advice = ` (${formatDistance(new TZDate(date), TZDate.tz(courseTimezone))})`;
     }
   }

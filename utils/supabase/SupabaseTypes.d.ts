@@ -8038,6 +8038,106 @@ export type Database = {
           }
         ];
       };
+      workflow_timing_summary: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number | null;
+          completed_at: string | null;
+          in_progress_at: string | null;
+          profile_id: string | null;
+          queue_time_seconds: number | null;
+          requested_at: string | null;
+          run_attempt: number | null;
+          run_time_seconds: number | null;
+          workflow_run_id: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["student_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["student_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["private_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_user_id_fkey1";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_user_id_fkey1";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "workflow_events_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
     };
     Functions: {
       admin_bulk_set_user_roles_disabled: {
@@ -8466,6 +8566,24 @@ export type Database = {
           id: string;
         }[];
       };
+      get_workflow_statistics: {
+        Args: { p_class_id: number; p_duration_hours?: number };
+        Returns: {
+          class_id: number;
+          duration_hours: number;
+          total_runs: number;
+          completed_runs: number;
+          failed_runs: number;
+          in_progress_runs: number;
+          avg_queue_time_seconds: number;
+          avg_run_time_seconds: number;
+          error_count: number;
+          error_rate: number;
+          success_rate: number;
+          period_start: string;
+          period_end: string;
+        }[];
+      };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
         Returns: undefined;
@@ -8578,6 +8696,10 @@ export type Database = {
       };
       recalculate_gradebook_columns_in_range: {
         Args: { start_id: number; end_id: number };
+        Returns: undefined;
+      };
+      refresh_workflow_events_summary: {
+        Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
       release_all_grading_reviews_for_assignment: {
