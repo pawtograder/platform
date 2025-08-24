@@ -540,6 +540,7 @@ export default function CourseImportPage() {
           //Apparently Banner made the brilliant decision that Fall is the next year so it sorts right.
           year = year - 1;
         }
+        const lastTwoDigits = year % 100;
 
         // Create the class
         const { data: newClassId, error: classError } = await supabase.rpc("admin_create_class", {
@@ -549,7 +550,7 @@ export default function CourseImportPage() {
           p_course_title: importData.courseInfo.title,
           p_start_date: importData.courseInfo.startDate,
           p_end_date: importData.courseInfo.endDate,
-          p_github_template_prefix: `${termMap[termCode]}${year}`
+          p_github_template_prefix: `${termMap[termCode]}${lastTwoDigits}`
         });
 
         if (classError) throw classError;

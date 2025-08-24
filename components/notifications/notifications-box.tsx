@@ -25,7 +25,7 @@ export default function NotificationsBox() {
         if (!n.body || typeof n.body !== "object") return true;
 
         const body = n.body as { author_profile_id?: string; type?: string; expires_at?: string };
-        
+
         // Filter out expired system notifications
         if (body.type === "system" && body.expires_at) {
           const expiresAt = new Date(body.expires_at);
@@ -198,41 +198,39 @@ export default function NotificationsBox() {
       </PopoverRoot>
 
       {/* Modal System Notifications */}
-      {modalNotifications.length > 0 && (() => {
-        const notification = modalNotifications[0];
-        const body = notification.body as SystemNotification;
-        
-        const handleModalDismiss = () => {
-          set_read(notification, true);
-          setModalNotifications((prev) => prev.filter((n) => n.id !== notification.id));
-        };
+      {modalNotifications.length > 0 &&
+        (() => {
+          const notification = modalNotifications[0];
+          const body = notification.body as SystemNotification;
 
-        return (
-          <DialogRoot
-            key={notification.id}
-            open={true}
-            onOpenChange={body.backdrop_dismiss !== false ? handleModalDismiss : undefined}
-            size="md"
-          >
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{body.title}</DialogTitle>
-              </DialogHeader>
-              <DialogBody>
-                <Markdown>{body.message}</Markdown>
-              </DialogBody>
-              <DialogFooter>
-                <Button
-                  variant="solid"
-                  onClick={handleModalDismiss}
-                >
-                  OK
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </DialogRoot>
-        );
-      })()}
+          const handleModalDismiss = () => {
+            set_read(notification, true);
+            setModalNotifications((prev) => prev.filter((n) => n.id !== notification.id));
+          };
+
+          return (
+            <DialogRoot
+              key={notification.id}
+              open={true}
+              onOpenChange={body.backdrop_dismiss !== false ? handleModalDismiss : undefined}
+              size="md"
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{body.title}</DialogTitle>
+                </DialogHeader>
+                <DialogBody>
+                  <Markdown>{body.message}</Markdown>
+                </DialogBody>
+                <DialogFooter>
+                  <Button variant="solid" onClick={handleModalDismiss}>
+                    OK
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </DialogRoot>
+          );
+        })()}
 
       {/* Banner System Notifications */}
       {bannerNotifications.length > 0 && (
