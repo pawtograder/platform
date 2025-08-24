@@ -14,6 +14,7 @@ DECLARE
     class_id_value bigint;
     row_id text;
     user_payload jsonb;
+    viewer_user_id uuid;
     viewer_profile_id uuid;
 BEGIN
     -- Get class_id from the discussion thread and row_id
@@ -22,22 +23,30 @@ BEGIN
         FROM public.discussion_threads dt
         WHERE dt.id = NEW.discussion_thread_id;
         row_id := NEW.id;
-        viewer_profile_id := NEW.user_id;
+        viewer_user_id := NEW.user_id;
     ELSIF TG_OP = 'UPDATE' THEN
         SELECT dt.class_id INTO class_id_value
         FROM public.discussion_threads dt
         WHERE dt.id = COALESCE(NEW.discussion_thread_id, OLD.discussion_thread_id);
         row_id := COALESCE(NEW.id, OLD.id);
-        viewer_profile_id := COALESCE(NEW.user_id, OLD.user_id);
+        viewer_user_id := COALESCE(NEW.user_id, OLD.user_id);
     ELSIF TG_OP = 'DELETE' THEN
         SELECT dt.class_id INTO class_id_value
         FROM public.discussion_threads dt
         WHERE dt.id = OLD.discussion_thread_id;
         row_id := OLD.id;
-        viewer_profile_id := OLD.user_id;
+        viewer_user_id := OLD.user_id;
     END IF;
 
-    -- Only broadcast if we have valid class_id and user_id
+    -- Get the private_profile_id from user_id for the channel name
+    IF class_id_value IS NOT NULL AND viewer_user_id IS NOT NULL THEN
+        SELECT ur.private_profile_id INTO viewer_profile_id
+        FROM public.user_roles ur
+        WHERE ur.user_id = viewer_user_id AND ur.class_id = class_id_value
+        LIMIT 1;
+    END IF;
+
+    -- Only broadcast if we have valid class_id and profile_id
     IF class_id_value IS NOT NULL AND viewer_profile_id IS NOT NULL THEN
         -- Create payload for the individual user only
         user_payload := jsonb_build_object(

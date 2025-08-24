@@ -5,8 +5,6 @@ import remarkBreaks from "remark-breaks";
 import remarkGemoji from "remark-gemoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import "katex/dist/katex.min.css";
-import "@uiw/react-markdown-preview/markdown.css";
 
 export type MarkdownProps = Parameters<typeof ReactMarkdown>[0] & { style?: React.CSSProperties };
 
