@@ -964,9 +964,10 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 // function constructSemesterCode(term: string, year: number): string {
 //   const termMap: { [key: string]: string } = {
 //     Fall: "10",
-//     Spring: "20",
-//     "Summer 1": "30",
-//     "Summer 2": "40"
+//     Spring: "30",
+//     "Summer 1": "40",
+//     "Summer": "50",
+//     "Summer 2": "60"
 //   };
 
 //   const termCode = termMap[term] || "10";

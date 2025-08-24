@@ -23,9 +23,9 @@ const ProtectedLayout = async ({
   params
 }: Readonly<{
   children: React.ReactNode;
-  params: { course_id: string };
+  params: Promise<{ course_id: string }>;
 }>) => {
-  const { course_id } = params;
+  const { course_id } = await params;
   const user_role = await getUserRolesForCourse(Number.parseInt(course_id));
   if (!user_role) {
     redirect("/");

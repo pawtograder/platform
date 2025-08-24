@@ -27,7 +27,7 @@ export function TermSelector({ value, onChange, label = "Term", required = false
 
     // Past 5 years + current year + next year
     for (let year = currentYear - 5; year <= currentYear + 1; year++) {
-      // Spring (30), Summer (20), Fall (10)
+      // Fall (10), Spring (30), Summer 1 (40), Summer Full (50), Summer 2 (60)
       options.push(
         { value: parseInt(`${year}10`), label: `Fall ${year - 1}` },
         { value: parseInt(`${year}30`), label: `Spring ${year}` },

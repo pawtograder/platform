@@ -1002,13 +1002,11 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      let _courseController: CourseController | null = null;
-
+      const _courseController = new CourseController(role, course_id, client, realTimeController, userId);
+      setCourseController(_courseController);
       const start = async () => {
         try {
           await realTimeController.start();
-
-          _courseController = new CourseController(role, course_id, client, realTimeController, userId);
 
           if (cancelled) {
             _courseController?.close();
@@ -1019,7 +1017,6 @@ export function CourseControllerProvider({
           // Initialize the critical controllers now that everything is stable
           _courseController.initializeEagerControllers();
 
-          setCourseController(_courseController);
           setClassRealTimeController(realTimeController);
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -1039,6 +1036,7 @@ export function CourseControllerProvider({
   }, [course_id, profile_id, role, userId]);
 
   if (!courseController) {
+    console.log("CourseController not found");
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />

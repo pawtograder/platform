@@ -30,6 +30,17 @@ export function DiscussionThreadReply({
 }) {
   // const invalidate = useInvalidate();
   const { mutateAsync: mutate } = useCreate({ resource: "discussion_threads" });
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus the textarea when the reply becomes visible
+  useEffect(() => {
+    if (visible && messageInputRef.current) {
+      // Small delay to ensure the component is fully rendered
+      setTimeout(() => {
+        messageInputRef.current?.focus();
+      }, 100);
+    }
+  }, [visible]);
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
@@ -72,6 +83,7 @@ export function DiscussionThreadReply({
         enableGiphyPicker={true}
         enableFilePicker={true}
         sendMessage={sendMessage}
+        textAreaRef={messageInputRef}
       />
       <Button variant="ghost" onClick={() => setVisible(false)}>
         Cancel
