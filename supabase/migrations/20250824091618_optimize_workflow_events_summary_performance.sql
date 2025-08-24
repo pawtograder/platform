@@ -384,26 +384,17 @@ GRANT ALL ON TABLE "public"."workflow_timing_summary" TO "service_role";
 -- Update RLS policy for review assignment rubric parts to consolidate access rules
 -- This replaces multiple policies with a single comprehensive policy using OR conditions
 -- Drop existing policies first to avoid conflicts
-DROP POLICY IF EXISTS "review_assignment_rubric_parts_class_grader_select" ON "public"."review_assignment_rubric_parts";
-DROP POLICY IF EXISTS "review_assignment_rubric_parts_select" ON "public"."review_assignment_rubric_parts";
-DROP POLICY IF EXISTS "review_assignment_rubric_parts_owner_select" ON "public"."review_assignment_rubric_parts";
+DROP POLICY IF EXISTS "Assignees can view rubric parts for their reviews" ON "public"."review_assignment_rubric_parts";
 
--- Create unified policy with OR conditions for all access patterns
-CREATE POLICY "review_assignment_rubric_parts_unified_select" ON "public"."review_assignment_rubric_parts"
-FOR SELECT USING (
-  -- Allow class graders (instructors and TAs) to view rubric parts for their classes
+CREATE POLICY "Assignees can view rubric parts for their reviews" ON "public"."review_assignment_rubric_parts" FOR SELECT TO "authenticated" USING (
+    -- Allow class graders (instructors and TAs) to view rubric parts for their classes
   authorizeforclassgrader(class_id)
   OR
-  -- Allow service role full access
-  auth.role() = 'service_role'
-  OR
-  -- Allow assignees to view rubric parts for their reviews
-  auth.uid() IN (
-    SELECT ras.assignee_id 
-    FROM "public"."review_assignment_submissions" ras 
-    WHERE ras.review_assignment_id = review_assignment_rubric_parts.review_assignment_id
-  )
-);
+  (EXISTS ( SELECT 1
+   FROM "public"."review_assignments" "ra"
+  WHERE (("ra"."id" = "review_assignment_rubric_parts"."review_assignment_id") AND ("ra"."assignee_profile_id" = ( SELECT "user_roles"."private_profile_id"
+           FROM "public"."user_roles"
+          WHERE (("user_roles"."user_id" = "auth"."uid"()) AND ("user_roles"."class_id" = "review_assignment_rubric_parts"."class_id"))))))));
 
 -- ========================================
 -- Optimize discussion thread read status realtime notifications

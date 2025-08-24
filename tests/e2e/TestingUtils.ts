@@ -690,9 +690,16 @@ export async function insertAssignment({
         },
         {
           class_id: class_id,
-          name: "Grading Review",
-          description: "Grading review rubric",
+          name: "Grading Review Part 1",
+          description: "Grading review rubric, part 1",
           ordinal: 1,
+          rubric_id: assignmentData.grading_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Part 2",
+          description: "Grading review rubric, part 2",
+          ordinal: 2,
           rubric_id: assignmentData.grading_rubric_id || 0
         }
       ])
@@ -703,6 +710,7 @@ export async function insertAssignment({
   }
   const self_review_part_id = partsData.data?.[0]?.id;
   const grading_review_part_id = partsData.data?.[1]?.id;
+  const grading_review_part_2_id = partsData.data?.[2]?.id;
   const criteriaData = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("rubric_criteria", () =>
     supabase
       .from("rubric_criteria")
@@ -726,6 +734,16 @@ export async function insertAssignment({
           is_additive: true,
           rubric_part_id: grading_review_part_id || 0,
           rubric_id: assignmentData.grading_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Criteria 2",
+          description: "Criteria for grading review evaluation, part 2",
+          ordinal: 1,
+          total_points: 20,
+          is_additive: true,
+          rubric_part_id: grading_review_part_2_id || 0,
+          rubric_id: assignmentData.grading_rubric_id || 0
         }
       ])
       .select("id")
@@ -735,6 +753,7 @@ export async function insertAssignment({
   }
   const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
   const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
+  const gradingReviewCriteriaId2 = criteriaData.data?.[2]?.id;
   const { data: rubricChecksData, error: rubricChecksError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
   ).trackAndLimit("rubric_checks", () =>
@@ -779,6 +798,17 @@ export async function insertAssignment({
           name: "Grading Review Check 2",
           description: "Second check for grading review",
           ordinal: 1,
+          points: 10,
+          is_annotation: false,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
+        },
+        {
+          rubric_criteria_id: gradingReviewCriteriaId2 || 0,
+          name: "Grading Review Check 3",
+          description: "Third check for grading review",
+          ordinal: 2,
           points: 10,
           is_annotation: false,
           is_comment_required: false,

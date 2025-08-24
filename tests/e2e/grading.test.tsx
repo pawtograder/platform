@@ -42,10 +42,15 @@ let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
 let assignment: Assignment | undefined;
+let grader: TestingUser | undefined;
+let student2: TestingUser | undefined;
+let submission_id2: number | undefined;
 test.beforeAll(async () => {
   course = await createClass();
   student = await createUserInClass({ role: "student", class_id: course.id });
   instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+  grader = await createUserInClass({ role: "grader", class_id: course.id });
+  student2 = await createUserInClass({ role: "student", class_id: course.id });
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
     class_id: course.id
@@ -57,6 +62,14 @@ test.beforeAll(async () => {
     class_id: course.id
   });
   submission_id = submission_res.submission_id;
+
+  const submission_res2 = await insertPreBakedSubmission({
+    student_profile_id: student2.private_profile_id,
+    assignment_id: assignment!.id,
+    class_id: course.id
+  });
+  submission_id2 = submission_res2.submission_id;
+  // Assign grader to the first rubric part
 });
 
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
