@@ -1,5 +1,5 @@
 export function termToTermText(term: number): string {
-  const year = Math.floor(term / 100);
+  let year = Math.floor(term / 100);
   const termCode = term % 100;
   const termMap: Record<number, string> = {
     10: "Fall",
@@ -7,6 +7,10 @@ export function termToTermText(term: number): string {
     30: "Summer 1",
     40: "Summer 2"
   };
+  if (termCode === 10) {
+    //Apparently Banner made the brilliant decision that Fall is the next year so it sorts right.
+    year = year - 1;
+  }
   const name = termMap[termCode] ?? `Term ${termCode}`;
   return `${name} ${year}`;
 }

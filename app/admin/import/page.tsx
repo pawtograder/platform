@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { VStack, HStack, Text, Heading, Card, Badge, Table, Box, Flex, Grid } from "@chakra-ui/react";
+
 import { Checkbox } from "@chakra-ui/react";
 import { Download, Users, GraduationCap, BookOpen, MapPin, Clock, AlertCircle } from "lucide-react";
 import { courseImportSis, invitationCreate } from "@/lib/edgeFunctions";
@@ -61,6 +62,10 @@ export default function CourseImportPage() {
   const [existingClass, setExistingClass] = useState<ExistingClass | null>(null);
   const [existingSections, setExistingSections] = useState<ExistingSection[]>([]);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+  const [existingClassesForTerm, setExistingClassesForTerm] = useState<
+    Array<{ id: number; name: string | null; course_title: string | null }>
+  >([]);
+  const [selectedExistingClassId, setSelectedExistingClassId] = useState<number | null>(null);
   const [invitationProgress, setInvitationProgress] = useState<{
     current: number;
     total: number;
@@ -69,7 +74,7 @@ export default function CourseImportPage() {
     isProcessing: boolean;
   } | null>(null);
 
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   /**
    * Helper function to get all records from a paginated Supabase query.
@@ -104,106 +109,110 @@ export default function CourseImportPage() {
   }
 
   // Helper function to process invitations in batches to avoid timeouts
-  const processBatchedInvitations = async (
-    classId: number,
-    allInvitations: Array<{
-      sis_user_id: string;
-      role: "instructor" | "grader" | "student";
-      name?: string;
-      class_section_id?: number;
-      lab_section_id?: number;
-    }>
-  ) => {
-    const BATCH_SIZE = 50;
-    const batches = [];
+  const processBatchedInvitations = useCallback(
+    async (
+      classId: number,
+      allInvitations: Array<{
+        sis_user_id: string;
+        role: "instructor" | "grader" | "student";
+        name?: string;
+        class_section_id?: number;
+        lab_section_id?: number;
+      }>
+    ) => {
+      const BATCH_SIZE = 50;
+      const batches = [];
 
-    // Split invitations into batches
-    for (let i = 0; i < allInvitations.length; i += BATCH_SIZE) {
-      batches.push(allInvitations.slice(i, i + BATCH_SIZE));
-    }
+      // Split invitations into batches
+      for (let i = 0; i < allInvitations.length; i += BATCH_SIZE) {
+        batches.push(allInvitations.slice(i, i + BATCH_SIZE));
+      }
 
-    let totalInvitationsSent = 0;
-    const allErrors: string[] = [];
+      let totalInvitationsSent = 0;
+      const allErrors: string[] = [];
 
-    // Initialize progress
-    setInvitationProgress({
-      current: 0,
-      total: allInvitations.length,
-      currentBatch: 0,
-      totalBatches: batches.length,
-      isProcessing: true
-    });
+      // Initialize progress
+      setInvitationProgress({
+        current: 0,
+        total: allInvitations.length,
+        currentBatch: 0,
+        totalBatches: batches.length,
+        isProcessing: true
+      });
 
-    // Process each batch
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex];
+      // Process each batch
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
 
-      try {
+        try {
+          // Update progress
+          setInvitationProgress((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  currentBatch: batchIndex + 1,
+                  current: Math.min(totalInvitationsSent + batch.length, allInvitations.length)
+                }
+              : null
+          );
+
+          const response = await invitationCreate(
+            {
+              courseId: classId,
+              invitations: batch
+            },
+            supabase
+          );
+
+          if (response.success) {
+            totalInvitationsSent += response.invitations.length;
+            if (response.errors && response.errors.length > 0) {
+              response.errors.forEach((err) => {
+                allErrors.push(`Batch ${batchIndex + 1} - ${err.sis_user_id}: ${err.error}`);
+              });
+            }
+          } else {
+            allErrors.push(`Batch ${batchIndex + 1} failed to process`);
+          }
+
+          // Small delay between batches to prevent overwhelming the server
+          if (batchIndex < batches.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        } catch (error) {
+          allErrors.push(`Batch ${batchIndex + 1} error: ${error instanceof Error ? error.message : "Unknown error"}`);
+        }
+
         // Update progress
         setInvitationProgress((prev) =>
           prev
             ? {
                 ...prev,
-                currentBatch: batchIndex + 1,
-                current: Math.min(totalInvitationsSent + batch.length, allInvitations.length)
+                current: Math.min(totalInvitationsSent, allInvitations.length)
               }
             : null
         );
-
-        const response = await invitationCreate(
-          {
-            courseId: classId,
-            invitations: batch
-          },
-          supabase
-        );
-
-        if (response.success) {
-          totalInvitationsSent += response.invitations.length;
-          if (response.errors && response.errors.length > 0) {
-            response.errors.forEach((err) => {
-              allErrors.push(`Batch ${batchIndex + 1} - ${err.sis_user_id}: ${err.error}`);
-            });
-          }
-        } else {
-          allErrors.push(`Batch ${batchIndex + 1} failed to process`);
-        }
-
-        // Small delay between batches to prevent overwhelming the server
-        if (batchIndex < batches.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-      } catch (error) {
-        allErrors.push(`Batch ${batchIndex + 1} error: ${error instanceof Error ? error.message : "Unknown error"}`);
       }
 
-      // Update progress
-      setInvitationProgress((prev) =>
-        prev
-          ? {
-              ...prev,
-              current: Math.min(totalInvitationsSent, allInvitations.length)
-            }
-          : null
-      );
-    }
+      // Clear progress
+      setInvitationProgress(null);
 
-    // Clear progress
-    setInvitationProgress(null);
+      return {
+        invitationsSent: totalInvitationsSent,
+        errors: allErrors
+      };
+    },
+    [supabase]
+  );
 
-    return {
-      invitationsSent: totalInvitationsSent,
-      errors: allErrors
-    };
-  };
-
-  // Find existing class with same title and term
-  const findExistingClass = async (courseTitle: string, term: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("classes")
-        .select(
-          `
+  // Find all existing classes for a term
+  const findExistingClassesForTerm = useCallback(
+    async (term: number) => {
+      try {
+        const { data, error } = await supabase
+          .from("classes")
+          .select(
+            `
           id,
           name,
           term,
@@ -211,131 +220,179 @@ export default function CourseImportPage() {
           description,
           created_at
         `
-        )
-        .eq("course_title", courseTitle)
-        .eq("term", parseInt(term))
-        .eq("archived", false)
-        .single();
+          )
+          .eq("term", term)
+          .eq("archived", false)
+          .order("course_title", { ascending: true });
 
-      if (error && error.code !== "PGRST116") {
-        // PGRST116 is "no rows found"
+        if (error) {
+          console.error("Error fetching existing classes:", error);
+          return [];
+        }
+
+        return data || [];
+      } catch (error) {
+        console.error("Error fetching existing classes:", error);
+        return [];
+      }
+    },
+    [supabase]
+  );
+
+  // Find existing class with same title and term
+  const findExistingClass = useCallback(
+    async (class_id: number) => {
+      try {
+        const { data, error } = await supabase
+          .from("classes")
+          .select(
+            `
+          id,
+          name,
+          term,
+          course_title,
+          description,
+          created_at
+        `
+          )
+          .eq("id", class_id)
+          .eq("archived", false)
+          .single();
+
+        if (error && error.code !== "PGRST116") {
+          // PGRST116 is "no rows found"
+          return null;
+        }
+
+        if (data) {
+          // Get enrolled user counts by getting all user roles with pagination
+          const studentRoles = await getAllRecords<{ id: string }>(
+            supabase.from("user_roles").select("id").eq("class_id", data.id).eq("role", "student")
+          );
+
+          const instructorRoles = await getAllRecords<{ id: string }>(
+            supabase.from("user_roles").select("id").eq("class_id", data.id).eq("role", "instructor")
+          );
+
+          const graderRoles = await getAllRecords<{ id: string }>(
+            supabase.from("user_roles").select("id").eq("class_id", data.id).eq("role", "grader")
+          );
+
+          // Get pending invitation counts
+          const pendingInvitations = await getAllRecords<{ id: number; role: string }>(
+            supabase.from("invitations").select("id, role").eq("class_id", data.id).eq("status", "pending")
+          );
+
+          const pendingStudents = pendingInvitations.filter((inv) => inv.role === "student").length;
+          const pendingInstructors = pendingInvitations.filter((inv) => inv.role === "instructor").length;
+          const pendingGraders = pendingInvitations.filter((inv) => inv.role === "grader").length;
+
+          // Get section counts
+          const classSections = await getAllRecords<{ id: number }>(
+            supabase.from("class_sections").select("id").eq("class_id", data.id)
+          );
+
+          const labSections = await getAllRecords<{ id: number }>(
+            supabase.from("lab_sections").select("id").eq("class_id", data.id)
+          );
+
+          return {
+            ...data,
+            student_count: studentRoles.length,
+            instructor_count: instructorRoles.length,
+            grader_count: graderRoles.length,
+            pending_students: pendingStudents,
+            pending_instructors: pendingInstructors,
+            pending_graders: pendingGraders,
+            class_sections_count: classSections.length,
+            lab_sections_count: labSections.length,
+            total_sections: classSections.length + labSections.length
+          } as ExistingClass;
+        }
+
+        return null;
+      } catch {
         return null;
       }
+    },
+    [supabase]
+  );
 
-      if (data) {
-        // Get enrolled user counts by getting all user roles with pagination
-        const studentRoles = await getAllRecords<{ id: string }>(
-          supabase.from("user_roles").select("id").eq("class_id", data.id).eq("role", "student")
-        );
-
-        const instructorRoles = await getAllRecords<{ id: string }>(
-          supabase.from("user_roles").select("id").eq("class_id", data.id).eq("role", "instructor")
-        );
-
-        const graderRoles = await getAllRecords<{ id: string }>(
-          supabase.from("user_roles").select("id").eq("class_id", data.id).eq("role", "grader")
-        );
-
-        // Get pending invitation counts
-        const pendingInvitations = await getAllRecords<{ id: number; role: string }>(
-          supabase.from("invitations").select("id, role").eq("class_id", data.id).eq("status", "pending")
-        );
-
-        const pendingStudents = pendingInvitations.filter((inv) => inv.role === "student").length;
-        const pendingInstructors = pendingInvitations.filter((inv) => inv.role === "instructor").length;
-        const pendingGraders = pendingInvitations.filter((inv) => inv.role === "grader").length;
-
-        // Get section counts
-        const classSections = await getAllRecords<{ id: number }>(
-          supabase.from("class_sections").select("id").eq("class_id", data.id)
-        );
-
-        const labSections = await getAllRecords<{ id: number }>(
-          supabase.from("lab_sections").select("id").eq("class_id", data.id)
-        );
-
-        return {
-          ...data,
-          student_count: studentRoles.length,
-          instructor_count: instructorRoles.length,
-          grader_count: graderRoles.length,
-          pending_students: pendingStudents,
-          pending_instructors: pendingInstructors,
-          pending_graders: pendingGraders,
-          class_sections_count: classSections.length,
-          lab_sections_count: labSections.length,
-          total_sections: classSections.length + labSections.length
-        } as ExistingClass;
-      }
-
-      return null;
-    } catch {
-      return null;
+  // Fetch existing classes when component mounts
+  useEffect(() => {
+    if (semester) {
+      findExistingClassesForTerm(semester).then((classes) => {
+        const validClasses = classes.filter((c) => c.name || c.course_title);
+        setExistingClassesForTerm(validClasses);
+      });
     }
-  };
+  }, [semester, findExistingClassesForTerm]);
 
   // Find existing sections by CRN
-  const findExistingSections = async (classId: number, crns: number[]) => {
-    if (crns.length === 0) return [];
+  const findExistingSections = useCallback(
+    async (classId: number, crns: number[]) => {
+      if (crns.length === 0) return [];
 
-    try {
-      // Check class sections with pagination
-      const classSections = await getAllRecords<{ id: number; name: string | null; sis_crn: number | null }>(
-        supabase.from("class_sections").select("id, name, sis_crn").eq("class_id", classId).in("sis_crn", crns)
-      );
+      try {
+        // Check class sections with pagination
+        const classSections = await getAllRecords<{ id: number; name: string | null; sis_crn: number | null }>(
+          supabase.from("class_sections").select("id, name, sis_crn").eq("class_id", classId).in("sis_crn", crns)
+        );
 
-      // Check lab sections with pagination
-      const labSections = await getAllRecords<{ id: number; name: string | null; sis_crn: number | null }>(
-        supabase.from("lab_sections").select("id, name, sis_crn").eq("class_id", classId).in("sis_crn", crns)
-      );
+        // Check lab sections with pagination
+        const labSections = await getAllRecords<{ id: number; name: string | null; sis_crn: number | null }>(
+          supabase.from("lab_sections").select("id, name, sis_crn").eq("class_id", classId).in("sis_crn", crns)
+        );
 
-      const existingSections: ExistingSection[] = [];
+        const existingSections: ExistingSection[] = [];
 
-      // Process class sections
-      if (classSections && classSections.length > 0) {
-        for (const section of classSections) {
-          if (section.sis_crn) {
-            // Get member count with pagination
-            const members = await getAllRecords<{ id: string }>(
-              supabase.from("user_roles").select("id").eq("class_section_id", section.id)
-            );
+        // Process class sections
+        if (classSections && classSections.length > 0) {
+          for (const section of classSections) {
+            if (section.sis_crn) {
+              // Get member count with pagination
+              const members = await getAllRecords<{ id: string }>(
+                supabase.from("user_roles").select("id").eq("class_section_id", section.id)
+              );
 
-            existingSections.push({
-              id: section.id,
-              name: section.name || "",
-              sis_crn: section.sis_crn,
-              section_type: "class",
-              member_count: members.length
-            });
+              existingSections.push({
+                id: section.id,
+                name: section.name || "",
+                sis_crn: section.sis_crn,
+                section_type: "class",
+                member_count: members.length
+              });
+            }
           }
         }
-      }
 
-      // Process lab sections
-      if (labSections && labSections.length > 0) {
-        for (const section of labSections) {
-          if (section.sis_crn) {
-            // Get member count with pagination
-            const members = await getAllRecords<{ id: string }>(
-              supabase.from("user_roles").select("id").eq("lab_section_id", section.id)
-            );
+        // Process lab sections
+        if (labSections && labSections.length > 0) {
+          for (const section of labSections) {
+            if (section.sis_crn) {
+              // Get member count with pagination
+              const members = await getAllRecords<{ id: string }>(
+                supabase.from("user_roles").select("id").eq("lab_section_id", section.id)
+              );
 
-            existingSections.push({
-              id: section.id,
-              name: section.name || "",
-              sis_crn: section.sis_crn,
-              section_type: "lab",
-              member_count: members.length
-            });
+              existingSections.push({
+                id: section.id,
+                name: section.name || "",
+                sis_crn: section.sis_crn,
+                section_type: "lab",
+                member_count: members.length
+              });
+            }
           }
         }
-      }
 
-      return existingSections;
-    } catch {
-      return [];
-    }
-  };
+        return existingSections;
+      } catch {
+        return [];
+      }
+    },
+    [supabase]
+  );
 
   const formatInstructorName = (fullName: string) => {
     const parts = fullName.split(" ");
@@ -347,7 +404,23 @@ export default function CourseImportPage() {
     return fullName;
   };
 
-  const handleImport = async () => {
+  // Fetch existing classes when term changes
+  const handleTermChange = useCallback(
+    async (newTerm: number) => {
+      setSemester(newTerm);
+      setSelectedExistingClassId(null);
+      setExistingClass(null);
+
+      // Fetch existing classes for the new term
+      const classes = await findExistingClassesForTerm(newTerm);
+      // Filter out classes with null names or course titles
+      const validClasses = classes.filter((c) => c.name && c.course_title);
+      setExistingClassesForTerm(validClasses);
+    },
+    [findExistingClassesForTerm]
+  );
+
+  const handleImport = useCallback(async () => {
     if (!semester || !mainCourseCode.trim()) {
       toaster.create({
         title: "Validation Error",
@@ -369,7 +442,8 @@ export default function CourseImportPage() {
         {
           term: semester.toString(),
           mainCourseCode: mainCourseCode.trim().toUpperCase(),
-          labCourseCode: labCourseCode.trim().toUpperCase() || ""
+          labCourseCode: labCourseCode.trim().toUpperCase() || "",
+          existingClassId: selectedExistingClassId || undefined
         },
         supabase
       );
@@ -384,9 +458,13 @@ export default function CourseImportPage() {
       // Select all sections by default
       setSelectedSections(new Set(result.sections.map((s) => s.crn)));
 
-      // Check for existing class with same title and term
-      const existingClassResult = await findExistingClass(result.courseInfo.title, semester.toString());
-      setExistingClass(existingClassResult);
+      // If existingClassId was provided and validated, use that class
+      let existingClassResult: ExistingClass | null = null;
+      if (result.existingClassId) {
+        existingClassResult = await findExistingClass(result.existingClassId);
+        setExistingClass(existingClassResult);
+        setSelectedExistingClassId(result.existingClassId);
+      }
 
       // If there's an existing class, check for existing sections
       if (existingClassResult) {
@@ -409,9 +487,17 @@ export default function CourseImportPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [
+    semester,
+    mainCourseCode,
+    labCourseCode,
+    selectedExistingClassId,
+    supabase,
+    findExistingClass,
+    findExistingSections
+  ]);
 
-  const handleCreateClass = async () => {
+  const handleCreateClass = useCallback(async () => {
     if (!importData) return;
 
     const selectedSectionData = importData.sections.filter((s) => selectedSections.has(s.crn));
@@ -433,32 +519,45 @@ export default function CourseImportPage() {
     };
 
     try {
-      // Extract year and term from semester code (e.g., 202610 -> Fall 2026)
-      const year = Math.floor(semester / 100);
-      const termCode = semester % 100;
-      const termMap: { [key: number]: string } = {
-        10: "fa",
-        20: "sp",
-        30: "su1",
-        40: "su2"
-      };
-      console.log(year, termCode, termMap[termCode]);
+      let classId: number;
 
-      // Create the class
-      const { data: classId, error: classError } = await supabase.rpc("admin_create_class", {
-        p_name: importData.courseInfo.course,
-        p_term: semester,
-        p_description: `${importData.courseInfo.title} - ${importData.courseInfo.campus} Campus`,
-        p_course_title: importData.courseInfo.title,
-        p_start_date: importData.courseInfo.startDate,
-        p_end_date: importData.courseInfo.endDate,
-        p_github_template_prefix: `${termMap[termCode]}${year}`
-      });
+      if (selectedExistingClassId) {
+        // Use existing class
+        classId = selectedExistingClassId;
+        summary.classCreated = false; // Not creating, just syncing
+        summary.classId = classId;
+      } else {
+        // Extract year and term from semester code (e.g., 202610 -> Fall 2026)
+        let year = Math.floor(semester / 100);
+        const termCode = semester % 100;
+        const termMap: { [key: number]: string } = {
+          10: "fa",
+          20: "sp",
+          30: "su1",
+          40: "su2"
+        };
+        if (termCode === 10) {
+          //Apparently Banner made the brilliant decision that Fall is the next year so it sorts right.
+          year = year - 1;
+        }
 
-      if (classError) throw classError;
+        // Create the class
+        const { data: newClassId, error: classError } = await supabase.rpc("admin_create_class", {
+          p_name: importData.courseInfo.course,
+          p_term: semester,
+          p_description: `${importData.courseInfo.title}`,
+          p_course_title: importData.courseInfo.title,
+          p_start_date: importData.courseInfo.startDate,
+          p_end_date: importData.courseInfo.endDate,
+          p_github_template_prefix: `${termMap[termCode]}${year}`
+        });
 
-      summary.classCreated = true;
-      summary.classId = classId;
+        if (classError) throw classError;
+
+        classId = newClassId;
+        summary.classCreated = true;
+        summary.classId = classId;
+      }
 
       // Create sections and collect all users for invitations
       const classSections = selectedSectionData.filter((s) => s.sectionType === "class");
@@ -574,8 +673,8 @@ export default function CourseImportPage() {
       setImportSummary(summary);
 
       toaster.create({
-        title: existingClass ? "Class Synced Successfully" : "Class Created Successfully",
-        description: `${existingClass ? "Synced" : "Created"} class with ${summary.sectionsCreated} sections and ${summary.invitationsSent} invitations sent`,
+        title: selectedExistingClassId ? "Class Synced Successfully" : "Class Created Successfully",
+        description: `${selectedExistingClassId ? "Synced" : "Created"} class with ${summary.sectionsCreated} sections and ${summary.invitationsSent} invitations sent`,
         type: "success"
       });
 
@@ -601,7 +700,7 @@ export default function CourseImportPage() {
       setIsCreating(false);
       setInvitationProgress(null); // Make sure to clear progress on error
     }
-  };
+  }, [importData, selectedSections, selectedExistingClassId, supabase, processBatchedInvitations, semester]);
 
   const toggleSection = (crn: number) => {
     const newSelected = new Set(selectedSections);
@@ -668,15 +767,21 @@ export default function CourseImportPage() {
 
     // If existing class, calculate how many users are already enrolled
     let existingUsers = 0;
-    if (existingClass) {
-      existingUsers = existingClass.student_count + existingClass.instructor_count + existingClass.grader_count;
+    if (selectedExistingClassId) {
+      // Find the selected existing class to get user counts
+      const selectedClass = existingClassesForTerm.find((c) => c.id === selectedExistingClassId);
+      if (selectedClass) {
+        // For now, we'll estimate existing users based on the existing class
+        // In a real implementation, you might want to fetch actual user counts
+        existingUsers = 0; // This will be updated when we implement the actual sync
+      }
     }
 
     // Rough estimate of new invitations (this is approximate since we'd need to check each user individually)
     const estimatedNewInvitations = Math.max(0, allUsers.size - existingUsers);
 
     return {
-      classExists: !!existingClass,
+      classExists: !!selectedExistingClassId,
       classSections: {
         total: selectedClassSections.length,
         existing: existingClassSections.length,
@@ -720,14 +825,9 @@ export default function CourseImportPage() {
               <HStack gap={4} w="full">
                 <VStack align="start" flex={1}>
                   <Label htmlFor="semester">Term *</Label>
-                  <TermSelector
-                    value={semester}
-                    onChange={(value: number) => setSemester(value)}
-                    label="Semester"
-                    required
-                  />
+                  <TermSelector value={semester} onChange={handleTermChange} label="Semester" required />
                   <Text fontSize="xs" color="fg.subtle">
-                    Banner format: YYYYTT (e.g., 202610 = Fall 2026)
+                    Banner format: YYYYTT (e.g., 202610 = Fall 2025)
                   </Text>
                 </VStack>
                 <VStack align="start" flex={1}>
@@ -755,6 +855,36 @@ export default function CourseImportPage() {
                   </Text>
                 </VStack>
               </HStack>
+
+              {/* Existing Class Selector */}
+              {existingClassesForTerm.length > 0 && (
+                <HStack gap={4} w="full">
+                  <VStack align="start" flex={1}>
+                    <Label htmlFor="existingClass">Use Existing Class (Optional)</Label>
+                    <select
+                      value={selectedExistingClassId || ""}
+                      onChange={(e) => setSelectedExistingClassId(e.target.value ? parseInt(e.target.value) : null)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "6px",
+                        fontSize: "14px"
+                      }}
+                    >
+                      <option value="">Select an existing class to sync to...</option>
+                      {existingClassesForTerm.map((cls) => (
+                        <option key={cls.id} value={cls.id}>
+                          {cls.course_title} - {cls.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Text fontSize="xs" color="fg.subtle">
+                      If selected, sections will be added to this existing class instead of creating a new one
+                    </Text>
+                  </VStack>
+                </HStack>
+              )}
 
               <Button type="submit" loading={isLoading} disabled={!semester || !mainCourseCode.trim()} size="lg">
                 <HStack gap={2}>
@@ -1241,12 +1371,14 @@ export default function CourseImportPage() {
           <Card.Root>
             <Card.Header>
               <Card.Title>
-                {existingClass ? "Sync to Existing Class & Send Invitations" : "Create Class & Send Invitations"}
+                {selectedExistingClassId
+                  ? "Sync to Existing Class & Send Invitations"
+                  : "Create Class & Send Invitations"}
               </Card.Title>
               <HStack gap={2}>
                 <AlertCircle size={16} />
                 <Text color="orange.fg" fontSize="sm">
-                  {existingClass
+                  {selectedExistingClassId
                     ? "This will sync sections to the existing class and send invitations to new users"
                     : "This will create the class and send invitations to all users in selected sections"}
                 </Text>
@@ -1267,7 +1399,7 @@ export default function CourseImportPage() {
                         {/* Class Status */}
                         <HStack gap={2}>
                           <Text fontSize="sm">•</Text>
-                          {analysis.classExists ? (
+                          {selectedExistingClassId ? (
                             <Text fontSize="sm">
                               <Text as="span" color="orange.fg" fontWeight="medium">
                                 Sync to existing class:
@@ -1410,10 +1542,10 @@ export default function CourseImportPage() {
                   colorScheme="blue"
                 >
                   {isCreating
-                    ? existingClass
+                    ? selectedExistingClassId
                       ? "Syncing..."
                       : "Creating..."
-                    : existingClass
+                    : selectedExistingClassId
                       ? "Sync to Existing Class & Send Invitations"
                       : "Create Class & Send Invitations"}
                 </Button>
