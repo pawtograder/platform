@@ -1,6 +1,7 @@
 -- Optimize broadcast messages to reduce unnecessary noise
 -- Fix 1: discussion thread read status ONLY goes to the reader (not to entire class/staff etc)
 -- Fix 2: user_roles changes ONLY go to staff (not to the affected individual user)
+-- Fix 3: Add missing broadcast trigger for discussion_thread_watchers (was missing from realtime setup)
 
 -- Drop the existing trigger first
 DROP TRIGGER IF EXISTS broadcast_discussion_thread_read_status_realtime ON public.discussion_thread_read_status;
@@ -230,3 +231,92 @@ $$;
 -- Add comment explaining the user_roles optimization
 COMMENT ON FUNCTION public.broadcast_course_table_change_unified() IS 
 'Optimized broadcast function for course-level table changes. user_roles changes now only broadcast to staff channel, eliminating unnecessary individual user notifications when users join/leave classes.';
+
+-- ========================================
+-- Fix 3: Add missing broadcast for discussion_thread_watchers (user-only)
+-- ========================================
+
+-- Create a dedicated broadcast function for thread watchers that only broadcasts to the individual user
+-- Thread watching is a personal preference - staff don't need to see this activity
+CREATE OR REPLACE FUNCTION "public"."broadcast_discussion_thread_watchers_user_only"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+    class_id_value bigint;
+    row_id text;
+    user_payload jsonb;
+    watcher_user_id uuid;
+    watcher_profile_id uuid;
+BEGIN
+    -- Get class_id and user info from the record
+    IF TG_OP = 'INSERT' THEN
+        class_id_value := NEW.class_id;
+        row_id := NEW.id;
+        watcher_user_id := NEW.user_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        class_id_value := COALESCE(NEW.class_id, OLD.class_id);
+        row_id := COALESCE(NEW.id, OLD.id);
+        watcher_user_id := COALESCE(NEW.user_id, OLD.user_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        class_id_value := OLD.class_id;
+        row_id := OLD.id;
+        watcher_user_id := OLD.user_id;
+    END IF;
+
+    -- Get the private_profile_id from user_id for the channel name
+    IF class_id_value IS NOT NULL AND watcher_user_id IS NOT NULL THEN
+        SELECT ur.private_profile_id INTO watcher_profile_id
+        FROM public.user_roles ur
+        WHERE ur.user_id = watcher_user_id AND ur.class_id = class_id_value
+        LIMIT 1;
+    END IF;
+
+    -- Only broadcast if we have valid class_id and profile_id
+    IF class_id_value IS NOT NULL AND watcher_profile_id IS NOT NULL THEN
+        -- Create payload for the individual user only
+        user_payload := jsonb_build_object(
+            'type', 'staff_data_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', row_id,
+            'class_id', class_id_value,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast ONLY to the individual user who changed their watch status
+        -- Staff don't need to see personal watch preferences
+        PERFORM realtime.send(
+            user_payload,
+            'broadcast',
+            'class:' || class_id_value || ':user:' || watcher_profile_id,
+            true
+        );
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$;
+
+-- Add the broadcast trigger for discussion_thread_watchers using the user-only function
+CREATE OR REPLACE TRIGGER "broadcast_discussion_thread_watchers_realtime" 
+  AFTER INSERT OR DELETE OR UPDATE 
+  ON "public"."discussion_thread_watchers" 
+  FOR EACH ROW 
+  EXECUTE FUNCTION "public"."broadcast_discussion_thread_watchers_user_only"();
+
+-- Add comments explaining the approach
+COMMENT ON FUNCTION public.broadcast_discussion_thread_watchers_user_only() IS 
+'Broadcasts discussion_thread_watchers changes only to the individual user. Thread watching is a personal preference that staff do not need to monitor.';
+
+COMMENT ON TRIGGER "broadcast_discussion_thread_watchers_realtime" ON "public"."discussion_thread_watchers" IS 
+'Broadcasts changes to discussion_thread_watchers table only to the affected user. This trigger was missing from the original realtime setup.';

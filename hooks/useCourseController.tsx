@@ -14,7 +14,6 @@ import {
   Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
-  DiscussionThreadWatcher,
   HelpRequestWatcher,
   LabSection,
   LabSectionMeeting,
@@ -318,6 +317,7 @@ export class CourseController {
   // Lazily created TableController instances to avoid realtime subscription bursts
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
+  private _discussionThreadWatchers?: TableController<"discussion_thread_watchers">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
@@ -392,6 +392,18 @@ export class CourseController {
       });
     }
     return this._discussionThreadReadStatus;
+  }
+
+  get discussionThreadWatchers(): TableController<"discussion_thread_watchers"> {
+    if (!this._discussionThreadWatchers) {
+      this._discussionThreadWatchers = new TableController({
+        client: this._client,
+        table: "discussion_thread_watchers",
+        query: this._client.from("discussion_thread_watchers").select("*").eq("user_id", this._userId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreadWatchers;
   }
 
   get tags(): TableController<"tags"> {
@@ -889,36 +901,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     }
   }, [controller, notifications?.data]);
 
-  const { data: threadWatches } = useList<DiscussionThreadWatcher>({
-    resource: "discussion_thread_watchers",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [
-      {
-        field: "user_id",
-        operator: "eq",
-        value: user?.id
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleGenericDataEvent("discussion_thread_watchers", event);
-    }
-  });
-  useEffect(() => {
-    controller.registerGenericDataType(
-      "discussion_thread_watchers",
-      (item: DiscussionThreadWatcher) => item.discussion_thread_root_id
-    );
-    if (threadWatches?.data) {
-      controller.setGeneric("discussion_thread_watchers", threadWatches.data);
-    }
-  }, [controller, threadWatches?.data]);
+  // discussion_thread_watchers now uses a dedicated TableController instead of generic data system
 
   // Fetch help request watchers for the current user
   const { data: helpRequestWatches } = useList<HelpRequestWatcher>({
@@ -1036,7 +1019,6 @@ export function CourseControllerProvider({
   }, [course_id, profile_id, role, userId]);
 
   if (!courseController) {
-    console.log("CourseController not found");
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
