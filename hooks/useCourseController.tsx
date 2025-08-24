@@ -14,6 +14,7 @@ import {
   Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
+  DiscussionThreadWatcher,
   HelpRequestWatcher,
   LabSection,
   LabSectionMeeting,
@@ -399,7 +400,12 @@ export class CourseController {
       this._discussionThreadWatchers = new TableController({
         client: this._client,
         table: "discussion_thread_watchers",
-        query: this._client.from("discussion_thread_watchers").select("*").eq("user_id", this._userId),
+        query: this._client
+          .from("discussion_thread_watchers")
+          .select("*")
+          .eq("user_id", this._userId)
+          .eq("class_id", this.courseId),
+        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -857,6 +863,7 @@ export class CourseController {
     this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
+    this._discussionThreadWatchers?.close();
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
@@ -901,7 +908,36 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     }
   }, [controller, notifications?.data]);
 
-  // discussion_thread_watchers now uses a dedicated TableController instead of generic data system
+  const { data: threadWatches } = useList<DiscussionThreadWatcher>({
+    resource: "discussion_thread_watchers",
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    filters: [
+      {
+        field: "user_id",
+        operator: "eq",
+        value: user?.id
+      }
+    ],
+    pagination: {
+      pageSize: 1000
+    },
+    liveMode: "manual",
+    onLiveEvent: (event) => {
+      controller.handleGenericDataEvent("discussion_thread_watchers", event);
+    }
+  });
+  useEffect(() => {
+    controller.registerGenericDataType(
+      "discussion_thread_watchers",
+      (item: DiscussionThreadWatcher) => item.discussion_thread_root_id
+    );
+    if (threadWatches?.data) {
+      controller.setGeneric("discussion_thread_watchers", threadWatches.data);
+    }
+  }, [controller, threadWatches?.data]);
 
   // Fetch help request watchers for the current user
   const { data: helpRequestWatches } = useList<HelpRequestWatcher>({

@@ -43,15 +43,16 @@ const additionalStyles = `
 `;
 
 export default function Markdown(props: MarkdownProps) {
+  const { style, remarkPlugins, rehypePlugins, ...rest } = props;
+
+  const combinedRemark = [remarkMath, remarkGfm, remarkBreaks, remarkGemoji, ...(remarkPlugins || [])];
+  const combinedRehype = [rehypeKatex, rehypeHighlight, ...(rehypePlugins || [])];
+
   return (
     <>
       <style>{additionalStyles}</style>
-      <div style={props.style} className="wmde-markdown">
-        <ReactMarkdown
-          remarkPlugins={[remarkMath, remarkGfm, remarkBreaks, remarkGemoji, ...(props.remarkPlugins || [])]}
-          rehypePlugins={[rehypeKatex, rehypeHighlight, ...(props.rehypePlugins || [])]}
-          {...props}
-        />
+      <div style={style} className="wmde-markdown">
+        <ReactMarkdown {...rest} remarkPlugins={combinedRemark} rehypePlugins={combinedRehype} />
       </div>
     </>
   );
