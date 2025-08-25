@@ -270,11 +270,12 @@ BEGIN
       AND wes.requested_at <= v_period_end
   ),
   error_stats AS (
-    SELECT COUNT(DISTINCT wre.workflow_run_id) as error_count
+    SELECT COUNT(DISTINCT ws.workflow_run_id) as error_count
     FROM "public"."workflow_run_error" wre
     JOIN workflow_stats ws ON (
-      wre.workflow_run_id = ws.workflow_run_id 
+      wre.run_number = ws.run_number 
       AND (wre.run_attempt IS NULL OR wre.run_attempt = ws.run_attempt)
+      AND wre.class_id = ws.class_id
     )
     WHERE wre.class_id = p_class_id
       AND wre.created_at >= v_period_start
@@ -412,7 +413,7 @@ BEGIN
     ) INTO class_metrics;
     
     -- Add this class's metrics to the result array
-    result := result || class_metrics;
+    result := result || jsonb_build_array(class_metrics);
   END LOOP;
 
   RETURN result;

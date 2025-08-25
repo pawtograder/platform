@@ -70,11 +70,9 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       return;
     }
 
-    // CRITICAL: Also wait for review assignments data to actually load
-    // The controller can be ready before the data is fetched
-    if (activeReviewAssignmentId && myAssignedReviews.length === 0) {
-      return;
-    }
+    // Note: We allow validation to proceed even when myAssignedReviews.length === 0
+    // This ensures invalid review_assignment_id values are cleaned up even when
+    // the user truly has zero assignments, preventing permanent URL pollution
 
     const params = new URLSearchParams(searchParams.toString());
     let changed = false;

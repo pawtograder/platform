@@ -72,7 +72,6 @@ test.beforeAll(async () => {
   submission_id2 = submission_res2.submission_id;
   // Assign grader to the first rubric part
   const private_profile_id = grader!.private_profile_id;
-  console.log(submission_res2);
   const review_assignment_res = await supabase
     .from("review_assignments")
     .insert({
