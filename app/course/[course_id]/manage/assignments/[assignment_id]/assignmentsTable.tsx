@@ -99,9 +99,7 @@ function ScoreLink({
   if (isObfuscated && !canShowGradeFor) {
     return <Skeleton w="50px" h="1em" />;
   }
-  return (
-    <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>
-  );
+  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
@@ -449,7 +447,7 @@ export default function AssignmentsTable() {
                     if (row.original.activesubmissionid) {
                       return (
                         <Link
-                          href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
+                          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
                         >
                           {linkContent}
                         </Link>

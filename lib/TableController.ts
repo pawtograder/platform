@@ -1045,9 +1045,12 @@ export default class TableController<
     for (const filter of filters) {
       query = query.filter(filter.column as string, filter.operator, filter.value);
     }
-    const { data, error } = await query.single();
+    const { data, error } = await query.maybeSingle();
     if (error) {
       throw error;
+    }
+    if (!data) {
+      return null;
     }
     this._addRow({
       ...data,

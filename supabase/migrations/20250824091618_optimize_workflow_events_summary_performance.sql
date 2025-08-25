@@ -46,8 +46,16 @@ ANALYZE "public"."workflow_events";
 -- This addresses the remaining bottleneck where HAVING clause filtering happens after expensive GROUP BY
 -- Materialized view will be service_role only, with controlled access via security definer functions
 
--- First, drop the existing view to replace it with a materialized view
+-- First, drop the existing view/materialized view to replace it with a materialized view
+-- Handle both cases to make migration idempotent across environments
+DROP MATERIALIZED VIEW IF EXISTS "public"."workflow_events_summary";
 DROP VIEW IF EXISTS "public"."workflow_events_summary";
+
+-- Create supporting partial index for efficient semijoin lookup
+-- This index optimizes the "has requested event" check by pre-filtering on event_type
+CREATE INDEX IF NOT EXISTS "idx_workflow_events_requested_lookup" 
+ON "public"."workflow_events" USING "btree" ("event_type", "workflow_run_id", "run_attempt", "class_id") 
+WHERE "event_type" = 'requested';
 
 -- Create materialized view for pre-computed results (service_role access only)
 CREATE MATERIALIZED VIEW "public"."workflow_events_summary" AS
@@ -69,20 +77,22 @@ WITH workflow_events_filtered AS (
     we.event_type,
     we.updated_at
   FROM "public"."workflow_events" we
+  -- Semijoin to ensure workflow runs have at least a 'requested' event
+  -- This is more index-friendly than EXISTS subquery
+  JOIN (
+    SELECT DISTINCT workflow_run_id, run_attempt, class_id
+    FROM "public"."workflow_events" 
+    WHERE event_type = 'requested'
+  ) requested_events ON (
+    we.workflow_run_id = requested_events.workflow_run_id 
+    AND we.run_attempt = requested_events.run_attempt 
+    AND we.class_id = requested_events.class_id
+  )
   WHERE we.class_id IS NOT NULL
     -- Only include events that are needed for timing calculations
     AND we.event_type IN ('requested', 'in_progress', 'completed')
-    -- Aggressive time filtering - adjust based on your typical query patterns
-    AND we.updated_at >= (CURRENT_DATE - INTERVAL '6 months')
-    -- Pre-filter to only include workflow runs that have at least a 'requested' event
-    -- This eliminates incomplete workflow runs early
-    AND EXISTS (
-      SELECT 1 FROM "public"."workflow_events" we2 
-      WHERE we2.workflow_run_id = we.workflow_run_id 
-        AND we2.run_attempt = we.run_attempt
-        AND we2.event_type = 'requested'
-        AND we2.class_id = we.class_id
-    )
+    -- Use precise timestamp to avoid midnight truncation edge cases
+    AND we.updated_at >= (NOW() - INTERVAL '6 months')
 ),
 aggregated_events AS (
   SELECT 
@@ -171,6 +181,9 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = pg_catalog, public;
+  
   -- Refresh the materialized view concurrently if possible
   -- Falls back to regular refresh if concurrent refresh fails
   BEGIN
@@ -186,7 +199,16 @@ $$;
 GRANT EXECUTE ON FUNCTION "public"."refresh_workflow_events_summary"() TO "service_role";
 
 -- Schedule automatic refresh every 5 minutes using pgron
-SELECT cron.schedule('refresh-workflow-events-summary', '*/5 * * * *', 'SELECT refresh_workflow_events_summary();');
+-- Wrap in DO block to check for existing job and ensure idempotency
+DO $$
+BEGIN
+  -- Only schedule if no existing job with this name is found
+  IF NOT EXISTS (
+    SELECT 1 FROM cron.job WHERE jobname = 'refresh-workflow-events-summary'
+  ) THEN
+    PERFORM cron.schedule('refresh-workflow-events-summary', '*/5 * * * *', 'SELECT refresh_workflow_events_summary();');
+  END IF;
+END $$;
 
 -- Create security definer function to provide controlled access to workflow statistics
 -- This function uses authorizeforclassgrader to ensure proper access control
@@ -216,19 +238,27 @@ DECLARE
   v_period_start timestamptz;
   v_period_end timestamptz;
 BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = public, pg_temp;
+  
   -- Check authorization using existing function
   IF NOT authorizeforclassgrader(p_class_id) THEN
     RAISE EXCEPTION 'Access denied: insufficient permissions for class %', p_class_id;
   END IF;
 
-  -- Calculate time period
+  -- Calculate time period, clamp start to respect MV retention (6 months)
   v_period_end := NOW();
-  v_period_start := v_period_end - (p_duration_hours || ' hours')::interval;
+  v_period_start := GREATEST(
+    v_period_end - (p_duration_hours || ' hours')::interval,
+    NOW() - INTERVAL '6 months'
+  );
 
-  -- Return statistics from materialized view
+  -- Return statistics from materialized view, always return a row even if no data
   RETURN QUERY
   WITH workflow_stats AS (
     SELECT 
+      wes.workflow_run_id,
+      wes.run_attempt,
       wes.class_id,
       wes.requested_at,
       wes.in_progress_at,
@@ -241,35 +271,52 @@ BEGIN
       AND wes.requested_at <= v_period_end
   ),
   error_stats AS (
-    SELECT COUNT(*) as error_count
+    SELECT COUNT(DISTINCT wre.workflow_run_id) as error_count
     FROM "public"."workflow_run_error" wre
+    JOIN workflow_stats ws ON (
+      wre.workflow_run_id = ws.workflow_run_id 
+      AND (wre.run_attempt IS NULL OR wre.run_attempt = ws.run_attempt)
+    )
     WHERE wre.class_id = p_class_id
       AND wre.created_at >= v_period_start
       AND wre.created_at <= v_period_end
+  ),
+  base_stats AS (
+    SELECT 
+      COUNT(*)::bigint as total_runs,
+      COUNT(CASE WHEN ws.completed_at IS NOT NULL THEN 1 END)::bigint as completed_runs,
+      -- Failed runs: runs that are not completed but have at least one error
+      COUNT(CASE WHEN ws.completed_at IS NULL AND es.error_count > 0 THEN 1 END)::bigint as failed_runs,
+      COUNT(CASE WHEN ws.in_progress_at IS NOT NULL AND ws.completed_at IS NULL THEN 1 END)::bigint as in_progress_runs,
+      AVG(ws.queue_time_seconds) as avg_queue_time_seconds,
+      AVG(ws.run_time_seconds) as avg_run_time_seconds,
+      es.error_count
+    FROM workflow_stats ws
+    CROSS JOIN error_stats es
+    GROUP BY es.error_count
   )
   SELECT 
     p_class_id as class_id,
     p_duration_hours as duration_hours,
-    COUNT(*)::bigint as total_runs,
-    COUNT(CASE WHEN ws.completed_at IS NOT NULL THEN 1 END)::bigint as completed_runs,
-    COUNT(CASE WHEN ws.requested_at IS NOT NULL AND ws.completed_at IS NULL AND ws.in_progress_at IS NULL THEN 1 END)::bigint as failed_runs,
-    COUNT(CASE WHEN ws.in_progress_at IS NOT NULL AND ws.completed_at IS NULL THEN 1 END)::bigint as in_progress_runs,
-    ROUND(AVG(ws.queue_time_seconds), 2) as avg_queue_time_seconds,
-    ROUND(AVG(ws.run_time_seconds), 2) as avg_run_time_seconds,
-    es.error_count::bigint as error_count,
+    COALESCE(bs.total_runs, 0::bigint) as total_runs,
+    COALESCE(bs.completed_runs, 0::bigint) as completed_runs,
+    COALESCE(bs.failed_runs, 0::bigint) as failed_runs,
+    COALESCE(bs.in_progress_runs, 0::bigint) as in_progress_runs,
+    COALESCE(ROUND(bs.avg_queue_time_seconds, 2), 0.00) as avg_queue_time_seconds,
+    COALESCE(ROUND(bs.avg_run_time_seconds, 2), 0.00) as avg_run_time_seconds,
+    COALESCE(bs.error_count, 0::bigint) as error_count,
     CASE 
-      WHEN COUNT(*) > 0 THEN ROUND((es.error_count::numeric / COUNT(*)::numeric) * 100, 2)
-      ELSE 0
+      WHEN COALESCE(bs.total_runs, 0) > 0 THEN ROUND((COALESCE(bs.error_count, 0)::numeric / bs.total_runs::numeric) * 100, 2)
+      ELSE 0.00
     END as error_rate,
     CASE 
-      WHEN COUNT(*) > 0 THEN ROUND((COUNT(CASE WHEN ws.completed_at IS NOT NULL THEN 1 END)::numeric / COUNT(*)::numeric) * 100, 2)
-      ELSE 0
+      WHEN COALESCE(bs.total_runs, 0) > 0 THEN ROUND((bs.completed_runs::numeric / bs.total_runs::numeric) * 100, 2)
+      ELSE 0.00
     END as success_rate,
     v_period_start as period_start,
     v_period_end as period_end
-  FROM workflow_stats ws
-  CROSS JOIN error_stats es
-  GROUP BY es.error_count;
+  FROM (SELECT 1) dummy -- Ensure we always return a row
+  LEFT JOIN base_stats bs ON true;
 END;
 $$;
 
@@ -426,11 +473,12 @@ declare
    body jsonb;
    subject jsonb;
    style text;
-   existing_watch int;
    root_subject text;
    reply_author_name text;
    current_user_id uuid;
 BEGIN
+   -- Set explicit search_path to harden SECURITY DEFINER
+   SET search_path = public;
    CASE TG_OP
    WHEN 'INSERT' THEN
     -- Set root to its own ID if there is no root specified
@@ -464,17 +512,15 @@ BEGIN
       -- Only send notifications if we have a current user
       if current_user_id is not null then
         INSERT INTO notifications (class_id, subject, body, style, user_id)
-          SELECT class_id, subject, body, style, user_id FROM discussion_thread_watchers
+          SELECT NEW.class_id, subject, body, style, user_id FROM discussion_thread_watchers
             WHERE discussion_thread_root_id = NEW.root and enabled=true and user_id!=current_user_id;
       end if;
 
    -- Set watch if there is not one already and we have a current user
       if current_user_id is not null then
-        Select COUNT(*) into existing_watch from discussion_thread_watchers WHERE discussion_thread_root_id = NEW.root and user_id=current_user_id;
-        if existing_watch = 0 then
-           INSERT INTO discussion_thread_watchers (class_id,discussion_thread_root_id,user_id,enabled) values
-              (NEW.class_id, NEW.root, current_user_id, true);
-        end if;
+        INSERT INTO discussion_thread_watchers (class_id, discussion_thread_root_id, user_id, enabled) 
+        VALUES (NEW.class_id, NEW.root, current_user_id, true)
+        ON CONFLICT (user_id, discussion_thread_root_id) DO NOTHING;
       end if;
 
       -- Mark as unread for everyone in the class, excluding the current user if one exists

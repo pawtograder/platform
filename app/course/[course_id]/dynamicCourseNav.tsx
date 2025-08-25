@@ -202,7 +202,9 @@ export default function DynamicCourseNav() {
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter(
       (link) =>
-        (!link.instructors_or_graders_only || isInstructorOrGrader) && (!link.student_only || !isInstructorOrGrader)
+        (!link.instructors_or_graders_only || isInstructorOrGrader) &&
+        (!link.student_only || !isInstructorOrGrader) &&
+        (!link.instructor_only || isInstructor)
     )
     .filter((link) => !("feature_flag" in link) || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
 

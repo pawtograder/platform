@@ -1,6 +1,6 @@
 "use client";
 import { AssignmentProvider, useAssignmentController } from "@/hooks/useAssignment";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
@@ -41,13 +41,13 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Grading Assignments",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
     icon: FaSearch,
-    instructorsOnly: true
+    instructorsOnly: "graderOrInstructor"
   },
   {
     label: "Manage Groups",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`,
     icon: FaUsers,
-    instructorsOnly: true
+    instructorsOnly: "graderOrInstructor"
   },
   {
     label: "Manage Regrade Requests",
@@ -82,6 +82,7 @@ function AssignmentWindowTitle() {
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();
   const isInstructor = useIsInstructor();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const { data: assignment } = useOne<Assignment>({
     resource: "assignments",
     id: Number.parseInt(assignment_id as string)
@@ -97,7 +98,11 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
         <Box w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
             {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string))
-              .filter((item) => !item.instructorsOnly || isInstructor)
+              .filter((item) => {
+                if (!item.instructorsOnly) return true;
+                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+                return isInstructor;
+              })
               .map((item) => (
                 <Button
                   key={item.label}
@@ -148,12 +153,23 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
               }
             }}
             value={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
+              .filter((item) => {
+                if (!item.instructorsOnly) return true;
+                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+                return isInstructor;
+              })
               .map((item) => ({ label: item.label, value: item.href }))
               .find((option) => option.value === selectedPage)}
-            options={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string)).map((item) => ({
-              label: item.label,
-              value: item.href
-            }))}
+            options={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
+              .filter((item) => {
+                if (!item.instructorsOnly) return true;
+                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+                return isInstructor;
+              })
+              .map((item) => ({
+                label: item.label,
+                value: item.href
+              }))}
           />
         </Box>
         <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>

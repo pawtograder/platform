@@ -51,9 +51,17 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
 
   const activeReviewAssignmentId: number | undefined = useMemo(() => {
     if (ignoreReviewParam) return undefined;
-    const id = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
-    return Number.isFinite(id as number) ? (id as number) : undefined;
-  }, [ignoreReviewParam, reviewAssignmentIdParam]);
+
+    // If there's a URL parameter, use it
+    if (reviewAssignmentIdParam) {
+      const id = parseInt(reviewAssignmentIdParam, 10);
+      return Number.isFinite(id) ? id : undefined;
+    }
+
+    // If no URL parameter, automatically select an incomplete review assignment
+    const incompleteReviewAssignment = myAssignedReviews.find((ra) => !ra.completed_at);
+    return incompleteReviewAssignment?.id;
+  }, [ignoreReviewParam, reviewAssignmentIdParam, myAssignedReviews]);
 
   // Validate URL params and clean up if they reference invalid entities
   useEffect(() => {
