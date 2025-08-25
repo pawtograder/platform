@@ -3,56 +3,17 @@
 import { Field } from "@/components/ui/field";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Card, Flex, Heading, HStack, Input, Link, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Card, Heading, HStack, Input, Link, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate, useList } from "@refinedev/core";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
-import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { FaClock, FaExternalLinkAlt } from "react-icons/fa";
+import { FaClock } from "react-icons/fa";
 import { toaster } from "@/components/ui/toaster";
 
 interface ClassLateTokenUpdateFormData {
   late_tokens_per_student: number;
-}
-
-function AssignmentDueDateExceptionRow({
-  assignment,
-  timeZone,
-  courseId
-}: {
-  assignment: Assignment;
-  timeZone: string;
-  courseId: number;
-}) {
-  return (
-    <Card.Root>
-      <Card.Body>
-        <Flex justify="space-between" align="center">
-          <VStack align="start" gap={2}>
-            <Heading size="sm">{assignment.title}</Heading>
-            <HStack gap={4}>
-              <Text fontSize="sm" color="fg.muted">
-                Due:{" "}
-                {assignment.due_date
-                  ? new Date(assignment.due_date).toLocaleString("en-US", { timeZone })
-                  : "No due date"}
-              </Text>
-              <Text fontSize="sm" color="fg.muted">
-                Max Late Tokens: {assignment.max_late_tokens}
-              </Text>
-            </HStack>
-          </VStack>
-          <Button asChild size="sm" variant="outline">
-            <NextLink href={`/course/${courseId}/manage/assignments/${assignment.id}/due-date-exceptions`}>
-              Manage Due Date Exceptions <FaExternalLinkAlt style={{ marginLeft: "8px" }} />
-            </NextLink>
-          </Button>
-        </Flex>
-      </Card.Body>
-    </Card.Root>
-  );
 }
 
 export default function DueDateExceptionsManagement() {
@@ -141,7 +102,7 @@ export default function DueDateExceptionsManagement() {
   }
 
   return (
-    <Box p={6} maxW="6xl">
+    <Box maxW="6xl">
       <VStack gap={8} align="stretch">
         {/* Header */}
         <Box>
@@ -221,45 +182,14 @@ export default function DueDateExceptionsManagement() {
           </Card.Body>
         </Card.Root>
 
-        {/* Assignment Due Date Exceptions */}
-        <Card.Root>
-          <Card.Header>
-            <Card.Title>Assignment Due Date Exceptions</Card.Title>
-            <Card.Description>
-              Manage due date exceptions for individual assignments. Click on an assignment to manage student-specific
-              exceptions.
-            </Card.Description>
-          </Card.Header>
-          <Card.Body>
-            <VStack gap={4}>
-              {assignments.data.map((assignment) => (
-                <AssignmentDueDateExceptionRow
-                  key={assignment.id}
-                  assignment={assignment}
-                  timeZone={course.time_zone}
-                  courseId={Number.parseInt(course_id as string)}
-                />
-              ))}
-              {assignments.data.length === 0 && (
-                <Text color="fg.muted" textAlign="center" py={8}>
-                  No assignments found in this course.
-                </Text>
-              )}
-            </VStack>
-          </Card.Body>
-        </Card.Root>
-
         {/* Coming Soon Features */}
         <Card.Root>
           <Card.Header>
             <Card.Title>Coming Soon</Card.Title>
-            <Card.Description>Additional features planned for due date exception management:</Card.Description>
+            <Card.Description>Additional features planned for Due Date Extension Management:</Card.Description>
           </Card.Header>
           <Card.Body>
             <VStack align="start" gap={2}>
-              <Text fontSize="sm" color="fg.muted">
-                • Individual student late token overrides
-              </Text>
               <Text fontSize="sm" color="fg.muted">
                 • Bulk due date exception creation across multiple assignments
               </Text>
@@ -267,7 +197,7 @@ export default function DueDateExceptionsManagement() {
                 • Analytics and reporting on late token usage
               </Text>
               <Text fontSize="sm" color="fg.muted">
-                Follow along at <Link href="https://github.com/pawtograder/platform/issues/127">Pawtograder #127</Link>
+                Follow along at <Link href="https://github.com/pawtograder/platform/issues/178">Pawtograder #178</Link>
               </Text>
             </VStack>
           </Card.Body>

@@ -21,6 +21,8 @@ export default function StudentExtensionsTable() {
   const students = useAllStudentProfiles();
   const supabase = createClient();
 
+  console.log("extensions", extensions);
+
   const createOpen = useModalManager<AddExtensionDefaults>();
   const editOpen = useModalManager<StudentDeadlineExtension>();
 

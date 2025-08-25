@@ -84,12 +84,11 @@ const LinkItems = (courseID: number) => [
       },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
-      { name: "Due Date Extensions", icon: FiClock, target: `/course/${courseID}/manage/course/due-date-extensions` },
       {
-        name: "Due Date Exceptions",
+        name: "Due Date Extensions",
         instructors_only: true,
         icon: FiClock,
-        target: `/course/${courseID}/manage/course/due-date-exceptions`
+        target: `/course/${courseID}/manage/course/due-date-extensions`
       },
       { name: "Audit Log", instructors_only: true, icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
       {
