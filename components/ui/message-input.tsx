@@ -198,16 +198,7 @@ export default function MessageInput(props: MessageInputProps) {
     return (
       <VStack align="stretch" spaceY="0" p="0" gap="2" w="100%">
         {showMarkdownPreview && (
-          <Box
-            width="100%"
-            p="2"
-            bg="bg.muted"
-            border={"1px solid"}
-            borderColor="border.subtle"
-            rounded="md"
-            m="0"
-            data-visual-test-no-radius
-          >
+          <Box width="100%" p="2" bg="bg.muted" border={"1px solid"} borderColor="border.subtle" rounded="md" m="0">
             <Markdown>{value}</Markdown>
           </Box>
         )}

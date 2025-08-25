@@ -998,7 +998,7 @@ export default function CourseImportPage() {
                     </Text>
                     <Grid templateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
                       {/* Students */}
-                      <VStack align="center" gap={2} p={4} bg="blue.bg" rounded="md" data-visual-test-no-radius>
+                      <VStack align="center" gap={2} p={4} bg="blue.bg" rounded="md">
                         <Text fontSize="sm" fontWeight="semibold" color="fg.muted">
                           Students
                         </Text>
@@ -1025,7 +1025,7 @@ export default function CourseImportPage() {
                       </VStack>
 
                       {/* Instructors */}
-                      <VStack align="center" gap={2} p={4} bg="green.bg" rounded="md" data-visual-test-no-radius>
+                      <VStack align="center" gap={2} p={4} bg="green.bg" rounded="md">
                         <Text fontSize="sm" fontWeight="semibold" color="fg.muted">
                           Instructors
                         </Text>
@@ -1053,7 +1053,7 @@ export default function CourseImportPage() {
 
                       {/* TAs/Graders */}
                       {(existingClass.grader_count > 0 || existingClass.pending_graders > 0) && (
-                        <VStack align="center" gap={2} p={4} bg="teal.bg" rounded="md" data-visual-test-no-radius>
+                        <VStack align="center" gap={2} p={4} bg="teal.bg" rounded="md">
                           <Text fontSize="sm" fontWeight="semibold" color="fg.muted">
                             Graders/TAs
                           </Text>
@@ -1393,7 +1393,7 @@ export default function CourseImportPage() {
                   if (!analysis) return null;
 
                   return (
-                    <Box w="full" p={4} bg="bg.muted" rounded="md" data-visual-test-no-radius>
+                    <Box w="full" p={4} bg="bg.muted" rounded="md">
                       <Text fontWeight="semibold" mb={3}>
                         Import Summary:
                       </Text>
@@ -1482,7 +1482,7 @@ export default function CourseImportPage() {
 
                         {/* Additional Context */}
                         {analysis.classExists && (
-                          <HStack gap={2} mt={2} p={2} bg="orange.subtle" rounded="sm" data-visual-test-no-radius>
+                          <HStack gap={2} mt={2} p={2} bg="orange.subtle" rounded="sm">
                             <AlertCircle size={14} />
                             <Text fontSize="xs" color="orange.fg">
                               Syncing to existing class will update sections and send invitations to new users only
@@ -1496,15 +1496,7 @@ export default function CourseImportPage() {
 
                 {/* Invitation Processing Progress */}
                 {invitationProgress && (
-                  <Box
-                    w="full"
-                    p={4}
-                    bg="blue.subtle"
-                    rounded="md"
-                    border="1px"
-                    borderColor="blue.border"
-                    data-visual-test-no-radius
-                  >
+                  <Box w="full" p={4} bg="blue.subtle" rounded="md" border="1px" borderColor="blue.border">
                     <VStack gap={3}>
                       <HStack justify="space-between" w="full">
                         <Text fontSize="sm" fontWeight="semibold" color="blue.fg">
@@ -1516,15 +1508,7 @@ export default function CourseImportPage() {
                       </HStack>
 
                       <Box w="full">
-                        <Box
-                          w="full"
-                          h="6px"
-                          bg="blue.muted"
-                          rounded="md"
-                          overflow="hidden"
-                          position="relative"
-                          data-visual-test-no-radius
-                        >
+                        <Box w="full" h="6px" bg="blue.muted" rounded="md" overflow="hidden" position="relative">
                           <Box
                             h="full"
                             bg="blue.solid"
@@ -1603,7 +1587,7 @@ export default function CourseImportPage() {
                   )}
                 </VStack>
 
-                <VStack align="center" gap={2} p={4} bg="blue.bg" rounded="md" data-visual-test-no-radius>
+                <VStack align="center" gap={2} p={4} bg="blue.bg" rounded="md">
                   <Text fontSize="sm" fontWeight="semibold" color="fg.muted">
                     Sections Created
                   </Text>
@@ -1612,7 +1596,7 @@ export default function CourseImportPage() {
                   </Text>
                 </VStack>
 
-                <VStack align="center" gap={2} p={4} bg="purple.bg" rounded="md" data-visual-test-no-radius>
+                <VStack align="center" gap={2} p={4} bg="purple.bg" rounded="md">
                   <Text fontSize="sm" fontWeight="semibold" color="fg.muted">
                     Invitations Sent
                   </Text>
@@ -1648,16 +1632,7 @@ export default function CourseImportPage() {
                   </Text>
                   <VStack align="start" gap={1}>
                     {importSummary.errors.map((error, idx) => (
-                      <Text
-                        key={idx}
-                        fontSize="sm"
-                        color="red.fg"
-                        p={2}
-                        bg="red.bg"
-                        rounded="md"
-                        w="full"
-                        data-visual-test-no-radius
-                      >
+                      <Text key={idx} fontSize="sm" color="red.fg" p={2} bg="red.bg" rounded="md" w="full">
                         {error}
                       </Text>
                     ))}

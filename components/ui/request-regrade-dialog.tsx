@@ -97,7 +97,7 @@ export default function RequestRegradeDialog({
               </Text>
 
               {isGroupSubmission && (
-                <Box bg="bg.info" p={3} borderRadius="md" w="100%" data-visual-test-no-radius>
+                <Box bg="bg.info" p={3} borderRadius="md" w="100%">
                   <Text fontWeight="semibold" mb={2}>
                     📝 Group Submission
                   </Text>

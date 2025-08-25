@@ -96,7 +96,6 @@ export default function Flashcard({
               }}
               onClick={onShowAnswer}
               cursor={showAnswer ? "default" : "pointer"}
-              data-visual-test-no-radius
             >
               <Card.Header p={0}>
                 <Text fontWeight="semibold" fontSize={{ base: "xl", md: "4xl" }} lineHeight="1.2" textAlign="center">
@@ -157,7 +156,6 @@ export default function Flashcard({
             zIndex: showAnswer ? 2 : 1,
             pointerEvents: showAnswer ? "auto" : "none"
           }}
-          data-visual-test-no-radius
         >
           <Card.Header p={0} pr={{ base: "6rem", md: "9rem" }} position="relative">
             <Text

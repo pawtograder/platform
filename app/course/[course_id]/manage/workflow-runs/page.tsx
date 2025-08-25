@@ -146,7 +146,6 @@ function WorkflowRunStats() {
             border="1px solid"
             borderColor="border.subtle"
             borderRadius="md"
-            data-visual-test-no-radius
             bg="bg.default"
             shadow="sm"
           >

@@ -148,7 +148,7 @@ export default function StudentKarmaManagement() {
   };
 
   const KarmaEntryCard = ({ entry }: { entry: KarmaEntryWithDetails }) => (
-    <Box p={4} borderWidth="1px" borderRadius="md" data-visual-test-no-radius>
+    <Box p={4} borderWidth="1px" borderRadius="md">
       <Flex justify="space-between" align="flex-start">
         <Box flex="1">
           <Flex align="center" gap={3} mb={2}>
@@ -167,7 +167,7 @@ export default function StudentKarmaManagement() {
           </HStack>
 
           {entry.internal_notes && (
-            <Box mb={3} p={3} borderRadius="md" data-visual-test-no-radius>
+            <Box mb={3} p={3} borderRadius="md">
               <Text fontSize="sm" color="fg.subtle" fontStyle="italic">
                 &ldquo;{entry.internal_notes}&rdquo;
               </Text>

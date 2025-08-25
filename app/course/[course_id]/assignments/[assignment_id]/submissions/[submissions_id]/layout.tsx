@@ -439,16 +439,7 @@ function TestResults() {
         }
         const showScore = extraData?.hide_score !== "true" && test.max_score !== 0;
         return (
-          <Box
-            key={test.id}
-            border="1px solid"
-            borderColor="border.emphasized"
-            borderRadius="md"
-            p={2}
-            mt={2}
-            w="100%"
-            data-visual-test-no-radius
-          >
+          <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
             <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
               <Heading size="sm">
@@ -646,7 +637,7 @@ function RubricView() {
           <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>
         )}
         {activeReviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
-          <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default" data-visual-test-no-radius>
+          <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
             <Heading size="md">
               Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
             </Heading>
@@ -758,17 +749,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </VStack>
         </Box>
         {submission.is_not_graded && (
-          <Box
-            flexShrink={1}
-            maxW="lg"
-            rounded="sm"
-            bg="fg.warning"
-            color="fg.inverted"
-            p={2}
-            textAlign="center"
-            m={0}
-            data-visual-test-no-radius
-          >
+          <Box flexShrink={1} maxW="lg" rounded="sm" bg="fg.warning" color="fg.inverted" p={2} textAlign="center" m={0}>
             <Heading size="md">Viewing a not-for-grading submission.</Heading>
             <Text fontSize="xs">
               This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
@@ -777,16 +758,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </Box>
         )}
         {!submission.is_active && !submission.is_not_graded && (
-          <Box
-            rounded="sm"
-            bg="red.fg"
-            color="fg.inverted"
-            px={6}
-            py={2}
-            textAlign="center"
-            m={0}
-            data-visual-test-no-radius
-          >
+          <Box rounded="sm" bg="red.fg" color="fg.inverted" px={6} py={2} textAlign="center" m={0}>
             <Heading size="md">Viewing a previous submission.</Heading>
             <Text fontSize="xs">
               Use the submission history to view or change the active submission. The active submission is the one that

@@ -405,7 +405,7 @@ function WorkflowErrorsTable() {
   if (error) {
     return (
       <Box>
-        <Box p={4} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md" data-visual-test-no-radius>
+        <Box p={4} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md">
           <Text color="red.600">Failed to load workflow errors: {error.message}</Text>
         </Box>
       </Box>
@@ -469,7 +469,7 @@ function WorkflowErrorsTable() {
   return (
     <Box>
       {workflowErrors.length === 0 ? (
-        <Box p={6} borderRadius="md" textAlign="center" data-visual-test-no-radius>
+        <Box p={6} borderRadius="md" textAlign="center">
           <Text fontSize="lg" fontWeight="medium">
             🎉 No errors found!
           </Text>

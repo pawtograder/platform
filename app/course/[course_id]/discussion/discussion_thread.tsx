@@ -75,7 +75,7 @@ export function DiscussionThreadReply({
     return <></>;
   }
   return (
-    <Container ml="2" w="100%" bg="bg.subtle" p="2" rounded="l3" py="2" px="3" data-visual-test-no-radius>
+    <Container ml="2" w="100%" bg="bg.subtle" p="2" rounded="l3" py="2" px="3">
       <MessageInput
         defaultSingleLine={true}
         enableAnonymousModeToggle={true}
@@ -249,7 +249,6 @@ const DiscussionThreadContent = memo(
               roundedBottomLeft="l3"
               borderStartWidth="2px"
               borderBottomWidth="2px"
-              data-visual-test-no-radius
             />
             {outerBorders(outerSiblings)}
             {descendant && <Box pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
@@ -267,7 +266,7 @@ const DiscussionThreadContent = memo(
                 border={thread.id === root_thread?.answer ? "2px solid var(--chakra-colors-green-500)" : "none"}
                 borderRadius="l3"
               >
-                <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref} data-visual-test-no-radius>
+                <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
                   <HStack gap="1">
                     <Text textStyle="sm" fontWeight="semibold">
                       <Link

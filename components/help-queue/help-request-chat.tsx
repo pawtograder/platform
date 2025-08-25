@@ -532,7 +532,6 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
                             border="1px solid"
                             borderColor="gray.200"
                             borderRadius="md"
-                            data-visual-test-no-radius
                           >
                             <HStack justify="space-between" align="center">
                               <HStack flex={1}>

@@ -190,7 +190,7 @@ export default function ModerationManagement() {
   };
 
   const ModerationActionCard = ({ action }: { action: ModerationActionWithDetails }) => (
-    <Box p={4} borderWidth="1px" borderRadius="md" data-visual-test-no-radius>
+    <Box p={4} borderWidth="1px" borderRadius="md">
       <Flex justify="space-between" align="flex-start">
         <Box flex="1">
           <Flex align="center" gap={3} mb={2}>

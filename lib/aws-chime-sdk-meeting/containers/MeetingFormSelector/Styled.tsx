@@ -27,23 +27,3 @@ export const StyledDiv = styled.div`
     padding: 3rem 3rem 2rem;
   }
 `;
-
-// Add data-visual-test-no-radius to prevent border-radius visual flakiness
-export const StyledWrapperWithNoRadius = styled.div`
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-
-  @media (min-width: 600px) and (min-height: 600px) {
-    min-height: 35.75rem;
-    max-width: 30rem;
-    border-radius: 0.25rem;
-    box-shadow:
-      0 0.25rem 0.5rem 0 rgba(0, 0, 0, 0.2),
-      0 0.375rem 1.25rem 0 rgba(0, 0, 0, 0.2);
-  }
-
-  &[data-visual-test-no-radius] {
-    border-radius: 0 !important;
-  }
-`;

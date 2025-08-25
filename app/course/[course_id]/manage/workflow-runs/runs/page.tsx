@@ -452,7 +452,7 @@ function WorkflowRunTable() {
   if (error) {
     return (
       <Box>
-        <Box p={4} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md" data-visual-test-no-radius>
+        <Box p={4} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md">
           <Text color="red.600">Failed to load workflow runs: {error.message}</Text>
         </Box>
       </Box>
@@ -500,7 +500,7 @@ function WorkflowRunTable() {
   return (
     <Box>
       {workflowRuns.length === 0 ? (
-        <Box p={6} borderRadius="md" textAlign="center" data-visual-test-no-radius>
+        <Box p={6} borderRadius="md" textAlign="center">
           <Text fontSize="lg" fontWeight="medium">
             🚀 No workflow runs found!
           </Text>

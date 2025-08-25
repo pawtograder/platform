@@ -352,7 +352,7 @@ function EmailNotificationTeaser({ notification }: { notification: Notification 
   const body = notification.body as EmailNotification;
   return (
     <HStack align="flex-start" gap="3">
-      <Box flexShrink="0" p="2" bg="blue.subtle" borderRadius="md" data-visual-test-no-radius>
+      <Box flexShrink="0" p="2" bg="blue.subtle" borderRadius="md">
         <LucideMail size={16} />
       </Box>
       <VStack align="flex-start" gap="1" flex="1">
@@ -371,7 +371,7 @@ function CourseEnrollmentNotificationTeaser({ notification }: { notification: No
   const body = notification.body as CourseEnrollmentNotification;
   return (
     <HStack align="flex-start" gap="3">
-      <Box flexShrink="0" p="2" bg="green.subtle" borderRadius="md" data-visual-test-no-radius>
+      <Box flexShrink="0" p="2" bg="green.subtle" borderRadius="md">
         <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
         </svg>
@@ -433,7 +433,7 @@ function SystemNotificationTeaser({ notification }: { notification: Notification
 
   return (
     <HStack align="flex-start" gap="3">
-      <Box flexShrink="0" p="2" bg={config.bg} borderRadius="md" color={config.color} data-visual-test-no-radius>
+      <Box flexShrink="0" p="2" bg={config.bg} borderRadius="md" color={config.color}>
         {body.icon ? (
           // Custom icon - could be emoji or lucide icon name
           <Text fontSize="16px">{body.icon}</Text>
@@ -631,7 +631,6 @@ export default function NotificationTeaser({
           height="20px"
           bg="blue.500"
           borderRadius="full"
-          data-visual-test-no-radius
         />
       )}
 

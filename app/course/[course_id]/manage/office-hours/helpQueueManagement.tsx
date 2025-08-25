@@ -97,7 +97,7 @@ export default function HelpQueueManagement() {
       ) : (
         <Stack spaceY={4}>
           {queues.map((queue) => (
-            <Box key={queue.id} p={4} borderWidth="1px" borderRadius="md" data-visual-test-no-radius>
+            <Box key={queue.id} p={4} borderWidth="1px" borderRadius="md">
               <Flex justify="space-between" align="flex-start">
                 <Box flex="1">
                   <Flex align="center" gap={3} mb={2}>
@@ -116,7 +116,6 @@ export default function HelpQueueManagement() {
                         color="red.700"
                         fontSize="sm"
                         fontWeight="medium"
-                        data-visual-test-no-radius
                       >
                         Inactive
                       </Box>

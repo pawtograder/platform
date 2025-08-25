@@ -64,15 +64,7 @@ export default function WorkflowRunsLayout({ children }: { children: React.React
             ))}
           </VStack>
         </Box>
-        <Box
-          borderColor="border.muted"
-          borderWidth="2px"
-          borderRadius="md"
-          p={4}
-          flexGrow={1}
-          minWidth="0"
-          data-visual-test-no-radius
-        >
+        <Box borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4} flexGrow={1} minWidth="0">
           <Heading size="lg">Workflow Management</Heading>
           <Box>{children}</Box>
         </Box>
@@ -96,7 +88,7 @@ export default function WorkflowRunsLayout({ children }: { children: React.React
             }))}
           />
         </Box>
-        <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2} data-visual-test-no-radius>
+        <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>
           <Heading size="lg">Workflow Management</Heading>
           <Box>{children}</Box>
         </Box>

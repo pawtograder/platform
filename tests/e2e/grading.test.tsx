@@ -1,5 +1,6 @@
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
-import { expect, test, type Page } from "@playwright/test";
+import { test, expect } from "../global-setup";
+import { type Page } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";

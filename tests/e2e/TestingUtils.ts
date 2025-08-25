@@ -872,7 +872,8 @@ export async function insertAssignment({
   rateLimitManager?: RateLimitManager;
   name?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
-  const title = name ?? `Assignment #${assignmentIdx.assignment}Test`;
+  const currentAssignmentIdx = assignmentIdx.assignment;
+  const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
   assignmentIdx.assignment++;
   const { data: selfReviewSettingDataList, error: selfReviewSettingError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
@@ -905,7 +906,7 @@ export async function insertAssignment({
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: `assignment-${assignmentIdx.assignment}`,
+      slug: `assignment-${currentAssignmentIdx}`,
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       self_review_setting_id: self_review_setting_id

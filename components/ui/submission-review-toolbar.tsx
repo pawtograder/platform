@@ -599,15 +599,7 @@ export default function SubmissionReviewToolbar() {
   }
 
   return (
-    <Box
-      w="100%"
-      p={2}
-      borderRadius="md"
-      borderWidth="1px"
-      borderColor="border.info"
-      bg="bg.info"
-      data-visual-test-no-radius
-    >
+    <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
       <SelfReviewDueDateInformation />
       <HStack w="100%" justifyContent="space-between">
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}

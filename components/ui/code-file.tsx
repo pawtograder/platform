@@ -437,23 +437,8 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
         <Box m={0} p={0} w="100%" pb={1}>
           <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
             <PersonAvatar size="2xs" uid={comment.author} />
-            <VStack
-              alignItems="flex-start"
-              spaceY={0}
-              gap={0}
-              w="100%"
-              border="1px solid"
-              borderRadius="md"
-              data-visual-test-no-radius
-            >
-              <Box
-                bg={willBeVisibleToStudents ? "bg.info" : "bg.error"}
-                pl={1}
-                pr={1}
-                borderRadius="md"
-                w="100%"
-                data-visual-test-no-radius
-              >
+            <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
+              <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
                 <Flex w="100%" justifyContent="space-between">
                   <HStack flexGrow={10}>
                     {!comment.eventually_visible && (
@@ -556,7 +541,6 @@ function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: numbe
           border="1px solid"
           borderColor="border.emphasized"
           borderRadius="md"
-          data-visual-test-no-radius
         >
           <HStack
             w="100%"
@@ -875,7 +859,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
       borderRadius="md"
       boxShadow="lg"
       ref={popupRef}
-      data-visual-test-no-radius
     >
       <VStack gap={2} align="stretch">
         <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
@@ -1089,7 +1072,6 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
         p={2}
         backgroundColor="bg"
         boxShadow="sm"
-        data-visual-test-no-radius
       >
         {commentsToDisplay.map((comment) =>
           comment.rubric_check_id ? (

@@ -77,7 +77,6 @@ export default function LinkAccount() {
       mb="5"
       bg="bg.success"
       mx="auto"
-      data-visual-test-no-radius
     >
       <HStack alignItems="flex-start">
         <VStack alignItems="flex-start" gap="0">
@@ -111,7 +110,6 @@ export default function LinkAccount() {
               console.error(error);
             }
           }}
-          data-visual-test-no-radius
         >
           <BsGithub /> Sign in with GitHub
         </Button>

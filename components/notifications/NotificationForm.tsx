@@ -227,7 +227,7 @@ export default function NotificationForm({
   return (
     <form id="notification-form" onSubmit={handleSubmit}>
       {validationError && (
-        <Box p={3} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md" data-visual-test-no-radius>
+        <Box p={3} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md">
           <Text color="red.600" fontSize="sm">
             {validationError}
           </Text>

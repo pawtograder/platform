@@ -56,7 +56,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 px={3}
                 py={2}
                 rounded="md"
-                data-visual-test-no-radius
                 fontSize="sm"
                 fontWeight="medium"
               >
@@ -71,7 +70,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 rounded="md"
                 fontSize="sm"
                 fontWeight="medium"
-                data-visual-test-no-radius
               >
                 Classes
               </Link>
@@ -82,7 +80,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 px={3}
                 py={2}
                 rounded="md"
-                data-visual-test-no-radius
                 fontSize="sm"
                 fontWeight="medium"
               >
@@ -95,7 +92,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 px={3}
                 py={2}
                 rounded="md"
-                data-visual-test-no-radius
                 fontSize="sm"
                 fontWeight="medium"
               >
@@ -108,7 +104,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 px={3}
                 py={2}
                 rounded="md"
-                data-visual-test-no-radius
                 fontSize="sm"
                 fontWeight="medium"
               >
@@ -121,7 +116,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 px={3}
                 py={2}
                 rounded="md"
-                data-visual-test-no-radius
                 fontSize="sm"
                 fontWeight="medium"
               >
@@ -134,7 +128,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 px={3}
                 py={2}
                 rounded="md"
-                data-visual-test-no-radius
                 fontSize="sm"
                 fontWeight="medium"
               >

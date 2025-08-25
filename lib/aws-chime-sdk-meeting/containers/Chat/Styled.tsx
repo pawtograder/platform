@@ -17,11 +17,6 @@ export const StyledChat = styled.aside<any>`
   border-top: 0.0625rem solid ${(props) => props.theme.chat.containerBorder};
   border-left: 0.0625rem solid ${(props) => props.theme.chat.containerBorder};
   border-right: 0.0625rem solid ${(props) => props.theme.chat.containerBorder};
-
-  &[data-visual-test-no-radius] {
-    border-radius: 0 !important;
-  }
-
   ${({ theme }) => theme.mediaQueries.min.md} {
     width: ${(props) => props.theme.chat.maxWidth};
   }
@@ -30,19 +25,22 @@ export const StyledChat = styled.aside<any>`
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const StyledTitle = styled.div<any>`
   grid-area: chat-header;
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.25rem;
-  color: ${(props) => props.theme.colors.fontPrimary};
-  margin-bottom: 1rem;
-  padding: 1rem 1rem 0.5rem 1rem;
-  border-bottom: 0.0625rem solid ${(props) => props.theme.colors.borderControl};
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-
-  &[data-visual-test-no-radius] {
-    border-radius: 0 !important;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 0.0625rem solid ${(props) => props.theme.chat.headerBorder};
+  .ch-title {
+    font-size: 1rem;
+    color: ${(props) => props.theme.chat.primaryText};
+  }
+  .close-button {
+    margin-left: auto;
+    display: flex;
+    > * {
+      margin-left: 0.5rem;
+    }
   }
 `;
 

@@ -559,14 +559,7 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
                     name="yamlContent"
                     control={control}
                     render={() => (
-                      <Box
-                        border="1px solid"
-                        borderRadius="md"
-                        overflow="hidden"
-                        height="300px"
-                        width="100%"
-                        data-visual-test-no-radius
-                      >
+                      <Box border="1px solid" borderRadius="md" overflow="hidden" height="300px" width="100%">
                         <Editor
                           height="300px"
                           width="100%"

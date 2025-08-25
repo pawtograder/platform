@@ -50,7 +50,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
   if (moderationStatus.isLoading) {
     return (
       <Container maxW="2xl" py={8}>
-        <Box p={6} borderRadius="xl" borderWidth="1px" textAlign="center" data-visual-test-no-radius>
+        <Box p={6} borderRadius="xl" borderWidth="1px" textAlign="center">
           <VStack gap={3}>
             <Icon as={BsShield} boxSize={6} />
             <Text fontSize="lg" fontWeight="medium">
@@ -66,7 +66,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
   if (moderationStatus.error) {
     return (
       <Container maxW="2xl" py={8}>
-        <Box p={6} borderRadius="xl" borderWidth="2px" shadow="sm" data-visual-test-no-radius>
+        <Box p={6} borderRadius="xl" borderWidth="2px" shadow="sm">
           <HStack gap={3}>
             <Icon as={BsExclamationTriangle} boxSize={6} />
             <VStack align="start" gap={1}>
@@ -85,11 +85,11 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
   if (moderationStatus.isBanned) {
     return (
       <Container maxW="3xl" py={8}>
-        <Box borderRadius="2xl" borderWidth="2px" shadow="2xl" overflow="hidden" data-visual-test-no-radius>
+        <Box borderRadius="2xl" borderWidth="2px" shadow="2xl" overflow="hidden">
           {/* Header with gradient background */}
           <Box p={6}>
             <HStack gap={4}>
-              <Box p={3} borderRadius="full" data-visual-test-no-radius>
+              <Box p={3} borderRadius="full">
                 <Icon as={moderationStatus.isPermanentBan ? BsBan : BsPersonX} boxSize={8} />
               </Box>
               <VStack align="start" gap={1}>
@@ -112,7 +112,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
           <VStack gap={6} p={6} align="stretch">
             {/* Time remaining for temporary bans */}
             {!moderationStatus.isPermanentBan && timeRemaining && (
-              <Box p={4} borderRadius="xl" borderWidth="1px" data-visual-test-no-radius>
+              <Box p={4} borderRadius="xl" borderWidth="1px">
                 <HStack gap={3}>
                   <Icon as={BsClock} boxSize={5} />
                   <Text fontSize="lg" fontWeight="medium">
@@ -131,7 +131,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
                 <Text fontSize="lg" fontWeight="semibold" mb={3}>
                   Reason for ban:
                 </Text>
-                <Box p={4} borderRadius="xl" borderWidth="1px" data-visual-test-no-radius>
+                <Box p={4} borderRadius="xl" borderWidth="1px">
                   <Text fontWeight="medium">{moderationStatus.activeBan.reason}</Text>
                 </Box>
               </Box>
@@ -157,7 +157,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
                     : "You will regain access when the ban expires"
                 ].map((restriction, index) => (
                   <HStack key={index} gap={3} align="start">
-                    <Box mt={1.5} w={2} h={2} borderRadius="full" flexShrink={0} data-visual-test-no-radius />
+                    <Box mt={1.5} w={2} h={2} borderRadius="full" flexShrink={0} />
                     <Text fontSize="sm">{restriction}</Text>
                   </HStack>
                 ))}
@@ -166,7 +166,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
 
             {/* Contact section for permanent bans */}
             {moderationStatus.isPermanentBan && (
-              <Box p={5} borderRadius="xl" borderWidth="1px" data-visual-test-no-radius>
+              <Box p={5} borderRadius="xl" borderWidth="1px">
                 <HStack gap={3} align="start">
                   <Icon as={BsInfoCircle} boxSize={5} mt={0.5} />
                   <VStack align="start" gap={2}>
@@ -192,11 +192,11 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
     return (
       <VStack gap={6} align="stretch" mt={8}>
         <Container maxW="3xl">
-          <Box borderRadius="xl" borderWidth="2px" shadow="lg" overflow="hidden" data-visual-test-no-radius>
+          <Box borderRadius="xl" borderWidth="2px" shadow="lg" overflow="hidden">
             {/* Warning header */}
             <Box p={4}>
               <HStack gap={3}>
-                <Box p={2} borderRadius="full" data-visual-test-no-radius>
+                <Box p={2} borderRadius="full">
                   <Icon as={BsExclamationTriangle} boxSize={6} />
                 </Box>
                 <VStack align="start" gap={1}>
@@ -213,7 +213,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
 
             {/* Warning content */}
             <VStack gap={4} p={4} align="stretch">
-              <Box p={3} borderRadius="lg" borderWidth="1px" data-visual-test-no-radius>
+              <Box p={3} borderRadius="lg" borderWidth="1px">
                 <Text fontSize="sm" fontWeight="medium">
                   Continued violations may result in temporary or permanent bans from office hours.
                 </Text>
@@ -224,7 +224,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
                   <Text fontSize="sm" fontWeight="semibold" mb={2}>
                     Most recent warning:
                   </Text>
-                  <Box p={3} borderRadius="lg" borderWidth="1px" data-visual-test-no-radius>
+                  <Box p={3} borderRadius="lg" borderWidth="1px">
                     <Text fontSize="sm">{moderationStatus.recentWarnings[0].reason}</Text>
                   </Box>
                 </Box>

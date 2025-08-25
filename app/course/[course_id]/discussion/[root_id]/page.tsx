@@ -208,16 +208,7 @@ function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
   }
   return (
     <Link href={`/course/${answer.class_id}/discussion/${answer.root}#post-${answer.ordinal}`}>
-      <Box
-        m="2"
-        p="2"
-        border="1px solid"
-        borderColor="border.info"
-        rounded="l3"
-        bg="bg.info"
-        minW="xl"
-        data-visual-test-no-radius
-      >
+      <Box m="2" p="2" border="1px solid" borderColor="border.info" rounded="l3" bg="bg.info" minW="xl">
         Answered in #{answer.ordinal} by {userProfile.name}{" "}
         {userProfile.flair && <Badge colorPalette={userProfile.flair_color}>{userProfile.flair}</Badge>}
       </Box>

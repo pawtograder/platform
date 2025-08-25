@@ -63,14 +63,7 @@ export function DiscussionPostSummary({
   );
   return (
     <Box minWidth={"fit-content"} width="auto">
-      <Flex
-        borderWidth="1px"
-        divideX="1px"
-        borderRadius="l3"
-        bg="bg"
-        _hover={{ bg: "bg.subtle" }}
-        data-visual-test-no-radius
-      >
+      <Flex borderWidth="1px" divideX="1px" borderRadius="l3" bg="bg" _hover={{ bg: "bg.subtle" }}>
         <Stack p="6" flex="1">
           <Badge variant="surface" alignSelf="flex-start" colorPalette={topic.color}>
             {topic.topic}

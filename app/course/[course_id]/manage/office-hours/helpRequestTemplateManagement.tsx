@@ -118,7 +118,7 @@ export default function HelpRequestTemplateManagement() {
   };
 
   const TemplateCard = ({ template }: { template: HelpRequestTemplate }) => (
-    <Box p={4} borderWidth="1px" borderRadius="md" data-visual-test-no-radius>
+    <Box p={4} borderWidth="1px" borderRadius="md">
       <Flex justify="space-between" align="flex-start">
         <Box flex="1">
           <Flex align="center" gap={3} mb={2}>
@@ -221,7 +221,7 @@ export default function HelpRequestTemplateManagement() {
               Active Templates ({activeTemplates.length})
             </Heading>
             {activeTemplates.length === 0 ? (
-              <Box textAlign="center" py={6} borderWidth="1px" borderRadius="md" data-visual-test-no-radius>
+              <Box textAlign="center" py={6} borderWidth="1px" borderRadius="md">
                 <Text>No active templates available.</Text>
               </Box>
             ) : (

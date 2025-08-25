@@ -1,6 +1,7 @@
 import { EmailNotification } from "@/components/notifications/notification-teaser";
 import { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
-import { expect, test, type Page } from "@playwright/test";
+import { test, expect } from "../global-setup";
+import { type Page } from "@playwright/test";
 import {
   createClass,
   createClassSection,

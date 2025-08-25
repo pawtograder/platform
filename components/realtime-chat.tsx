@@ -310,7 +310,7 @@ export const RealtimeChat = ({
   if (!isAuthorized || connectionError) {
     return (
       <Flex direction="column" height="100%" width="100%" bg="bg.subtle" justify="center" align="center" p={4}>
-        <Box p={4} bg="bg.error" borderRadius="md" border="1px" borderColor="border.error" data-visual-test-no-radius>
+        <Box p={4} bg="bg.error" borderRadius="md" border="1px" borderColor="border.error">
           <Text fontSize="sm" color="fg.error">
             {connectionError || "Unable to connect to chat"}
           </Text>

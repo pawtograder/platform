@@ -164,16 +164,7 @@ export default function SelfReviewNotice(props: {
     return <></>;
   }
   return (
-    <Box
-      m={4}
-      borderWidth={1}
-      borderColor="bg.emphasized"
-      borderRadius={4}
-      p={4}
-      bg="bg.subtle"
-      maxW="4xl"
-      data-visual-test-no-radius
-    >
+    <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
       <SelfReviewNoticeInner {...props} />
     </Box>
   );

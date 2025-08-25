@@ -139,7 +139,6 @@ export const HelpRequestTeaser = (props: Props) => {
       bg={selected ? "bg.muted" : ""}
       role="listitem"
       aria-label={`${message}`}
-      data-visual-test-no-radius
     >
       <Box pt="1">{renderStudentsAvatars()}</Box>
       <Stack spaceY="0" fontSize="sm" flex="1" truncate>

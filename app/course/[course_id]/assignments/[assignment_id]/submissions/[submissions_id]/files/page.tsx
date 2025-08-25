@@ -103,13 +103,7 @@ function FilePicker({ curFile }: { curFile: number }) {
         }
       }}
     >
-      <Table.Root
-        borderWidth="1px"
-        borderColor="border.emphasized"
-        w="100%"
-        borderRadius="md"
-        data-visual-test-no-radius
-      >
+      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
         <Table.Header>
           <Table.Row bg="bg.subtle">
             <Table.ColumnHeader>File</Table.ColumnHeader>
@@ -169,13 +163,7 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
         }
       }}
     >
-      <Table.Root
-        borderWidth="1px"
-        borderColor="border.emphasized"
-        w="100%"
-        borderRadius="md"
-        data-visual-test-no-radius
-      >
+      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
         <Table.Header>
           <Table.Row bg="bg.subtle">
             <Table.ColumnHeader>Artifact</Table.ColumnHeader>
@@ -252,7 +240,7 @@ function ArtifactAnnotation({
           borderColor="border.info"
           borderRadius="md"
         >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%" data-visual-test-no-radius>
+          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
               <HStack>
                 {!comment.released && (
@@ -333,7 +321,6 @@ function ArtifactComment({
           border="1px solid"
           borderColor="border.emphasized"
           borderRadius="md"
-          data-visual-test-no-radius
         >
           <HStack
             w="100%"

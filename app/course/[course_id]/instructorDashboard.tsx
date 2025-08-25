@@ -709,14 +709,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       const timeAgo = new Date(error.created_at).toLocaleString();
 
                       return (
-                        <Box
-                          key={error.id}
-                          p={2}
-                          border="1px solid"
-                          borderColor="border.subtle"
-                          borderRadius="md"
-                          data-visual-test-no-radius
-                        >
+                        <Box key={error.id} p={2} border="1px solid" borderColor="border.subtle" borderRadius="md">
                           <Flex justify="space-between" align="start" mb={1}>
                             <Text fontSize="sm" fontWeight="medium" color="red.600">
                               {error.name}

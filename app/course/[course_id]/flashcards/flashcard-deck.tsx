@@ -71,7 +71,6 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
         borderWidth="1px"
         position="relative"
         role="group"
-        data-visual-test-no-radius
       >
         <Card.Header>
           <Card.Title fontWeight="semibold" fontSize="lg" textAlign="center" lineHeight="1.4">
@@ -93,7 +92,6 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
               _groupHover={{
                 transform: "scale(1.1)"
               }}
-              data-visual-test-no-radius
             />
             <Icon
               aria-label={`Open ${deck.name} flashcard deck`}

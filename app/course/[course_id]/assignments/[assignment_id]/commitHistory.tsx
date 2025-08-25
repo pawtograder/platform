@@ -72,15 +72,7 @@ function CommitHistory({
   });
 
   return (
-    <Box
-      w="100%"
-      bg="bg.muted"
-      p={2}
-      borderRadius="md"
-      border="1px solid"
-      borderColor="border.emphasized"
-      data-visual-test-no-radius
-    >
+    <Box w="100%" bg="bg.muted" p={2} borderRadius="md" border="1px solid" borderColor="border.emphasized">
       {(!commits || !data) && <Skeleton height="20px" />}
       <Table.Root>
         <Table.Header>

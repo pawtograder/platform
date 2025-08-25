@@ -34,7 +34,7 @@ function HelpDialog() {
           <VStack alignItems="flex-start" gap="3">
             <Box>
               Your Pawtograder account is linked to the GitHub account{" "}
-              <Text as="span" fontWeight="bold" bg="bg.info" borderRadius="md" p="1" data-visual-test-no-radius>
+              <Text as="span" fontWeight="bold" bg="bg.info" borderRadius="md" p="1">
                 {role.users.github_username}
               </Text>
               , but you have not yet joined the course organization. This invitation was sent{" "}
@@ -89,7 +89,6 @@ export default function ResendOrgInvitation() {
       mb="5"
       bg="bg.success"
       mx="auto"
-      data-visual-test-no-radius
     >
       <Toaster />
       <HStack alignItems="flex-start">
@@ -100,7 +99,7 @@ export default function ResendOrgInvitation() {
           </HStack>
           <Text fontSize="sm">
             Your Pawtograder account is linked to the GitHub account{" "}
-            <Text as="span" fontWeight="bold" bg="bg.info" borderRadius="md" data-visual-test-no-radius>
+            <Text as="span" fontWeight="bold" bg="bg.info" borderRadius="md">
               {role.users.github_username}
             </Text>
             , but you have not yet joined the course organization, so Pawtograder cannot create repositories for your

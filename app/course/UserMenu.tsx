@@ -172,13 +172,7 @@ const DropBoxAvatar = ({
           <Menu.Root positioning={{ placement: "bottom" }}>
             <Text fontWeight={"700"}>{avatarType} Avatar</Text>
             <Menu.Trigger asChild>
-              <Button
-                background="transparent"
-                height="100%"
-                width="100%"
-                borderRadius={"full"}
-                data-visual-test-no-radius
-              >
+              <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
                 <Avatar.Root
                   colorPalette="gray"
                   width="100px"
@@ -730,13 +724,7 @@ function ConnectionStatusIndicator() {
       </Text>
       {status.channels.map((channel, index) => (
         <HStack key={index} fontSize="xs" gap={2}>
-          <Box
-            width={2}
-            height={2}
-            borderRadius="full"
-            bg={channel.state === "joined" ? "green.400" : "red.400"}
-            data-visual-test-no-radius
-          />
+          <Box width={2} height={2} borderRadius="full" bg={channel.state === "joined" ? "green.400" : "red.400"} />
           <Text>
             {getChannelTypeName(channel.type)}
             {getChannelDetails(channel)}
@@ -758,7 +746,6 @@ function ConnectionStatusIndicator() {
         role="note"
         cursor="help"
         flexShrink={0}
-        data-visual-test-no-radius
       />
     </Tooltip>
   );

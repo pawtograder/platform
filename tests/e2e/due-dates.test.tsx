@@ -1,6 +1,6 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { expect, test } from "@playwright/test";
+import { test, expect } from "../global-setup";
 import { addDays, addHours, previousMonday } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import {
