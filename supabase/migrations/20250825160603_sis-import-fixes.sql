@@ -15,6 +15,9 @@ CREATE OR REPLACE FUNCTION "public"."admin_get_sis_sync_status"() RETURNS TABLE(
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 BEGIN
+    -- Set safe search_path to prevent schema hijacking
+    SET search_path = public, pg_temp;
+    
     -- Check admin authorization
     IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -79,6 +82,11 @@ USING (
     "public"."authorizeforclassinstructor"("course_id")
 );
 
+REVOKE ALL ON FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint, "p_lab_section_id" bigint, "p_sync_status" "text", "p_sync_message" "text") FROM "anon";
+REVOKE ALL ON FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint, "p_lab_section_id" bigint, "p_sync_status" "text", "p_sync_message" "text") FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."trigger_sis_sync"("p_class_id" bigint) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."trigger_sis_sync"("p_class_id" bigint) FROM "authenticated";
+
 -- Fix update_sis_sync_status function bug for lab sections
 -- The original function had flawed logic that prevented proper updates for lab sections
 CREATE OR REPLACE FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint DEFAULT NULL::bigint, "p_lab_section_id" bigint DEFAULT NULL::bigint, "p_sync_status" "text" DEFAULT NULL::"text", "p_sync_message" "text" DEFAULT NULL::"text") RETURNS bigint
@@ -87,6 +95,9 @@ CREATE OR REPLACE FUNCTION "public"."update_sis_sync_status"("p_course_id" bigin
 DECLARE
     v_status_id bigint;
 BEGIN
+    -- Set safe search_path to prevent schema hijacking
+    SET search_path = public, pg_temp;
+    
     -- Validate that exactly one section ID is provided
     IF (p_course_section_id IS NULL AND p_lab_section_id IS NULL) OR 
        (p_course_section_id IS NOT NULL AND p_lab_section_id IS NOT NULL) THEN
@@ -176,6 +187,9 @@ DECLARE
     v_noun text;
     v_number integer;
 BEGIN
+    -- Set safe search_path to prevent schema hijacking
+    PERFORM set_config('search_path','pg_catalog, public', true);
+    
     -- Check if user exists
     SELECT name, email INTO v_user_name, v_user_email
     FROM public.users 
