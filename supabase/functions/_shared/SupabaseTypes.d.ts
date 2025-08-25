@@ -8640,6 +8640,16 @@ export type Database = {
           period_end: string;
         }[];
       };
+      gift_tokens_to_student: {
+        Args: {
+          p_student_id: string;
+          p_class_id: number;
+          p_assignment_id: number;
+          p_tokens_to_gift: number;
+          p_note?: string;
+        };
+        Returns: undefined;
+      };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
         Returns: undefined;
