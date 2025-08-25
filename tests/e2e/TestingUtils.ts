@@ -519,10 +519,6 @@ export async function createUsersInClass(
       publicProfileData = newPublicProfileData;
       privateProfileData = newPrivateProfileData;
 
-      console.log(
-        `Putting user ${userId}} into class ${class_id} with role ${role} and section ${section_id} and lab section ${lab_section_id}`
-      );
-
       await supabase.from("user_roles").insert({
         user_id: userId,
         class_id: class_id,
