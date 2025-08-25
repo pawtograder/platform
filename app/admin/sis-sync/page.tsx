@@ -34,7 +34,7 @@ export default function SISSyncPage() {
       const { data, error } = await supabase.rpc("admin_get_sis_sync_status");
 
       if (error) throw error;
-      setClasses((data as SISClass[]) || []);
+      setClasses((data as unknown as SISClass[]) || []);
     } catch (error) {
       toaster.create({
         title: "Error loading SIS status",
