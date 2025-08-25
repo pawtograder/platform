@@ -68,7 +68,15 @@ export default function FlashcardDeckLayout({ children }: { children: React.Reac
           ))}
         </VStack>
       </Box>
-      <Box borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4} flexGrow={1} minWidth="0">
+      <Box
+        borderColor="border.muted"
+        borderWidth="2px"
+        borderRadius="md"
+        p={4}
+        flexGrow={1}
+        minWidth="0"
+        data-visual-test-no-radius
+      >
         <HStack justifyContent="flex-start" gap={0}>
           <Link href={`/course/${course_id}/manage/course/flashcard-decks`}>
             <IconButton variant="ghost" size="sm" aria-label="Go back to flashcard decks">

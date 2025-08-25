@@ -113,7 +113,14 @@ export function OverrideScoreForm({
           </HStack>
         )}
         {isAutoCalculated && (
-          <Box w="100%" border="1px solid" borderColor="border.warning" p={1} borderRadius="md">
+          <Box
+            w="100%"
+            border="1px solid"
+            borderColor="border.warning"
+            p={1}
+            borderRadius="md"
+            data-visual-test-no-radius
+          >
             <HStack>
               <Separator flex="1" />
               <Heading size="sm" color="fg.warning">
@@ -227,8 +234,8 @@ export const GradeCellOverlay = memo(function GradeCellOverlay({ studentId }: { 
 });
 export function GradebookColumnExpression() {
   return (
-    <VStack gap={1} w="100%" p={1} borderRadius="md" mb={2} align="flex-start">
-      <HStack gap={2} w="100%" p={0} borderRadius="md">
+    <VStack gap={1} w="100%" p={1} borderRadius="md" mb={2} align="flex-start" data-visual-test-no-radius>
+      <HStack gap={2} w="100%" p={0} borderRadius="md" data-visual-test-no-radius>
         <Icon as={FaRobot} color="fg.info" />
         <Heading size="sm">This column is automatically calculated</Heading>
       </HStack>

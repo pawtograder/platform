@@ -37,7 +37,7 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
           <Heading size="xl" textAlign="center">
             Flashcard Decks
           </Heading>
-          <Box p={8} borderRadius="xl" border="1px solid">
+          <Box p={8} borderRadius="xl" border="1px solid" data-visual-test-no-radius>
             <Text textAlign="center" fontSize="lg">
               Error loading flashcard decks. Please try again later.
             </Text>
@@ -61,8 +61,17 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
         </Box>
 
         {!flashcardDecks || flashcardDecks.length === 0 ? (
-          <VStack align="center" justify="center" minH="400px" gap={6} borderRadius="2xl" p={12} border="2px dashed">
-            <Box p={6} borderRadius="full" mb={2}>
+          <VStack
+            align="center"
+            justify="center"
+            minH="400px"
+            gap={6}
+            borderRadius="2xl"
+            p={12}
+            border="2px dashed"
+            data-visual-test-no-radius
+          >
+            <Box p={6} borderRadius="full" mb={2} data-visual-test-no-radius>
               <Text fontSize="4xl">📚</Text>
             </Box>
             <VStack gap={3}>
@@ -79,7 +88,7 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
           <>
             {/* Deck count badge */}
             <Box display="flex" justifyContent="center" mb={2}>
-              <Badge variant="subtle" fontSize="sm" px={3} py={1} borderRadius="full">
+              <Badge variant="subtle" fontSize="sm" px={3} py={1} borderRadius="full" data-visual-test-no-radius>
                 {flashcardDecks.length} deck{flashcardDecks.length !== 1 ? "s" : ""} available
               </Badge>
             </Box>

@@ -106,7 +106,7 @@ export default function EditKarmaEntryModal({ isOpen, onClose, onSuccess, karmaE
             <form onSubmit={handleSubmit(onSubmit)}>
               <Stack spaceY={4}>
                 {/* Student info (read-only) */}
-                <Box p={3} borderRadius="md">
+                <Box p={3} borderRadius="md" data-visual-test-no-radius>
                   <Text fontSize="sm" fontWeight="semibold">
                     Student
                   </Text>
@@ -147,7 +147,7 @@ export default function EditKarmaEntryModal({ isOpen, onClose, onSuccess, karmaE
                   </Field.HelperText>
                 </Field.Root>
 
-                <Box p={3} borderRadius="md" borderWidth="1px">
+                <Box p={3} borderRadius="md" borderWidth="1px" data-visual-test-no-radius>
                   <Text fontSize="sm">
                     <strong>Karma Guidelines:</strong>
                     <br />

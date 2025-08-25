@@ -352,7 +352,7 @@ function EscalateRequestDialog({
         <DialogBody>
           <VStack gap={4} align="start">
             <Text>You can appeal this regrade request to an instructor for final review.</Text>
-            <Box bg="bg.info" p={3} borderRadius="md" w="100%">
+            <Box bg="bg.info" p={3} borderRadius="md" w="100%" data-visual-test-no-radius>
               <Text fontWeight="semibold" mb={2}>
                 ⚠️ Important Guidelines
               </Text>
@@ -662,6 +662,7 @@ export default function RegradeRequestWrapper({
             opacity: 0.3,
             pointerEvents: "none"
           }}
+          data-visual-test-no-radius
         >
           {/* Status Badge */}
           <Box w="100%" bg={config.bgColor} p={1} borderBottom="1px solid" borderColor={config.borderColor}>
@@ -744,7 +745,7 @@ export default function RegradeRequestWrapper({
             <Box mx={2} mb={2} position="relative">
               <VStack p={2} gap={0} align="start">
                 {isSubmittingComment && (
-                  <Box bg="bg.info" p={2} borderRadius="md" w="100%">
+                  <Box bg="bg.info" p={2} borderRadius="md" w="100%" data-visual-test-no-radius>
                     <Text fontSize="sm" color="fg.muted">
                       ⏳ Submitting your comment...
                     </Text>

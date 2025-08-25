@@ -231,7 +231,15 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
             if (!referencedCheck) return null;
 
             return (
-              <HStack key={reference.id} fontSize="xs" gap={1} p={1} bg="bg.muted" borderRadius="sm">
+              <HStack
+                key={reference.id}
+                fontSize="xs"
+                gap={1}
+                p={1}
+                bg="bg.muted"
+                borderRadius="sm"
+                data-visual-test-no-radius
+              >
                 <Icon as={FaLink} color="blue.500" />
                 <Text flex={1} truncate>
                   {referencedCheck.name} ({referencedCheck.points} pts)
@@ -257,7 +265,15 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
           Add Reference
         </Button>
       ) : (
-        <VStack gap={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default" bg="bg.canvas">
+        <VStack
+          gap={2}
+          p={2}
+          borderWidth="1px"
+          borderRadius="md"
+          borderColor="border.default"
+          bg="bg.canvas"
+          data-visual-test-no-radius
+        >
           <ChakraReactSelect<CheckOptionType, false>
             size="sm"
             options={checkOptions}
@@ -481,6 +497,7 @@ export function RubricCheckComment({
           p={0}
           w="100%"
           fontSize="sm"
+          data-visual-test-no-radius
         >
           <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
             <HStack justify="space-between">
@@ -722,6 +739,7 @@ export function RubricCheckAnnotation({
       borderRadius="md"
       p={1}
       w="100%"
+      data-visual-test-no-radius
     >
       <HStack justify="space-between">
         <HStack>
@@ -889,6 +907,7 @@ export function RubricCheckGlobal({
                 borderRadius="md"
                 p={1}
                 wordBreak="break-word"
+                data-visual-test-no-radius
               >
                 <HStack justify="space-between" w="100%">
                   <Field.Label>
@@ -962,6 +981,7 @@ export function RubricCheckGlobal({
                 borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
                 borderWidth={gradingIsRequired ? "1px" : "0px"}
                 borderRadius="md"
+                data-visual-test-no-radius
               >
                 <HStack justify="space-between" w="100%">
                   <Checkbox
@@ -1020,6 +1040,7 @@ export function RubricCheckGlobal({
                 borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
                 borderWidth={gradingIsRequired ? "1px" : "0px"}
                 borderRadius="md"
+                data-visual-test-no-radius
               >
                 <HStack justify="space-between" w="100%">
                   <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
@@ -1141,7 +1162,15 @@ function SubmissionCommentForm({
       ? check.data.options[selectedOptionIndex]
       : undefined;
   return (
-    <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%" fontSize="sm">
+    <Box
+      border="1px solid"
+      borderColor="border.inverted"
+      borderRadius="md"
+      p={0}
+      w="100%"
+      fontSize="sm"
+      data-visual-test-no-radius
+    >
       <Box bg="bg.inverted" pl={1} borderTopRadius="md">
         <Text color="fg.inverted">
           Check not yet applied.{" "}
@@ -1289,6 +1318,7 @@ export function RubricCriteria({
       borderRadius="md"
       p={1}
       w="100%"
+      data-visual-test-no-radius
     >
       <Fieldset.Root>
         <Heading size="sm">

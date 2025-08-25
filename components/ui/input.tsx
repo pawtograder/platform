@@ -37,6 +37,7 @@ const Input = React.forwardRef<HTMLInputElement, ChakraInputProps>(({ ...props }
           color: "gray.400"
         }
       }}
+      data-visual-test-no-radius
       {...props}
     />
   );

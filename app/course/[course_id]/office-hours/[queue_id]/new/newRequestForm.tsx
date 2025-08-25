@@ -808,6 +808,7 @@ export default function HelpRequestForm() {
                               border="1px solid"
                               borderColor="gray.200"
                               borderRadius="md"
+                              data-visual-test-no-radius
                             >
                               <Stack direction="row" gap={3} align="center">
                                 <Text flex={1} fontWeight="medium">

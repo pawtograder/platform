@@ -153,7 +153,16 @@ export default function AssignmentPage() {
       ) : (
         <></>
       )}
-      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
+      <Box
+        m={4}
+        borderWidth={1}
+        borderColor="bg.emphasized"
+        borderRadius={4}
+        p={4}
+        bg="bg.subtle"
+        maxW="4xl"
+        data-visual-test-no-radius
+      >
         <ManageGroupWidget assignment={assignment} repositories={repositories ?? []} />
       </Box>
       <SelfReviewNotice

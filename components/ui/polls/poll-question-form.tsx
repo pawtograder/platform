@@ -23,6 +23,7 @@ export function PollQuestionForm({ question }: { question: PollQuestionWithAnswe
               borderColor="border.emphasized"
               p={2}
               borderRadius="md"
+              data-visual-test-no-radius
             >
               <Text>{answer.ordinal}</Text>
               <Text>{answer.title}</Text>

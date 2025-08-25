@@ -252,7 +252,14 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                 </Field.Root>
 
                 {actionType === "permanent_ban" && (
-                  <Box p={3} bg="red.50" borderRadius="md" borderWidth="1px" borderColor="red.200">
+                  <Box
+                    p={3}
+                    bg="red.50"
+                    borderRadius="md"
+                    borderWidth="1px"
+                    borderColor="red.200"
+                    data-visual-test-no-radius
+                  >
                     <Text color="red.700" fontSize="sm">
                       <strong>Warning:</strong> Permanent bans cannot be automatically reversed and will prevent the
                       student from participating in office hours indefinitely.

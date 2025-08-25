@@ -64,7 +64,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
     <Box position="relative" width={props.width || "100%"}>
       <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
-          {isUnread && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
+          {isUnread && <Box w="8px" h="8px" bg="blue.500" rounded="full" data-visual-test-no-radius></Box>}
         </Box>
         <HStack
           align="flex-start"

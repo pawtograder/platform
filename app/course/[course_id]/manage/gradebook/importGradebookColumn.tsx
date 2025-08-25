@@ -415,6 +415,7 @@ export default function ImportGradebookColumns() {
                                       p={1}
                                       mt={1}
                                       bg="bg.warning"
+                                      data-visual-test-no-radius
                                     >
                                       <Icon as={MdWarning} />
                                       Update will override calculated score. Only do this if you really are sure you

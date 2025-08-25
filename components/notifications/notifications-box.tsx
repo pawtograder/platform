@@ -153,7 +153,7 @@ export default function NotificationsBox() {
             </PopoverTrigger>
           </Box>
         </Tooltip>
-        <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px" portalled={false}>
+        <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px" portalled={false} data-visual-test-no-radius>
           <PopoverBody p="0">
             <Box p="4" borderBottom="1px" borderColor="border.muted">
               <HStack justify="space-between" align="center">
@@ -239,7 +239,13 @@ export default function NotificationsBox() {
             <PopoverTrigger asChild>
               <Box />
             </PopoverTrigger>
-            <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px" portalled={false}>
+            <PopoverContent
+              shadow="lg"
+              borderRadius="lg"
+              borderWidth="1px"
+              portalled={false}
+              data-visual-test-no-radius
+            >
               <PopoverBody p="0">
                 <VStack align="stretch" gap="0">
                   {bannerNotifications.map((notification) => {

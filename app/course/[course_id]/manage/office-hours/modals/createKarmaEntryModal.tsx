@@ -112,7 +112,15 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
           <Dialog.Body>
             {/* Connection Status Warning */}
             {!isConnected && (
-              <Box mb={4} p={3} borderRadius="md" bg="yellow.50" borderWidth="1px" borderColor="yellow.200">
+              <Box
+                mb={4}
+                p={3}
+                borderRadius="md"
+                bg="yellow.50"
+                borderWidth="1px"
+                borderColor="yellow.200"
+                data-visual-test-no-radius
+              >
                 <Text fontSize="sm" color="yellow.700">
                   <strong>Warning:</strong> Real-time updates disconnected. Student list may not be current. Status:{" "}
                   {connectionStatus?.overall}
@@ -175,7 +183,7 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
                   </Field.HelperText>
                 </Field.Root>
 
-                <Box p={3} borderRadius="md" borderWidth="1px">
+                <Box p={3} borderRadius="md" borderWidth="1px" data-visual-test-no-radius>
                   <Text fontSize="sm">
                     <strong>Karma Guidelines:</strong>
                     <br />

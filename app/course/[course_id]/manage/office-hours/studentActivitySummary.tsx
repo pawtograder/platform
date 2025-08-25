@@ -165,7 +165,7 @@ export default function StudentActivitySummary({
 
   if (compact) {
     return (
-      <Box p={3} borderRadius="md" borderWidth="1px">
+      <Box p={3} borderRadius="md" borderWidth="1px" data-visual-test-no-radius>
         <VStack align="start" gap={2}>
           {karmaEntry && (
             <HStack>
@@ -193,7 +193,7 @@ export default function StudentActivitySummary({
   }
 
   return (
-    <Box p={4} borderRadius="md" borderWidth="1px">
+    <Box p={4} borderRadius="md" borderWidth="1px" data-visual-test-no-radius>
       <VStack align="start" gap={4}>
         <HStack justify="space-between" width="100%">
           <Text fontWeight="semibold">

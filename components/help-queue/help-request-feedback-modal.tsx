@@ -183,7 +183,7 @@ export default function HelpRequestFeedbackModal({
                   </Field.HelperText>
                 </Field.Root>
 
-                <Box p={4} borderRadius="md" borderWidth="1px">
+                <Box p={4} borderRadius="md" borderWidth="1px" data-visual-test-no-radius>
                   <Text fontSize="sm" lineHeight="1.5">
                     <strong>Your feedback is important!</strong> It helps instructors and TAs understand how to improve
                     the help experience and ensures quality assistance for all students.

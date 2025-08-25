@@ -272,7 +272,7 @@ export default function HelpRequestFeedbackComponent() {
                       <Text fontWeight="medium" mb={2}>
                         Comment:
                       </Text>
-                      <Box p={3} borderRadius="md">
+                      <Box p={3} borderRadius="md" data-visual-test-no-radius>
                         <Text>{feedback.comment}</Text>
                       </Box>
                     </Box>

@@ -792,6 +792,7 @@ function GradebookColumnFilter({
         minW="300px"
         maxW="400px"
         zIndex={1000}
+        data-visual-test-no-radius
       >
         <PopoverBody p={3}>
           {/* Header with close button */}
@@ -901,6 +902,7 @@ function SectionFilter({
         minW="300px"
         maxW="400px"
         zIndex={1000}
+        data-visual-test-no-radius
       >
         <PopoverBody p={3}>
           <HStack justifyContent="space-between" mb={3}>

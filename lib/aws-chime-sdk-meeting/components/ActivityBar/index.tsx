@@ -9,6 +9,10 @@ const Track = styled.div`
   height: 0.625rem;
   background-color: #ecf0f1;
   border-radius: 0.25rem;
+
+  &[data-visual-test-no-radius] {
+    border-radius: 0 !important;
+  }
 `;
 
 const Progress = styled.div`
@@ -19,6 +23,10 @@ const Progress = styled.div`
   transformorigin: left;
   transition: transform 33ms ease-in-out;
   will-change: transform;
+
+  &[data-visual-test-no-radius] {
+    border-radius: 0 !important;
+  }
 `;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

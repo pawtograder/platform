@@ -23,22 +23,14 @@ type FlashcardDeckCardProps = {
  */
 export const FlashcardDeckCardSkeleton = () => {
   return (
-    <Card.Root
-      variant="outline"
-      cursor="pointer"
-      transition="all 0.3s ease-in-out"
-      borderRadius="xl"
-      overflow="hidden"
-      height="336px"
-      width="240px"
-    >
-      <Card.Body p={8}>
-        <Box mb={6} display="flex" justifyContent="center">
-          <Skeleton height="80px" width="80px" borderRadius="full" />
+    <Card.Root variant="outline" height="336px" width="240px" borderWidth="1px" position="relative">
+      <Card.Header>
+        <Skeleton height="80px" width="80px" borderRadius="full" data-visual-test-no-radius />
+        <Box mb={6} display="flex" justifyContent="center" alignItems="center" position="relative">
+          <Skeleton height="24px" width="100%" mb={2} borderRadius="md" data-visual-test-no-radius />
+          <Skeleton height="16px" width="80%" borderRadius="md" data-visual-test-no-radius />
         </Box>
-        <Skeleton height="24px" width="100%" mb={2} borderRadius="md" />
-        <Skeleton height="16px" width="80%" borderRadius="md" />
-      </Card.Body>
+      </Card.Header>
     </Card.Root>
   );
 };
@@ -71,6 +63,7 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
         borderWidth="1px"
         position="relative"
         role="group"
+        data-visual-test-no-radius
       >
         <Card.Header>
           <Card.Title fontWeight="semibold" fontSize="lg" textAlign="center" lineHeight="1.4">
@@ -92,6 +85,7 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
               _groupHover={{
                 transform: "scale(1.1)"
               }}
+              data-visual-test-no-radius
             />
             <Icon
               aria-label={`Open ${deck.name} flashcard deck`}

@@ -140,6 +140,7 @@ export default function HelpQueuesDashboard() {
             justifyContent="space-between"
             role="region"
             aria-label={`Help queue: ${queue.name}`}
+            data-visual-test-no-radius
           >
             <Box>
               <Text fontWeight="medium">{queue.name}</Text>

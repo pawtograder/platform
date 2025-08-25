@@ -64,6 +64,7 @@ export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) 
               borderWidth="1px"
               position="relative"
               role="group"
+              data-visual-test-no-radius
             >
               {/* Success gradient overlay */}
               <Box
@@ -90,6 +91,7 @@ export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) 
                     _groupHover={{
                       transform: "scale(1.1)"
                     }}
+                    data-visual-test-no-radius
                   />
                   <Text fontSize="lg" transition="all 0.3s ease-in-out" position="relative" zIndex={1}>
                     ✓
@@ -128,6 +130,7 @@ export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) 
                     aria-label={`Return "${card.title}" to practice pile`}
                     borderRadius="md"
                     transition="all 0.3s ease-in-out"
+                    data-visual-test-no-radius
                   >
                     <FaUndo />
                   </IconButton>

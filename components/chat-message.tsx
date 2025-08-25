@@ -573,6 +573,7 @@ export const ChatMessageItem = ({
                 opacity: 1
               }
             }}
+            data-visual-test-no-radius
           >
             <CollapsibleMessageContent content={getMessageContent(message)} isOwnMessage={isOwnMessage} />
 
@@ -600,6 +601,7 @@ export const ChatMessageItem = ({
                 aspectRatio="1"
                 minW="auto"
                 p={1}
+                data-visual-test-no-radius
               >
                 <Icon as={Reply} boxSize={3} />
               </Button>

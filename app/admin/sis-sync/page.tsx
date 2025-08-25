@@ -363,7 +363,7 @@ export default function SISSyncPage() {
               <Text fontSize="sm">• Updates section metadata if changed in SIS</Text>
               <Text fontSize="sm">• Preserves existing enrollments and user data</Text>
             </VStack>
-            <Box p={3} bg="blue.subtle" rounded="md" w="full">
+            <Box p={3} bg="blue.subtle" rounded="md" w="full" data-visual-test-no-radius>
               <HStack gap={2}>
                 <AlertCircle size={16} />
                 <Text fontSize="sm" fontWeight="medium">
