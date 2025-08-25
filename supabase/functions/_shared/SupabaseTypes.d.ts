@@ -8542,6 +8542,10 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: string;
       };
+      get_all_class_metrics: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       get_gradebook_records_for_all_students: {
         Args: { class_id: number };
         Returns: Json;

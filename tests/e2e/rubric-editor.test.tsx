@@ -30,12 +30,12 @@ test.describe("Rubric editor", () => {
     await expect(summary).toBeVisible();
     await expect(summary.getByText(/The assignment's max points is set to 100/)).toBeVisible();
     await expect(summary.getByText(/autograder is currently configured to award up to 100 points/)).toBeVisible();
-    await expect(summary.getByText(/grading rubric is configured to award 20 points/)).toBeVisible();
+    await expect(summary.getByText(/grading rubric is configured to award 30 points/)).toBeVisible();
     // 100 !== 100 + 20, so expect the warning state text
     await expect(summary.getByText(/These do not add up/)).toBeVisible();
 
     // Also make sure that the checks are rendered in the wysiwg
-    const rubricSidebar = page.getByRole("region", { name: "Rubric Part: Grading Review" });
+    const rubricSidebar = page.getByRole("region", { name: "Rubric Part: Grading Review Part 1" });
     await expect(rubricSidebar).toContainText("Grading Review Criteria 0/20");
     await expect(rubricSidebar).toContainText("Criteria for grading review evaluation");
     await expect(rubricSidebar).toContainText("Grading Review Check 1");

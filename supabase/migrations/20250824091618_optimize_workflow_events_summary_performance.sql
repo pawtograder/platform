@@ -48,7 +48,6 @@ ANALYZE "public"."workflow_events";
 
 -- First, drop the existing view/materialized view to replace it with a materialized view
 -- Handle both cases to make migration idempotent across environments
-DROP MATERIALIZED VIEW IF EXISTS "public"."workflow_events_summary";
 DROP VIEW IF EXISTS "public"."workflow_events_summary";
 
 -- Create supporting partial index for efficient semijoin lookup
@@ -322,6 +321,108 @@ $$;
 
 -- Grant execute permission to authenticated users (authorization handled inside function)
 GRANT EXECUTE ON FUNCTION "public"."get_workflow_statistics"(bigint, integer) TO "authenticated";
+
+-- Create security definer function to get all metrics for all classes (service_role only)
+-- This function returns comprehensive metrics in JSON format for monitoring/metrics endpoints
+CREATE OR REPLACE FUNCTION "public"."get_all_class_metrics"()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  result jsonb := '[]'::jsonb;
+  class_record record;
+  class_metrics jsonb;
+BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = public, pg_temp;
+  
+  -- Only allow service_role to call this function
+  IF auth.role() != 'service_role' THEN
+    RAISE EXCEPTION 'Access denied: function only available to service_role';
+  END IF;
+
+  -- Loop through all active (non-archived) classes
+  FOR class_record IN 
+    SELECT id, name, slug FROM "public"."classes" WHERE archived = false
+  LOOP
+    -- Build metrics JSON for this class
+    SELECT jsonb_build_object(
+      'class_id', class_record.id,
+      'class_name', class_record.name,
+      'class_slug', class_record.slug,
+      
+      -- Workflow metrics from materialized view
+      'workflow_runs_total', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id
+      ),
+      'workflow_runs_completed', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id AND completed_at IS NOT NULL
+      ),
+      'workflow_runs_failed', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND requested_at IS NOT NULL 
+          AND completed_at IS NULL 
+          AND in_progress_at IS NULL
+      ),
+      'workflow_runs_in_progress', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND in_progress_at IS NOT NULL 
+          AND completed_at IS NULL
+      ),
+      
+      -- Workflow error metrics
+      'workflow_errors_total', (
+        SELECT COUNT(*) FROM "public"."workflow_run_error" 
+        WHERE class_id = class_record.id
+      ),
+      
+      -- Submission metrics
+      'submissions_total', (
+        SELECT COUNT(*) FROM "public"."submissions" 
+        WHERE class_id = class_record.id AND is_active = true
+      ),
+      'submissions_recent_24h', (
+        SELECT COUNT(*) FROM "public"."submissions" 
+        WHERE class_id = class_record.id 
+          AND is_active = true 
+          AND created_at >= (NOW() - INTERVAL '24 hours')
+      ),
+      
+      -- Discussion thread metrics
+      'discussion_threads_total', (
+        SELECT COUNT(*) FROM "public"."discussion_threads" 
+        WHERE class_id = class_record.id
+      ),
+      
+      -- Help request metrics
+      'help_requests_total', (
+        SELECT COUNT(*) FROM "public"."help_requests" 
+        WHERE class_id = class_record.id
+      ),
+      'help_requests_open', (
+        SELECT COUNT(*) FROM "public"."help_requests" 
+        WHERE class_id = class_record.id AND status = 'open'
+      )
+      
+    ) INTO class_metrics;
+    
+    -- Add this class's metrics to the result array
+    result := result || class_metrics;
+  END LOOP;
+
+  RETURN result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION "public"."get_all_class_metrics"() FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."get_all_class_metrics"() FROM "anon";
+-- Grant execute permission ONLY to service_role
+GRANT EXECUTE ON FUNCTION "public"."get_all_class_metrics"() TO "service_role";
 
 -- Create a super-optimized view specifically for timing queries (queue_time_seconds, run_time_seconds)
 -- This view is designed for queries that only need timing data and can be much faster

@@ -105,7 +105,7 @@ const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glo
 const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";
 const GRADING_REVIEW_COMMENT_2 =
   "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
-const GRADING_REVIEW_COMMENT_3 = "This is a significant change";
+const GRADING_REVIEW_COMMENT_3 = "I have stared at this for a long time, and I am still not sure what to write here.";
 
 const REGRADE_COMMENT = "I think that I deserve better than a 10/10!";
 const REGRADE_RESOLUTION = "I do not think it is possible to get more than 10/10!";
@@ -213,9 +213,21 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("textbox", { name: "Optional: comment on check Grading Review Check 2" })
       .fill(GRADING_REVIEW_COMMENT_2);
     await page.getByRole("button", { name: "Add Check" }).click();
-    // await clickAddCheckWithRetry(page);
 
     //Wait for the textbox to disappear
+    await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
+
+    await clickWithTextboxRetry(
+      page,
+      page.getByLabel("Grading Review Check 3 (+10)"),
+      page.getByRole("textbox", { name: "Optional: comment on check Grading Review Check 3" })
+    );
+    await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
+    await page
+      .getByRole("textbox", { name: "Optional: comment on check Grading Review Check 3" })
+      .fill(GRADING_REVIEW_COMMENT_3);
+    await page.getByRole("button", { name: "Add Check" }).click();
+
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).click();
@@ -298,7 +310,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await argosScreenshot(page, "Instructors can resolve the regrade request");
     await page.getByRole("spinbutton").fill("40");
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    await expect(page.getByText("This is a significant change")).toBeVisible();
+    await expect(page.getByText("This is a significant change (>50%)")).toBeVisible();
     await page.getByRole("button", { name: "Override Score and Resolve Request", exact: true }).click();
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {

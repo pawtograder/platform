@@ -1,17 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
-
-interface WorkflowRun {
-  requested_at: string | null;
-  in_progress_at: string | null;
-  completed_at: string | null;
-}
-
-interface Submission {
-  created_at: string;
-}
 
 interface ClassMetrics {
   class_id: number;
@@ -26,7 +16,7 @@ interface ClassMetrics {
   submissions_recent_24h: number;
 }
 
-async function generatePrometheusMetrics(_req: Request): Promise<Response> {
+async function generatePrometheusMetrics(): Promise<Response> {
   const scope = Sentry.getCurrentScope();
   scope?.setTag("function", "metrics");
 
@@ -37,85 +27,33 @@ async function generatePrometheusMetrics(_req: Request): Promise<Response> {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
     );
 
-    // Get all active classes
-    const { data: classes, error: classesError } = await supabase
-      .from("classes")
-      .select("id, name, slug")
-      .eq("is_active", true);
+    // Get all class metrics using the secure function (single call)
+    const { data: metricsData, error: metricsError } = await supabase.rpc("get_all_class_metrics");
 
-    if (classesError) {
-      console.error("Error fetching classes:", classesError);
-      throw new Error("Failed to fetch classes");
+    if (metricsError) {
+      console.error("Error fetching class metrics:", metricsError);
+      throw new Error("Failed to fetch class metrics");
     }
 
-    if (!classes || classes.length === 0) {
+    if (!metricsData || metricsData.length === 0) {
       return new Response("# No active classes found\n", {
         headers: { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" }
       });
     }
 
-    const metrics: ClassMetrics[] = [];
-
-    // Process each class
-    for (const classInfo of classes) {
-      const classId = classInfo.id;
-
-      // Get workflow statistics using the secure function (24 hour window)
-      const { data: workflowStats, error: workflowError } = await supabase.rpc("get_workflow_statistics", {
-        p_class_id: classId,
-        p_duration_hours: 24
-      });
-
-      if (workflowError) {
-        console.error(`Error fetching workflow statistics for class ${classId}:`, workflowError);
-        continue;
-      }
-
-      // Extract metrics from function result
-      const stats = workflowStats?.[0];
-      if (!stats) {
-        console.warn(`No workflow statistics found for class ${classId}`);
-        continue;
-      }
-
-      const workflowRunsTotal = Number(stats.total_runs) || 0;
-      const workflowRunsCompleted = Number(stats.completed_runs) || 0;
-      const workflowRunsInProgress = Number(stats.in_progress_runs) || 0;
-      const workflowRunsFailed = Number(stats.failed_runs) || 0;
-      const workflowErrorsTotal = Number(stats.error_count) || 0;
-
-      // Get submission metrics
-      const { data: submissions, error: submissionsError } = await supabase
-        .from("submissions")
-        .select("created_at")
-        .eq("class_id", classId)
-        .eq("is_active", true);
-
-      if (submissionsError) {
-        console.error(`Error fetching submissions for class ${classId}:`, submissionsError);
-        continue;
-      }
-
-      const submissionsTotal = submissions?.length || 0;
-
-      // Calculate recent submissions (last 24 hours)
-      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const submissionsRecent24h =
-        submissions?.filter((sub: Submission) => new Date(sub.created_at) >= twentyFourHoursAgo).length || 0;
-
-      metrics.push({
-        class_id: classId,
-        class_name: classInfo.name,
-        class_slug: classInfo.slug,
-        workflow_runs_total: workflowRunsTotal,
-        workflow_runs_completed: workflowRunsCompleted,
-        workflow_runs_failed: workflowRunsFailed,
-        workflow_runs_in_progress: workflowRunsInProgress,
-        workflow_errors_total: workflowErrorsTotal,
-        submissions_total: submissionsTotal,
-        submissions_recent_24h: submissionsRecent24h
-      });
-    }
+    // Convert the JSON response to our metrics format
+    const metrics: ClassMetrics[] = metricsData.map((classData: ClassMetrics) => ({
+      class_id: classData.class_id,
+      class_name: classData.class_name,
+      class_slug: classData.class_slug,
+      workflow_runs_total: classData.workflow_runs_total || 0,
+      workflow_runs_completed: classData.workflow_runs_completed || 0,
+      workflow_runs_failed: classData.workflow_runs_failed || 0,
+      workflow_runs_in_progress: classData.workflow_runs_in_progress || 0,
+      workflow_errors_total: classData.workflow_errors_total || 0,
+      submissions_total: classData.submissions_total || 0,
+      submissions_recent_24h: classData.submissions_recent_24h || 0
+    }));
 
     // Generate Prometheus metrics format
     const prometheusOutput = generatePrometheusOutput(metrics);
@@ -232,11 +170,45 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Optional: Add basic authentication or API key validation here
-  // const authHeader = req.headers.get("Authorization");
-  // if (!authHeader || !isValidAuth(authHeader)) {
-  //   return new Response("Unauthorized", { status: 401 });
-  // }
+  // Bearer token authentication if METRICS_TOKEN is set
+  const metricsToken = Deno.env.get("METRICS_TOKEN");
+  if (metricsToken) {
+    const authHeader = req.headers.get("Authorization");
 
-  return await generatePrometheusMetrics(req);
+    if (!authHeader) {
+      return new Response("Unauthorized: Missing Authorization header", { status: 401 });
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return new Response("Unauthorized: Invalid Authorization header format", { status: 401 });
+    }
+
+    const providedToken = authHeader.slice(7); // Remove "Bearer " prefix
+
+    // Use constant-time comparison if available, otherwise direct string compare
+    let isValidToken = false;
+    try {
+      // Try to use crypto.subtle for constant-time comparison
+      const encoder = new TextEncoder();
+      const expectedBytes = encoder.encode(metricsToken);
+      const providedBytes = encoder.encode(providedToken);
+
+      if (expectedBytes.length !== providedBytes.length) {
+        isValidToken = false;
+      } else {
+        const expectedHash = await crypto.subtle.digest("SHA-256", expectedBytes);
+        const providedHash = await crypto.subtle.digest("SHA-256", providedBytes);
+        isValidToken = new Uint8Array(expectedHash).every((byte, i) => byte === new Uint8Array(providedHash)[i]);
+      }
+    } catch {
+      // Fallback to direct string comparison if crypto.subtle is not available
+      isValidToken = providedToken === metricsToken;
+    }
+
+    if (!isValidToken) {
+      return new Response("Unauthorized: Invalid token", { status: 401 });
+    }
+  }
+
+  return await generatePrometheusMetrics();
 });

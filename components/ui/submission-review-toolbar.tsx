@@ -422,6 +422,13 @@ export function CompleteReviewButton() {
                   colorPalette="green"
                   loading={isLoading}
                   onClick={async () => {
+                    if (!activeSubmissionReview) {
+                      toaster.error({
+                        title: "Error marking review as complete",
+                        description: "No active submission review found."
+                      });
+                      return;
+                    }
                     try {
                       setIsLoading(true);
                       await submissionController.submission_reviews.update(activeSubmissionReview.id, {

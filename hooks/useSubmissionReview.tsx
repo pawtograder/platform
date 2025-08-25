@@ -356,8 +356,9 @@ export function useActiveSubmissionReview() {
 
   // If we have an activeReviewAssignmentId but no activeSubmissionReviewId,
   // we might still be loading the review assignment data
-  const isLoadingReviewAssignment =
-    ctx.activeReviewAssignmentId && !myAssignedReviews.find((ra) => ra.id === ctx.activeReviewAssignmentId);
+  const isLoadingReviewAssignment = !!(
+    ctx.activeReviewAssignmentId && !myAssignedReviews.find((ra) => ra.id === ctx.activeReviewAssignmentId)
+  );
 
   // If we don't have an activeSubmissionReviewId and we're potentially still loading,
   // return undefined instead of throwing an error
