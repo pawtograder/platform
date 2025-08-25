@@ -154,6 +154,7 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
   if (course) {
     await page.waitForLoadState("networkidle");
     await page.goto(`/course/${course.id}`);
+    await page.waitForLoadState("networkidle");
   }
 }
 
