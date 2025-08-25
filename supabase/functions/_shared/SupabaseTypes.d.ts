@@ -4952,6 +4952,58 @@ export type Database = {
           }
         ];
       };
+      student_deadline_extensions: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          hours: number;
+          id: number;
+          includes_lab: boolean;
+          student_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          hours: number;
+          id?: number;
+          includes_lab: boolean;
+          student_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          hours?: number;
+          id?: number;
+          includes_lab?: boolean;
+          student_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_deadline_extensions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_deadline_extensions_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_deadline_extensions_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       student_flashcard_deck_progress: {
         Row: {
           card_id: number;
@@ -8587,6 +8639,16 @@ export type Database = {
           period_start: string;
           period_end: string;
         }[];
+      };
+      gift_tokens_to_student: {
+        Args: {
+          p_student_id: string;
+          p_class_id: number;
+          p_assignment_id: number;
+          p_tokens_to_gift: number;
+          p_note?: string;
+        };
+        Returns: undefined;
       };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
