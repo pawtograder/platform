@@ -158,6 +158,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Confirm action" }).click();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
+    
+    //Scroll self-review rubric to top of its container
+    await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
     await page.getByText("public int doMath(int a, int").click({
       button: "right"
     });
@@ -217,7 +223,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
+    //Scroll self-review rubric to top of its container
+    await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     await argosScreenshot(page, "Instructor can view the student's self-review");
+
+    //Scroll grading rubric to top of its container
+    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
 
     await page.getByText("public static void main(").click({
       button: "right"
@@ -286,6 +301,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_1);
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
+    //Scroll grading rubric to top of its container
+    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     await argosScreenshot(page, "Student can view their grading results");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
@@ -393,7 +412,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await loginAsUser(page, grader!, course);
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);
-    await expect(page.getByText("Grading Review Part 2")).toBeVisible();
+    //Scroll grading rubric to top of its container
+    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();
     await expect(page.getByText("Grading Review Part 1")).not.toBeVisible();
     await expect(page.getByRole("button", { name: "View + Grade Full Rubric" })).toBeVisible();
     await argosScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade");

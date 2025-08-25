@@ -41,7 +41,8 @@ test.describe("Discussion Thread Page", () => {
   test.describe.configure({ mode: "serial" });
   test("A student can view the discussion feed", async ({ page }) => {
     await loginAsUser(page, student1!, course);
-    await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await expect(page.getByRole("heading", { name: "Discussion Feed" })).toBeVisible();
     await expect(page.getByRole("link").filter({ hasText: "New Thread" })).toBeVisible();
     await expect(page.getByPlaceholder("Search threads...")).toBeVisible();
@@ -54,7 +55,8 @@ test.describe("Discussion Thread Page", () => {
   });
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
-    await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
     await argosScreenshot(page, "Create New Thread Form");
@@ -113,7 +115,8 @@ test.describe("Discussion Thread Page", () => {
 
   test("Another student cannot view a private thread", async ({ page }) => {
     await loginAsUser(page, student2!, course);
-    await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
     await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1 correct?" })).not.toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
@@ -123,7 +126,8 @@ test.describe("Discussion Thread Page", () => {
 
   test("Another student creates a public thread", async ({ page }) => {
     await loginAsUser(page, student2!, course);
-    await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
     // Test the form with a public thread

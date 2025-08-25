@@ -4,7 +4,9 @@ import { test as base, Page } from "@playwright/test";
 const injectVisualTestSetup = async (page: Page) => {
   await page.evaluate(() => {
     // Set the data-visual-tests attribute on the html element
-    document.documentElement.setAttribute("data-visual-tests", "");
+    if(document.documentElement) {
+      document.documentElement.setAttribute("data-visual-tests", "");
+    }
     
     // Check if our style is already injected to avoid duplicates
     if (!document.getElementById('visual-test-style')) {
@@ -23,7 +25,9 @@ const injectVisualTestSetup = async (page: Page) => {
           border-bottom-right-radius: 0 !important;
         }
       `;
-      document.head.appendChild(style);
+      if(document.head) {
+        document.head.appendChild(style);
+      }
     }
   });
 };
@@ -34,7 +38,9 @@ export const test = base.extend({
     // Set up initial script for new page loads
     await page.addInitScript(() => {
       // Set the data-visual-tests attribute on the html element
-      document.documentElement.setAttribute("data-visual-tests", "");
+      if(document.documentElement) {
+        document.documentElement.setAttribute("data-visual-tests", "");
+      }
       
       // Check if our style is already injected to avoid duplicates
       if (!document.getElementById('visual-test-style')) {
@@ -53,7 +59,9 @@ export const test = base.extend({
             border-bottom-right-radius: 0 !important;
           }
         `;
-        document.head.appendChild(style);
+        if(document.head) {
+          document.head.appendChild(style);
+        }
       }
     });
 
