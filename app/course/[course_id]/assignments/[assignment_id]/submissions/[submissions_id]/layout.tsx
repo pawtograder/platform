@@ -524,7 +524,7 @@ function ReviewActions() {
   const { private_profile_id } = useClassProfiles();
   const submissionController = useSubmissionController();
   const [updatingReview, setUpdatingReview] = useState(false);
-  const isInstructor = useIsInstructor();
+  const isInstructor = useIsGraderOrInstructor();
   if (!review) {
     return <Skeleton height="20px" />;
   }

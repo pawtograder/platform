@@ -180,10 +180,8 @@ export function useDiscussionThreadReadStatus(threadId: number) {
   );
   const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
 
-  const createdThreadReadStatuses = useRef<Set<number>>(new Set<number>());
-
   const setUnread = useCallback(
-    (root_threadId: number, threadId: number, isUnread: boolean) => {
+    async (root_threadId: number, threadId: number, isUnread: boolean) => {
       if (!controller.discussionThreadReadStatus.ready || readStatus === undefined) {
         return;
       }
@@ -198,26 +196,28 @@ export function useDiscussionThreadReadStatus(threadId: number) {
           });
         }
       } else {
-        if (createdThreadReadStatuses.current.has(threadId)) {
-          return;
-        }
-        createdThreadReadStatuses.current.add(threadId);
-        controller.discussionThreadReadStatus
-          .create({
-            discussion_thread_id: threadId,
-            user_id: user?.id || "",
-            discussion_thread_root_id: root_threadId,
+        // There is a Postgres trigger that creates a read status for every user for every thread. So, if we don't have one, we just haven't fetched it yet!
+        const readStatus = await controller.discussionThreadReadStatus.getOneByFilters([
+          {
+            column: "discussion_thread_id",
+            operator: "eq",
+            value: threadId
+          },
+          {
+            column: "user_id",
+            operator: "eq",
+            value: user?.id || ""
+          }
+        ]);
+        console.log(readStatus);
+        if (readStatus) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
             read_at: isUnread ? null : new Date().toISOString()
-          })
-          .catch(() => {
-            toaster.error({
-              title: "Error creating thread read status",
-              description: "Please try again later"
-            });
           });
+        }
       }
     },
-    [user?.id, createdThreadReadStatuses, controller, readStatus]
+    [user?.id, controller, readStatus]
   );
   return { readStatus, setUnread };
 }

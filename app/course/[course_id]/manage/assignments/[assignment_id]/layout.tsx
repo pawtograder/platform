@@ -1,6 +1,6 @@
 "use client";
 import { AssignmentProvider, useAssignmentController } from "@/hooks/useAssignment";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
@@ -14,13 +14,24 @@ import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
-  { label: "Edit Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`, icon: FaEdit },
+  {
+    label: "Edit Assignment",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`,
+    icon: FaEdit,
+    instructorsOnly: true
+  },
   {
     label: "Configure Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/autograder`,
-    icon: FaCode
+    icon: FaCode,
+    instructorsOnly: true
   },
-  { label: "Configure Rubric", href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`, icon: FaPen },
+  {
+    label: "Configure Rubric",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`,
+    icon: FaPen,
+    instructorsOnly: true
+  },
   {
     label: "Manage Due Date Exceptions",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/due-date-exceptions`,
@@ -29,9 +40,15 @@ const LinkItems = (courseId: number, assignmentId: number) => [
   {
     label: "Grading Assignments",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
-    icon: FaSearch
+    icon: FaSearch,
+    instructorsOnly: "graderOrInstructor"
   },
-  { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
+  {
+    label: "Manage Groups",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`,
+    icon: FaUsers,
+    instructorsOnly: "graderOrInstructor"
+  },
   {
     label: "Manage Regrade Requests",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
@@ -41,7 +58,8 @@ const LinkItems = (courseId: number, assignmentId: number) => [
   {
     label: "Rerun Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
-    icon: FaPooStorm
+    icon: FaPooStorm,
+    instructorsOnly: true
   }
 ];
 
@@ -64,6 +82,7 @@ function AssignmentWindowTitle() {
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();
   const isInstructor = useIsInstructor();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const { data: assignment } = useOne<Assignment>({
     resource: "assignments",
     id: Number.parseInt(assignment_id as string)
@@ -78,30 +97,38 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
-            {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string)).map((item) => (
-              <Button
-                key={item.label}
-                variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
-                w="100%"
-                size="xs"
-                pt="0"
-                fontSize="sm"
-                justifyContent="flex-start"
-                asChild
-              >
-                <NextLink href={item.href} prefetch={true}>
-                  <HStack textAlign="left" w="100%" justify="flex-start">
-                    {React.createElement(item.icon)}
-                    {item.label}
-                  </HStack>
-                </NextLink>
-              </Button>
-            ))}
-            <CreateGitHubRepos
-              courseId={Number.parseInt(course_id as string)}
-              assignmentId={Number.parseInt(assignment_id as string)}
-              releaseDate={assignment?.data?.release_date}
-            />
+            {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string))
+              .filter((item) => {
+                if (!item.instructorsOnly) return true;
+                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+                return isInstructor;
+              })
+              .map((item) => (
+                <Button
+                  key={item.label}
+                  variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
+                  w="100%"
+                  size="xs"
+                  pt="0"
+                  fontSize="sm"
+                  justifyContent="flex-start"
+                  asChild
+                >
+                  <NextLink href={item.href} prefetch={true}>
+                    <HStack textAlign="left" w="100%" justify="flex-start">
+                      {React.createElement(item.icon)}
+                      {item.label}
+                    </HStack>
+                  </NextLink>
+                </Button>
+              ))}
+            {isInstructor && (
+              <CreateGitHubRepos
+                courseId={Number.parseInt(course_id as string)}
+                assignmentId={Number.parseInt(assignment_id as string)}
+                releaseDate={assignment?.data?.release_date}
+              />
+            )}
             {isInstructor && (
               <DeleteAssignmentButton
                 assignmentId={Number.parseInt(assignment_id as string)}
@@ -134,12 +161,23 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
               }
             }}
             value={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
+              .filter((item) => {
+                if (!item.instructorsOnly) return true;
+                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+                return isInstructor;
+              })
               .map((item) => ({ label: item.label, value: item.href }))
               .find((option) => option.value === selectedPage)}
-            options={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string)).map((item) => ({
-              label: item.label,
-              value: item.href
-            }))}
+            options={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
+              .filter((item) => {
+                if (!item.instructorsOnly) return true;
+                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+                return isInstructor;
+              })
+              .map((item) => ({
+                label: item.label,
+                value: item.href
+              }))}
           />
         </Box>
         <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2} data-visual-test-no-radius>

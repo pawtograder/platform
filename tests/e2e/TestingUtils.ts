@@ -1,4 +1,4 @@
-import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
@@ -588,6 +588,7 @@ export async function insertPreBakedSubmission({
 }): Promise<{
   submission_id: number;
   repository_name: string;
+  grading_review_id: number;
 }> {
   const test_run_prefix = repositorySuffix ?? getTestRunPrefix();
   const repository = `not-actually/repository-${test_run_prefix}-${repoCounter}`;
@@ -652,7 +653,7 @@ export async function insertPreBakedSubmission({
         repository_check_run_id: check_run_id,
         repository_id: repository_id
       })
-      .select("id")
+      .select("*")
   );
   if (submissionError) {
     // eslint-disable-next-line no-console
@@ -771,9 +772,20 @@ public class Entrypoint {
     console.error(graderResultTestError);
     throw new Error("Failed to create grader result test");
   }
+  //We add review id's in an AFTER trigger :/
+  const { data: submissionWithReviewId, error: submissionWithReviewIdError } = await supabase
+    .from("submissions")
+    .select("grading_review_id")
+    .eq("id", submission_id)
+    .single();
+  if (submissionWithReviewIdError) {
+    console.error(submissionWithReviewIdError);
+    throw new Error("Failed to get submission with review id");
+  }
   return {
     submission_id: submission_id,
-    repository_name: repository
+    repository_name: repository,
+    grading_review_id: submissionWithReviewId?.grading_review_id || 0
   };
 }
 
@@ -859,7 +871,7 @@ export async function insertAssignment({
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
-}): Promise<Assignment & { rubricChecks: RubricCheck[] }> {
+}): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const title = name ?? `Assignment #${assignmentIdx.assignment}Test`;
   assignmentIdx.assignment++;
   const { data: selfReviewSettingDataList, error: selfReviewSettingError } = await (
@@ -934,19 +946,41 @@ export async function insertAssignment({
         },
         {
           class_id: class_id,
-          name: "Grading Review",
-          description: "Grading review rubric",
+          name: "Grading Review Part 1",
+          description: "Grading review rubric, part 1",
           ordinal: 1,
+          rubric_id: assignmentData.grading_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Part 2",
+          description: "Grading review rubric, part 2",
+          ordinal: 2,
           rubric_id: assignmentData.grading_rubric_id || 0
         }
       ])
-      .select("id")
+      .select("*")
   );
   if (partsData.error) {
     throw new Error(`Failed to create rubric parts: ${partsData.error.message}`);
   }
-  const self_review_part_id = partsData.data?.[0]?.id;
-  const grading_review_part_id = partsData.data?.[1]?.id;
+  const self_review_part = partsData.data?.find((p) => p.name === "Self Review");
+  const grading_review_part = partsData.data?.find((p) => p.name === "Grading Review Part 1");
+  const grading_review_part_2 = partsData.data?.find((p) => p.name === "Grading Review Part 2");
+
+  if (!self_review_part) {
+    throw new Error("Failed to find 'Self Review' rubric part");
+  }
+  if (!grading_review_part) {
+    throw new Error("Failed to find 'Grading Review Part 1' rubric part");
+  }
+  if (!grading_review_part_2) {
+    throw new Error("Failed to find 'Grading Review Part 2' rubric part");
+  }
+
+  const self_review_part_id = self_review_part.id;
+  const grading_review_part_id = grading_review_part.id;
+  const grading_review_part_2_id = grading_review_part_2.id;
   const criteriaData = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("rubric_criteria", () =>
     supabase
       .from("rubric_criteria")
@@ -970,15 +1004,47 @@ export async function insertAssignment({
           is_additive: true,
           rubric_part_id: grading_review_part_id || 0,
           rubric_id: assignmentData.grading_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Criteria 2",
+          description: "Criteria for grading review evaluation, part 2",
+          ordinal: 1,
+          total_points: 20,
+          is_additive: true,
+          rubric_part_id: grading_review_part_2_id || 0,
+          rubric_id: assignmentData.grading_rubric_id || 0
         }
       ])
-      .select("id")
+      .select("id, name")
   );
   if (criteriaData.error) {
     throw new Error(`Failed to create rubric criteria: ${criteriaData.error.message}`);
   }
-  const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
-  const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
+
+  // Create a lookup map from criterion name to ID for robust, order-independent access
+  const criteriaByName = (criteriaData.data || []).reduce(
+    (acc, criterion) => {
+      acc[criterion.name] = criterion.id;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+
+  const selfReviewCriteriaId = criteriaByName["Self Review Criteria"];
+  const gradingReviewCriteriaId = criteriaByName["Grading Review Criteria"];
+  const gradingReviewCriteriaId2 = criteriaByName["Grading Review Criteria 2"];
+
+  // Validate that all expected criteria were found
+  if (!selfReviewCriteriaId) {
+    throw new Error("Failed to find 'Self Review Criteria' criterion");
+  }
+  if (!gradingReviewCriteriaId) {
+    throw new Error("Failed to find 'Grading Review Criteria' criterion");
+  }
+  if (!gradingReviewCriteriaId2) {
+    throw new Error("Failed to find 'Grading Review Criteria 2' criterion");
+  }
   const { data: rubricChecksData, error: rubricChecksError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
   ).trackAndLimit("rubric_checks", () =>
@@ -1028,6 +1094,17 @@ export async function insertAssignment({
           is_comment_required: false,
           class_id: class_id,
           is_required: true
+        },
+        {
+          rubric_criteria_id: gradingReviewCriteriaId2 || 0,
+          name: "Grading Review Check 3",
+          description: "Third check for grading review",
+          ordinal: 2,
+          points: 10,
+          is_annotation: false,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
         }
       ])
       .select("*")
@@ -1036,7 +1113,7 @@ export async function insertAssignment({
     throw new Error(`Failed to create rubric checks: ${rubricChecksError.message}`);
   }
 
-  return { ...assignmentData, rubricChecks: rubricChecksData };
+  return { ...assignmentData, rubricParts: partsData.data, rubricChecks: rubricChecksData };
 }
 
 export async function insertSubmissionViaAPI({

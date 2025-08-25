@@ -1038,6 +1038,27 @@ export default class TableController<
     return row;
   }
 
+  async getOneByFilters(
+    filters: { column: keyof Database["public"]["Tables"][RelationName]["Row"]; operator: string; value: unknown }[]
+  ) {
+    let query = this._client.from(this._table).select("*");
+    for (const filter of filters) {
+      query = query.filter(filter.column as string, filter.operator, filter.value);
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw error;
+    }
+    if (!data) {
+      return null;
+    }
+    this._addRow({
+      ...data,
+      __db_pending: false
+    } as PossiblyTentativeResult<ResultOne>);
+    return data;
+  }
+
   async getByIdAsync(id: IDType) {
     if (this._closed) {
       throw new Error(

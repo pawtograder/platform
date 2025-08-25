@@ -1,4 +1,4 @@
-import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { expect, test, type Page } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
@@ -9,6 +9,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  supabase,
   TestingUser
 } from "./TestingUtils";
 
@@ -41,10 +42,13 @@ let course: Course;
 let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
-let assignment: Assignment | undefined;
+let assignment: (Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }) | undefined;
+let grader: TestingUser | undefined;
+let student2: TestingUser | undefined;
+let submission_id2: number | undefined;
 test.beforeAll(async () => {
   course = await createClass();
-  [student, instructor] = await createUsersInClass([
+  [student, instructor, grader, student2] = await createUsersInClass([
     {
       name: "Grading Student",
       email: "grading-student@pawtograder.net",
@@ -56,6 +60,20 @@ test.beforeAll(async () => {
       name: "Grading Instructor",
       email: "grading-instructor@pawtograder.net",
       role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Grading Grader",
+      email: "grading-grader@pawtograder.net",
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Grading Student 2",
+      email: "grading-student2@pawtograder.net",
+      role: "student",
       class_id: course.id,
       useMagicLink: true
     }
@@ -72,6 +90,40 @@ test.beforeAll(async () => {
     class_id: course.id
   });
   submission_id = submission_res.submission_id;
+
+  const submission_res2 = await insertPreBakedSubmission({
+    student_profile_id: student2.private_profile_id,
+    assignment_id: assignment!.id,
+    class_id: course.id
+  });
+  submission_id2 = submission_res2.submission_id;
+  // Assign grader to the first rubric part
+  const private_profile_id = grader!.private_profile_id;
+  const review_assignment_res = await supabase
+    .from("review_assignments")
+    .insert({
+      assignee_profile_id: private_profile_id,
+      class_id: course.id,
+      assignment_id: assignment!.id,
+      submission_id: submission_id2!,
+      submission_review_id: submission_res2.grading_review_id!,
+      rubric_id: assignment!.grading_rubric_id!,
+      due_date: addDays(new Date(), 1).toUTCString()
+    })
+    .select("id")
+    .single();
+  if (review_assignment_res.error) {
+    console.error(review_assignment_res.error);
+    throw new Error(`Failed to create review assignment: ${review_assignment_res.error.message}`);
+  }
+  await supabase
+    .from("review_assignment_rubric_parts")
+    .insert({
+      review_assignment_id: review_assignment_res.data!.id,
+      rubric_part_id: assignment!.rubricParts[2]!.id,
+      class_id: course.id
+    })
+    .select("id");
 });
 
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
@@ -79,6 +131,7 @@ const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glo
 const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";
 const GRADING_REVIEW_COMMENT_2 =
   "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
+const GRADING_REVIEW_COMMENT_3 = "I have stared at this for a long time, and I am still not sure what to write here.";
 
 const REGRADE_COMMENT = "I think that I deserve better than a 10/10!";
 const REGRADE_RESOLUTION = "I do not think it is possible to get more than 10/10!";
@@ -186,9 +239,21 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("textbox", { name: "Optional: comment on check Grading Review Check 2" })
       .fill(GRADING_REVIEW_COMMENT_2);
     await page.getByRole("button", { name: "Add Check" }).click();
-    // await clickAddCheckWithRetry(page);
 
     //Wait for the textbox to disappear
+    await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
+
+    await clickWithTextboxRetry(
+      page,
+      page.getByLabel("Grading Review Check 3 (+10)"),
+      page.getByRole("textbox", { name: "Optional: comment on check Grading Review Check 3" })
+    );
+    await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
+    await page
+      .getByRole("textbox", { name: "Optional: comment on check Grading Review Check 3" })
+      .fill(GRADING_REVIEW_COMMENT_3);
+    await page.getByRole("button", { name: "Add Check" }).click();
+
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).click();
@@ -271,7 +336,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await argosScreenshot(page, "Instructors can resolve the regrade request");
     await page.getByRole("spinbutton").fill("40");
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    await expect(page.getByText("This is a significant change")).toBeVisible();
+    await expect(page.getByText("This is a significant change (>50%)")).toBeVisible();
     await page.getByRole("button", { name: "Override Score and Resolve Request", exact: true }).click();
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
@@ -322,5 +387,31 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal and Close Request" }).click();
     await argosScreenshot(page, "Instructors can close the regrade request");
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
+  });
+  test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
+    await loginAsUser(page, grader!, course);
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);
+    await expect(page.getByText("Grading Review Part 2")).toBeVisible();
+    await expect(page.getByText("Grading Review Part 1")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "View + Grade Full Rubric" })).toBeVisible();
+    await argosScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade");
+    await page.getByText("Third check for grading review").click();
+
+    await clickWithTextboxRetry(
+      page,
+      page.getByLabel("Grading Review Check 3 (+10)"),
+      page.getByRole("textbox", { name: "Optional: comment on check Grading Review Check 3" })
+    );
+    await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
+    await page
+      .getByRole("textbox", { name: "Optional: comment on check Grading Review Check 3" })
+      .fill(GRADING_REVIEW_COMMENT_3);
+    await page.getByRole("button", { name: "Add Check" }).click();
+
+    await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
+
+    await page.getByRole("button", { name: "Complete Review Assignment" }).click();
+    await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
   });
 });

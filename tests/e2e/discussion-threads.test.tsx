@@ -76,9 +76,9 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Post Visibility", { exact: true })).toBeVisible();
     await expect(page.getByText("Entire Class", { exact: true })).toBeVisible();
     await expect(page.getByText("Fastest response - other students can provide support.")).toBeVisible();
-    await expect(page.getByText("Instructors only", { exact: true })).toBeVisible();
+    await expect(page.getByText("Staff only", { exact: true })).toBeVisible();
     await expect(
-      page.getByText("Only instructors can see this post. Good if you need to share private assignment details.")
+      page.getByText("Only course staff can see this post. Good if you need to share private assignment details.")
     ).toBeVisible();
     await expect(page.getByText("Post Anonymity", { exact: true })).toBeVisible();
     await expect(page.getByText("Post with your name", { exact: true })).toBeVisible();
@@ -97,7 +97,7 @@ test.describe("Discussion Thread Page", () => {
     // Test the form with a private thread
     await page.getByText("Question", { exact: true }).click();
     await page.getByText("Follow-ups and discussion of assigned and optional readings").click();
-    await page.getByText("Instructors only", { exact: true }).click();
+    await page.getByText("Staff only", { exact: true }).click();
     await page.getByText("Post with your name", { exact: true }).click();
     await page.getByRole("textbox", { name: "subject" }).fill("Is my answer for HW1 Q1 correct?");
     await page
