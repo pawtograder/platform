@@ -51,12 +51,29 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
 
   const activeReviewAssignmentId: number | undefined = useMemo(() => {
     if (ignoreReviewParam) return undefined;
-    const id = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
-    return Number.isFinite(id as number) ? (id as number) : undefined;
-  }, [ignoreReviewParam, reviewAssignmentIdParam]);
+
+    // If there's a URL parameter, use it
+    if (reviewAssignmentIdParam) {
+      const id = parseInt(reviewAssignmentIdParam, 10);
+      return Number.isFinite(id) ? id : undefined;
+    }
+
+    // If no URL parameter, automatically select an incomplete review assignment
+    const incompleteReviewAssignment = myAssignedReviews.find((ra) => !ra.completed_at);
+    return incompleteReviewAssignment?.id;
+  }, [ignoreReviewParam, reviewAssignmentIdParam, myAssignedReviews]);
 
   // Validate URL params and clean up if they reference invalid entities
   useEffect(() => {
+    // Don't validate URLs until the assignment controller is ready and data has loaded
+    if (!assignmentController.isReady) {
+      return;
+    }
+
+    // Note: We allow validation to proceed even when myAssignedReviews.length === 0
+    // This ensures invalid review_assignment_id values are cleaned up even when
+    // the user truly has zero assignments, preventing permanent URL pollution
+
     const params = new URLSearchParams(searchParams.toString());
     let changed = false;
 
@@ -119,6 +136,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     writableReviews,
     submission.grading_review_id,
     assignmentController.assignment.grading_rubric_id,
+    assignmentController.isReady,
     searchParams,
     pathname,
     router
@@ -274,53 +292,82 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
 
 export function useMissingRubricChecksForActiveReview() {
   const activeSubmissionReview = useActiveSubmissionReview();
-  if (!activeSubmissionReview) {
-    throw new Error("No active submission review found");
-  }
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
-  const rubric = useRubricById(activeSubmissionReview.rubric_id);
+  const rubric = useRubricById(activeSubmissionReview?.rubric_id);
+
   const rubricChecks = useMemo(() => {
-    return rubric?.rubric_parts.flatMap((part) => part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks));
-  }, [rubric]);
+    if (!activeSubmissionReview || !rubric) return [];
+    return rubric.rubric_parts.flatMap((part) => part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks));
+  }, [rubric, activeSubmissionReview]);
+
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
+    if (!activeSubmissionReview || !rubricChecks.length) {
+      return { missing_required_checks: [], missing_optional_checks: [] };
+    }
     return {
-      missing_required_checks: rubricChecks?.filter(
+      missing_required_checks: rubricChecks.filter(
         (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
       ),
-      missing_optional_checks: rubricChecks?.filter(
+      missing_optional_checks: rubricChecks.filter(
         (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
       )
     };
-  }, [rubricChecks, comments]);
+  }, [rubricChecks, comments, activeSubmissionReview]);
+
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    const allCriteria = rubric?.rubric_parts.flatMap((part) => part.rubric_criteria);
-    const criteriaEvaluation = allCriteria?.map((criteria) => ({
+    if (!activeSubmissionReview || !rubric) {
+      return { missing_required_criteria: [], missing_optional_criteria: [] };
+    }
+    const allCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
+    const criteriaEvaluation = allCriteria.map((criteria) => ({
       criteria,
       check_count_applied: criteria.rubric_checks.filter((check) =>
         comments.some((comment) => comment.rubric_check_id === check.id)
       ).length
     }));
     return {
-      missing_required_criteria: criteriaEvaluation?.filter(
+      missing_required_criteria: criteriaEvaluation.filter(
         (item) =>
           item.criteria.min_checks_per_submission !== null &&
           item.check_count_applied < item.criteria.min_checks_per_submission
       ),
-      missing_optional_criteria: criteriaEvaluation?.filter(
+      missing_optional_criteria: criteriaEvaluation.filter(
         (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
       )
     };
-  }, [comments, rubric]);
+  }, [comments, rubric, activeSubmissionReview]);
+
   return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
 }
 
 export function useActiveSubmissionReview() {
   const ctx = useContext(SubmissionReviewContext);
   if (!ctx) throw new Error("useActiveSubmissionReview must be used within a SubmissionReviewProvider");
+
+  // Check if we're still loading data that could affect activeSubmissionReviewId
+  const submission = useSubmission();
+  const myAssignedReviews = useMyReviewAssignments(submission?.id);
+  const assignmentController = useAssignmentController();
+
+  // Always call the hook to avoid conditional hook calls
+  const submissionReview = useSubmissionReviewOrGradingReview(ctx.activeSubmissionReviewId || -1);
+
+  // If we have an activeReviewAssignmentId but no activeSubmissionReviewId,
+  // we might still be loading the review assignment data
+  const isLoadingReviewAssignment = !!(
+    ctx.activeReviewAssignmentId && !myAssignedReviews.find((ra) => ra.id === ctx.activeReviewAssignmentId)
+  );
+
+  // If we don't have an activeSubmissionReviewId and we're potentially still loading,
+  // return undefined instead of throwing an error
   if (!ctx.activeSubmissionReviewId) {
+    if (isLoadingReviewAssignment || !assignmentController.isReady) {
+      return undefined; // Still loading, don't throw error
+    }
     throw new Error("No active submission review ID found");
   }
-  return useSubmissionReviewOrGradingReview(ctx.activeSubmissionReviewId);
+
+  return submissionReview;
 }
 export function useActiveReviewAssignmentId() {
   const ctx = useContext(SubmissionReviewContext);

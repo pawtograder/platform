@@ -422,6 +422,13 @@ export function CompleteReviewButton() {
                   colorPalette="green"
                   loading={isLoading}
                   onClick={async () => {
+                    if (!activeSubmissionReview) {
+                      toaster.error({
+                        title: "Error marking review as complete",
+                        description: "No active submission review found."
+                      });
+                      return;
+                    }
                     try {
                       setIsLoading(true);
                       await submissionController.submission_reviews.update(activeSubmissionReview.id, {
@@ -470,6 +477,7 @@ function ReviewAssignmentActions() {
 
   const rubric = useRubricById(activeReviewAssignment?.rubric_id);
   const { time_zone } = useCourse();
+  console.log("assignedRubricParts", assignedRubricParts);
   const rubricPartsAdvice = useMemo(() => {
     return assignedRubricParts
       .map((part) => rubric?.rubric_parts.find((p) => p.id === part.rubric_part_id)?.name)
@@ -486,11 +494,7 @@ function ReviewAssignmentActions() {
   const isStudent = useIsStudent();
 
   // If there's no active review assignment, don't show assignment-specific actions
-  if (
-    (!activeReviewAssignment && !ignoreAssignedReview) ||
-    !activeSubmissionReview ||
-    activeSubmissionReview.completed_at
-  ) {
+  if ((!activeReviewAssignment && !ignoreAssignedReview) || !activeSubmissionReview) {
     return <></>;
   }
 

@@ -1,7 +1,7 @@
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { clsx, type ClassValue } from "clsx";
-import { differenceInHours, formatDistance } from "date-fns";
+import { differenceInHours, differenceInMilliseconds, formatDistance } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { twMerge } from "tailwind-merge";
 
@@ -13,7 +13,10 @@ export function dueDateAdvice(date: string | null, courseTimezone?: string) {
   let advice = "";
   if (courseTimezone && date) {
     const hoursUntilDue = differenceInHours(new TZDate(date), TZDate.tz(courseTimezone));
-    if (hoursUntilDue < 36) {
+    const msUntilDue = differenceInMilliseconds(new TZDate(date), TZDate.tz(courseTimezone));
+    if (msUntilDue < 0) {
+      advice = ` (Overdue: ${formatDistance(new TZDate(date), TZDate.tz(courseTimezone))} ago)`;
+    } else if (hoursUntilDue < 36) {
       advice = ` (${formatDistance(new TZDate(date), TZDate.tz(courseTimezone))})`;
     }
   }

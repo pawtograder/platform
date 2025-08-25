@@ -213,8 +213,8 @@ export default function NewDiscussionThread() {
                                 <FaChalkboardTeacher />
                               </Icon>
                             }
-                            description="Only instructors can see this post. Good if you need to share private assignment details."
-                            label="Instructors only"
+                            description="Only course staff can see this post. Good if you need to share private assignment details."
+                            label="Staff only"
                           />
                         </Box>
                       </Flex>
