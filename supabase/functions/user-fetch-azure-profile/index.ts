@@ -284,7 +284,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     );
   } catch (error) {
     console.error("Error in user-fetch-azure-profile:", error);
-    scope?.captureException(error);
+    Sentry.captureException(error, scope);
 
     return new Response(
       JSON.stringify({
