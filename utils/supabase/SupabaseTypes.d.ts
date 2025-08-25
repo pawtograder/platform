@@ -6706,6 +6706,48 @@ export type Database = {
           }
         ];
       };
+      system_settings: {
+        Row: {
+          created_at: string;
+          created_by: string | null;
+          key: string;
+          updated_at: string;
+          updated_by: string | null;
+          value: Json;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string | null;
+          key: string;
+          updated_at?: string;
+          updated_by?: string | null;
+          value?: Json;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string | null;
+          key?: string;
+          updated_at?: string;
+          updated_by?: string | null;
+          value?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "system_settings_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
+            foreignKeyName: "system_settings_updated_by_fkey";
+            columns: ["updated_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       tags: {
         Row: {
           class_id: number;
@@ -8048,6 +8090,106 @@ export type Database = {
           }
         ];
       };
+      workflow_timing_summary: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number | null;
+          completed_at: string | null;
+          in_progress_at: string | null;
+          profile_id: string | null;
+          queue_time_seconds: number | null;
+          requested_at: string | null;
+          run_attempt: number | null;
+          run_time_seconds: number | null;
+          workflow_run_id: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["student_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["student_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["private_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_user_id_fkey1";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_user_id_fkey1";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "workflow_events_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
     };
     Functions: {
       admin_bulk_set_user_roles_disabled: {
@@ -8411,6 +8553,27 @@ export type Database = {
         Args: { user_id: string; class_id?: number };
         Returns: undefined;
       };
+      create_system_notification: {
+        Args: {
+          p_title: string;
+          p_message: string;
+          p_display?: string;
+          p_severity?: string;
+          p_icon?: string;
+          p_persistent?: boolean;
+          p_expires_at?: string;
+          p_campaign_id?: string;
+          p_track_engagement?: boolean;
+          p_max_width?: string;
+          p_position?: string;
+          p_backdrop_dismiss?: boolean;
+          p_target_roles?: Database["public"]["Enums"]["app_role"][];
+          p_target_course_ids?: number[];
+          p_target_user_ids?: string[];
+          p_created_by?: string;
+        };
+        Returns: number;
+      };
       custom_access_token_hook: {
         Args: { event: Json };
         Returns: Json;
@@ -8418,6 +8581,10 @@ export type Database = {
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
+      };
+      delete_system_notifications_by_campaign: {
+        Args: { p_campaign_id: string; p_deleted_by?: string };
+        Returns: number;
       };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
@@ -8427,6 +8594,10 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: string;
       };
+      get_all_class_metrics: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       get_gradebook_records_for_all_students: {
         Args: { class_id: number };
         Returns: Json;
@@ -8435,21 +8606,39 @@ export type Database = {
         Args: { class_id: number };
         Returns: Json;
       };
+      get_system_notification_stats: {
+        Args: { p_requested_by?: string };
+        Returns: {
+          total_notifications: number;
+          active_notifications: number;
+          notifications_by_severity: Json;
+          notifications_by_display: Json;
+          recent_campaigns: Json;
+        }[];
+      };
       get_user_id_by_email: {
         Args: { email: string };
         Returns: {
           id: string;
         }[];
       };
-      gift_tokens_to_student: {
-        Args: {
-          p_student_id: string;
-          p_class_id: number;
-          p_assignment_id: number;
-          p_tokens_to_gift: number;
-          p_note?: string;
-        };
-        Returns: undefined;
+      get_workflow_statistics: {
+        Args: { p_class_id: number; p_duration_hours?: number };
+        Returns: {
+          class_id: number;
+          duration_hours: number;
+          total_runs: number;
+          completed_runs: number;
+          failed_runs: number;
+          in_progress_runs: number;
+          avg_queue_time_seconds: number;
+          avg_run_time_seconds: number;
+          error_count: number;
+          error_rate: number;
+          success_rate: number;
+          period_start: string;
+          period_end: string;
+        }[];
       };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
@@ -8565,6 +8754,10 @@ export type Database = {
         Args: { start_id: number; end_id: number };
         Returns: undefined;
       };
+      refresh_workflow_events_summary: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
@@ -8576,6 +8769,10 @@ export type Database = {
       send_gradebook_recalculation_messages: {
         Args: { messages: Json[] };
         Returns: undefined;
+      };
+      send_signup_welcome_message: {
+        Args: { p_user_id: string };
+        Returns: boolean;
       };
       submission_set_active: {
         Args: { _submission_id: number };
@@ -8621,6 +8818,10 @@ export type Database = {
           p_card_id: number;
           p_is_mastered: boolean;
         };
+        Returns: undefined;
+      };
+      update_class_late_tokens_per_student: {
+        Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
       update_regrade_request_status: {
@@ -8670,7 +8871,7 @@ export type Database = {
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
-      review_round: "self-review" | "grading-review" | "meta-grading-review";
+      review_round: "self-review" | "grading-review" | "meta-grading-review" | "code-walk";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
       student_help_activity_type:
         | "request_created"
@@ -8809,7 +9010,7 @@ export const Constants = {
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
-      review_round: ["self-review", "grading-review", "meta-grading-review"],
+      review_round: ["self-review", "grading-review", "meta-grading-review", "code-walk"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
       student_help_activity_type: [
         "request_created",

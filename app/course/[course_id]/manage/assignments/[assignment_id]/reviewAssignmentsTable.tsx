@@ -28,6 +28,11 @@ type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["R
     id: string;
     name: string;
   };
+  rubrics?: {
+    id: number;
+    name: string;
+    review_round: Database["public"]["Enums"]["review_round"];
+  };
 };
 
 export default function ReviewAssignmentsTable() {
@@ -53,6 +58,7 @@ export default function ReviewAssignmentsTable() {
         `
         *,
         profiles!assignee_profile_id(id, name),
+        rubrics!review_assignments_rubric_id_fkey(id, name, review_round),
         submissions(
           id,
           profiles!profile_id(id, name),
@@ -65,7 +71,7 @@ export default function ReviewAssignmentsTable() {
 
     return new TableController<
       "review_assignments",
-      "*, profiles!assignee_profile_id(id, name), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))",
+      "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))",
       number
     >({
       query,
@@ -113,6 +119,19 @@ export default function ReviewAssignmentsTable() {
         enableSorting: true
       },
       {
+        id: "rubric",
+        header: "Rubric",
+        accessorFn: (row: ReviewAssignmentRow) =>
+          row.rubrics?.name ?? row.rubrics?.review_round?.replace(/-/g, " ") ?? "Rubric",
+        cell: function render({ row }: { row: Row<ReviewAssignmentRow> }) {
+          const r = row.original.rubrics;
+          const label = r?.name ?? (r?.review_round ? r.review_round.replace(/-/g, " ") : "Rubric");
+          return <Badge variant="outline">{label}</Badge>;
+        },
+        enableColumnFilter: true,
+        enableSorting: true
+      },
+      {
         id: "due_date",
         header: "Due Date",
         accessorKey: "due_date",
@@ -149,7 +168,7 @@ export default function ReviewAssignmentsTable() {
 
   const table = useTableControllerTable<
     "review_assignments",
-    "*, profiles!assignee_profile_id(id, name), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))"
+    "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))"
   >({
     columns,
     tableController,

@@ -236,49 +236,23 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
 
-  // Get workflow run statistics for the last hour and day
-  const now = new Date();
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-  const { data: workflowStatsHour, error: workflowStatsHourError } = await supabase
-    .from("workflow_events_summary")
-    .select("queue_time_seconds, run_time_seconds")
-    .eq("class_id", course_id)
-    .gte("requested_at", oneHourAgo.toISOString());
+  // Get workflow run statistics using the secure RPC function
+  const { data: workflowStatsHour, error: workflowStatsHourError } = await supabase.rpc("get_workflow_statistics", {
+    p_class_id: course_id,
+    p_duration_hours: 1
+  });
 
   if (workflowStatsHourError) {
     Sentry.captureException(workflowStatsHourError);
   }
 
-  const { data: workflowStatsDay, error: workflowStatsDayError } = await supabase
-    .from("workflow_events_summary")
-    .select("queue_time_seconds, run_time_seconds")
-    .eq("class_id", course_id)
-    .gte("requested_at", oneDayAgo.toISOString());
+  const { data: workflowStatsDay, error: workflowStatsDayError } = await supabase.rpc("get_workflow_statistics", {
+    p_class_id: course_id,
+    p_duration_hours: 24
+  });
 
   if (workflowStatsDayError) {
     Sentry.captureException(workflowStatsDayError);
-  }
-
-  const { data: workflowErrorsHour, error: workflowErrorsHourError } = await supabase
-    .from("workflow_run_error")
-    .select("id")
-    .eq("class_id", course_id)
-    .gte("created_at", oneHourAgo.toISOString());
-
-  if (workflowErrorsHourError) {
-    Sentry.captureException(workflowErrorsHourError);
-  }
-
-  const { data: workflowErrorsDay, error: workflowErrorsDayError } = await supabase
-    .from("workflow_run_error")
-    .select("id")
-    .eq("class_id", course_id)
-    .gte("created_at", oneDayAgo.toISOString());
-
-  if (workflowErrorsDayError) {
-    Sentry.captureException(workflowErrorsDayError);
   }
 
   // Get the 5 most recent errors with details
@@ -304,26 +278,27 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     Sentry.captureException(recentErrorsError);
   }
 
-  // Calculate workflow statistics
-  const calculateWorkflowStats = (
-    runs: Array<{ queue_time_seconds: number | null; run_time_seconds: number | null }>,
-    errors: Array<{ id: string }>
+  // Extract workflow statistics from RPC response
+  const extractWorkflowStats = (
+    rpcResponse: Database["public"]["Functions"]["get_workflow_statistics"]["Returns"] | null
   ) => {
-    const total = runs.length;
-    const errorCount = errors.length;
+    if (!rpcResponse) {
+      return {
+        total: 0,
+        errorCount: 0,
+        avgQueue: 0,
+        avgRun: 0,
+        errorRate: 0
+      };
+    }
 
-    const queueTimes = runs.map((r) => r.queue_time_seconds).filter((t) => t !== null) as number[];
-    const runTimes = runs.map((r) => r.run_time_seconds).filter((t) => t !== null) as number[];
-
-    const avgQueue = queueTimes.length > 0 ? queueTimes.reduce((sum, time) => sum + time, 0) / queueTimes.length : 0;
-    const avgRun = runTimes.length > 0 ? runTimes.reduce((sum, time) => sum + time, 0) / runTimes.length : 0;
-
+    const stats = rpcResponse[0];
     return {
-      total,
-      errorCount,
-      avgQueue: Math.round(avgQueue),
-      avgRun: Math.round(avgRun),
-      errorRate: total > 0 ? (errorCount / total) * 100 : 0
+      total: Number(stats.total_runs) || 0,
+      errorCount: Number(stats.error_count) || 0,
+      avgQueue: Math.round(Number(stats.avg_queue_time_seconds) || 0),
+      avgRun: Math.round(Number(stats.avg_run_time_seconds) || 0),
+      errorRate: Number(stats.error_rate) || 0
     };
   };
 
@@ -333,8 +308,8 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     return `${Math.round(seconds / 3600)}h`;
   };
 
-  const hourStats = calculateWorkflowStats(workflowStatsHour || [], workflowErrorsHour || []);
-  const dayStats = calculateWorkflowStats(workflowStatsDay || [], workflowErrorsDay || []);
+  const hourStats = extractWorkflowStats(workflowStatsHour);
+  const dayStats = extractWorkflowStats(workflowStatsDay);
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>

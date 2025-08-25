@@ -1,8 +1,8 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import { expect, test } from "@playwright/test";
+import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
 import { random } from "mathjs";
 dotenv.config({ path: ".env.local" });
 
@@ -19,14 +19,22 @@ const instructor2Email = `$instructor-${random()}-${random()}instructor@pawtogra
 
 test.beforeAll(async () => {
   course = await createClass();
-  student1 = await createUserInClass({
-    role: "student",
-    class_id: course.id
-  });
-  instructor1 = await createUserInClass({
-    role: "instructor",
-    class_id: course.id
-  });
+  [student1, instructor1] = await createUsersInClass([
+    {
+      name: "Enrollments Student 1",
+      email: "enrollments-student1@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Enrollments Instructor 1",
+      email: "enrollments-instructor1@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
 });
 
 test.describe("Enrollments Page", () => {
@@ -39,7 +47,6 @@ test.describe("Enrollments Page", () => {
   });
   test("Instructors can view enrollments", async ({ page }) => {
     // Check Enrollments Page Contents
-    await argosScreenshot(page, "Enrollments Page");
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Name" }).first()).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Email" }).first()).toBeVisible();
@@ -55,6 +62,7 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(student1?.private_profile_name ?? "")).toBeVisible();
     await expect(page.getByText(instructor1?.email ?? "")).toBeVisible();
     await expect(page.getByText(instructor1?.private_profile_name ?? "")).toBeVisible();
+    await argosScreenshot(page, "Enrollments Page");
   });
 
   // Note: Creating users is expensive and can overwhelm supabase auth connections.

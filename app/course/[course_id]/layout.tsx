@@ -8,7 +8,15 @@ import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
-import { getUserRolesForCourse } from "@/lib/ssrUtils";
+import { getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
+
+export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
+  const { course_id } = await params;
+  const course = await getCourse(Number(course_id));
+  return {
+    title: `${course?.course_title || course?.name || "Course"} - Pawtograder`
+  };
+}
 
 const ProtectedLayout = async ({
   children,
@@ -19,7 +27,6 @@ const ProtectedLayout = async ({
 }>) => {
   const { course_id } = await params;
   const user_role = await getUserRolesForCourse(Number.parseInt(course_id));
-  console.log(user_role);
   if (!user_role) {
     redirect("/");
   }

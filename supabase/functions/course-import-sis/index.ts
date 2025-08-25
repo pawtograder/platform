@@ -44,6 +44,219 @@ interface CourseImportRequest {
   term: string;
   mainCourseCode: string;
   labCourseCode?: string;
+  existingClassId?: number; // ID of existing class to sync to instead of creating new one
+}
+
+interface ParsedMeetingTime {
+  startTime: string | null; // Time in HH:MM format
+  endTime: string | null; // Time in HH:MM format
+  dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null; // First day found in meeting_times (for day_of_week field)
+}
+
+/**
+ * Parse meeting times from SIS format (e.g., "T/R 2:30pm-3:30pm", "MWF 9:00am-10:00am")
+ * Returns start_time and end_time in HH:MM format, and the first day found for day_of_week
+ */
+function parseMeetingTimes(meetingTimes: string, scope?: Sentry.Scope): ParsedMeetingTime {
+  try {
+    // Debug logging - always log what we're trying to parse
+    scope?.addBreadcrumb({
+      message: `Attempting to parse meeting_times`,
+      category: "debug",
+      data: {
+        meetingTimes,
+        type: typeof meetingTimes,
+        length: meetingTimes?.length || 0,
+        trimmed: meetingTimes?.trim()
+      }
+    });
+
+    if (!meetingTimes?.trim()) {
+      scope?.addBreadcrumb({
+        message: `Empty or null meeting_times`,
+        category: "info",
+        data: { meetingTimes }
+      });
+      return { startTime: null, endTime: null, dayOfWeek: null };
+    }
+
+    // Day mapping
+    const dayMap = {
+      M: "monday",
+      T: "tuesday",
+      W: "wednesday",
+      R: "thursday",
+      F: "friday"
+    } as const satisfies Record<string, Database["public"]["Enums"]["day_of_week"]>;
+
+    // Try multiple time pattern variations
+    const timePatterns = [
+      /(\d{1,2}:\d{2}[ap])\s*-\s*(\d{1,2}:\d{2}[ap])/i, // Your format: 8:00a-9:40a
+      /(\d{1,2}:\d{2}[ap]m)\s*-\s*(\d{1,2}:\d{2}[ap]m)/i, // Standard: 9:00am-10:00am
+      /(\d{1,2}:\d{2}\s*[ap]m)\s*-\s*(\d{1,2}:\d{2}\s*[ap]m)/i, // With spaces: 9:00 am-10:00 pm
+      /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/i, // No am/pm: 09:00-10:00
+      /(\d{1,2}[ap])\s*-\s*(\d{1,2}[ap])/i, // No minutes, single letter: 9a-10a
+      /(\d{1,2}[ap]m)\s*-\s*(\d{1,2}[ap]m)/i // No minutes: 9am-10am
+    ];
+
+    let timeMatch: RegExpMatchArray | null = null;
+    let matchedPattern = -1;
+
+    for (let i = 0; i < timePatterns.length; i++) {
+      timeMatch = meetingTimes.match(timePatterns[i]);
+      if (timeMatch) {
+        matchedPattern = i;
+        break;
+      }
+    }
+
+    if (!timeMatch) {
+      scope?.addBreadcrumb({
+        message: `Could not parse time portion from meeting_times with any pattern`,
+        category: "warning",
+        data: {
+          meetingTimes,
+          patternsAttempted: timePatterns.length,
+          testedPatterns: timePatterns.map((p) => p.toString())
+        }
+      });
+      return { startTime: null, endTime: null, dayOfWeek: null };
+    }
+
+    scope?.addBreadcrumb({
+      message: `Successfully matched time pattern`,
+      category: "info",
+      data: {
+        meetingTimes,
+        matchedPattern,
+        match: timeMatch[0],
+        startMatch: timeMatch[1],
+        endMatch: timeMatch[2]
+      }
+    });
+
+    const [, startTimeStr, endTimeStr] = timeMatch;
+
+    // Convert to 24-hour format - handle multiple formats
+    const convertTo24Hour = (timeStr: string): string => {
+      scope?.addBreadcrumb({
+        message: `Converting time to 24hr format`,
+        category: "debug",
+        data: { timeStr, matchedPattern }
+      });
+
+      // Handle different time formats based on which pattern matched
+      let match: RegExpMatchArray | null = null;
+
+      if (matchedPattern === 0) {
+        // 8:00a format (single letter, your SIS format!)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})([ap])$/i);
+      } else if (matchedPattern === 1) {
+        // 9:00am format (standard)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})([ap])m$/i);
+      } else if (matchedPattern === 2) {
+        // 9:00 am format (with space)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})\s*([ap])m$/i);
+      } else if (matchedPattern === 3) {
+        // 09:00 format (24hr already, just return)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+        if (match) {
+          const [, hours, minutes] = match;
+          return `${parseInt(hours).toString().padStart(2, "0")}:${minutes}`;
+        }
+      } else if (matchedPattern === 4) {
+        // 9a format (no minutes, single letter)
+        match = timeStr.match(/^(\d{1,2})([ap])$/i);
+        if (match) {
+          const [, hours, ampm] = match;
+          let hour = parseInt(hours);
+
+          if (ampm.toLowerCase() === "p" && hour !== 12) {
+            hour += 12;
+          } else if (ampm.toLowerCase() === "a" && hour === 12) {
+            hour = 0;
+          }
+
+          return `${hour.toString().padStart(2, "0")}:00`;
+        }
+      } else if (matchedPattern === 5) {
+        // 9am format (no minutes)
+        match = timeStr.match(/^(\d{1,2})([ap])m$/i);
+        if (match) {
+          const [, hours, ampm] = match;
+          let hour = parseInt(hours);
+
+          if (ampm.toLowerCase() === "p" && hour !== 12) {
+            hour += 12;
+          } else if (ampm.toLowerCase() === "a" && hour === 12) {
+            hour = 0;
+          }
+
+          return `${hour.toString().padStart(2, "0")}:00`;
+        }
+      }
+
+      if (!match) {
+        Sentry.captureMessage(`Could not parse time format for conversion`, scope);
+        return timeStr; // Return as-is if we can't parse
+      }
+
+      const [, hours, minutes, ampm] = match;
+      let hour = parseInt(hours);
+
+      if (ampm && ampm.toLowerCase() === "p" && hour !== 12) {
+        hour += 12;
+      } else if (ampm && ampm.toLowerCase() === "a" && hour === 12) {
+        hour = 0;
+      }
+
+      const result = `${hour.toString().padStart(2, "0")}:${minutes || "00"}`;
+
+      scope?.addBreadcrumb({
+        message: `Time conversion successful`,
+        category: "debug",
+        data: { original: timeStr, converted: result }
+      });
+
+      return result;
+    };
+
+    const startTime = convertTo24Hour(startTimeStr);
+    const endTime = convertTo24Hour(endTimeStr);
+
+    // Extract first day for day_of_week field
+    let dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null = null;
+    // Iterate through meetingTimes string in order to find the first day that appears
+    for (let i = 0; i < meetingTimes.length; i++) {
+      const char = meetingTimes[i];
+      if (char in dayMap) {
+        dayOfWeek = dayMap[char as keyof typeof dayMap];
+        break;
+      }
+    }
+
+    scope?.addBreadcrumb({
+      message: `Parsed meeting times successfully`,
+      category: "info",
+      data: {
+        original: meetingTimes,
+        startTime,
+        endTime,
+        dayOfWeek
+      }
+    });
+
+    return { startTime, endTime, dayOfWeek };
+  } catch (error) {
+    scope?.addBreadcrumb({
+      message: `Error parsing meeting times: ${error instanceof Error ? error.message : String(error)}`,
+      category: "error",
+      data: { meetingTimes, error }
+    });
+
+    Sentry.captureException(error, scope);
+    return { startTime: null, endTime: null, dayOfWeek: null };
+  }
 }
 
 interface ProcessedSection {
@@ -52,6 +265,12 @@ interface ProcessedSection {
   sectionName: string;
   meetingInfo: string;
   location: string;
+  // Parsed meeting time fields for lab sections
+  parsedMeetingTimes?: {
+    startTime: string | null;
+    endTime: string | null;
+    dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null;
+  };
   instructors: Array<{
     sis_user_id: number;
     name: string;
@@ -104,6 +323,7 @@ interface CourseImportResponse {
       newInvitations: number;
     };
   };
+  existingClassId?: number | null; // ID of existing class if one was specified
 }
 
 /**
@@ -568,17 +788,51 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
           if (!updateError) updatedMetadataCount++;
         } else {
+          // Parse meeting times for lab sections to extract start/end times
+          const parsedTimes = parseMeetingTimes(sectionMeta.meeting_times || "", scope);
+
+          const labUpdateData: Database["public"]["Tables"]["lab_sections"]["Update"] = {
+            meeting_location: sectionMeta.meeting_location,
+            meeting_times: sectionMeta.meeting_times
+          };
+          const mt = sectionMeta.meeting_times?.trim() ?? "";
+          if (!mt) {
+            // SIS cleared times; clear derived fields too
+            labUpdateData.start_time = null;
+            labUpdateData.end_time = null;
+            labUpdateData.day_of_week = null;
+          } else if (parsedTimes.startTime && parsedTimes.endTime) {
+            // Only write when we have both ends
+            labUpdateData.start_time = parsedTimes.startTime;
+            labUpdateData.end_time = parsedTimes.endTime;
+            labUpdateData.day_of_week = parsedTimes.dayOfWeek ?? null;
+          }
+
           const { error: updateError } = await adminSupabase
             .from("lab_sections")
-            .update({
-              meeting_location: sectionMeta.meeting_location,
-              meeting_times: sectionMeta.meeting_times,
-              updated_at: new Date().toISOString()
-            })
+            .update(labUpdateData)
             .eq("class_id", classData.id)
             .eq("sis_crn", crn);
 
-          if (!updateError) updatedMetadataCount++;
+          if (!updateError) {
+            updatedMetadataCount++;
+            scope?.addBreadcrumb({
+              message: `Updated lab section ${crn} with parsed meeting times`,
+              category: "info",
+              data: {
+                crn,
+                originalMeetingTimes: sectionMeta.meeting_times,
+                parsedTimes,
+                classId: classData.id
+              }
+            });
+          } else {
+            scope?.addBreadcrumb({
+              message: `Failed to update lab section ${crn}`,
+              category: "error",
+              data: { crn, error: updateError, classId: classData.id }
+            });
+          }
         }
       }
 
@@ -710,9 +964,10 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 // function constructSemesterCode(term: string, year: number): string {
 //   const termMap: { [key: string]: string } = {
 //     Fall: "10",
-//     Spring: "20",
-//     "Summer 1": "30",
-//     "Summer 2": "40"
+//     Spring: "30",
+//     "Summer 1": "40",
+//     "Summer": "50",
+//     "Summer 2": "60"
 //   };
 
 //   const termCode = termMap[term] || "10";
@@ -763,7 +1018,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
   // Direct user call - import new course
   scope?.setTag("source", "user-direct");
 
-  const { term, mainCourseCode, labCourseCode } = (await req.json()) as CourseImportRequest;
+  const { term, mainCourseCode, labCourseCode, existingClassId } = (await req.json()) as CourseImportRequest;
 
   // Validate required inputs for new course import
   if (!term?.trim()) {
@@ -776,6 +1031,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
   scope?.setTag("term", term);
   scope?.setTag("mainCourseCode", mainCourseCode);
   scope?.setTag("labCourseCode", labCourseCode || "none");
+  scope?.setTag("existingClassId", existingClassId || "none");
 
   // Validate admin authorization for direct user calls
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -795,6 +1051,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  // If existingClassId is provided, validate that the class exists and belongs to the same term
+  if (existingClassId) {
+    const { data: existingClass, error: classError } = await adminSupabase
+      .from("classes")
+      .select("id, term, course_title")
+      .eq("id", existingClassId)
+      .eq("archived", false)
+      .single();
+
+    if (classError || !existingClass) {
+      throw new UserVisibleError(`Existing class with ID ${existingClassId} not found`);
+    }
+
+    if (existingClass.term !== parseInt(term)) {
+      throw new UserVisibleError(`Existing class term (${existingClass.term}) does not match import term (${term})`);
+    }
+
+    scope?.setTag("existingClassTitle", existingClass.course_title);
+  }
 
   const { data: isAdmin } = await adminSupabase.rpc("authorize_for_admin", {
     p_user_id: user.id
@@ -901,12 +1177,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
       const courseNumber = courseParts[1] || "Unknown";
       const sectionName = `${courseNumber} - ${data.section_meta.meeting_times}`;
 
+      // Parse meeting times for lab sections
+      let parsedMeetingTimes: ParsedMeetingTime | undefined;
+      if (sectionType === "lab") {
+        parsedMeetingTimes = parseMeetingTimes(data.section_meta.meeting_times || "", scope);
+
+        scope?.addBreadcrumb({
+          message: `Parsed meeting times for lab section ${crn}`,
+          category: "info",
+          data: {
+            crn,
+            originalMeetingTimes: data.section_meta.meeting_times,
+            parsedTimes: parsedMeetingTimes
+          }
+        });
+      }
+
       return {
         crn,
         sectionType,
         sectionName,
         meetingInfo: data.section_meta.meeting_times,
         location: data.section_meta.meeting_location,
+        parsedMeetingTimes: sectionType === "lab" ? parsedMeetingTimes : undefined,
         instructors: data.instructors.map((inst) => ({
           sis_user_id: inst.nuid,
           name: `${inst.first_name} ${inst.last_name}`,
@@ -1005,7 +1298,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
       courseInfo,
       sections,
       totalUsers,
-      enrollmentStatus
+      enrollmentStatus,
+      existingClassId: existingClassId || null
     };
   } catch (error) {
     scope?.captureException(error);

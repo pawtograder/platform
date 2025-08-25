@@ -2,6 +2,7 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
+import Link from "@/components/ui/link";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
@@ -25,7 +26,6 @@ import {
   Icon,
   IconButton,
   Input,
-  Link,
   NativeSelect,
   Popover,
   Skeleton,
@@ -40,7 +40,7 @@ import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useMemo, useState } from "react";
-import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
 function StudentNameCell({
@@ -63,26 +63,17 @@ function StudentNameCell({
 
   return (
     <HStack w="100%">
-      <PersonName uid={uid} size="2xs" />
+      {activeSubmissionId !== null ? (
+        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
+          <PersonName uid={uid} size="2xs" />
+        </Link>
+      ) : (
+        <PersonName uid={uid} size="2xs" />
+      )}
       <Box flex="1" display="flex" justifyContent="flex-end">
         {isObfuscated && (
           <IconButton variant="ghost" colorPalette="gray" size="sm" onClick={toggleOnlyShowGradesFor}>
             <Icon as={canShowGradeFor ? TbEyeOff : TbEye} />
-          </IconButton>
-        )}
-        {activeSubmissionId && (
-          <IconButton
-            variant="ghost"
-            colorPalette="gray"
-            size="sm"
-            onClick={() => {
-              window.open(
-                `/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`,
-                "_blank"
-              );
-            }}
-          >
-            <Icon as={FaExternalLinkAlt} />
           </IconButton>
         )}
       </Box>
@@ -456,7 +447,7 @@ export default function AssignmentsTable() {
                     if (row.original.activesubmissionid) {
                       return (
                         <Link
-                          href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
+                          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
                         >
                           {linkContent}
                         </Link>

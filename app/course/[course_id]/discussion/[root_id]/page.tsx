@@ -4,7 +4,7 @@ import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
+import { useCourseController, useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
@@ -17,7 +17,7 @@ import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { FaEye, FaEyeSlash, FaPencilAlt, FaReply } from "react-icons/fa";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
@@ -218,6 +218,10 @@ function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
 
 function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number; course_id: number }) {
   const thread = useDiscussionThreadChildren(root_id);
+  const courseController = useCourseController();
+  useEffect(() => {
+    document.title = `${courseController.course.name} - Discussion - ${thread?.subject}`;
+  }, [courseController.course.name, thread?.subject]);
   return (
     <>
       <DiscussionPost root_id={root_id} course_id={course_id} />

@@ -1,25 +1,35 @@
-import { test, expect } from "@playwright/test";
+import { Course } from "@/utils/supabase/DatabaseTypes";
+import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
+import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
 import { addDays } from "date-fns";
-import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
-import { createClass, createUserInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
+import { Assignment, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
-let course: Course | undefined;
+let course: Course;
 let instructor: TestingUser | undefined;
 let assignment: (Assignment & { rubricChecks: RubricCheck[] }) | undefined;
 
-test.describe("Rubric editor", () => {
-  test.beforeAll(async () => {
-    course = await createClass();
-    instructor = await createUserInClass({ role: "instructor", class_id: course!.id });
-    assignment = await insertAssignment({
-      due_date: addDays(new Date(), 1).toUTCString(),
-      class_id: course!.id
-    });
+test.beforeAll(async () => {
+  course = await createClass();
+  [instructor] = await createUsersInClass([
+    {
+      name: "Rubric Editor Instructor",
+      email: "rubric-editor-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course!.id,
+      useMagicLink: true
+    }
+  ]);
+  assignment = await insertAssignment({
+    due_date: addDays(new Date(), 1).toUTCString(),
+    class_id: course!.id,
+    name: "Rubric Editor Assignment"
   });
+});
 
+test.describe("Rubric editor", () => {
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
     await loginAsUser(page, instructor!);
     await page.waitForURL(`/course`);
@@ -30,12 +40,12 @@ test.describe("Rubric editor", () => {
     await expect(summary).toBeVisible();
     await expect(summary.getByText(/The assignment's max points is set to 100/)).toBeVisible();
     await expect(summary.getByText(/autograder is currently configured to award up to 100 points/)).toBeVisible();
-    await expect(summary.getByText(/grading rubric is configured to award 20 points/)).toBeVisible();
+    await expect(summary.getByText(/grading rubric is configured to award 30 points/)).toBeVisible();
     // 100 !== 100 + 20, so expect the warning state text
     await expect(summary.getByText(/These do not add up/)).toBeVisible();
 
     // Also make sure that the checks are rendered in the wysiwg
-    const rubricSidebar = page.getByRole("region", { name: "Rubric Part: Grading Review" });
+    const rubricSidebar = page.getByRole("region", { name: "Rubric Part: Grading Review Part 1" });
     await expect(rubricSidebar).toContainText("Grading Review Criteria 0/20");
     await expect(rubricSidebar).toContainText("Criteria for grading review evaluation");
     await expect(rubricSidebar).toContainText("Grading Review Check 1");

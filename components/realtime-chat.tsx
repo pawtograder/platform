@@ -18,7 +18,7 @@ import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;

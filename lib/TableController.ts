@@ -14,6 +14,14 @@ type TablesThatHaveAnIDField = {
 type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
 
 /**
+ * Type-safe filter for real-time event filtering.
+ * Supports basic equality filters that match PostgrestFilterBuilder patterns.
+ */
+export type RealtimeFilter<T extends TablesThatHaveAnIDField> = {
+  [K in keyof DatabaseTableTypes[T]["Row"]]?: DatabaseTableTypes[T]["Row"][K] | DatabaseTableTypes[T]["Row"][K][];
+};
+
+/**
  * Hook that returns all values from a TableController that match a predicate.
  * Automatically subscribes to real-time updates for each matching item.
  * Uses memoization to prevent unnecessary re-renders.
@@ -353,6 +361,7 @@ export default class TableController<
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
   private _closed: boolean = false;
+  private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
    * Optional select clause to use when fetching a single row (e.g., after realtime events).
    * This enables preserving joined columns for controllers initialized with joined selects.
@@ -542,7 +551,8 @@ export default class TableController<
     classRealTimeController,
     selectForSingleRow,
     submissionId,
-    officeHoursRealTimeController
+    officeHoursRealTimeController,
+    realtimeFilter
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -558,6 +568,8 @@ export default class TableController<
     /** Select clause to use for single-row refetches (preserves joins) */
     selectForSingleRow?: Query;
     submissionId?: number;
+    /** Optional filter for real-time events to match only rows that would be included in the query */
+    realtimeFilter?: RealtimeFilter<RelationName>;
   }) {
     this._rows = [];
     this._client = client;
@@ -567,6 +579,7 @@ export default class TableController<
     this._officeHoursRealTimeController = officeHoursRealTimeController || null;
     this._submissionId = submissionId || null;
     this._selectForSingleRow = selectForSingleRow;
+    this._realtimeFilter = realtimeFilter || null;
 
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
@@ -676,6 +689,11 @@ export default class TableController<
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
 
+      // Check if the row matches our realtime filter
+      if (!this._matchesRealtimeFilter(data)) {
+        return; // Skip rows that don't match our filter
+      }
+
       // Check for exact ID match first
       const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
       if (existingRowById) {
@@ -767,6 +785,12 @@ export default class TableController<
           if (!row) {
             return;
           }
+
+          // Check if the fetched row matches our realtime filter
+          if (!this._matchesRealtimeFilter(row as Record<string, unknown>)) {
+            return; // Skip rows that don't match our filter
+          }
+
           // One last check to see if we already have it
           if (this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id)) {
             return;
@@ -879,12 +903,51 @@ export default class TableController<
     }
   }
 
+  /**
+   * Check if a row matches the realtime filter
+   */
+  private _matchesRealtimeFilter(rowData: Record<string, unknown>): boolean {
+    if (!this._realtimeFilter) {
+      return true; // No filter means all rows match
+    }
+
+    for (const [key, filterValue] of Object.entries(this._realtimeFilter)) {
+      const rowValue = rowData[key];
+
+      if (Array.isArray(filterValue)) {
+        // Handle array filters (IN clause equivalent)
+        if (!filterValue.includes(rowValue as never)) {
+          return false;
+        }
+      } else {
+        // Handle single value filters (equality)
+        if (rowValue !== filterValue) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
   private _handleUpdate(message: BroadcastMessage) {
     if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+
+      // Check if the updated row matches our realtime filter
+      const matchesFilter = this._matchesRealtimeFilter(data);
+
+      if (existingRow && !matchesFilter) {
+        // Row was updated but no longer matches our filter - remove it
+        this._removeRow(data.id as IDType);
+        return;
+      } else if (!existingRow && !matchesFilter) {
+        // Row doesn't exist and doesn't match filter - ignore
+        return;
+      }
       const applyUpdate = (rowLike: Record<string, unknown>) => {
         if (existingRow) {
           this._updateRow(
@@ -917,7 +980,19 @@ export default class TableController<
         if (!row) {
           return;
         }
+
         const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id);
+        const matchesFilter = this._matchesRealtimeFilter(row as Record<string, unknown>);
+
+        if (existingRow && !matchesFilter) {
+          // Row was updated but no longer matches our filter - remove it
+          this._removeRow(message.row_id as IDType);
+          return;
+        } else if (!existingRow && !matchesFilter) {
+          // Row doesn't exist and doesn't match filter - ignore
+          return;
+        }
+
         if (existingRow) {
           this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
         } else {
@@ -961,6 +1036,27 @@ export default class TableController<
       this._nonExistantKeys.delete(id);
     }
     return row;
+  }
+
+  async getOneByFilters(
+    filters: { column: keyof Database["public"]["Tables"][RelationName]["Row"]; operator: string; value: unknown }[]
+  ) {
+    let query = this._client.from(this._table).select("*");
+    for (const filter of filters) {
+      query = query.filter(filter.column as string, filter.operator, filter.value);
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw error;
+    }
+    if (!data) {
+      return null;
+    }
+    this._addRow({
+      ...data,
+      __db_pending: false
+    } as PossiblyTentativeResult<ResultOne>);
+    return data;
   }
 
   async getByIdAsync(id: IDType) {

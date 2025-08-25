@@ -63,7 +63,8 @@ function ActiveReviewPicker() {
       <SegmentGroup.Root
         value={activeSubmissionReviewId?.toString() ?? ""}
         onValueChange={(value) => {
-          setActiveSubmissionReviewId(Number(value.value));
+          const selectedId = Number(value.value);
+          setActiveSubmissionReviewId(selectedId);
         }}
       >
         <SegmentGroup.Indicator />
@@ -421,6 +422,13 @@ export function CompleteReviewButton() {
                   colorPalette="green"
                   loading={isLoading}
                   onClick={async () => {
+                    if (!activeSubmissionReview) {
+                      toaster.error({
+                        title: "Error marking review as complete",
+                        description: "No active submission review found."
+                      });
+                      return;
+                    }
                     try {
                       setIsLoading(true);
                       await submissionController.submission_reviews.update(activeSubmissionReview.id, {
@@ -462,13 +470,14 @@ function ReviewAssignmentActions() {
   const activeSubmissionReview = useActiveSubmissionReview();
 
   const ignoreAssignedReview = useIgnoreAssignedReview();
-  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId ?? ignoreAssignedReview);
+  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
 
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const setIgnoreAssignedReview = useSetIgnoreAssignedReview();
 
   const rubric = useRubricById(activeReviewAssignment?.rubric_id);
   const { time_zone } = useCourse();
+  console.log("assignedRubricParts", assignedRubricParts);
   const rubricPartsAdvice = useMemo(() => {
     return assignedRubricParts
       .map((part) => rubric?.rubric_parts.find((p) => p.id === part.rubric_part_id)?.name)
@@ -476,20 +485,16 @@ function ReviewAssignmentActions() {
   }, [assignedRubricParts, rubric]); // rubric is not needed, but it's a dependency to force a re-render when the rubric changes
 
   const leaveReviewAssignment = useCallback(() => {
-    setIgnoreAssignedReview(activeReviewAssignmentId);
-  }, [setIgnoreAssignedReview, activeReviewAssignmentId]);
+    setIgnoreAssignedReview(true);
+  }, [setIgnoreAssignedReview]);
   const returnToReviewAssignment = useCallback(() => {
-    setIgnoreAssignedReview(undefined);
+    setIgnoreAssignedReview(false);
   }, [setIgnoreAssignedReview]);
 
   const isStudent = useIsStudent();
 
   // If there's no active review assignment, don't show assignment-specific actions
-  if (
-    (!activeReviewAssignment && !ignoreAssignedReview) ||
-    !activeSubmissionReview ||
-    activeSubmissionReview.completed_at
-  ) {
+  if ((!activeReviewAssignment && !ignoreAssignedReview) || !activeSubmissionReview) {
     return <></>;
   }
 
@@ -579,6 +584,11 @@ export default function SubmissionReviewToolbar() {
   const isStudent = useIsStudent();
   const ignoreAssignedReview = useIgnoreAssignedReview();
   const canSubmitEarlyForSelfReview = selfReviewSettings.enabled && selfReviewSettings.allow_early && isStudent;
+
+  // Check if there's an active, incomplete review assignment
+  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
+  const hasActiveIncompleteReview = activeReviewAssignment && !activeReviewAssignment.completed_at;
+
   if (
     !ignoreAssignedReview &&
     (!writableReviews || writableReviews.length === 0 || writableReviews.length === 1) &&
@@ -587,6 +597,7 @@ export default function SubmissionReviewToolbar() {
   ) {
     return <></>;
   }
+
   return (
     <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
       <SelfReviewDueDateInformation />
@@ -594,7 +605,8 @@ export default function SubmissionReviewToolbar() {
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
         <ReviewAssignmentActions />
       </HStack>
-      <CompletedReviewHistory />
+      {/* Only show completed history when NOT actively working on another review */}
+      {!hasActiveIncompleteReview && <CompletedReviewHistory />}
     </Box>
   );
 }

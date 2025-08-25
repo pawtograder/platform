@@ -1,5 +1,18 @@
 import { Box, Flex } from "@chakra-ui/react";
 import HelpRequestList from "./helpRequestList";
+import { getCourse } from "@/lib/ssrUtils";
+export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
+  const { course_id } = await params;
+  const course = await getCourse(Number(course_id));
+  if (!course) {
+    return {
+      title: "Office Hours - Pawtograder"
+    };
+  }
+  return {
+    title: `${course.course_title || course.name} - Office Hours - Pawtograder`
+  };
+}
 export default function HelpManageLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <Box>

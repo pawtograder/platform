@@ -6,7 +6,7 @@ import { Reply, Check, CheckCheck, ChevronDown, ChevronRight } from "lucide-reac
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTagsForProfile } from "@/hooks/useTags";
 import { Tooltip } from "@/components/ui/tooltip";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { ImageIcon, FileText } from "lucide-react";
 
 // Broadcast message type for real-time communication

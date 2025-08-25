@@ -14,7 +14,6 @@ export default async function ClassesPage() {
 
   // Fetch all classes using the admin function
   const { data: classes } = await supabase.rpc("admin_get_classes");
-  console.log(classes);
 
   return (
     <VStack align="stretch" gap={6}>

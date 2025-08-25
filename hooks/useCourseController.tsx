@@ -175,15 +175,14 @@ export function useDiscussionThreadReadStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
   const predicate = useMemo(
-    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_id === threadId,
-    [threadId]
+    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) =>
+      data.discussion_thread_id === threadId && data.user_id === user?.id,
+    [threadId, user?.id]
   );
   const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
 
-  const createdThreadReadStatuses = useRef<Set<number>>(new Set<number>());
-
   const setUnread = useCallback(
-    (root_threadId: number, threadId: number, isUnread: boolean) => {
+    async (root_threadId: number, threadId: number, isUnread: boolean) => {
       if (!controller.discussionThreadReadStatus.ready || readStatus === undefined) {
         return;
       }
@@ -198,26 +197,28 @@ export function useDiscussionThreadReadStatus(threadId: number) {
           });
         }
       } else {
-        if (createdThreadReadStatuses.current.has(threadId)) {
-          return;
-        }
-        createdThreadReadStatuses.current.add(threadId);
-        controller.discussionThreadReadStatus
-          .create({
-            discussion_thread_id: threadId,
-            user_id: user?.id || "",
-            discussion_thread_root_id: root_threadId,
+        // There is a Postgres trigger that creates a read status for every user for every thread. So, if we don't have one, we just haven't fetched it yet!
+        const readStatus = await controller.discussionThreadReadStatus.getOneByFilters([
+          {
+            column: "discussion_thread_id",
+            operator: "eq",
+            value: threadId
+          },
+          {
+            column: "user_id",
+            operator: "eq",
+            value: user?.id || ""
+          }
+        ]);
+        console.log(readStatus);
+        if (readStatus) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
             read_at: isUnread ? null : new Date().toISOString()
-          })
-          .catch(() => {
-            toaster.error({
-              title: "Error creating thread read status",
-              description: "Please try again later"
-            });
           });
+        }
       }
     },
-    [user?.id, createdThreadReadStatuses, controller, readStatus]
+    [user?.id, controller, readStatus]
   );
   return { readStatus, setUnread };
 }
@@ -318,6 +319,7 @@ export class CourseController {
   // Lazily created TableController instances to avoid realtime subscription bursts
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
+  private _discussionThreadWatchers?: TableController<"discussion_thread_watchers">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
@@ -397,6 +399,23 @@ export class CourseController {
       });
     }
     return this._discussionThreadReadStatus;
+  }
+
+  get discussionThreadWatchers(): TableController<"discussion_thread_watchers"> {
+    if (!this._discussionThreadWatchers) {
+      this._discussionThreadWatchers = new TableController({
+        client: this._client,
+        table: "discussion_thread_watchers",
+        query: this._client
+          .from("discussion_thread_watchers")
+          .select("*")
+          .eq("user_id", this._userId)
+          .eq("class_id", this.courseId),
+        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreadWatchers;
   }
 
   get tags(): TableController<"tags"> {
@@ -877,6 +896,7 @@ export class CourseController {
     this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
+    this._discussionThreadWatchers?.close();
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
@@ -1035,13 +1055,11 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      let _courseController: CourseController | null = null;
-
+      const _courseController = new CourseController(role, course_id, client, realTimeController, userId);
+      setCourseController(_courseController);
       const start = async () => {
         try {
           await realTimeController.start();
-
-          _courseController = new CourseController(role, course_id, client, realTimeController, userId);
 
           if (cancelled) {
             _courseController?.close();
@@ -1052,7 +1070,6 @@ export function CourseControllerProvider({
           // Initialize the critical controllers now that everything is stable
           _courseController.initializeEagerControllers();
 
-          setCourseController(_courseController);
           setClassRealTimeController(realTimeController);
         } catch (e) {
           // eslint-disable-next-line no-console

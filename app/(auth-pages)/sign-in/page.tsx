@@ -4,10 +4,12 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import Logo from "@/components/ui/logo";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 import { BsMicrosoft } from "react-icons/bs";
+import { isSignupsEnabled } from "@/lib/features";
 
 type SearchParams = Message & { email?: string; code?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, ...message } = await props.searchParams;
+  const enableSignup = isSignupsEnabled();
 
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
@@ -57,9 +59,11 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
               </SubmitButton>
             </Box>
             <HStack gap="4" w="100%" mt="4">
-              <SubmitButton variant="outline" name="action" value="signup" flex="1" pendingText="Creating account…">
-                Sign up
-              </SubmitButton>
+              {enableSignup && (
+                <SubmitButton variant="outline" name="action" value="signup" flex="1" pendingText="Creating account…">
+                  Sign up
+                </SubmitButton>
+              )}
               <SubmitButton
                 variant="outline"
                 name="action"

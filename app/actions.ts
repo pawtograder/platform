@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
 import { env } from "process";
+import { isSignupsEnabled } from "@/lib/features";
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
@@ -112,6 +113,10 @@ export const signInWithEmailAction = async (email: string, password: string) => 
   }
 };
 export const signUpWithEmailAction = async (email: string, password: string) => {
+  if (!isSignupsEnabled()) {
+    return encodedRedirect("error", "/sign-in", "Signups are currently disabled");
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email,
@@ -137,7 +142,7 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback?next=/course`;
+  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email User.Read", redirectTo }

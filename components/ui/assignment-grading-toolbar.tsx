@@ -2,57 +2,37 @@
 
 import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
 import Link from "@/components/ui/link";
-import {
-  useActiveSubmissions,
-  useAssignmentGroups,
-  useMyReviewAssignments,
-  useReviewAssignment
-} from "@/hooks/useAssignment";
+import { useActiveSubmissions, useAssignmentGroups, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useAllProfilesForClass, useGradersAndInstructors } from "@/hooks/useCourseController";
 import { Box, HStack, Text } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
-import { formatRelative } from "date-fns";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { FaArrowLeft, FaArrowRight, FaChartBar, FaCheckCircle, FaClock } from "react-icons/fa";
 
-interface SubmissionOptionRendererProps {
-  submissionId: number;
-  assignmentReviewId?: number;
-}
-
-function SubmissionOptionRenderer({ submissionId, assignmentReviewId }: SubmissionOptionRendererProps) {
-  const review = useReviewAssignment(assignmentReviewId);
-  return (
-    <HStack justifyContent="space-between" w="100%">
-      <HStack>
-        <SubmissionAuthorNames submission_id={submissionId} />
-      </HStack>
-      <HStack>
-        {review?.completed_at ? (
-          <HStack gap={1}>
-            <FaCheckCircle size={12} color="green" />
-            <Text fontSize="xs" color="green.600">
-              {review.completed_at ? formatRelative(new Date(review.completed_at), new Date()) : "Completed"}
-            </Text>
-          </HStack>
-        ) : (
-          <HStack gap={1}>
-            <FaClock size={12} color="orange" />
-            <Text fontSize="xs" color="orange.600">
-              Pending
-            </Text>
-          </HStack>
-        )}
-      </HStack>
-    </HStack>
-  );
-}
-
 interface SubmissionSelectOption {
+  // value represents the submission id (submission-centric selection)
   value: number;
   label: string;
+  submissionId: number;
+  // optional review assignment id associated to this submission (prefer incomplete)
+  reviewAssignmentId?: number;
+  // whether there is an incomplete review for me on this submission
+  hasIncompleteReview: boolean;
+  // whether all review assignments for this submission (for me) are complete
+  allReviewsComplete: boolean;
+  // counts for display purposes
+  totalReviews: number;
+  completedReviews: number;
 }
+
+type ReviewToolbarStats = {
+  totalReviews: number;
+  completedReviews: number;
+  completionPercent: number;
+  allComplete: boolean;
+  nextIncomplete: { reviewAssignmentId: number; submissionId: number } | null;
+};
 
 // Data types for grouped submission selector
 interface SubmissionOption {
@@ -168,16 +148,23 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
 function SubmissionSelector() {
   const { course_id, assignment_id } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { groups, selectedOption, placeholder } = useGroupedSubmissionData();
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionOption | null) => {
       if (option) {
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files`;
+        const params = new URLSearchParams(searchParams.toString());
+        // Strip review-specific params when navigating generically
+        params.delete("review_assignment_id");
+        params.delete("ignore_review");
+        params.delete("selected_review_id");
+        const qs = params.toString();
+        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${qs ? `?${qs}` : ""}`;
         router.push(url);
       }
     },
-    [course_id, assignment_id, router]
+    [course_id, assignment_id, router, searchParams]
   );
 
   if (groups.length === 0) {
@@ -216,83 +203,118 @@ export { SubmissionSelector };
 export default function AssignmentGradingToolbar() {
   const { course_id, assignment_id, submissions_id } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const myReviewAssignments = useMyReviewAssignments();
+  const isInReviewMode = myReviewAssignments.length > 0;
 
-  const { numCompleted, nextUncompleted, lastCompleted, completionPercent, selectOptions, currentlySelected } =
-    useMemo(() => {
-      const completed = myReviewAssignments.filter((review) => review.completed_at);
-      const uncompleted = myReviewAssignments.filter((review) => !review.completed_at);
-      const last = completed[completed.length - 1]; // Last completed
-      const percent =
-        myReviewAssignments.length > 0 ? Math.round((completed.length / myReviewAssignments.length) * 100) : 0;
+  // Group review assignments by submission id
+  const reviewAssignmentsBySubmission = useMemo(() => {
+    const grouped = new Map<number, typeof myReviewAssignments>();
+    myReviewAssignments.forEach((assignment) => {
+      const existing = grouped.get(assignment.submission_id) || [];
+      grouped.set(assignment.submission_id, [...existing, assignment]);
+    });
+    return grouped;
+  }, [myReviewAssignments]);
 
-      // Create select options for all review assignments
-      const options: SubmissionSelectOption[] = myReviewAssignments.map((review) => ({
-        value: review.submission_id,
-        label: `Submission ${review.submission_id}`
-      }));
-
-      // Find the currently selected option based on the submissions_id from URL
-      const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : null;
-      const selected = currentSubmissionId ? options.find((option) => option.value === currentSubmissionId) : null;
-
-      // Find next uncompleted relative to current position in the select order
-      let nextUncompleted = null;
-      if (uncompleted.length > 0) {
-        const currentIndex = selected ? options.findIndex((opt) => opt.value === selected.value) : -1;
-
-        // Start searching from the position after current, or from beginning if no current selection
-        const startIndex = currentIndex >= 0 ? currentIndex + 1 : 0;
-
-        // Search from current position forward
-        for (let i = startIndex; i < options.length; i++) {
-          const review = myReviewAssignments.find((r) => r.submission_id === options[i].value);
-          if (review && !review.completed_at) {
-            nextUncompleted = review;
-            break;
-          }
-        }
-
-        // If nothing found, wrap around and search from beginning to current position
-        if (!nextUncompleted && currentIndex > 0) {
-          for (let i = 0; i < currentIndex; i++) {
-            const review = myReviewAssignments.find((r) => r.submission_id === options[i].value);
-            if (review && !review.completed_at) {
-              nextUncompleted = review;
-              break;
-            }
-          }
-        }
-
-        // If still nothing found and no current selection, just take first uncompleted
-        if (!nextUncompleted && currentIndex < 0) {
-          nextUncompleted = uncompleted[0];
-        }
-      }
-
+  const { selectOptions, currentlySelected, stats } = useMemo(() => {
+    if (!isInReviewMode) {
       return {
-        numCompleted: completed.length,
-        nextUncompleted,
-        lastCompleted: last,
-        completionPercent: percent,
-        selectOptions: options,
-        currentlySelected: selected || null
+        selectOptions: [] as SubmissionSelectOption[],
+        currentlySelected: null,
+        stats: null as ReviewToolbarStats | null
       };
-    }, [myReviewAssignments, submissions_id]);
+    }
+
+    // Build one option per submission that has review assignments for me
+    const options: SubmissionSelectOption[] = Array.from(reviewAssignmentsBySubmission.entries()).map(
+      ([submissionId, assignments]) => {
+        const allComplete = assignments.every((ra) => ra.completed_at);
+        const anyIncomplete = assignments.some((ra) => !ra.completed_at);
+        const primaryAssignment = assignments.find((ra) => !ra.completed_at) || assignments[0];
+        const completedCount = assignments.filter((ra) => ra.completed_at).length;
+
+        return {
+          value: submissionId,
+          label: `Submission ${submissionId}`,
+          submissionId,
+          reviewAssignmentId: primaryAssignment?.id,
+          hasIncompleteReview: anyIncomplete,
+          allReviewsComplete: allComplete,
+          totalReviews: assignments.length,
+          completedReviews: completedCount
+        };
+      }
+    );
+
+    // Sort so that incomplete submissions appear first, stable by submission id
+    options.sort((a, b) => {
+      if (a.hasIncompleteReview && !b.hasIncompleteReview) return -1;
+      if (!a.hasIncompleteReview && b.hasIncompleteReview) return 1;
+      return a.submissionId - b.submissionId;
+    });
+
+    const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : undefined;
+    const selected = currentSubmissionId
+      ? options.find((opt) => opt.submissionId === currentSubmissionId) || null
+      : null;
+
+    const totalReviews = myReviewAssignments.length;
+    const completedReviews = myReviewAssignments.filter((ra) => ra.completed_at).length;
+    const completionPercent = totalReviews > 0 ? Math.round((completedReviews / totalReviews) * 100) : 0;
+    const allComplete = options.every((opt) => opt.allReviewsComplete);
+
+    // Find next submission with any incomplete reviews (after current), else wrap to first incomplete
+    const nextIncompleteOption =
+      options.find((opt) => opt.hasIncompleteReview && (!selected || opt.submissionId > selected.submissionId)) ||
+      options.find((opt) => opt.hasIncompleteReview);
+
+    const nextIncomplete = nextIncompleteOption
+      ? (() => {
+          const ras = reviewAssignmentsBySubmission.get(nextIncompleteOption.submissionId) ?? [];
+          const target = ras.find((ra) => !ra.completed_at) ?? ras[0];
+          return target ? { reviewAssignmentId: target.id, submissionId: target.submission_id } : null;
+        })()
+      : null;
+
+    return {
+      selectOptions: options,
+      currentlySelected: selected,
+      stats: {
+        totalReviews,
+        completedReviews,
+        completionPercent,
+        allComplete,
+        nextIncomplete
+      }
+    };
+  }, [isInReviewMode, reviewAssignmentsBySubmission, submissions_id, myReviewAssignments]);
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionSelectOption | null) => {
       if (option) {
-        const review = myReviewAssignments.find((r) => r.submission_id === option.value);
-        const reviewId = review?.id;
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${reviewId ? `?review_assignment_id=${reviewId}` : ""}`;
+        const reviewId = option.reviewAssignmentId;
+        const params = new URLSearchParams(searchParams.toString());
+        // Only set review assignment if it is an incomplete review for this submission
+        if (option.hasIncompleteReview && reviewId) {
+          params.set("review_assignment_id", String(reviewId));
+          params.delete("ignore_review");
+          params.delete("selected_review_id");
+        } else {
+          // Ensure no stale RA id is carried over from a prior selection
+          params.delete("review_assignment_id");
+          params.delete("ignore_review");
+          params.delete("selected_review_id");
+        }
+        const qs = params.toString();
+        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.submissionId}/files${qs ? `?${qs}` : ""}`;
         router.push(url);
       }
     },
-    [course_id, assignment_id, router, myReviewAssignments]
+    [course_id, assignment_id, router, searchParams]
   );
 
-  if (myReviewAssignments.length === 0) {
+  if (!isInReviewMode) {
     return (
       <HStack p={2} bg="bg.subtle" borderBottom="1px solid" borderColor="border.muted" w="100%">
         <Link href={`/course/${course_id}/manage/assignments/${assignment_id}`}>
@@ -325,9 +347,9 @@ export default function AssignmentGradingToolbar() {
           <Text fontSize="sm">
             Progress:{" "}
             <strong>
-              {numCompleted}/{myReviewAssignments.length}
+              {stats?.completedReviews}/{stats?.totalReviews}
             </strong>{" "}
-            ({completionPercent}%)
+            ({stats?.completionPercent}%)
           </Text>
         </HStack>
 
@@ -340,39 +362,47 @@ export default function AssignmentGradingToolbar() {
             onChange={handleSubmissionSelect}
             size="sm"
             isSearchable={false}
-            formatOptionLabel={(option: SubmissionSelectOption) => {
-              const review = myReviewAssignments.find((r) => r.submission_id === option.value);
-              return <SubmissionOptionRenderer submissionId={option.value} assignmentReviewId={review?.id} />;
-            }}
+            formatOptionLabel={(option: SubmissionSelectOption) => (
+              <HStack justifyContent="space-between" w="100%">
+                <SubmissionAuthorNames submission_id={option.submissionId} />
+                <HStack gap={1}>
+                  {option.allReviewsComplete ? (
+                    <>
+                      <FaCheckCircle size={12} color="green" />
+                      <Text fontSize="xs" color="green.600">
+                        All reviews complete ({option.completedReviews}/{option.totalReviews})
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <FaClock size={12} color="orange" />
+                      <Text fontSize="xs" color="orange.600">
+                        {option.completedReviews}/{option.totalReviews} complete
+                      </Text>
+                    </>
+                  )}
+                </HStack>
+              </HStack>
+            )}
           />
         </Box>
 
         {/* Right side: Navigation buttons and status badges */}
         <HStack gap={3} flex="0 0 auto">
-          {/* Quick navigation buttons */}
+          {/* Quick navigation: next incomplete if any, else show all done */}
           <HStack gap={3} fontSize="sm">
-            {nextUncompleted ? (
+            {stats && !stats.allComplete && stats.nextIncomplete ? (
               <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${nextUncompleted.submission_id}/files?review_assignment_id=${nextUncompleted.id}`}
+                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${stats.nextIncomplete.submissionId}/files?review_assignment_id=${stats.nextIncomplete.reviewAssignmentId}`}
               >
                 <FaArrowRight style={{ marginRight: "4px" }} />
-                Next Uncompleted
+                Next Incomplete
               </Link>
-            ) : (
+            ) : stats?.allComplete ? (
               <Text color="fg.muted" fontSize="sm">
-                All completed!
+                All reviews completed!
               </Text>
-            )}
-
-            {lastCompleted && (
-              <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${lastCompleted.submission_id}/files?review_assignment_id=${lastCompleted.id}`}
-                colorPalette="green"
-              >
-                Last Completed
-                <FaCheckCircle style={{ marginLeft: "4px" }} />
-              </Link>
-            )}
+            ) : null}
           </HStack>
         </HStack>
       </HStack>
