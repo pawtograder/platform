@@ -4,15 +4,15 @@ import { test as base, Page } from "@playwright/test";
 const injectVisualTestSetup = async (page: Page) => {
   await page.evaluate(() => {
     // Set the data-visual-tests attribute on the html element
-    if(document.documentElement) {
+    if (document.documentElement) {
       document.documentElement.setAttribute("data-visual-tests", "");
     }
-    
+
     // Check if our style is already injected to avoid duplicates
-    if (!document.getElementById('visual-test-style')) {
+    if (!document.getElementById("visual-test-style")) {
       // Create and inject CSS that removes all border-radius
-      const style = document.createElement('style');
-      style.id = 'visual-test-style';
+      const style = document.createElement("style");
+      style.id = "visual-test-style";
       style.textContent = `
         /* Visual test override - remove all border radius */
         html[data-visual-tests] *,
@@ -25,7 +25,7 @@ const injectVisualTestSetup = async (page: Page) => {
           border-bottom-right-radius: 0 !important;
         }
       `;
-      if(document.head) {
+      if (document.head) {
         document.head.appendChild(style);
       }
     }
@@ -38,15 +38,15 @@ export const test = base.extend({
     // Set up initial script for new page loads
     await page.addInitScript(() => {
       // Set the data-visual-tests attribute on the html element
-      if(document.documentElement) {
+      if (document.documentElement) {
         document.documentElement.setAttribute("data-visual-tests", "");
       }
-      
+
       // Check if our style is already injected to avoid duplicates
-      if (!document.getElementById('visual-test-style')) {
+      if (!document.getElementById("visual-test-style")) {
         // Create and inject CSS that removes all border-radius
-        const style = document.createElement('style');
-        style.id = 'visual-test-style';
+        const style = document.createElement("style");
+        style.id = "visual-test-style";
         style.textContent = `
           /* Visual test override - remove all border radius */
           html[data-visual-tests] *,
@@ -59,14 +59,14 @@ export const test = base.extend({
             border-bottom-right-radius: 0 !important;
           }
         `;
-        if(document.head) {
+        if (document.head) {
           document.head.appendChild(style);
         }
       }
     });
 
     // Listen for all navigations and re-inject the setup
-    page.on('domcontentloaded', async () => {
+    page.on("domcontentloaded", async () => {
       await injectVisualTestSetup(page);
     });
 
