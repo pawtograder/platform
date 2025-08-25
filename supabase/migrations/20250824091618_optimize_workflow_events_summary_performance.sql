@@ -258,6 +258,7 @@ BEGIN
     SELECT 
       wes.workflow_run_id,
       wes.run_attempt,
+      wes.run_number,
       wes.class_id,
       wes.requested_at,
       wes.in_progress_at,
@@ -269,31 +270,36 @@ BEGIN
       AND wes.requested_at >= v_period_start
       AND wes.requested_at <= v_period_end
   ),
-  error_stats AS (
-    SELECT COUNT(DISTINCT ws.workflow_run_id) as error_count
-    FROM "public"."workflow_run_error" wre
-    JOIN workflow_stats ws ON (
+  run_errors AS (
+    SELECT 
+      ws.workflow_run_id,
+      ws.run_attempt,
+      COUNT(*) as error_count
+    FROM workflow_stats ws
+    LEFT JOIN "public"."workflow_run_error" wre ON (
       wre.run_number = ws.run_number 
       AND (wre.run_attempt IS NULL OR wre.run_attempt = ws.run_attempt)
       AND wre.class_id = ws.class_id
-    )
-    WHERE wre.class_id = p_class_id
       AND wre.created_at >= v_period_start
       AND wre.created_at <= v_period_end
+    )
+    GROUP BY ws.workflow_run_id, ws.run_attempt
   ),
   base_stats AS (
     SELECT 
       COUNT(*)::bigint as total_runs,
       COUNT(CASE WHEN ws.completed_at IS NOT NULL THEN 1 END)::bigint as completed_runs,
       -- Failed runs: runs that are not completed but have at least one error
-      COUNT(CASE WHEN ws.completed_at IS NULL AND es.error_count > 0 THEN 1 END)::bigint as failed_runs,
+      COUNT(CASE WHEN ws.completed_at IS NULL AND re.error_count > 0 THEN 1 END)::bigint as failed_runs,
       COUNT(CASE WHEN ws.in_progress_at IS NOT NULL AND ws.completed_at IS NULL THEN 1 END)::bigint as in_progress_runs,
       AVG(ws.queue_time_seconds) as avg_queue_time_seconds,
       AVG(ws.run_time_seconds) as avg_run_time_seconds,
-      es.error_count
+      SUM(re.error_count)::bigint as total_error_count
     FROM workflow_stats ws
-    CROSS JOIN error_stats es
-    GROUP BY es.error_count
+    LEFT JOIN run_errors re ON (
+      ws.workflow_run_id = re.workflow_run_id 
+      AND ws.run_attempt = re.run_attempt
+    )
   )
   SELECT 
     p_class_id as class_id,
@@ -302,11 +308,11 @@ BEGIN
     COALESCE(bs.completed_runs, 0::bigint) as completed_runs,
     COALESCE(bs.failed_runs, 0::bigint) as failed_runs,
     COALESCE(bs.in_progress_runs, 0::bigint) as in_progress_runs,
-    COALESCE(ROUND(bs.avg_queue_time_seconds, 2), 0.00) as avg_queue_time_seconds,
-    COALESCE(ROUND(bs.avg_run_time_seconds, 2), 0.00) as avg_run_time_seconds,
-    COALESCE(bs.error_count, 0::bigint) as error_count,
+    COALESCE(ROUND((bs.avg_queue_time_seconds)::numeric, 2), 0.00) as avg_queue_time_seconds,
+    COALESCE(ROUND((bs.avg_run_time_seconds)::numeric, 2), 0.00) as avg_run_time_seconds,
+    COALESCE(bs.total_error_count, 0::bigint) as error_count,
     CASE 
-      WHEN COALESCE(bs.total_runs, 0) > 0 THEN ROUND((COALESCE(bs.error_count, 0)::numeric / bs.total_runs::numeric) * 100, 2)
+      WHEN COALESCE(bs.total_runs, 0) > 0 THEN ROUND((COALESCE(bs.total_error_count, 0)::numeric / bs.total_runs::numeric) * 100, 2)
       ELSE 0.00
     END as error_rate,
     CASE 
