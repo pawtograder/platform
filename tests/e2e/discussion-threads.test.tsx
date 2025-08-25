@@ -2,7 +2,7 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { expect, test } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
 
 let course: Course;
@@ -12,18 +12,29 @@ let instructor: TestingUser | undefined;
 
 test.beforeAll(async () => {
   course = await createClass();
-  student1 = await createUserInClass({
-    role: "student",
-    class_id: course.id
-  });
-  student2 = await createUserInClass({
-    role: "student",
-    class_id: course.id
-  });
-  instructor = await createUserInClass({
-    role: "instructor",
-    class_id: course.id
-  });
+  [student1, student2, instructor] = await createUsersInClass([
+    {
+      name: "Discussion Thread Student 1",
+      email: "discussion-thread-student1@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Discussion Thread Student 2",
+      email: "discussion-thread-student2@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Discussion Thread Instructor",
+      email: "discussion-thread-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
 });
 
 test.describe("Discussion Thread Page", () => {
@@ -31,7 +42,6 @@ test.describe("Discussion Thread Page", () => {
   test("A student can view the discussion feed", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
-    await argosScreenshot(page, "Discussion Thread Page");
     await expect(page.getByRole("heading", { name: "Discussion Feed" })).toBeVisible();
     await expect(page.getByRole("link").filter({ hasText: "New Thread" })).toBeVisible();
     await expect(page.getByPlaceholder("Search threads...")).toBeVisible();
@@ -40,6 +50,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("No threads match your criteria.")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Unanswered Questions" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Answered Questions", exact: true })).toBeVisible();
+    await argosScreenshot(page, "Discussion Thread Page");
   });
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
@@ -136,7 +147,8 @@ test.describe("Discussion Thread Page", () => {
 
   test("An instructor can view all threads and reply to them", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
-    await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
     await page.waitForURL("**/discussion");
     await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1" }).nth(1)).toBeVisible();

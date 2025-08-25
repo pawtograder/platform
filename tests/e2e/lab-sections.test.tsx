@@ -2,7 +2,7 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { expect, test } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
 
 let course: Course;
@@ -13,14 +13,22 @@ const labSectionDescription = "Lab Section 1 Description";
 
 test.beforeAll(async () => {
   course = await createClass();
-  instructor1 = await createUserInClass({
-    role: "instructor",
-    class_id: course.id
-  });
-  instructor2 = await createUserInClass({
-    role: "instructor",
-    class_id: course.id
-  });
+  [instructor1, instructor2] = await createUsersInClass([
+    {
+      name: "Lab Sections Instructor 1",
+      email: "lab-sections-instructor1@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Lab Sections Instructor 2",
+      email: "lab-sections-instructor2@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
 });
 
 test.describe("Lab Sections Page", () => {

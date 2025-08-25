@@ -5,7 +5,7 @@ import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
   createClass,
-  createUserInClass,
+  createUsersInClass,
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
@@ -44,11 +44,26 @@ let submission_id: number | undefined;
 let assignment: Assignment | undefined;
 test.beforeAll(async () => {
   course = await createClass();
-  student = await createUserInClass({ role: "student", class_id: course.id });
-  instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+  [student, instructor] = await createUsersInClass([
+    {
+      name: "Grading Student",
+      email: "grading-student@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Grading Instructor",
+      email: "grading-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Grading Assignment"
   });
 
   const submission_res = await insertPreBakedSubmission({

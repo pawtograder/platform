@@ -557,6 +557,17 @@ export default function EnrollmentsTable() {
       type: "enrollment" as const
     }));
 
+    enrollmentRows.sort((a, b) => {
+      if (a.type === "enrollment" && b.type === "invitation") return -1;
+      if (a.type === "invitation" && b.type === "enrollment") return 1;
+      if (a.type === "enrollment" && b.type === "enrollment") {
+        return (a.profiles?.name || "").localeCompare(b.profiles?.name || "");
+      }
+      if (a.type === "invitation" && b.type === "invitation") {
+        return (a.name || `${a.sis_user_id}` || "").localeCompare(b.name || `${b.sis_user_id}` || "");
+      }
+      return 0;
+    });
     return [...enrollmentRows, ...invitations];
   }, [userRolesData, invitations]);
 
@@ -569,6 +580,7 @@ export default function EnrollmentsTable() {
     getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
     initialState: {
+      sorting: [{ id: "profiles.name", desc: false }],
       pagination: {
         pageIndex: 0,
         pageSize: 50

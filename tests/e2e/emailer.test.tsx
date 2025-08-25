@@ -5,7 +5,7 @@ import {
   createClass,
   createClassSection,
   createLabSectionWithStudents,
-  createUserInClass,
+  createUsersInClass,
   loginAsUser,
   supabase,
   TestingUser
@@ -24,29 +24,48 @@ let lab2Leader: TestingUser;
 let lab1Students: TestingUser[];
 let lab2Students: TestingUser[];
 let instructor: TestingUser;
-async function createSectionWithStudents(numStudents: number) {
-  const section = await createClassSection({ class_id: course.id });
+async function createSectionWithStudents(numStudents: number, sectionNumber: number) {
+  const section = await createClassSection({ class_id: course.id, name: `Emailer Section ${sectionNumber}` });
   const students = [];
   for (let i = 0; i < numStudents; i++) {
-    const student = await createUserInClass({ role: "student", class_id: course.id, section_id: section.id });
-    students.push(student);
+    const student = await createUsersInClass([
+      {
+        name: `Emailer Section ${sectionNumber} Student ${i + 1}`,
+        email: `emailer-section-${sectionNumber}-student${i + 1}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        section_id: section.id,
+        useMagicLink: true
+      }
+    ]);
+    students.push(student[0]);
   }
   return { section, students };
 }
 
-async function createLabWithStudents(numStudents: number, labLeader: TestingUser) {
+async function createLabWithStudents(numStudents: number, labLeader: TestingUser, labNumber: number) {
   const students = [];
   const lab = await createLabSectionWithStudents({
     class_id: course.id,
     lab_leader: labLeader,
+    name: `Emailer Lab ${labNumber}`,
     day_of_week: "monday",
     students: [],
     start_time: "10:00",
     end_time: "11:00"
   });
   for (let i = 0; i < numStudents; i++) {
-    const student = await createUserInClass({ role: "student", class_id: course.id, lab_section_id: lab.id });
-    students.push(student);
+    const student = await createUsersInClass([
+      {
+        name: `Emailer Lab ${labNumber} Student ${i + 1}`,
+        email: `emailer-lab-${labNumber}-student${i + 1}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        lab_section_id: lab.id,
+        useMagicLink: true
+      }
+    ]);
+    students.push(student[0]);
   }
   return { lab, students };
 }
@@ -54,25 +73,45 @@ test.beforeAll(async () => {
   //Create a new class for this test
   const course_res = await createClass();
   course = course_res;
-  instructor = await createUserInClass({ role: "instructor", class_id: course.id });
-  lab1Leader = await createUserInClass({ role: "grader", class_id: course.id });
-  lab2Leader = await createUserInClass({ role: "grader", class_id: course.id });
+  [instructor, lab1Leader, lab2Leader] = await createUsersInClass([
+    {
+      name: "Emailer Instructor",
+      email: "emailer-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Emailer Lab 1 Leader",
+      email: "emailer-lab1-leader@pawtograder.net",
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Emailer Lab 2 Leader",
+      email: "emailer-lab2-leader@pawtograder.net",
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
 
   //Create a section with 2 students
-  const { section: _section1, students: _section1Students } = await createSectionWithStudents(2);
+  const { section: _section1, students: _section1Students } = await createSectionWithStudents(2, 1);
   section1 = _section1;
   section1Students = _section1Students;
   //Create a section with 2 students
-  const { section: _section2, students: _section2Students } = await createSectionWithStudents(2);
+  const { section: _section2, students: _section2Students } = await createSectionWithStudents(2, 2);
   section2 = _section2;
   section2Students = _section2Students;
 
   //Create a lab with 2 students
-  const { lab: _lab1, students: _lab1Students } = await createLabWithStudents(2, lab1Leader);
+  const { lab: _lab1, students: _lab1Students } = await createLabWithStudents(2, lab1Leader, 1);
   lab1 = _lab1;
   lab1Students = _lab1Students;
   //Create a lab with 2 students
-  const { lab: _lab2, students: _lab2Students } = await createLabWithStudents(2, lab2Leader);
+  const { lab: _lab2, students: _lab2Students } = await createLabWithStudents(2, lab2Leader, 2);
   lab2 = _lab2;
   lab2Students = _lab2Students;
 });
@@ -192,8 +231,8 @@ async function expectStudentsReceivedExactlyTheseEmails({
 }
 test.describe("Emailer", () => {
   test("Emailing students in a class section or lab section", async ({ page }) => {
-    await loginAsUser(page, instructor);
-    await expect(page.getByRole("link", { name: course.name! })).toBeVisible();
+    await loginAsUser(page, instructor, course);
+    await page.waitForLoadState("networkidle");
     await page.goto(`/course/${course.id}/manage/course/emails`);
     const section1Message = await sendBatchEmails({ page, target_text: "Students", class_section_text: section1.name });
     const section2Message = await sendBatchEmails({ page, target_text: "Students", class_section_text: section2.name });

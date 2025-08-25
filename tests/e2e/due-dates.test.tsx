@@ -6,7 +6,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import {
   createClass,
   createLabSectionWithStudents,
-  createUserInClass,
+  createUsersInClass,
   insertAssignment,
   loginAsUser,
   TestingUser
@@ -24,8 +24,22 @@ const labAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"),
 labAssignmentDueDate.setHours(10, 0, 0, 0);
 test.beforeAll(async () => {
   course = await createClass();
-  labLeader = await createUserInClass({ role: "grader", class_id: course.id });
-  student = await createUserInClass({ role: "student", class_id: course.id });
+  [labLeader, student] = await createUsersInClass([
+    {
+      name: "Due Dates Lab Leader",
+      email: "due-dates-lab-leader@pawtograder.net",
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Due Dates Student",
+      email: "due-dates-student@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
   await createLabSectionWithStudents({
     class_id: course.id,
     lab_leader: labLeader,
@@ -36,12 +50,14 @@ test.beforeAll(async () => {
   });
   testAssignment = await insertAssignment({
     due_date: assignmentDueDate.toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Due Dates Assignment"
   });
   testLabAssignment = await insertAssignment({
     due_date: labAssignmentDueDate.toUTCString(),
     lab_due_date_offset: 42,
-    class_id: course.id
+    class_id: course.id,
+    name: "Due Dates Lab Assignment"
   });
 });
 const expectedLabAssignmentDueDate =

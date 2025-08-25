@@ -21,11 +21,11 @@ export type TestingUser = {
   private_profile_name: string;
   public_profile_name: string;
   email: string;
-  password: string;
   user_id: string;
   private_profile_id: string;
   public_profile_id: string;
   class_id: number;
+  password: string;
 };
 
 export async function createClass({
@@ -72,10 +72,12 @@ export async function createClass({
 let sectionIdx = 1;
 export async function createClassSection({
   class_id,
-  rateLimitManager
+  rateLimitManager,
+  name
 }: {
   class_id: number;
   rateLimitManager?: RateLimitManager;
+  name?: string;
 }) {
   const { data: sectionDataList, error: sectionError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
@@ -84,7 +86,7 @@ export async function createClassSection({
       .from("class_sections")
       .insert({
         class_id: class_id,
-        name: `Section #${sectionIdx}Test`
+        name: name ?? `Section #${sectionIdx}Test`
       })
       .select("*")
   );
@@ -121,13 +123,37 @@ export async function updateClassSettings({
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "Sign in email" }).click();
-  await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
-  await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-  await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
-  await page.getByRole("button", { name: "Sign in with email" }).click();
+
+  // Generate magic link on-demand for authentication
+  try {
+    const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
+      email: testingUser.email,
+      type: "magiclink"
+    });
+    if (magicLinkError) {
+      throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
+    }
+
+    const magicLink = `${process.env.BASE_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL || "http://localhost:3000"}/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+
+    // Use magic link for login
+    await page.goto(magicLink);
+    await page.getByRole("button", { name: "Sign in with magic link" }).click();
+  } catch (error) {
+    // Fall back to password-based login if magic link generation fails
+    // eslint-disable-next-line no-console
+    console.warn(`Failed to generate magic link for ${testingUser.email}, falling back to password:`, error);
+
+    await page.getByRole("textbox", { name: "Sign in email" }).click();
+    await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
+    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
+    await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
+    await page.getByRole("button", { name: "Sign in with email" }).click();
+  }
+
   if (course) {
-    await page.getByRole("link", { name: course.name! }).click();
+    await page.waitForLoadState("networkidle");
+    await page.goto(`/course/${course.id}`);
   }
 }
 
@@ -144,7 +170,8 @@ export async function createUserInClass({
   randomSuffix,
   name,
   email,
-  rateLimitManager
+  rateLimitManager,
+  useMagicLink = false
 }: {
   role: "student" | "instructor" | "grader";
   class_id: number;
@@ -154,8 +181,8 @@ export async function createUserInClass({
   name?: string;
   email?: string;
   rateLimitManager?: RateLimitManager;
+  useMagicLink?: boolean;
 }): Promise<TestingUser> {
-  const password = process.env.TEST_PASSWORD || "change-it";
   const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
   const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
@@ -167,9 +194,12 @@ export async function createUserInClass({
   userIdx[role]++;
   // Try to create user, if it fails due to existing email, try to get the existing user
   let userId: string;
+  const tempPassword = useMagicLink
+    ? Math.random().toString(36).substring(2, 34)
+    : process.env.TEST_PASSWORD || "change-it";
   const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser({
     email: resolvedEmail,
-    password: password,
+    password: tempPassword,
     email_confirm: true
   });
 
@@ -261,7 +291,6 @@ export async function createUserInClass({
     }
     const newPublicProfileData = newPublicProfileDataList[0];
 
-    //OLD BAD WAY
     const { data: newPrivateProfileDataList, error: privateProfileError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("profiles", () =>
@@ -318,6 +347,10 @@ export async function createUserInClass({
   if (!profileData || profileError) {
     throw new Error(`Failed to get profile: ${profileError?.message}`);
   }
+
+  // Always return password, magic links will be generated by loginAsUser when needed
+  const password = process.env.TEST_PASSWORD || "change-it";
+
   return {
     private_profile_name: private_profile_name,
     public_profile_name: public_profile_name,
@@ -328,6 +361,217 @@ export async function createUserInClass({
     password: password,
     class_id: class_id
   };
+}
+
+// New wrapper function for batch user creation with existing user detection
+export async function createUsersInClass(
+  userRequests: Array<{
+    role: "student" | "instructor" | "grader";
+    class_id: number;
+    section_id?: number;
+    lab_section_id?: number;
+    randomSuffix?: string;
+    name?: string;
+    email?: string;
+    rateLimitManager?: RateLimitManager;
+    useMagicLink?: boolean;
+  }>,
+  rateLimitManager?: RateLimitManager
+): Promise<TestingUser[]> {
+  // Resolve all emails first
+  const resolvedRequests = userRequests.map((req) => {
+    const extra_randomness = req.randomSuffix ?? Math.random().toString(36).substring(2, 20);
+    const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
+    const resolvedEmail =
+      req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${userIdx[req.role]}@pawtograder.net`;
+    const resolvedName = req.name
+      ? req.name
+      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${userIdx[req.role]}Test`;
+    userIdx[req.role]++;
+
+    return {
+      ...req,
+      resolvedEmail,
+      resolvedName
+    };
+  });
+
+  // Get all resolved emails
+  const emails = resolvedRequests.map((req) => req.resolvedEmail);
+
+  // Check for existing users in one database query
+  const { data: existingUsers, error: existingUsersError } = await supabase
+    .from("users")
+    .select("user_id, email")
+    .in("email", emails);
+
+  if (existingUsersError) {
+    throw new Error(`Failed to check for existing users: ${existingUsersError.message}`);
+  }
+
+  // Create a map of existing users by email
+  const existingUsersMap = new Map(existingUsers.map((user) => [user.email, user.user_id]));
+
+  // Process each request
+  const results: TestingUser[] = [];
+
+  for (const request of resolvedRequests) {
+    const { role, class_id, section_id, lab_section_id, resolvedEmail, resolvedName, useMagicLink = false } = request;
+
+    const public_profile_name = request.name
+      ? `Pseudonym #${userIdx[role] - 1}`
+      : `Pseudonym #${userIdx[role] - 1} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+    const private_profile_name = resolvedName;
+
+    let userId: string;
+
+    // Check if user already exists
+    if (existingUsersMap.has(resolvedEmail)) {
+      userId = existingUsersMap.get(resolvedEmail)!;
+    } else {
+      // Create new user
+      const tempPassword = useMagicLink
+        ? Math.random().toString(36).substring(2, 34)
+        : process.env.TEST_PASSWORD || "change-it";
+      const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser(
+        {
+          email: resolvedEmail,
+          password: tempPassword,
+          email_confirm: true
+        }
+      );
+
+      if (userError) {
+        throw new Error(`Failed to create user ${resolvedEmail}: ${userError.message}`);
+      }
+
+      // Handle both possible return structures from createUser
+      if (newUserData && "user" in newUserData && newUserData.user) {
+        userId = newUserData.user.id;
+      } else if (newUserData && "id" in newUserData) {
+        userId = (newUserData as unknown as { id: string }).id;
+      } else {
+        throw new Error("Failed to extract user ID from created user data");
+      }
+    }
+
+    // Check if user already has a role in this class
+    const { data: existingRole, error: roleCheckError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("user_roles", () =>
+      supabase
+        .from("user_roles")
+        .select("private_profile_id, public_profile_id")
+        .eq("user_id", userId)
+        .eq("class_id", class_id)
+    );
+
+    let publicProfileData: { id: string }, privateProfileData: { id: string };
+
+    if (existingRole.length > 0 && !roleCheckError) {
+      // User already enrolled in class, get existing profile data
+      // eslint-disable-next-line no-console
+      console.log(`User already enrolled in class ${class_id}, using existing profiles`);
+      publicProfileData = { id: existingRole[0].public_profile_id };
+      privateProfileData = { id: existingRole[0].private_profile_id };
+    } else if (class_id !== 1) {
+      // User not enrolled or new class, create profiles and enrollment
+      const { data: newPublicProfileDataList, error: publicProfileError } = await (
+        rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+      ).trackAndLimit("profiles", () =>
+        supabase
+          .from("profiles")
+          .insert({
+            name: public_profile_name,
+            avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-user"}`,
+            class_id: class_id,
+            is_private_profile: false
+          })
+          .select("id")
+      );
+      if (publicProfileError) {
+        throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
+      }
+      const newPublicProfileData = newPublicProfileDataList[0];
+
+      const { data: newPrivateProfileDataList, error: privateProfileError } = await (
+        rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+      ).trackAndLimit("profiles", () =>
+        supabase
+          .from("profiles")
+          .insert({
+            name: private_profile_name,
+            avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-private-user"}`,
+            class_id: class_id,
+            is_private_profile: true
+          })
+          .select("id")
+      );
+      if (privateProfileError) {
+        throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
+      }
+      const newPrivateProfileData = newPrivateProfileDataList[0];
+
+      if (!newPublicProfileData || !newPrivateProfileData) {
+        throw new Error("Failed to create public or private profile");
+      }
+
+      publicProfileData = newPublicProfileData;
+      privateProfileData = newPrivateProfileData;
+
+      console.log(
+        `Putting user ${userId}} into class ${class_id} with role ${role} and section ${section_id} and lab section ${lab_section_id}`
+      );
+
+      await supabase.from("user_roles").insert({
+        user_id: userId,
+        class_id: class_id,
+        private_profile_id: privateProfileData.id,
+        public_profile_id: publicProfileData.id,
+        role: role,
+        class_section_id: section_id,
+        lab_section_id: lab_section_id
+      });
+    } else if (section_id || lab_section_id) {
+      await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+        supabase
+          .from("user_roles")
+          .update({
+            class_section_id: section_id,
+            lab_section_id: lab_section_id
+          })
+          .eq("user_id", userId)
+          .eq("class_id", class_id)
+          .select("id")
+      );
+    }
+
+    const { data: profileData, error: profileError } = await supabase
+      .from("user_roles")
+      .select("private_profile_id, public_profile_id")
+      .eq("user_id", userId)
+      .eq("class_id", class_id)
+      .single();
+    if (!profileData || profileError) {
+      throw new Error(`Failed to get profile: ${profileError?.message}`);
+    }
+
+    // Always return password, magic links will be generated by loginAsUser when needed
+    const password = process.env.TEST_PASSWORD || "change-it";
+
+    results.push({
+      private_profile_name: private_profile_name,
+      public_profile_name: public_profile_name,
+      email: resolvedEmail,
+      user_id: userId,
+      private_profile_id: profileData.private_profile_id,
+      public_profile_id: profileData.public_profile_id,
+      password: password,
+      class_id: class_id
+    });
+  }
+
+  return results;
 }
 
 let repoCounter = 0;
@@ -544,7 +788,8 @@ export async function createLabSectionWithStudents({
   day_of_week,
   students,
   start_time,
-  end_time
+  end_time,
+  name
 }: {
   class_id?: number;
   lab_leader: TestingUser;
@@ -552,8 +797,9 @@ export async function createLabSectionWithStudents({
   students: TestingUser[];
   start_time?: string;
   end_time?: string;
+  name?: string;
 }) {
-  const lab_section_name = `Lab #${labSectionIdx} (${day_of_week})`;
+  const lab_section_name = name ?? `Lab #${labSectionIdx} (${day_of_week})`;
   labSectionIdx++;
   const { data: labSectionData, error: labSectionError } = await supabase
     .from("lab_sections")
@@ -608,15 +854,17 @@ export async function insertAssignment({
   lab_due_date_offset,
   allow_not_graded_submissions,
   class_id,
-  rateLimitManager
+  rateLimitManager,
+  name
 }: {
   due_date: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
   class_id: number;
   rateLimitManager?: RateLimitManager;
+  name?: string;
 }): Promise<Assignment & { rubricChecks: RubricCheck[] }> {
-  const title = `Assignment #${assignmentIdx.assignment}Test`;
+  const title = name ?? `Assignment #${assignmentIdx.assignment}Test`;
   assignmentIdx.assignment++;
   const { data: selfReviewSettingDataList, error: selfReviewSettingError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER

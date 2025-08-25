@@ -5,7 +5,7 @@ import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
   createClass,
-  createUserInClass,
+  createUsersInClass,
   insertAssignment,
   insertOfficeHoursQueue,
   insertPreBakedSubmission,
@@ -24,13 +24,34 @@ let assignment: Assignment | undefined;
 
 test.beforeAll(async () => {
   course = await createClass();
-  student = await createUserInClass({ role: "student", class_id: course.id });
-  student2 = await createUserInClass({ role: "student", class_id: course.id });
-  instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+  [student, student2, instructor] = await createUsersInClass([
+    {
+      name: "Office Hours Student",
+      email: "office-hours-student@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Office Hours Student 2",
+      email: "office-hours-student2@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Office Hours Instructor",
+      email: "office-hours-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
   await insertOfficeHoursQueue({ class_id: course.id, name: "office-hours" });
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Office Hours Assignment"
   });
 
   const submission_res = await insertPreBakedSubmission({
@@ -52,7 +73,8 @@ test.describe("Office Hours", () => {
   test.describe.configure({ mode: "serial" });
   test("Student can request help", async ({ page }) => {
     await loginAsUser(page, student!, course);
-    await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
+    const navRegion = page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.waitForURL("**/office-hours/**");
 
     //Make a private request first
@@ -89,7 +111,8 @@ test.describe("Office Hours", () => {
   });
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
     await loginAsUser(page, student2!, course);
-    await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
+    const navRegion = page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.waitForURL("**/office-hours/**");
 
     await page.getByRole("button", { name: "View Chat" }).click();
@@ -103,7 +126,8 @@ test.describe("Office Hours", () => {
   });
   test("Instructor can view all, comment, and start a video call", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
-    await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
+    const navRegion = page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.waitForURL("**/manage/office-hours");
 
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
