@@ -3396,6 +3396,7 @@ export type Database = {
           sis_user_id: number;
           status: string;
           updated_at: string;
+          updated_by: string | null;
         };
         Insert: {
           accepted_at?: string | null;
@@ -3414,6 +3415,7 @@ export type Database = {
           sis_user_id: number;
           status?: string;
           updated_at?: string;
+          updated_by?: string | null;
         };
         Update: {
           accepted_at?: string | null;
@@ -3432,6 +3434,7 @@ export type Database = {
           sis_user_id?: number;
           status?: string;
           updated_at?: string;
+          updated_by?: string | null;
         };
         Relationships: [
           {

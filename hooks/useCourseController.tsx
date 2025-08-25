@@ -209,7 +209,6 @@ export function useDiscussionThreadReadStatus(threadId: number) {
             value: user?.id || ""
           }
         ]);
-        console.log(readStatus);
         if (readStatus) {
           controller.discussionThreadReadStatus.update(readStatus.id, {
             read_at: isUnread ? null : new Date().toISOString()
@@ -377,7 +376,8 @@ export class CourseController {
         client: this._client,
         table: "discussion_threads",
         query: this._client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { root_class_id: this.courseId }
       });
     }
     return this._discussionThreadTeasers;

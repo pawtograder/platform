@@ -1,4 +1,14 @@
 DROP FUNCTION admin_get_sis_sync_status();
+
+-- Ensure partial unique indexes exist for ON CONFLICT targets
+CREATE UNIQUE INDEX IF NOT EXISTS sis_sync_status_unique_course_section_partial
+  ON public.sis_sync_status (course_id, course_section_id)
+  WHERE course_section_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS sis_sync_status_unique_lab_section_partial
+  ON public.sis_sync_status (course_id, lab_section_id)
+  WHERE lab_section_id IS NOT NULL;
+
 -- Fix admin_get_sis_sync_status function return type mismatch
 -- The function declares term as text but classes.term is integer
 CREATE OR REPLACE FUNCTION "public"."admin_get_sis_sync_status"() RETURNS TABLE("class_id" bigint, "class_name" "text", "term" integer, "sis_sections_count" bigint, "last_sync_time" timestamp with time zone, "last_sync_status" "text", "last_sync_message" "text", "sync_enabled" boolean, "total_invitations" bigint, "pending_invitations" bigint, "expired_invitations" bigint)

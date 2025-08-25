@@ -176,17 +176,40 @@ function LinkedSectionsTab() {
   useEffect(() => {
     const supabase = createClient();
     const fetchSections = async () => {
-      const { data } = await supabase
-        .from("classes")
-        .select("*, class_sections(*), lab_sections(*), sis_sync_status(*)")
-        .eq("id", parseInt(course_id as string))
-        .single();
-      if (data) {
-        setClassWithSyncStatus(data);
-      } else {
+      try {
+        const { data, error } = await supabase
+          .from("classes")
+          .select("*, class_sections(*), lab_sections(*), sis_sync_status(*)")
+          .eq("id", parseInt(course_id as string))
+          .single();
+
+        if (error) {
+          // Handle Supabase error
+          const errorDescription = error.message + (error.details ? ` (${error.details})` : "");
+          toaster.create({
+            title: "Error fetching section sync status",
+            description: errorDescription,
+            type: "error"
+          });
+          return;
+        }
+
+        if (data) {
+          setClassWithSyncStatus(data);
+        } else {
+          // No error but no data
+          toaster.create({
+            title: "Error fetching section sync status",
+            description: "No class data found",
+            type: "error"
+          });
+        }
+      } catch (exception) {
+        // Handle any thrown exceptions
+        const errorMessage = exception instanceof Error ? exception.message : String(exception);
         toaster.create({
           title: "Error fetching section sync status",
-          description: "Error fetching section sync status",
+          description: `Unexpected error: ${errorMessage}`,
           type: "error"
         });
       }

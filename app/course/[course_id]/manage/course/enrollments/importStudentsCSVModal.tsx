@@ -295,8 +295,17 @@ const ImportStudentsCSVModalContent = () => {
 
           // Build list of SIS IDs that should be ignored (already enrolled or have pending invitations)
           existingUserIdentifiers = [];
+
+          // Add SIS IDs for users who are already enrolled or have pending invitations
           for (const [sisId, userId] of existingUserMap) {
             if (enrolledUserIds.has(userId) || pendingInvitationSisIds.has(sisId)) {
+              existingUserIdentifiers.push(sisId);
+            }
+          }
+
+          // Add pending invitation SIS IDs for users that don't exist in the system yet
+          for (const sisId of pendingInvitationSisIds) {
+            if (!existingUserMap.has(sisId)) {
               existingUserIdentifiers.push(sisId);
             }
           }
@@ -387,7 +396,7 @@ const ImportStudentsCSVModalContent = () => {
                     courseId: Number(course_id),
                     invitations: [
                       {
-                        sis_user_id: user.sis_id!.toString(),
+                        sis_user_id: user.sis_id!,
                         role: user.role as "instructor" | "grader" | "student",
                         name: user.name
                       }
