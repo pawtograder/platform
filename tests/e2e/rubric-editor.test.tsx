@@ -1,25 +1,35 @@
-import { test, expect } from "@playwright/test";
+import { Course } from "@/utils/supabase/DatabaseTypes";
+import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
+import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
 import { addDays } from "date-fns";
-import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
-import { createClass, createUserInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
+import { Assignment, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
-let course: Course | undefined;
+let course: Course;
 let instructor: TestingUser | undefined;
 let assignment: (Assignment & { rubricChecks: RubricCheck[] }) | undefined;
 
-test.describe("Rubric editor", () => {
-  test.beforeAll(async () => {
-    course = await createClass();
-    instructor = await createUserInClass({ role: "instructor", class_id: course!.id });
-    assignment = await insertAssignment({
-      due_date: addDays(new Date(), 1).toUTCString(),
-      class_id: course!.id
-    });
+test.beforeAll(async () => {
+  course = await createClass();
+  [instructor] = await createUsersInClass([
+    {
+      name: "Rubric Editor Instructor",
+      email: "rubric-editor-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course!.id,
+      useMagicLink: true
+    }
+  ]);
+  assignment = await insertAssignment({
+    due_date: addDays(new Date(), 1).toUTCString(),
+    class_id: course!.id,
+    name: "Rubric Editor Assignment"
   });
+});
 
+test.describe("Rubric editor", () => {
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
     await loginAsUser(page, instructor!);
     await page.waitForURL(`/course`);

@@ -1,11 +1,12 @@
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
-import { expect, test, type Page } from "@playwright/test";
+import { test, expect } from "../global-setup";
+import { type Page } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
   createClass,
-  createUserInClass,
+  createUsersInClass,
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
@@ -48,13 +49,40 @@ let student2: TestingUser | undefined;
 let submission_id2: number | undefined;
 test.beforeAll(async () => {
   course = await createClass();
-  student = await createUserInClass({ role: "student", class_id: course.id });
-  instructor = await createUserInClass({ role: "instructor", class_id: course.id });
-  grader = await createUserInClass({ role: "grader", class_id: course.id });
-  student2 = await createUserInClass({ role: "student", class_id: course.id });
+  [student, instructor, grader, student2] = await createUsersInClass([
+    {
+      name: "Grading Student",
+      email: "grading-student@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Grading Instructor",
+      email: "grading-instructor@pawtograder.net",
+      role: "instructor",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Grading Grader",
+      email: "grading-grader@pawtograder.net",
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Grading Student 2",
+      email: "grading-student2@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Grading Assignment"
   });
 
   const submission_res = await insertPreBakedSubmission({
@@ -130,6 +158,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Confirm action" }).click();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
+
+    //Scroll self-review rubric to top of its container
+    await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+
     await page.getByText("public int doMath(int a, int").click({
       button: "right"
     });
@@ -189,7 +223,17 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
+    //Scroll self-review rubric to top of its container
+    await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+    await page.waitForTimeout(100); // Ensure scroll completes before screenshot
     await argosScreenshot(page, "Instructor can view the student's self-review");
+
+    //Scroll grading rubric to top of its container
+    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+    });
 
     await page.getByText("public static void main(").click({
       button: "right"
@@ -258,6 +302,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_1);
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
+    //Scroll grading rubric to top of its container
+    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+    await page.waitForTimeout(100); // Ensure scroll completes before screenshot
     await argosScreenshot(page, "Student can view their grading results");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
@@ -365,7 +414,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await loginAsUser(page, grader!, course);
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);
-    await expect(page.getByText("Grading Review Part 2")).toBeVisible();
+    //Scroll grading rubric to top of its container
+    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+    await page.waitForTimeout(100); // Ensure scroll completes before screenshot
+    await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();
     await expect(page.getByText("Grading Review Part 1")).not.toBeVisible();
     await expect(page.getByRole("button", { name: "View + Grade Full Rubric" })).toBeVisible();
     await argosScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade");
