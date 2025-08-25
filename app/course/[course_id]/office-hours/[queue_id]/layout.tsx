@@ -136,9 +136,7 @@ export default function QueueLayout({ children }: LayoutProps) {
 
           {/* Main Content */}
           <Box flex="1" maxW={{ base: "md", md: "full" }} mx={{ base: "auto", md: "0" }}>
-            <Box p={4} bg="bg.muted" borderRadius="md" data-visual-test-no-radius>
-              {children}
-            </Box>
+            {children}
           </Box>
         </Box>
       </Box>

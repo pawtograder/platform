@@ -7,3 +7,8 @@ button,
 select {
   cursor: pointer;
 }
+
+/* Visual test override for border radius */
+[data-visual-test-no-radius] {
+  border-radius: 0 !important;
+}

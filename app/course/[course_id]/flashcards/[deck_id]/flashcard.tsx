@@ -157,8 +157,6 @@ export default function Flashcard({
             zIndex: showAnswer ? 2 : 1,
             pointerEvents: showAnswer ? "auto" : "none"
           }}
-          onClick={onShowAnswer}
-          cursor={showAnswer ? "pointer" : "default"}
           data-visual-test-no-radius
         >
           <Card.Header p={0} pr={{ base: "6rem", md: "9rem" }} position="relative">

@@ -557,7 +557,10 @@ export default function EnrollmentsTable() {
       type: "enrollment" as const
     }));
 
-    enrollmentRows.sort((a, b) => {
+    // Merge both arrays and perform a single stable sort
+    const allRows = [...enrollmentRows, ...invitations];
+
+    allRows.sort((a, b) => {
       if (a.type === "enrollment" && b.type === "invitation") return -1;
       if (a.type === "invitation" && b.type === "enrollment") return 1;
       if (a.type === "enrollment" && b.type === "enrollment") {
@@ -568,7 +571,8 @@ export default function EnrollmentsTable() {
       }
       return 0;
     });
-    return [...enrollmentRows, ...invitations];
+
+    return allRows;
   }, [userRolesData, invitations]);
 
   // Create local table using react-table

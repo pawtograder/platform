@@ -29,6 +29,7 @@ export const StyledChat = styled.aside<any>`
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const StyledTitle = styled.div<any>`
+  grid-area: chat-header;
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.25rem;

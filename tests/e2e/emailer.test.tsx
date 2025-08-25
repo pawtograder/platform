@@ -26,25 +26,26 @@ let lab2Students: TestingUser[];
 let instructor: TestingUser;
 async function createSectionWithStudents(numStudents: number, sectionNumber: number) {
   const section = await createClassSection({ class_id: course.id, name: `Emailer Section ${sectionNumber}` });
-  const students = [];
+
+  // Build array of student descriptors for batch creation
+  const studentDescriptors = [];
   for (let i = 0; i < numStudents; i++) {
-    const student = await createUsersInClass([
-      {
-        name: `Emailer Section ${sectionNumber} Student ${i + 1}`,
-        email: `emailer-section-${sectionNumber}-student${i + 1}@pawtograder.net`,
-        role: "student",
-        class_id: course.id,
-        section_id: section.id,
-        useMagicLink: true
-      }
-    ]);
-    students.push(student[0]);
+    studentDescriptors.push({
+      name: `Emailer Section ${sectionNumber} Student ${i + 1}`,
+      email: `emailer-section-${sectionNumber}-student${i + 1}@pawtograder.net`,
+      role: "student" as const,
+      class_id: course.id,
+      section_id: section.id,
+      useMagicLink: true
+    });
   }
+
+  // Create all students in one batch call
+  const students = await createUsersInClass(studentDescriptors);
   return { section, students };
 }
 
 async function createLabWithStudents(numStudents: number, labLeader: TestingUser, labNumber: number) {
-  const students = [];
   const lab = await createLabSectionWithStudents({
     class_id: course.id,
     lab_leader: labLeader,
@@ -54,19 +55,22 @@ async function createLabWithStudents(numStudents: number, labLeader: TestingUser
     start_time: "10:00",
     end_time: "11:00"
   });
+
+  // Build array of student descriptors for batch creation
+  const studentDescriptors = [];
   for (let i = 0; i < numStudents; i++) {
-    const student = await createUsersInClass([
-      {
-        name: `Emailer Lab ${labNumber} Student ${i + 1}`,
-        email: `emailer-lab-${labNumber}-student${i + 1}@pawtograder.net`,
-        role: "student",
-        class_id: course.id,
-        lab_section_id: lab.id,
-        useMagicLink: true
-      }
-    ]);
-    students.push(student[0]);
+    studentDescriptors.push({
+      name: `Emailer Lab ${labNumber} Student ${i + 1}`,
+      email: `emailer-lab-${labNumber}-student${i + 1}@pawtograder.net`,
+      role: "student" as const,
+      class_id: course.id,
+      lab_section_id: lab.id,
+      useMagicLink: true
+    });
   }
+
+  // Create all students in one batch call
+  const students = await createUsersInClass(studentDescriptors);
   return { lab, students };
 }
 test.beforeAll(async () => {
