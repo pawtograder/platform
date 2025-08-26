@@ -288,9 +288,15 @@ export function useTableControllerValueById<
 export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller: TableController<T>): boolean {
   const [ready, setReady] = useState(controller.ready);
   useEffect(() => {
+    let cleanedUp = false;
     controller.readyPromise.then(() => {
-      setReady(true);
+      if (!cleanedUp) {
+        setReady(true);
+      }
     });
+    return () => {
+      cleanedUp = true;
+    };
   }, [controller]);
   return ready;
 }
