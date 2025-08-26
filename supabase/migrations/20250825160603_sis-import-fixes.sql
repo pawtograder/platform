@@ -13,11 +13,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS sis_sync_status_unique_lab_section_partial
 -- The function declares term as text but classes.term is integer
 CREATE OR REPLACE FUNCTION "public"."admin_get_sis_sync_status"() RETURNS TABLE("class_id" bigint, "class_name" "text", "term" integer, "sis_sections_count" bigint, "last_sync_time" timestamp with time zone, "last_sync_status" "text", "last_sync_message" "text", "sync_enabled" boolean, "total_invitations" bigint, "pending_invitations" bigint, "expired_invitations" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path TO pg_catalog, public
     AS $$
 BEGIN
-    -- Set safe search_path to prevent schema hijacking
-    SET search_path = public, pg_temp;
-    
     -- Check admin authorization
     IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -84,8 +82,18 @@ USING (
 
 REVOKE ALL ON FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint, "p_lab_section_id" bigint, "p_sync_status" "text", "p_sync_message" "text") FROM "anon";
 REVOKE ALL ON FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint, "p_lab_section_id" bigint, "p_sync_status" "text", "p_sync_message" "text") FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."update_sis_sync_status"(bigint, bigint, bigint, "text", "text") FROM PUBLIC;
+
 REVOKE ALL ON FUNCTION "public"."trigger_sis_sync"("p_class_id" bigint) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."trigger_sis_sync"("p_class_id" bigint) FROM "authenticated";
+
+REVOKE ALL ON FUNCTION "public"."trigger_sis_sync"("p_class_id" bigint) FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.update_sis_sync_status(bigint, bigint, bigint, text, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.trigger_sis_sync(bigint) TO service_role;
+GRANT EXECUTE ON FUNCTION public.update_sis_sync_status(bigint, bigint, bigint, text, text) TO "postgres";
+GRANT EXECUTE ON FUNCTION public.trigger_sis_sync(bigint) TO "postgres";
+
 
 -- Fix update_sis_sync_status function bug for lab sections
 -- The original function had flawed logic that prevented proper updates for lab sections
@@ -186,6 +194,7 @@ DECLARE
     v_adjective text;
     v_noun text;
     v_number integer;
+    v_secure_seed text;
 BEGIN
     -- Set safe search_path to prevent schema hijacking
     PERFORM set_config('search_path','pg_catalog, public', true);
@@ -215,10 +224,20 @@ BEGIN
         RAISE EXCEPTION 'Access denied: Instructor or admin role required';
     END IF;
     
+    -- Generate secure, non-PII seed for avatar URLs
+    BEGIN
+        -- Try to use pgcrypto for secure hash
+        v_secure_seed := encode(digest(p_user_id::text || 'pawtograder_avatar_salt_2024', 'sha256'), 'hex');
+    EXCEPTION
+        WHEN undefined_function THEN
+            -- Fallback if pgcrypto is not available
+            v_secure_seed := encode(sha256(p_user_id::text || 'pawtograder_avatar_salt_2024'), 'hex');
+    END;
+    
     -- Determine avatar URL for private profile
     v_avatar_url := COALESCE(
         (SELECT avatar_url FROM public.users WHERE user_id = p_user_id),
-        'https://api.dicebear.com/9.x/initials/svg?seed=' || encode(v_user_name::bytea, 'base64')
+        'https://api.dicebear.com/9.x/initials/svg?seed=' || v_secure_seed
     );
     
     -- Always create new private profile for each class enrollment
@@ -262,7 +281,7 @@ BEGIN
     )
     VALUES (
         v_public_name,
-        'https://api.dicebear.com/9.x/identicon/svg?seed=' || encode(v_public_name::bytea, 'base64'),
+        'https://api.dicebear.com/9.x/identicon/svg?seed=' || v_secure_seed,
         p_class_id,
         false
     )
@@ -296,3 +315,111 @@ $$;
 -- Add updated_by column to invitations table
 ALTER TABLE "public"."invitations" 
 ADD COLUMN "updated_by" "uuid" REFERENCES "auth"."users"("id");
+
+-- Update sync_lab_section_meetings function to delete existing meetings first
+CREATE OR REPLACE FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+DECLARE
+    lab_section_record RECORD;
+    class_record RECORD;
+    target_day_num INTEGER;
+    iter_date DATE;
+    meeting_count INTEGER := 0;
+BEGIN
+    -- Get lab section details
+    SELECT * INTO lab_section_record 
+    FROM public.lab_sections 
+    WHERE id = lab_section_id_param;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Lab section with id % not found', lab_section_id_param;
+    END IF;
+    
+    -- Get class dates
+    SELECT * INTO class_record 
+    FROM public.classes 
+    WHERE id = lab_section_record.class_id;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Class with id % not found', lab_section_record.class_id;
+    END IF;
+    
+    -- Skip if class doesn't have start/end dates set
+    IF class_record.start_date IS NULL OR class_record.end_date IS NULL THEN
+        RAISE EXCEPTION 'Class with id % does not have start/end dates set. So, it can not yet have lab sections.', lab_section_record.class_id;
+    END IF;
+    
+    -- DELETE ALL EXISTING MEETINGS FOR THIS LAB SECTION
+    DELETE FROM public.lab_section_meetings 
+    WHERE lab_section_id = lab_section_id_param;
+    
+    -- Convert day_of_week enum to PostgreSQL day number (0=Sunday, 1=Monday, etc.)
+    target_day_num := CASE lab_section_record.day_of_week
+        WHEN 'sunday' THEN 0
+        WHEN 'monday' THEN 1
+        WHEN 'tuesday' THEN 2
+        WHEN 'wednesday' THEN 3
+        WHEN 'thursday' THEN 4
+        WHEN 'friday' THEN 5
+        WHEN 'saturday' THEN 6
+    END;
+    
+    -- Find the first occurrence of the target day on or after start_date
+    iter_date := class_record.start_date;
+    WHILE EXTRACT(DOW FROM iter_date) != target_day_num LOOP
+        iter_date := iter_date + INTERVAL '1 day';
+    END LOOP;
+    
+    -- Create meetings for each occurrence of the target day
+    WHILE iter_date <= class_record.end_date LOOP
+        INSERT INTO public.lab_section_meetings (
+            lab_section_id,
+            meeting_date,
+            class_id,
+            cancelled
+        ) VALUES (
+            lab_section_id_param,
+            iter_date,
+            lab_section_record.class_id,
+            false
+        );
+        
+        meeting_count := meeting_count + 1;
+        iter_date := iter_date + INTERVAL '7 days';
+    END LOOP;
+    
+    RAISE NOTICE 'Recreated % lab section meetings for lab section %', meeting_count, lab_section_id_param;
+END;
+$$;
+
+-- Create trigger function to handle lab section schedule changes
+CREATE OR REPLACE FUNCTION "public"."handle_lab_section_schedule_update"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+BEGIN
+    -- Only sync meetings if day_of_week changed
+    IF (OLD.day_of_week IS DISTINCT FROM NEW.day_of_week) THEN
+        
+        -- Sync meetings after schedule change
+        PERFORM public.sync_lab_section_meetings(NEW.id);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+-- Add UPDATE trigger for lab_sections to sync meetings when schedule changes
+CREATE OR REPLACE TRIGGER "sync_lab_section_meetings_on_schedule_update" 
+    AFTER UPDATE ON "public"."lab_sections" 
+    FOR EACH ROW 
+    EXECUTE FUNCTION "public"."handle_lab_section_schedule_update"();
+
+-- Revoke all permissions from sync_lab_section_meetings function
+REVOKE ALL ON FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) FROM PUBLIC;
+
+-- Grant execute permission only to postgres and service_role
+GRANT EXECUTE ON FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) TO "postgres";
+GRANT EXECUTE ON FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) TO "service_role";

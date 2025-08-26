@@ -285,6 +285,16 @@ export function useTableControllerValueById<
 
   return value;
 }
+export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller: TableController<T>): boolean {
+  const [ready, setReady] = useState(controller.ready);
+  useEffect(() => {
+    controller.readyPromise.then(() => {
+      setReady(true);
+    });
+  }, [controller]);
+  return ready;
+}
+
 export function useTableControllerTableValues<
   T extends TablesThatHaveAnIDField,
   Query extends string = "*",

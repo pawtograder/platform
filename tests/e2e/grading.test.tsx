@@ -422,6 +422,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();
     await expect(page.getByText("Grading Review Part 1")).not.toBeVisible();
     await expect(page.getByRole("button", { name: "View + Grade Full Rubric" })).toBeVisible();
+
+    await expect(page.getByText("public static void main(")).toBeVisible();
     await argosScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade");
     await page.getByText("Third check for grading review").click();
 

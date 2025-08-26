@@ -322,7 +322,7 @@ const DiscussionThreadContent = memo(
                   )}
                 </Box>
                 <HStack fontWeight="semibold" textStyle="xs" ps="2">
-                  <Text textStyle="sm" color="fg.muted" ms="3">
+                  <Text textStyle="sm" color="fg.muted" ms="3" data-visual-test="blackout">
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
                   <Link onClick={showReply} color="fg.muted">

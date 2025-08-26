@@ -3089,20 +3089,17 @@ final;`,
     max_score: number | null;
     score_expression: string | null;
   }> {
-    console.log("Creating gradebook column", name);
     // Get the gradebook for this class
     const { data: gradebook, error: gradebookError } = await supabase
       .from("gradebooks")
       .select("id")
       .eq("class_id", class_id)
       .single();
-    console.log("Gradebook retrieved");
 
     if (gradebookError || !gradebook) {
       throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
     }
 
-    console.log("Doing column insert");
     // Create the gradebook column
     const { data: column, error: columnError } = await this.rateLimitManager.trackAndLimit("gradebook_columns", () =>
       supabase
