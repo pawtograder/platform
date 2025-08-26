@@ -831,7 +831,9 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+        <Link href={`https://github.com/${repositories[0].repository}`} data-visual-test="blackout">
+          {repositories[0].repository}
+        </Link>
       </HStack>
     );
   }
@@ -843,7 +845,9 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontWeight="bold" fontSize="sm">
           Current group repository:
         </Text>{" "}
-        <Link href={`https://github.com/${groupRepo?.repository}`}>{groupRepo?.repository}</Link>
+        <Link href={`https://github.com/${groupRepo?.repository}`} data-visual-test="blackout">
+          {groupRepo?.repository}
+        </Link>
       </HStack>
       <Text fontWeight="bold">
         Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
@@ -851,7 +855,9 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
       </Text>
       <Text>
         Individual repository (not in use, you are now in a group):{" "}
-        <Link href={`https://github.com/${personalRepo?.repository}`}>{personalRepo?.repository}</Link>
+        <Link href={`https://github.com/${personalRepo?.repository}`} data-visual-test="blackout">
+          {personalRepo?.repository}
+        </Link>
       </Text>
     </VStack>
   );

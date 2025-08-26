@@ -1091,6 +1091,8 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
     );
     //Make sure no duplicates by review id
     const uniqueReviews = ret?.filter((sr, index, self) => index === self.findIndex((t) => t.id === sr.id));
+    // Sort by name
+    uniqueReviews?.sort((a, b) => a.name.localeCompare(b.name));
     return uniqueReviews;
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;

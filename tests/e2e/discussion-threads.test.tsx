@@ -179,9 +179,10 @@ test.describe("Discussion Thread Page", () => {
       );
     await page.getByRole("button").filter({ hasText: "Send" }).click();
     await expect(page.getByText(instructor?.private_profile_name ?? "")).toBeVisible();
-    await expect(page.getByText("Yes.")).toBeVisible();
+    await expect(page.getByText("Yes.")).not.toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).toBeVisible();
+    await argosScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });

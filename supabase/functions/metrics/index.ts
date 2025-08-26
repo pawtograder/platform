@@ -28,7 +28,10 @@ async function generatePrometheusMetrics(): Promise<Response> {
     );
 
     // Get all class metrics using the secure function (single call)
-    const { data: metricsData, error: metricsError } = await supabase.rpc("get_all_class_metrics");
+    const { data: metricsData, error: metricsError } = (await supabase.rpc("get_all_class_metrics")) as unknown as {
+      data: ClassMetrics[];
+      error: Error;
+    };
 
     if (metricsError) {
       console.error("Error fetching class metrics:", metricsError);
@@ -76,7 +79,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
 }
 
 function generatePrometheusOutput(metrics: ClassMetrics[]): string {
-  const timestamp = Math.floor(Date.now() / 1000);
+  const timestamp = Math.floor(Date.now()); // Use milliseconds since epoch
 
   let output = `# HELP pawtograder_info Information about Pawtograder instance
 # TYPE pawtograder_info gauge

@@ -14,7 +14,7 @@ export function getUserProfile(
   return {
     id: profile.id,
     name: profile.name,
-    avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
+    avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.id}`,
     badge: profile.flair || undefined,
     badge_color: profile.flair_color || undefined
   };
@@ -42,7 +42,7 @@ export function useUserProfile(
     return {
       id: profile.id,
       name: profile.name || "",
-      avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
+      avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.id}`,
       flair: profile.flair || "",
       flair_color: profile.flair_color || "",
       real_name: userRole?.profiles.name && profile.id !== userRole.private_profile_id ? userRole.profiles.name : ""

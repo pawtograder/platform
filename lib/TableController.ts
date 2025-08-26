@@ -285,6 +285,34 @@ export function useTableControllerValueById<
 
   return value;
 }
+export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller: TableController<T>): boolean {
+  const [ready, setReady] = useState(controller.ready);
+  useEffect(() => {
+    let cleanedUp = false;
+    // Reset state when controller changes
+    setReady(controller.ready);
+
+    controller.readyPromise
+      .then(() => {
+        if (!cleanedUp) {
+          setReady(true);
+        }
+      })
+      .catch((err) => {
+        if (!cleanedUp) {
+          setReady(false);
+          // Optionally log the error
+          console.error("TableController readyPromise rejected:", err);
+        }
+      });
+
+    return () => {
+      cleanedUp = true;
+    };
+  }, [controller]);
+  return ready;
+}
+
 export function useTableControllerTableValues<
   T extends TablesThatHaveAnIDField,
   Query extends string = "*",

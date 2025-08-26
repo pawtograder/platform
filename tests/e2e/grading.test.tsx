@@ -414,14 +414,18 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await loginAsUser(page, grader!, course);
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);
+
+    await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();
+    await expect(page.getByText("Grading Review Part 1")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "View + Grade Full Rubric" })).toBeVisible();
+
+    await expect(page.getByText("public static void main(")).toBeVisible();
+
     //Scroll grading rubric to top of its container
     await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
       el.scrollIntoView({ block: "start", behavior: "instant" });
     });
-    await page.waitForTimeout(100); // Ensure scroll completes before screenshot
-    await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();
-    await expect(page.getByText("Grading Review Part 1")).not.toBeVisible();
-    await expect(page.getByRole("button", { name: "View + Grade Full Rubric" })).toBeVisible();
+    await page.waitForTimeout(1000); // Ensure scroll completes before screenshot
     await argosScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade");
     await page.getByText("Third check for grading review").click();
 

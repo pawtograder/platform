@@ -1,6 +1,7 @@
 "use client";
 import { Field } from "@/components/ui/field";
 import {
+  Box,
   CardBody,
   CardHeader,
   CardRoot,
@@ -9,7 +10,9 @@ import {
   Fieldset,
   Input,
   NativeSelectField,
-  NativeSelectRoot
+  NativeSelectRoot,
+  Table,
+  Text
 } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 
@@ -26,6 +29,139 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import { useTableControllerTableValues } from "@/lib/TableController";
+import { formatInTimeZone } from "date-fns-tz";
+
+// Helper function to calculate effective due date for a lab section
+function calculateLabSectionDueDate(
+  labSection: LabSection,
+  labSectionMeetings: LabSectionMeeting[],
+  originalDueDate: Date,
+  minutesDueAfterLab: number,
+  timezone: string
+): Date | null {
+  // Find the most recent lab section meeting before the assignment's original due date
+  const relevantMeetings = labSectionMeetings
+    .filter((meeting) => {
+      if (meeting.lab_section_id !== labSection.id || meeting.cancelled) {
+        return false;
+      }
+
+      // Combine meeting date with lab section end time
+      const meetingEndTime = new TZDate(meeting.meeting_date + "T" + (labSection.end_time || "23:59:59"), timezone);
+
+      return meetingEndTime <= originalDueDate;
+    })
+    .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
+
+  if (relevantMeetings.length === 0) {
+    return null; // No lab meeting found before due date
+  }
+
+  // Get the most recent lab meeting
+  const mostRecentMeeting = relevantMeetings[0];
+
+  // Combine meeting date with lab section end time
+  const labMeetingEndTime = new TZDate(
+    mostRecentMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
+    timezone
+  );
+
+  // Add the minutes offset
+  return addMinutes(labMeetingEndTime, minutesDueAfterLab);
+}
+
+function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
+  const dueDate = form.watch("due_date");
+  const minutesDueAfterLab = form.watch("minutes_due_after_lab");
+  const controller = useCourseController();
+  const labSections = useTableControllerTableValues(controller.labSections);
+  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
+
+  if (
+    !dueDate ||
+    minutesDueAfterLab === null ||
+    minutesDueAfterLab === undefined ||
+    minutesDueAfterLab === "" ||
+    labSections.length === 0
+  ) {
+    return (
+      <Field
+        label="Lab Section Due Date Preview"
+        helperText="Shows when the assignment will be due for each lab section"
+        w="100%"
+      >
+        <Box p="3" bg="bg.info" borderRadius="md" w="100%">
+          <Text fontSize="sm" color="fg.muted">
+            {!dueDate && "Set a due date to see lab section preview"}
+            {dueDate &&
+              (minutesDueAfterLab === null || minutesDueAfterLab === undefined || minutesDueAfterLab === "") &&
+              "Set minutes due after lab to see preview"}
+            {dueDate &&
+              minutesDueAfterLab !== null &&
+              minutesDueAfterLab !== undefined &&
+              minutesDueAfterLab !== "" &&
+              labSections.length === 0 &&
+              "No lab sections found"}
+          </Text>
+        </Box>
+      </Field>
+    );
+  }
+
+  const originalDueDate = new TZDate(dueDate, timezone);
+
+  return (
+    <Field label="Lab Section Due Date Preview" helperText="Shows when the assignment will be due for each lab section">
+      <Box borderWidth="1px" borderColor="border.info" borderRadius="md" overflow="hidden">
+        <Table.Root size="sm" variant="outline" striped w="100%">
+          <Table.Header>
+            <Table.Row>
+              <Table.ColumnHeader py="2" fontSize="xs" fontWeight="semibold" bg="bg.info">
+                Lab Section
+              </Table.ColumnHeader>
+              <Table.ColumnHeader py="2" fontSize="xs" fontWeight="semibold" textAlign="right" bg="bg.info">
+                Effective Due Date
+              </Table.ColumnHeader>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {labSections.map((labSection) => {
+              const effectiveDueDate = calculateLabSectionDueDate(
+                labSection,
+                labSectionMeetings,
+                originalDueDate,
+                minutesDueAfterLab,
+                timezone
+              );
+
+              return (
+                <Table.Row key={labSection.id}>
+                  <Table.Cell py="1.5" fontSize="sm" fontWeight="medium">
+                    {labSection.name}
+                  </Table.Cell>
+                  <Table.Cell
+                    py="1.5"
+                    fontSize="sm"
+                    textAlign="right"
+                    color={effectiveDueDate ? "fg.default" : "fg.error"}
+                    fontWeight={effectiveDueDate ? "normal" : "semibold"}
+                  >
+                    {effectiveDueDate
+                      ? formatInTimeZone(effectiveDueDate, timezone, "MMM d, yyyy 'at' h:mm a")
+                      : "No lab meeting before due date"}
+                  </Table.Cell>
+                </Table.Row>
+              );
+            })}
+          </Table.Body>
+        </Table.Root>
+      </Box>
+    </Field>
+  );
+}
 
 function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
   const { course_id } = useParams();
@@ -196,6 +332,92 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               </Field>
             </Fieldset.Content>
           </>
+        )}
+      </CardBody>
+    </CardRoot>
+  );
+}
+
+function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+  const [withLabDueDate, setWithLabDueDate] = useState<boolean>(() => {
+    const minutesDueAfterLab = form.getValues("minutes_due_after_lab");
+    return minutesDueAfterLab !== null && minutesDueAfterLab !== undefined;
+  });
+
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
+  const timezone = course.time_zone || "America/New_York";
+
+  const {
+    register,
+    watch,
+    formState: { errors }
+  } = form;
+
+  // Watch for changes to minutes_due_after_lab to handle form reset/loading
+  useEffect(() => {
+    const subscription = watch((value, { name }) => {
+      if (name === "minutes_due_after_lab" || !name) {
+        const minutesDueAfterLab = value.minutes_due_after_lab;
+        setWithLabDueDate(minutesDueAfterLab !== null && minutesDueAfterLab !== undefined && minutesDueAfterLab !== "");
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Lab-Based Due Date</CardTitle>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field helperText="When enabled, the assignment due date will be calculated as a number of minutes after the student's most recent lab section meeting before the original due date. This allows for flexible due dates that align with each student's lab schedule.">
+            <Checkbox.Root
+              checked={withLabDueDate}
+              onCheckedChange={(checked) => {
+                setWithLabDueDate(!!checked.checked);
+                if (!checked.checked) {
+                  // Clear the minutes_due_after_lab field when unchecked
+                  form.setValue("minutes_due_after_lab", null);
+                } else {
+                  // Set a default value when checked
+                  form.setValue("minutes_due_after_lab", 60);
+                }
+              }}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control>
+                <LuCheck />
+              </Checkbox.Control>
+              <Checkbox.Label>Custom due date based on lab meeting time</Checkbox.Label>
+            </Checkbox.Root>
+          </Field>
+        </Fieldset.Content>
+        {withLabDueDate && (
+          <Fieldset.Content>
+            <Field
+              label="Minutes due after lab meeting"
+              helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
+              errorText={errors.minutes_due_after_lab?.message?.toString()}
+              invalid={errors.minutes_due_after_lab ? true : false}
+              required={withLabDueDate}
+            >
+              <Input
+                type="number"
+                {...register("minutes_due_after_lab", {
+                  required: withLabDueDate ? "This is required when using lab-based due dates" : false,
+                  min: { value: 0, message: "Minutes must be at least 0" },
+                  valueAsNumber: true
+                })}
+              />
+            </Field>
+          </Fieldset.Content>
+        )}
+        {withLabDueDate && (
+          <Fieldset.Content>
+            <LabDueDatePreview form={form} timezone={timezone} />
+          </Fieldset.Content>
         )}
       </CardBody>
     </CardRoot>
@@ -478,6 +700,7 @@ export default function AssignmentForm({
               />
             </Field>
           </Fieldset.Content>
+          <LabDueDateSubform form={form} />
           <Fieldset.Content>
             <Field
               label="Max Late Tokens"

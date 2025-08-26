@@ -377,7 +377,7 @@ export default function EnrollmentsTable() {
       },
       {
         id: "canvas_id",
-        header: "Canvas Link",
+        header: "SIS Link",
         accessorKey: "canvas_id",
         cell: ({ row }) => {
           if (row.original.type === "invitation") {

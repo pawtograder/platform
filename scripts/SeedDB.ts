@@ -41,7 +41,7 @@ interface SeederConfig {
 const TEMPLATES: Record<string, SeederConfig> = {
   micro: {
     className: "Micro Test Class",
-    students: 2,
+    students: 30,
     graders: 1,
     instructors: 1,
     assignments: 2,
@@ -58,7 +58,7 @@ const TEMPLATES: Record<string, SeederConfig> = {
     },
     sectionsAndTags: {
       numClassSections: 1,
-      numLabSections: 1,
+      numLabSections: 20,
       numStudentTags: 1,
       numGraderTags: 1
     },

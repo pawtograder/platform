@@ -523,7 +523,7 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      {isInstructor && (
+      {isInstructor && (!review.completed_at || (review.completed_at && !review.checked_at)) && (
         <VStack>
           <Heading size="md">Submission Review Actions</Heading>
           <HStack w="100%" justify="space-between">
@@ -643,7 +643,7 @@ function RubricView() {
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
             <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
-            <Text fontSize="sm">
+            <Text fontSize="sm" data-visual-test="blackout">
               Due:{" "}
               {reviewAssignment.due_date
                 ? formatDueDateInTimezone(

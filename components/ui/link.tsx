@@ -8,7 +8,8 @@ export default function Link({
   colorPalette,
   prefetch,
   target,
-  w
+  w,
+  ...rest
 }: {
   href: string;
   children: React.ReactNode;
@@ -30,10 +31,10 @@ export default function Link({
   prefetch?: null | true | false;
   target?: "_blank" | "_self";
   w?: string;
-}) {
+} & React.ComponentProps<typeof ChakraLink>) {
   return (
     <NextLink href={href} passHref legacyBehavior prefetch={prefetch === undefined ? null : prefetch}>
-      <ChakraLink target={target} color={colorPalette} variant={variant} style={{ width: w }}>
+      <ChakraLink target={target} color={colorPalette} variant={variant} style={{ width: w }} {...rest}>
         {children}
       </ChakraLink>
     </NextLink>
