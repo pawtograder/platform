@@ -13,7 +13,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS sis_sync_status_unique_lab_section_partial
 -- The function declares term as text but classes.term is integer
 CREATE OR REPLACE FUNCTION "public"."admin_get_sis_sync_status"() RETURNS TABLE("class_id" bigint, "class_name" "text", "term" integer, "sis_sections_count" bigint, "last_sync_time" timestamp with time zone, "last_sync_status" "text", "last_sync_message" "text", "sync_enabled" boolean, "total_invitations" bigint, "pending_invitations" bigint, "expired_invitations" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET search_path TO pg_catalog, public
+    SET search_path = pg_catalog, public
     AS $$
 BEGIN
     -- Check admin authorization
@@ -99,7 +99,7 @@ GRANT EXECUTE ON FUNCTION public.trigger_sis_sync(bigint) TO "postgres";
 -- The original function had flawed logic that prevented proper updates for lab sections
 CREATE OR REPLACE FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint DEFAULT NULL::bigint, "p_lab_section_id" bigint DEFAULT NULL::bigint, "p_sync_status" "text" DEFAULT NULL::"text", "p_sync_message" "text" DEFAULT NULL::"text") RETURNS bigint
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET search_path = public, pg_temp
+    SET search_path = pg_catalog, public
     AS $$
 DECLARE
     v_status_id bigint;
@@ -181,7 +181,7 @@ CREATE OR REPLACE FUNCTION "public"."create_user_role_for_existing_user"(
     "p_sis_id" integer DEFAULT NULL
 ) RETURNS bigint
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET search_path = public, pg_temp
+    SET search_path = pg_catalog, public
     AS $$
 DECLARE
     v_user_role_id bigint;
@@ -316,7 +316,7 @@ ADD COLUMN "updated_by" "uuid" REFERENCES "auth"."users"("id");
 -- Update sync_lab_section_meetings function to delete existing meetings first
 CREATE OR REPLACE FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET search_path = public, pg_temp
+    SET search_path = pg_catalog, public
     AS $$
 DECLARE
     lab_section_record RECORD;
@@ -394,7 +394,7 @@ $$;
 -- Create trigger function to handle lab section schedule changes
 CREATE OR REPLACE FUNCTION "public"."handle_lab_section_schedule_update"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET search_path = public, pg_temp
+    SET search_path = pg_catalog, public
     AS $$
 BEGIN
     -- Only sync meetings if day_of_week changed

@@ -13,8 +13,11 @@ const labSectionDescription = "Lab Section 1 Description";
 
 test.beforeAll(async () => {
   course = await createClass();
-  //Fix course start and end dates for testing, always start on Feb 14 2025 and go to April 30 2025
-  await supabase.from("classes").update({ start_date: "2035-02-14", end_date: "2035-04-30" }).eq("id", course.id);
+  //Fix course start and end dates for testing
+  const { error: classError } = await supabase.from("classes").update({ start_date: "2035-02-14", end_date: "2035-04-30" }).eq("id", course.id).select().single();
+  if (classError) {
+    throw new Error(`Failed to update class: ${classError.message}`);
+  }
   [instructor1, instructor2] = await createUsersInClass([
     {
       name: "Lab Sections Instructor 1",
