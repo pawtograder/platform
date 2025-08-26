@@ -352,7 +352,7 @@ export type CourseImportResponse = {
 
 // Invitation Creation Types
 export type InvitationRequestItem = {
-  sis_user_id: string;
+  sis_user_id: number;
   role: "student" | "grader" | "instructor";
   email?: string;
   name?: string;
@@ -369,7 +369,7 @@ export type CreateInvitationResponse = {
   success: boolean;
   invitations: Array<{
     id: number;
-    sis_user_id: string;
+    sis_user_id: number;
     role: string;
     email?: string;
     name?: string;
@@ -380,7 +380,7 @@ export type CreateInvitationResponse = {
     lab_section_id?: number;
   }>;
   errors?: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     error: string;
   }>;
 };

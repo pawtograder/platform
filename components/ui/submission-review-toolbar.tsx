@@ -510,7 +510,9 @@ function ReviewAssignmentActions() {
           <Text textAlign="left">
             Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} is required on this
             submission by{" "}
-            {formatDueDateInTimezone(activeReviewAssignment.due_date, time_zone || "America/New_York", false, true)}.
+            <span data-visual-test="blackout">
+              {formatDueDateInTimezone(activeReviewAssignment.due_date, time_zone || "America/New_York", false, true)}.
+            </span>
           </Text>
           {!ignoreAssignedReview && (
             <Text textAlign="left" fontSize="sm" color="fg.muted">
@@ -559,7 +561,8 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   }
   return (
     <Text>
-      {rubric.name} completed on {formatDate(submissionReview?.completed_at, "MM/dd/yyyy hh:mm a")} by{" "}
+      {rubric.name} completed on{" "}
+      <span data-visual-test="blackout">{formatDate(submissionReview?.completed_at, "MM/dd/yyyy hh:mm a")}</span> by{" "}
       <PersonName uid={submissionReview.completed_by} showAvatar={false} />
     </Text>
   );

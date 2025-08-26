@@ -120,7 +120,7 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
               <Text fontWeight="bold">{authorProfile?.name}</Text>
-              <Text>commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
               {authorRole === "grader" || authorRole === "instructor" || authorProfile?.flair ? (
@@ -670,7 +670,7 @@ export default function RegradeRequestWrapper({
               <VStack align="flex-start" gap={0} flexGrow={10}>
                 <Heading size="sm">Regrade {config.label}</Heading>
                 {regradeRequest.opened_at && (
-                  <Text fontSize="xs" color="fg.muted">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Opened {formatRelative(regradeRequest.opened_at, new Date())}, initial score:{" "}
                     {regradeRequest.initial_points || 0}
                   </Text>
@@ -686,18 +686,18 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
                 {regradeRequest.resolved_at && (
-                  <Text fontSize="xs" color="fg.muted">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
                     {regradeRequest.resolved_points || 0}
                   </Text>
                 )}
                 {regradeRequest.escalated_at && (
-                  <Text fontSize="xs" color="fg.muted">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Appealed {formatRelative(regradeRequest.escalated_at, new Date())} by {escalator?.name}
                   </Text>
                 )}
                 {regradeRequest.closed_at && (
-                  <Text fontSize="xs" color="fg.muted">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
                     {regradeRequest.closed_points || 0}
                   </Text>

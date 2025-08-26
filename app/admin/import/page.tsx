@@ -113,7 +113,7 @@ export default function CourseImportPage() {
     async (
       classId: number,
       allInvitations: Array<{
-        sis_user_id: string;
+        sis_user_id: number;
         role: "instructor" | "grader" | "student";
         name?: string;
         class_section_id?: number;
@@ -566,7 +566,7 @@ export default function CourseImportPage() {
       const labSections = selectedSectionData.filter((s) => s.sectionType === "lab");
 
       const allInvitations: Array<{
-        sis_user_id: string;
+        sis_user_id: number;
         role: "instructor" | "grader" | "student";
         name?: string;
         class_section_id?: number;
@@ -594,7 +594,7 @@ export default function CourseImportPage() {
         // Add users from this section
         [...section.instructors, ...section.tas, ...section.students].forEach((user) => {
           allInvitations.push({
-            sis_user_id: user.sis_user_id.toString(),
+            sis_user_id: user.sis_user_id,
             role: user.role,
             name: user.name,
             class_section_id: sectionId
@@ -641,7 +641,7 @@ export default function CourseImportPage() {
         // Add users from this section
         [...section.instructors, ...section.tas, ...section.students].forEach((user) => {
           allInvitations.push({
-            sis_user_id: user.sis_user_id.toString(),
+            sis_user_id: user.sis_user_id,
             role: user.role,
             name: user.name,
             lab_section_id: sectionId
@@ -650,7 +650,7 @@ export default function CourseImportPage() {
       }
 
       // Deduplicate invitations by sis_user_id (take highest role if duplicates)
-      const invitationMap = new Map<string, (typeof allInvitations)[0]>();
+      const invitationMap = new Map<number, (typeof allInvitations)[0]>();
       const roleHierarchy = { instructor: 3, grader: 2, student: 1 };
 
       allInvitations.forEach((inv) => {

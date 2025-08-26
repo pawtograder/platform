@@ -3396,6 +3396,7 @@ export type Database = {
           sis_user_id: number;
           status: string;
           updated_at: string;
+          updated_by: string | null;
         };
         Insert: {
           accepted_at?: string | null;
@@ -3414,6 +3415,7 @@ export type Database = {
           sis_user_id: number;
           status?: string;
           updated_at?: string;
+          updated_by?: string | null;
         };
         Update: {
           accepted_at?: string | null;
@@ -3432,6 +3434,7 @@ export type Database = {
           sis_user_id?: number;
           status?: string;
           updated_at?: string;
+          updated_by?: string | null;
         };
         Relationships: [
           {
@@ -8303,7 +8306,7 @@ export type Database = {
         Returns: {
           class_id: number;
           class_name: string;
-          term: string;
+          term: number;
           sis_sections_count: number;
           last_sync_time: string;
           last_sync_status: string;
@@ -8571,6 +8574,16 @@ export type Database = {
           p_target_course_ids?: number[];
           p_target_user_ids?: string[];
           p_created_by?: string;
+        };
+        Returns: number;
+      };
+      create_user_role_for_existing_user: {
+        Args: {
+          p_user_id: string;
+          p_class_id: number;
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_name: string;
+          p_sis_id?: number;
         };
         Returns: number;
       };
