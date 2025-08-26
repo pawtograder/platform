@@ -22,7 +22,7 @@ export type Database = {
         Returns: unknown[];
       };
       read: {
-        Args: { n: number; sleep_seconds: number; queue_name: string };
+        Args: { sleep_seconds: number; queue_name: string; n: number };
         Returns: unknown[];
       };
       send: {
@@ -30,7 +30,7 @@ export type Database = {
         Returns: number[];
       };
       send_batch: {
-        Args: { queue_name: string; messages: Json[]; sleep_seconds?: number };
+        Args: { sleep_seconds?: number; queue_name: string; messages: Json[] };
         Returns: number[];
       };
     };
@@ -8209,56 +8209,56 @@ export type Database = {
     Functions: {
       admin_bulk_set_user_roles_disabled: {
         Args: {
+          p_user_role_ids: number[];
           p_admin_user_id?: string;
           p_disabled: boolean;
-          p_user_role_ids: number[];
         };
         Returns: number;
       };
       admin_create_class: {
         Args: {
           p_description?: string;
-          p_github_org_name?: string;
           p_github_template_prefix?: string;
-          p_start_date?: string;
-          p_term: number;
-          p_name: string;
           p_created_by?: string;
-          p_end_date?: string;
           p_course_title?: string;
+          p_start_date?: string;
+          p_end_date?: string;
+          p_name: string;
+          p_term: number;
+          p_github_org_name?: string;
         };
         Returns: number;
       };
       admin_create_class_section: {
         Args: {
-          p_sis_crn?: number;
-          p_meeting_times?: string;
-          p_meeting_location?: string;
           p_created_by?: string;
-          p_name: string;
-          p_class_id: number;
+          p_meeting_times?: string;
           p_campus?: string;
+          p_sis_crn?: number;
+          p_class_id: number;
+          p_name: string;
+          p_meeting_location?: string;
         };
         Returns: number;
       };
       admin_create_lab_section: {
         Args: {
-          p_class_id: number;
           p_name: string;
-          p_created_by?: string;
-          p_meeting_location?: string;
-          p_meeting_times?: string;
           p_campus?: string;
-          p_sis_crn?: number;
-          p_day_of_week?: Database["public"]["Enums"]["day_of_week"];
-          p_start_time?: string;
-          p_end_time?: string;
+          p_meeting_times?: string;
+          p_meeting_location?: string;
           p_description?: string;
+          p_created_by?: string;
+          p_class_id: number;
+          p_end_time?: string;
+          p_start_time?: string;
+          p_day_of_week?: Database["public"]["Enums"]["day_of_week"];
+          p_sis_crn?: number;
         };
         Returns: number;
       };
       admin_delete_class: {
-        Args: { p_class_id: number; p_deleted_by?: string };
+        Args: { p_deleted_by?: string; p_class_id: number };
         Returns: boolean;
       };
       admin_delete_class_section: {
@@ -8266,76 +8266,76 @@ export type Database = {
         Returns: boolean;
       };
       admin_delete_lab_section: {
-        Args: { p_deleted_by?: string; p_section_id: number };
+        Args: { p_section_id: number; p_deleted_by?: string };
         Returns: boolean;
       };
       admin_get_class_sections: {
         Args: { p_class_id: number };
         Returns: {
-          member_count: number;
-          created_at: string;
-          section_id: number;
-          section_name: string;
-          section_type: string;
           meeting_location: string;
           meeting_times: string;
           campus: string;
           sis_crn: number;
+          created_at: string;
           updated_at: string;
+          member_count: number;
+          section_id: number;
+          section_name: string;
+          section_type: string;
         }[];
       };
       admin_get_classes: {
         Args: Record<PropertyKey, never>;
         Returns: {
-          github_template_prefix: string;
-          github_org_name: string;
-          description: string;
-          term: number;
-          name: string;
-          id: number;
           archived: boolean;
           instructor_count: number;
           student_count: number;
+          github_org_name: string;
+          github_template_prefix: string;
           created_at: string;
+          description: string;
+          name: string;
+          term: number;
+          id: number;
         }[];
       };
       admin_get_disabled_users: {
         Args: { p_class_id?: number };
         Returns: {
+          class_id: number;
           user_id: string;
           user_role_id: number;
-          class_id: number;
-          class_name: string;
-          user_name: string;
-          user_email: string;
-          role: Database["public"]["Enums"]["app_role"];
           disabled_at: string;
+          role: Database["public"]["Enums"]["app_role"];
+          user_email: string;
+          user_name: string;
+          class_name: string;
           profile_name: string;
         }[];
       };
       admin_get_sis_sync_status: {
         Args: Record<PropertyKey, never>;
         Returns: {
-          sync_enabled: boolean;
-          total_invitations: number;
-          pending_invitations: number;
-          expired_invitations: number;
-          class_name: string;
           sis_sections_count: number;
-          last_sync_time: string;
-          last_sync_status: string;
-          last_sync_message: string;
-          class_id: number;
           term: number;
+          class_name: string;
+          class_id: number;
+          pending_invitations: number;
+          sync_enabled: boolean;
+          last_sync_message: string;
+          last_sync_status: string;
+          last_sync_time: string;
+          expired_invitations: number;
+          total_invitations: number;
         }[];
       };
       admin_set_section_sync_enabled: {
         Args: {
-          p_enabled: boolean;
           p_admin_user_id?: string;
-          p_lab_section_id?: number;
           p_course_id: number;
+          p_enabled: boolean;
           p_course_section_id?: number;
+          p_lab_section_id?: number;
         };
         Returns: boolean;
       };
@@ -8361,16 +8361,16 @@ export type Database = {
       };
       admin_update_class: {
         Args: {
-          p_updated_by?: string;
-          p_github_template_prefix?: string;
-          p_github_org_name?: string;
-          p_description?: string;
           p_term?: number;
+          p_class_id: number;
+          p_name?: string;
+          p_description?: string;
+          p_github_org_name?: string;
+          p_github_template_prefix?: string;
+          p_updated_by?: string;
+          p_course_title?: string;
           p_start_date?: string;
           p_end_date?: string;
-          p_name?: string;
-          p_class_id: number;
-          p_course_title?: string;
         };
         Returns: boolean;
       };
@@ -8379,7 +8379,7 @@ export type Database = {
         Returns: boolean;
       };
       admin_update_lab_section: {
-        Args: { p_name: string; p_updated_by?: string; p_section_id: number };
+        Args: { p_updated_by?: string; p_name: string; p_section_id: number };
         Returns: boolean;
       };
       authorize_for_admin: {
@@ -8408,20 +8408,20 @@ export type Database = {
       };
       authorize_for_submission_reviewable: {
         Args: {
-          requested_submission_review_id: number;
           requested_submission_id: number;
+          requested_submission_review_id: number;
         };
         Returns: boolean;
       };
       authorize_to_create_own_due_date_extension: {
         Args: {
           _tokens_consumed: number;
-          _student_id: string;
-          _assignment_group_id: number;
           _assignment_id: number;
           _class_id: number;
           _creator_id: string;
           _hours_to_extend: number;
+          _assignment_group_id: number;
+          _student_id: string;
         };
         Returns: boolean;
       };
@@ -8450,7 +8450,7 @@ export type Database = {
         Returns: boolean;
       };
       authorizeforpoll: {
-        Args: { class__id: number; poll__id: number } | { poll__id: number };
+        Args: { poll__id: number } | { poll__id: number; class__id: number };
         Returns: boolean;
       };
       authorizeforprofile: {
@@ -8458,29 +8458,29 @@ export type Database = {
         Returns: boolean;
       };
       calculate_effective_due_date: {
-        Args: { assignment_id_param: number; student_profile_id_param: string };
+        Args: { student_profile_id_param: string; assignment_id_param: number };
         Returns: string;
       };
       calculate_final_due_date: {
         Args: {
-          assignment_group_id_param?: number;
           student_profile_id_param: string;
+          assignment_group_id_param?: number;
           assignment_id_param: number;
         };
         Returns: string;
       };
       call_edge_function_internal: {
         Args: {
-          schema_name?: string;
-          timeout_ms?: number;
           url_path: string;
-          method: string;
-          headers?: Json;
           params?: Json;
-          old_record?: Json;
-          new_record?: Json;
-          op?: string;
           table_name?: string;
+          schema_name?: string;
+          headers?: Json;
+          method: string;
+          new_record?: Json;
+          old_record?: Json;
+          timeout_ms?: number;
+          op?: string;
         };
         Returns: undefined;
       };
@@ -8505,37 +8505,37 @@ export type Database = {
         Returns: boolean;
       };
       create_all_repos_for_assignment: {
-        Args: { assignment_id: number; course_id: number } | { assignment_id: number; course_id: number };
+        Args: { assignment_id: number; course_id: number } | { course_id: number; assignment_id: number };
         Returns: undefined;
       };
       create_help_request_message_notification: {
         Args: {
-          p_author_name: string;
-          p_author_profile_id: string;
-          p_is_private?: boolean;
           p_help_request_creator_name: string;
           p_help_request_creator_profile_id: string;
           p_message_preview: string;
-          p_help_queue_name: string;
-          p_class_id: number;
+          p_author_name: string;
+          p_author_profile_id: string;
           p_message_id: number;
-          p_help_request_id: number;
+          p_help_queue_name: string;
           p_help_queue_id: number;
+          p_help_request_id: number;
+          p_is_private?: boolean;
+          p_class_id: number;
         };
         Returns: undefined;
       };
       create_help_request_notification: {
         Args: {
           p_help_queue_id: number;
-          p_notification_type: string;
+          p_help_request_id: number;
           p_class_id: number;
+          p_notification_type: string;
           p_action?: string;
           p_is_private?: boolean;
           p_request_preview?: string;
           p_status?: Database["public"]["Enums"]["help_request_status"];
           p_assignee_name?: string;
           p_assignee_profile_id?: string;
-          p_help_request_id: number;
           p_creator_name: string;
           p_creator_profile_id: string;
           p_help_queue_name: string;
@@ -8544,14 +8544,14 @@ export type Database = {
       };
       create_invitation: {
         Args: {
-          p_class_id: number;
-          p_role: Database["public"]["Enums"]["app_role"];
-          p_sis_user_id: number;
-          p_email?: string;
-          p_name?: string;
-          p_invited_by?: string;
-          p_class_section_id?: number;
           p_lab_section_id?: number;
+          p_invited_by?: string;
+          p_name?: string;
+          p_email?: string;
+          p_sis_user_id: number;
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_class_section_id?: number;
+          p_class_id: number;
         };
         Returns: number;
       };
@@ -8559,18 +8559,24 @@ export type Database = {
         Args: {
           private_profile_id: string;
           submission_artifact_comment_id?: number;
-          submission_file_comment_id?: number;
           submission_comment_id?: number;
+          submission_file_comment_id?: number;
         };
         Returns: number;
       };
       create_repos_for_student: {
-        Args: { class_id?: number; user_id: string };
+        Args: { user_id: string; class_id?: number };
         Returns: undefined;
       };
       create_system_notification: {
         Args: {
+          p_display?: string;
+          p_title: string;
+          p_message: string;
+          p_severity?: string;
           p_icon?: string;
+          p_persistent?: boolean;
+          p_expires_at?: string;
           p_campaign_id?: string;
           p_track_engagement?: boolean;
           p_max_width?: string;
@@ -8580,22 +8586,16 @@ export type Database = {
           p_target_course_ids?: number[];
           p_target_user_ids?: string[];
           p_created_by?: string;
-          p_title: string;
-          p_message: string;
-          p_display?: string;
-          p_severity?: string;
-          p_persistent?: boolean;
-          p_expires_at?: string;
         };
         Returns: number;
       };
       create_user_role_for_existing_user: {
         Args: {
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_name: string;
+          p_sis_id?: number;
           p_user_id: string;
           p_class_id: number;
-          p_role: Database["public"]["Enums"]["app_role"];
-          p_sis_id?: number;
-          p_name: string;
         };
         Returns: number;
       };
@@ -8604,11 +8604,11 @@ export type Database = {
         Returns: Json;
       };
       delete_assignment_with_all_data: {
-        Args: { p_assignment_id: number; p_class_id: number };
+        Args: { p_class_id: number; p_assignment_id: number };
         Returns: Json;
       };
       delete_system_notifications_by_campaign: {
-        Args: { p_campaign_id: string; p_deleted_by?: string };
+        Args: { p_deleted_by?: string; p_campaign_id: string };
         Returns: number;
       };
       finalize_submission_early: {
@@ -8634,10 +8634,10 @@ export type Database = {
       get_system_notification_stats: {
         Args: { p_requested_by?: string };
         Returns: {
-          notifications_by_display: Json;
-          notifications_by_severity: Json;
           total_notifications: number;
           active_notifications: number;
+          notifications_by_severity: Json;
+          notifications_by_display: Json;
           recent_campaigns: Json;
         }[];
       };
@@ -8652,12 +8652,14 @@ export type Database = {
         Returns: unknown[];
       };
       get_workflow_statistics: {
-        Args: { p_duration_hours?: number; p_class_id: number };
+        Args: { p_class_id: number; p_duration_hours?: number };
         Returns: {
-          error_count: number;
+          class_id: number;
+          period_end: string;
           period_start: string;
           success_rate: number;
           error_rate: number;
+          error_count: number;
           avg_run_time_seconds: number;
           avg_queue_time_seconds: number;
           in_progress_runs: number;
@@ -8665,8 +8667,6 @@ export type Database = {
           completed_runs: number;
           total_runs: number;
           duration_hours: number;
-          class_id: number;
-          period_end: string;
         }[];
       };
       gift_tokens_to_student: {
@@ -8731,18 +8731,18 @@ export type Database = {
       };
       help_request_notification: {
         Args: {
-          p_help_queue_id: number;
-          p_help_request_id: number;
-          p_help_queue_name: string;
           p_creator_profile_id: string;
+          p_help_request_id: number;
+          p_action: string;
+          p_class_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
           p_creator_name: string;
           p_assignee_profile_id: string;
           p_assignee_name: string;
           p_status: string;
           p_request_preview: string;
           p_is_private: boolean;
-          p_class_id: number;
-          p_action: string;
         };
         Returns: undefined;
       };
@@ -8767,7 +8767,7 @@ export type Database = {
         Returns: boolean;
       };
       is_instructor_for_class: {
-        Args: { _class_id: number; _person_id: string } | { classid: number; _person_id: string };
+        Args: { _person_id: string; _class_id: number } | { classid: number; _person_id: string };
         Returns: boolean;
       };
       is_instructor_for_student: {
@@ -8776,12 +8776,12 @@ export type Database = {
       };
       log_flashcard_interaction: {
         Args: {
-          p_class_id: number;
-          p_card_id?: number;
-          p_duration_on_card_ms: number;
-          p_student_id: string;
           p_deck_id: number;
+          p_student_id: string;
+          p_duration_on_card_ms: number;
+          p_card_id?: number;
           p_action: string;
+          p_class_id: number;
         };
         Returns: undefined;
       };
@@ -8802,7 +8802,7 @@ export type Database = {
         Returns: number;
       };
       reset_all_flashcard_progress: {
-        Args: { p_card_ids: number[]; p_student_id: string; p_class_id: number };
+        Args: { p_class_id: number; p_student_id: string; p_card_ids: number[] };
         Returns: undefined;
       };
       send_gradebook_recalculation_messages: {
@@ -8832,14 +8832,14 @@ export type Database = {
       test_discussion_thread_insert_performance: {
         Args: {
           num_inserts?: number;
-          test_author_id: string;
-          test_topic_id: number;
           test_class_id: number;
+          test_topic_id: number;
+          test_author_id: string;
         };
         Returns: {
-          inserts_per_second: number;
-          duration_ms: number;
           operation: string;
+          duration_ms: number;
+          inserts_per_second: number;
         }[];
       };
       trigger_sis_sync: {
@@ -8852,10 +8852,10 @@ export type Database = {
       };
       update_card_progress: {
         Args: {
-          p_class_id: number;
-          p_card_id: number;
-          p_student_id: string;
           p_is_mastered: boolean;
+          p_class_id: number;
+          p_student_id: string;
+          p_card_id: number;
         };
         Returns: undefined;
       };
@@ -8867,24 +8867,24 @@ export type Database = {
         Args: {
           regrade_request_id: number;
           resolved_points?: number;
+          closed_points?: number;
           profile_id: string;
           new_status: Database["public"]["Enums"]["regrade_status"];
-          closed_points?: number;
         };
         Returns: boolean;
       };
       update_sis_sync_status: {
         Args: {
-          p_sync_status?: string;
-          p_lab_section_id?: number;
           p_course_section_id?: number;
           p_course_id: number;
           p_sync_message?: string;
+          p_sync_status?: string;
+          p_lab_section_id?: number;
         };
         Returns: number;
       };
       user_is_in_help_request: {
-        Args: { p_user_id?: string; p_help_request_id: number };
+        Args: { p_help_request_id: number; p_user_id?: string };
         Returns: boolean;
       };
     };
