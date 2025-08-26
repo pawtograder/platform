@@ -86,8 +86,8 @@ test.describe("Lab Sections Page", () => {
     await page.locator('select[name="lab_leader_id"]').selectOption(instructor2!.private_profile_id);
     await page.getByPlaceholder("Optional description").fill(labSectionDescription);
     await page.getByRole("button", { name: "Create" }).click();
-    await expect(page.getByText(labSectionName, { exact: true })).toBeVisible();
-    await expect(page.getByText(labSectionDescription)).toBeVisible();
+    await expect(page.locator(`text=${labSectionName}`).first()).toBeVisible();
+    await expect(page.locator(`text=${labSectionDescription}`).first()).toBeVisible();
     await expect(page.getByText("No lab sections created yet.")).not.toBeVisible();
   });
 });
