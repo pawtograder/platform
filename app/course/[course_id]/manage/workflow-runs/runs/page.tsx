@@ -1,8 +1,7 @@
 "use client";
 
 import { Box, Heading, Text, HStack, Button, Spinner, Input } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
-import { useList } from "@refinedev/core";
+import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
 import PersonName from "@/components/ui/person-name";
@@ -22,6 +21,7 @@ import {
 } from "@tanstack/react-table";
 import { Select, CreatableSelect } from "chakra-react-select";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { createClient } from "@/utils/supabase/client";
 
 export default function WorkflowRunsPage() {
   return (
@@ -30,8 +30,8 @@ export default function WorkflowRunsPage() {
         Workflow Runs
       </Heading>
       <Text fontSize="sm" color="fg.muted" mb={6}>
-        Complete history of GitHub Actions workflow executions for student submissions. This page shows detailed timing
-        information and execution status.
+        History of recent GitHub Actions workflow executions for student submissions. This page shows detailed timing
+        information and execution status. Data calculated every 5 minutes, only showing the most recent 1000 runs.
       </Text>
       <WorkflowRunTable />
     </Box>
@@ -53,26 +53,40 @@ function WorkflowRunTable() {
     pageSize: 25
   });
 
-  const { data, isLoading, error } = useList<WorkflowEventSummaryRow>({
-    resource: "workflow_events_summary",
-    filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: course_id as string
+  const [rows, setRows] = useState<WorkflowEventSummaryRow[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    let mounted = true;
+    (async () => {
+      try {
+        setLoading(true);
+        setErr(null);
+        const classId = Number(course_id);
+        if (!classId || Number.isNaN(classId)) {
+          setRows([]);
+          return;
+        }
+        const { data, error } = await supabase.rpc("get_workflow_events_summary_for_class", {
+          p_class_id: classId
+        });
+        if (!mounted) return;
+        if (error) {
+          setErr(error.message);
+          setRows([]);
+        } else {
+          setRows((data || []) as unknown as WorkflowEventSummaryRow[]);
+        }
+      } finally {
+        if (mounted) setLoading(false);
       }
-    ],
-    sorters: [
-      {
-        field: "requested_at",
-        order: "desc"
-      }
-    ],
-    pagination: {
-      current: 1,
-      pageSize: 1000 // Get all data for client-side filtering
-    }
-  });
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [course_id]);
 
   const columns = useMemo<ColumnDef<WorkflowEventSummaryRow>[]>(
     () => [
@@ -420,7 +434,7 @@ function WorkflowRunTable() {
     []
   );
 
-  const allData = data?.data || [];
+  const allData = rows || [];
 
   const table = useReactTable({
     data: allData,
@@ -439,7 +453,7 @@ function WorkflowRunTable() {
     }
   });
 
-  if (isLoading) {
+  if (loading) {
     return (
       <Box>
         <Box display="flex" justifyContent="center" alignItems="center" py={4}>
@@ -449,11 +463,11 @@ function WorkflowRunTable() {
     );
   }
 
-  if (error) {
+  if (err) {
     return (
       <Box>
         <Box p={4} bg="red.50" border="1px solid" borderColor="red.200" borderRadius="md">
-          <Text color="red.600">Failed to load workflow runs: {error.message}</Text>
+          <Text color="red.600">Failed to load workflow runs: {err}</Text>
         </Box>
       </Box>
     );

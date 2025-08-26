@@ -7002,21 +7002,33 @@ export type Database = {
       };
       webhook_process_status: {
         Row: {
+          attempt_count: number;
           completed: boolean;
           created_at: string;
+          event_name: string | null;
           id: number;
+          last_attempt_at: string;
+          last_error: string | null;
           webhook_id: string;
         };
         Insert: {
+          attempt_count?: number;
           completed: boolean;
           created_at?: string;
+          event_name?: string | null;
           id?: number;
+          last_attempt_at?: string;
+          last_error?: string | null;
           webhook_id: string;
         };
         Update: {
+          attempt_count?: number;
           completed?: boolean;
           created_at?: string;
+          event_name?: string | null;
           id?: number;
+          last_attempt_at?: string;
+          last_error?: string | null;
           webhook_id?: string;
         };
         Relationships: [];
@@ -8634,6 +8646,10 @@ export type Database = {
         Returns: {
           id: string;
         }[];
+      };
+      get_workflow_events_summary_for_class: {
+        Args: { p_class_id: number };
+        Returns: unknown[];
       };
       get_workflow_statistics: {
         Args: { p_duration_hours?: number; p_class_id: number };

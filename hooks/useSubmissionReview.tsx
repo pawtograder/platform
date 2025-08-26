@@ -83,6 +83,13 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       if (!exists) {
         params.delete("review_assignment_id");
         changed = true;
+      } else {
+        // If we have an active review assignment but no URL parameter for it,
+        // add it to the URL to ensure the state is properly reflected
+        if (!reviewAssignmentIdParam && !ignoreReviewParam) {
+          params.set("review_assignment_id", String(activeReviewAssignmentId));
+          changed = true;
+        }
       }
     }
 
@@ -139,7 +146,9 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     assignmentController.isReady,
     searchParams,
     pathname,
-    router
+    router,
+    reviewAssignmentIdParam,
+    ignoreReviewParam
   ]);
 
   // Derive activeSubmissionReviewId primarily from URL, then RA, then defaults
