@@ -4,7 +4,7 @@ create table "public"."student_deadline_extensions" (
     "student_id" uuid not null,
     "class_id" bigint not null,
     "hours" integer not null,
-    "includes_lab" boolean not null,
+    "includes_lab" boolean not null default false,
     "updated_at" timestamp with time zone not null default now()
 );
 
@@ -14,6 +14,10 @@ alter table "public"."student_deadline_extensions" enable row level security;
 CREATE UNIQUE INDEX student_deadline_extensions_pkey ON public.student_deadline_extensions USING btree (id);
 
 CREATE UNIQUE INDEX student_deadline_extensions_unique_student_class ON public.student_deadline_extensions USING btree (student_id, class_id);
+
+alter table "public"."student_deadline_extensions"
+  add constraint "student_deadline_extensions_hours_non_negative"
+  check (hours >= 0);
 
 alter table "public"."student_deadline_extensions" add constraint "student_deadline_extensions_pkey" PRIMARY KEY using index "student_deadline_extensions_pkey";
 
@@ -77,8 +81,13 @@ BEGIN
         'Class-wide extension automatically applied'
     FROM student_deadline_extensions sde
     WHERE sde.class_id = NEW.class_id
-        -- Apply if it includes labs OR if this isn't a lab assignment
-        AND (sde.includes_lab = true OR NEW.minutes_due_after_lab IS NULL);
+      AND (sde.includes_lab = true OR NEW.minutes_due_after_lab IS NULL)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM assignment_due_date_exceptions ade
+        WHERE ade.assignment_id = NEW.id
+          AND ade.student_id = sde.student_id
+      );
     
     RETURN NEW;
 END;
@@ -165,6 +174,8 @@ CREATE OR REPLACE FUNCTION public.gift_tokens_to_student(p_student_id uuid, p_cl
 AS $function$
 DECLARE
     v_creator_profile_id uuid;
+    v_assignment_class_id bigint;
+    v_student_in_class boolean;
 BEGIN
     -- Verify instructor authorization
     IF NOT authorizeforclassinstructor(p_class_id) THEN
@@ -183,6 +194,31 @@ BEGIN
     IF v_creator_profile_id IS NULL THEN
         RAISE EXCEPTION 'Could not find profile for current user in class %', p_class_id;
     END IF;
+
+    -- Validate positive gift amount
+    IF p_tokens_to_gift <= 0 THEN
+        RAISE EXCEPTION 'p_tokens_to_gift must be > 0 for gifting';
+    END IF;
+
+    -- Ensure assignment belongs to the class
+    SELECT class_id INTO v_assignment_class_id
+    FROM assignments
+    WHERE id = p_assignment_id;
+    IF v_assignment_class_id IS NULL OR v_assignment_class_id <> p_class_id THEN
+        RAISE EXCEPTION 'Assignment % does not belong to class %', p_assignment_id, p_class_id;
+    END IF;
+
+    -- Ensure the student is in the class (by private profile)
+    SELECT EXISTS (
+      SELECT 1 FROM user_roles
+      WHERE class_id = p_class_id
+        AND private_profile_id = p_student_id
+        AND disabled = false
+        AND role = 'student'
+    ) INTO v_student_in_class;
+    IF NOT v_student_in_class THEN
+        RAISE EXCEPTION 'Student % is not enrolled in class %', p_student_id, p_class_id;
+    END IF;    
     
     -- Create a negative token consumption entry
     INSERT INTO assignment_due_date_exceptions (
@@ -208,6 +244,9 @@ BEGIN
 END;
 $function$
 ;
+
+alter function public.gift_tokens_to_student(uuid, bigint, bigint, integer, text)
+  set search_path = public, pg_temp;
 
 grant delete on table "public"."student_deadline_extensions" to "anon";
 

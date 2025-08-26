@@ -101,7 +101,14 @@ export default function AddExceptionModal({
     setValue("class_id", Number(course_id));
     setValue("assignment_id", selectedAssignmentId);
     setValue("student_id", selectedStudentId);
-    setValue("creator_id", private_profile_id || "");
+    if (!private_profile_id) {
+      toaster.error({
+        title: "Missing creator",
+        description: "Your profile isn’t loaded yet. Please try again in a moment."
+      });
+      return;
+    }
+    setValue("creator_id", private_profile_id);
     handleSubmit(async (values) => {
       try {
         await refineCore.onFinish?.(values);

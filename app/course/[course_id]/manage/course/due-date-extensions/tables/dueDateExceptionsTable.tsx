@@ -78,7 +78,7 @@ export default function DueDateExceptionsTable() {
     return m;
   }, [filtered]);
 
-  const studentName = (id: string) => students.find((s) => s.id === id)?.name || id;
+  const studentName = (id: string | null | undefined) => students.find((s) => s.id === id)?.name || id;
 
   return (
     <VStack align="stretch" gap={4} w="100%">
@@ -167,7 +167,7 @@ export default function DueDateExceptionsTable() {
               <Table.Body>
                 {rows.map((r) => (
                   <Table.Row key={r.id}>
-                    <Table.Cell>{studentName(r.student_id!)}</Table.Cell>
+                    <Table.Cell>{studentName(r.student_id) ?? "Missing Student"}</Table.Cell>
                     <Table.Cell>{r.hours}</Table.Cell>
                     <Table.Cell>{r.minutes || 0}</Table.Cell>
                     <Table.Cell>{r.tokens_consumed}</Table.Cell>
