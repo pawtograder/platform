@@ -1,6 +1,7 @@
 {
   "imports": {
     "@sentry/deno": "npm:@sentry/deno@^10.1.0",
+    "@supabase/functions-js": "jsr:@supabase/functions-js@^2.4.5",
     "@supabase/postgrest-js": "https://esm.sh/@supabase/postgrest-js@1.19.2",
     "mathjs": "npm:mathjs@14.5.2",
     "minimatch": "npm:minimatch@10.0.3"
