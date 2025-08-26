@@ -31,7 +31,7 @@ import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useList, useUpdate } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -877,6 +877,7 @@ export class CourseController {
       | TableController<"lab_section_meetings">
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
       | TableController<"student_deadline_extensions">
+      | TableController<"assignment_due_date_exceptions">
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
     if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
@@ -886,6 +887,7 @@ export class CourseController {
     if (this._labSections) createdControllers.push(this._labSections);
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
     if (this._studentDeadlineExtensions) createdControllers.push(this._studentDeadlineExtensions);
+    if (this._assignmentDueDateExceptions) createdControllers.push(this._assignmentDueDateExceptions);
 
     return createdControllers.every((c) => c.ready);
   }
@@ -908,7 +910,7 @@ export class CourseController {
   }
 }
 
-function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
+function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
   const { user } = useAuthState();
   const course = useCourse();
 
@@ -1002,28 +1004,6 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     }
   }, [controller, helpRequestWatches?.data]);
 
-  const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
-    resource: "assignment_due_date_exceptions",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleGenericDataEvent("assignment_due_date_exceptions", event);
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    }
-  });
-  useEffect(() => {
-    controller.registerGenericDataType("assignment_due_date_exceptions", (item: AssignmentDueDateException) => item.id);
-    if (dueDateExceptions?.data) {
-      controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
-    }
-  }, [controller, dueDateExceptions?.data]);
-
   return <></>;
 }
 const CourseControllerContext = createContext<CourseController | null>(null);
@@ -1098,7 +1078,7 @@ export function CourseControllerProvider({
 
   return (
     <CourseControllerContext.Provider value={courseController}>
-      <CourseControllerProviderImpl controller={courseController} course_id={course_id} />
+      <CourseControllerProviderImpl controller={courseController} />
       {children}
     </CourseControllerContext.Provider>
   );
