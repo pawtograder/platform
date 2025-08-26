@@ -99,12 +99,11 @@ GRANT EXECUTE ON FUNCTION public.trigger_sis_sync(bigint) TO "postgres";
 -- The original function had flawed logic that prevented proper updates for lab sections
 CREATE OR REPLACE FUNCTION "public"."update_sis_sync_status"("p_course_id" bigint, "p_course_section_id" bigint DEFAULT NULL::bigint, "p_lab_section_id" bigint DEFAULT NULL::bigint, "p_sync_status" "text" DEFAULT NULL::"text", "p_sync_message" "text" DEFAULT NULL::"text") RETURNS bigint
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
     AS $$
 DECLARE
     v_status_id bigint;
 BEGIN
-    -- Set safe search_path to prevent schema hijacking
-    SET search_path = public, pg_temp;
     
     -- Validate that exactly one section ID is provided
     IF (p_course_section_id IS NULL AND p_lab_section_id IS NULL) OR 
@@ -231,7 +230,7 @@ BEGIN
     EXCEPTION
         WHEN undefined_function THEN
             -- Fallback if pgcrypto is not available
-            v_secure_seed := encode(sha256(p_user_id::text || 'pawtograder_avatar_salt_2024'), 'hex');
+            v_secure_seed := md5(p_user_id::text || 'pawtograder_avatar_salt_2024');
     END;
     
     -- Determine avatar URL for private profile
@@ -319,6 +318,7 @@ ADD COLUMN "updated_by" "uuid" REFERENCES "auth"."users"("id");
 -- Update sync_lab_section_meetings function to delete existing meetings first
 CREATE OR REPLACE FUNCTION "public"."sync_lab_section_meetings"("lab_section_id_param" bigint) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
     AS $$
 DECLARE
     lab_section_record RECORD;
@@ -396,6 +396,7 @@ $$;
 -- Create trigger function to handle lab section schedule changes
 CREATE OR REPLACE FUNCTION "public"."handle_lab_section_schedule_update"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
     AS $$
 BEGIN
     -- Only sync meetings if day_of_week changed

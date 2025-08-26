@@ -223,7 +223,10 @@ const DropBoxAvatar = ({
                   value="delete"
                   color="fg.error"
                   _hover={{ bg: "bg.error", color: "fg.error" }}
-                  onClick={() => setAvatarLink(`https://api.dicebear.com/9.x/identicon/svg?seed=${profile?.id}`)}
+                  onClick={() => {
+                    const safeSeed = profile?.id || user?.id || "default";
+                    setAvatarLink(`https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(safeSeed)}`);
+                  }}
                 >
                   Remove current picture
                 </Menu.Item>

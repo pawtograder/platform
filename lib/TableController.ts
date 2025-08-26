@@ -289,11 +289,23 @@ export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(con
   const [ready, setReady] = useState(controller.ready);
   useEffect(() => {
     let cleanedUp = false;
-    controller.readyPromise.then(() => {
-      if (!cleanedUp) {
-        setReady(true);
-      }
-    });
+    // Reset state when controller changes
+    setReady(controller.ready);
+
+    controller.readyPromise
+      .then(() => {
+        if (!cleanedUp) {
+          setReady(true);
+        }
+      })
+      .catch((err) => {
+        if (!cleanedUp) {
+          setReady(false);
+          // Optionally log the error
+          console.error("TableController readyPromise rejected:", err);
+        }
+      });
+
     return () => {
       cleanedUp = true;
     };

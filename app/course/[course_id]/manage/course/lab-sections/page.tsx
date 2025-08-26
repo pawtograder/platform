@@ -579,12 +579,7 @@ function LabSectionsTable() {
 
   // Get lab section meetings from course controller
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
-
-  // Get profiles for lab leaders
-  const { data: profiles } = useList({
-    resource: "profiles",
-    pagination: { pageSize: 1000 }
-  });
+  const profiles = useTableControllerTableValues(controller.profiles);
 
   const handleCreateNew = () => {
     openCreateModal(undefined);
@@ -710,7 +705,7 @@ function LabSectionsTable() {
                   <Table.Cell>
                     <Text>
                       {labSection.lab_leader_id
-                        ? profiles?.data?.find((p) => p.id === labSection.lab_leader_id)?.name || "Unknown"
+                        ? profiles?.find((p) => p.id === labSection.lab_leader_id)?.name || "Unknown"
                         : "Not assigned"}
                     </Text>
                   </Table.Cell>

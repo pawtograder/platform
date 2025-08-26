@@ -80,7 +80,13 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
   const labSections = useTableControllerTableValues(controller.labSections);
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
 
-  if (!dueDate || !minutesDueAfterLab || labSections.length === 0) {
+  if (
+    !dueDate ||
+    minutesDueAfterLab === null ||
+    minutesDueAfterLab === undefined ||
+    minutesDueAfterLab === "" ||
+    labSections.length === 0
+  ) {
     return (
       <Field
         label="Lab Section Due Date Preview"
@@ -90,8 +96,15 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
         <Box p="3" bg="bg.info" borderRadius="md" w="100%">
           <Text fontSize="sm" color="fg.muted">
             {!dueDate && "Set a due date to see lab section preview"}
-            {dueDate && !minutesDueAfterLab && "Set minutes due after lab to see preview"}
-            {dueDate && minutesDueAfterLab && labSections.length === 0 && "No lab sections found"}
+            {dueDate &&
+              (minutesDueAfterLab === null || minutesDueAfterLab === undefined || minutesDueAfterLab === "") &&
+              "Set minutes due after lab to see preview"}
+            {dueDate &&
+              minutesDueAfterLab !== null &&
+              minutesDueAfterLab !== undefined &&
+              minutesDueAfterLab !== "" &&
+              labSections.length === 0 &&
+              "No lab sections found"}
           </Text>
         </Box>
       </Field>
