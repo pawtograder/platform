@@ -127,7 +127,7 @@ async function handlePushToStudentRepo(
 
     console.log(`Adding check run for ${commit.id}`);
     maybeCrash("push.student.before_create_check_run");
-    const checkRunId = await createCheckRun(repoName, commit.id, detailsUrl);
+    const { id: checkRunId } = await createCheckRun(repoName, commit.id, detailsUrl);
     console.log(`Check run created: ${checkRunId}`);
     const status: ExtendedCheckRunStatus = {
       created_at: new Date().toISOString(),
@@ -138,7 +138,7 @@ async function handlePushToStudentRepo(
     };
     const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
       repository_id: studentRepo.id,
-      check_run_id: checkRunId.id,
+      check_run_id: checkRunId,
       class_id: studentRepo.class_id,
       assignment_group_id: studentRepo.assignment_group_id,
       commit_message: commit.message,

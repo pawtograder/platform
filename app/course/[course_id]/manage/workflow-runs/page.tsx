@@ -39,7 +39,6 @@ function WorkflowRunStats() {
 
         // Define time periods with their duration in hours
         const timePeriods = [
-          { name: "Last 30 minutes", hours: 0.5 },
           { name: "Last hour", hours: 1 },
           { name: "Today", hours: 24 },
           { name: "This week", hours: 24 * 7 },

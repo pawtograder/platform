@@ -190,6 +190,7 @@ BEGIN
       wes.requested_at,
       wes.in_progress_at,
       wes.completed_at,
+      wes.conclusion,
       wes.queue_time_seconds,
       wes.run_time_seconds
     FROM "public"."workflow_events_summary" wes
@@ -207,9 +208,8 @@ BEGIN
   base_stats AS (
     SELECT 
       COUNT(*)::bigint as total_runs,
-      COUNT(CASE WHEN ws.completed_at IS NOT NULL THEN 1 END)::bigint as completed_runs,
-      -- Failed runs: runs that are not completed
-      COUNT(CASE WHEN ws.completed_at IS NULL THEN 1 END)::bigint as failed_runs,
+      COUNT(CASE WHEN ws.conclusion = 'success' THEN 1 END)::bigint as completed_runs,
+      COUNT(CASE WHEN ws.conclusion IS NOT NULL AND ws.conclusion <> 'success' THEN 1 END)::bigint as failed_runs,
       COUNT(CASE WHEN ws.in_progress_at IS NOT NULL AND ws.completed_at IS NULL THEN 1 END)::bigint as in_progress_runs,
       AVG(ws.queue_time_seconds) as avg_queue_time_seconds,
       AVG(ws.run_time_seconds) as avg_run_time_seconds
