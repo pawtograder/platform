@@ -395,6 +395,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
       }
     }
     if (
+      ret &&
       ret.incomplete_values !== null &&
       typeof ret.incomplete_values === "object" &&
       "missing" in ret.incomplete_values
