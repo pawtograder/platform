@@ -136,4 +136,112 @@ REVOKE ALL ON FUNCTION public.get_workflow_events_summary_for_class(bigint) FROM
 GRANT EXECUTE ON FUNCTION public.get_workflow_events_summary_for_class(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_workflow_events_summary_for_class(bigint) TO service_role;
 
+-- 5) Updated get_workflow_statistics function with proper error counting
+-- This replaces the previous version to count workflow_run_error records directly
+CREATE OR REPLACE FUNCTION "public"."get_workflow_statistics"(
+  p_class_id bigint,
+  p_duration_hours integer DEFAULT 24
+)
+RETURNS TABLE(
+  class_id bigint,
+  duration_hours integer,
+  total_runs bigint,
+  completed_runs bigint,
+  failed_runs bigint,
+  in_progress_runs bigint,
+  avg_queue_time_seconds numeric,
+  avg_run_time_seconds numeric,
+  error_count bigint,
+  error_rate numeric,
+  success_rate numeric,
+  period_start timestamptz,
+  period_end timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_period_start timestamptz;
+  v_period_end timestamptz;
+BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = public, pg_temp;
+  
+  -- Check authorization using existing function
+  IF NOT authorizeforclassgrader(p_class_id) THEN
+    RAISE EXCEPTION 'Access denied: insufficient permissions for class %', p_class_id;
+  END IF;
+
+  -- Calculate time period, clamp start to respect MV retention (6 months)
+  v_period_end := NOW();
+  v_period_start := GREATEST(
+    v_period_end - (p_duration_hours || ' hours')::interval,
+    NOW() - INTERVAL '6 months'
+  );
+
+  -- Return statistics from materialized view, always return a row even if no data
+  RETURN QUERY
+  WITH workflow_stats AS (
+    SELECT 
+      wes.workflow_run_id,
+      wes.run_attempt,
+      wes.run_number,
+      wes.class_id,
+      wes.requested_at,
+      wes.in_progress_at,
+      wes.completed_at,
+      wes.queue_time_seconds,
+      wes.run_time_seconds
+    FROM "public"."workflow_events_summary" wes
+    WHERE wes.class_id = p_class_id
+      AND wes.requested_at >= v_period_start
+      AND wes.requested_at <= v_period_end
+  ),
+  error_stats AS (
+    SELECT COUNT(*)::bigint as total_error_count
+    FROM "public"."workflow_run_error" wre
+    WHERE wre.class_id = p_class_id
+      AND wre.created_at >= v_period_start
+      AND wre.created_at <= v_period_end
+  ),
+  base_stats AS (
+    SELECT 
+      COUNT(*)::bigint as total_runs,
+      COUNT(CASE WHEN ws.completed_at IS NOT NULL THEN 1 END)::bigint as completed_runs,
+      -- Failed runs: runs that are not completed
+      COUNT(CASE WHEN ws.completed_at IS NULL THEN 1 END)::bigint as failed_runs,
+      COUNT(CASE WHEN ws.in_progress_at IS NOT NULL AND ws.completed_at IS NULL THEN 1 END)::bigint as in_progress_runs,
+      AVG(ws.queue_time_seconds) as avg_queue_time_seconds,
+      AVG(ws.run_time_seconds) as avg_run_time_seconds
+    FROM workflow_stats ws
+  )
+  SELECT 
+    p_class_id as class_id,
+    p_duration_hours as duration_hours,
+    COALESCE(bs.total_runs, 0::bigint) as total_runs,
+    COALESCE(bs.completed_runs, 0::bigint) as completed_runs,
+    COALESCE(bs.failed_runs, 0::bigint) as failed_runs,
+    COALESCE(bs.in_progress_runs, 0::bigint) as in_progress_runs,
+    COALESCE(ROUND((bs.avg_queue_time_seconds)::numeric, 2), 0.00) as avg_queue_time_seconds,
+    COALESCE(ROUND((bs.avg_run_time_seconds)::numeric, 2), 0.00) as avg_run_time_seconds,
+    COALESCE(es.total_error_count, 0::bigint) as error_count,
+    CASE 
+      WHEN COALESCE(bs.total_runs, 0) > 0 THEN ROUND((COALESCE(es.total_error_count, 0)::numeric / bs.total_runs::numeric) * 100, 2)
+      ELSE 0.00
+    END as error_rate,
+    CASE 
+      WHEN COALESCE(bs.total_runs, 0) > 0 THEN ROUND((bs.completed_runs::numeric / bs.total_runs::numeric) * 100, 2)
+      ELSE 0.00
+    END as success_rate,
+    v_period_start as period_start,
+    v_period_end as period_end
+  FROM (SELECT 1) dummy -- Ensure we always return a row
+  LEFT JOIN base_stats bs ON true
+  LEFT JOIN error_stats es ON true;
+END;
+$$;
+
+-- Grant execute permission to authenticated users (authorization handled inside function)
+GRANT EXECUTE ON FUNCTION "public"."get_workflow_statistics"(bigint, integer) TO "authenticated";
+
 

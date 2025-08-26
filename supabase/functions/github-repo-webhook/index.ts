@@ -171,6 +171,11 @@ async function handlePushToStudentRepo(
       Sentry.captureException(headRowErr, scope);
       throw headRowErr;
     }
+    if (!headRow) {
+      scope.setTag("error_source", "no_head_commit_repository_check_run");
+      Sentry.captureException(new Error("No head commit repository_check_run found"), scope);
+      return;
+    }
     const currentStatus = (headRow?.status || {}) as ExtendedCheckRunStatus;
     if (!currentStatus.workflow_triggered_at) {
       maybeCrash("push.student.before_trigger_workflow");
@@ -183,7 +188,7 @@ async function handlePushToStudentRepo(
             workflow_triggered_at: new Date().toISOString()
           } as unknown as Json
         })
-        .eq("id", headRow?.id || 0);
+        .eq("id", headRow.id);
       if (statusUpdateErr) {
         console.error(statusUpdateErr);
         scope.setTag("error_source", "repository_check_run_status_update_failed");
@@ -228,6 +233,9 @@ async function handlePushToGraderSolution(
       console.log("Pawtograder yml changed");
       const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
       const parsedYml = parse(file.content) as PawtograderConfig;
+      if (!parsedYml.gradedParts) {
+        parsedYml.gradedParts = [];
+      }
       const totalAutograderPoints = parsedYml.gradedParts.reduce(
         (acc, part) =>
           acc +

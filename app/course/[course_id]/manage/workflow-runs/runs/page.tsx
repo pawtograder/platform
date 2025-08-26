@@ -53,12 +53,12 @@ function WorkflowRunTable() {
     pageSize: 25
   });
 
-  const supabase = createClient();
   const [rows, setRows] = useState<WorkflowEventSummaryRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    const supabase = createClient();
     let mounted = true;
     (async () => {
       try {
@@ -86,7 +86,7 @@ function WorkflowRunTable() {
     return () => {
       mounted = false;
     };
-  }, [course_id, supabase]);
+  }, [course_id]);
 
   const columns = useMemo<ColumnDef<WorkflowEventSummaryRow>[]>(
     () => [

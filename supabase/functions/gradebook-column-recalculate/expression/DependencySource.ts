@@ -390,7 +390,9 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
       if (!context.incomplete_values.missing.gradebook_columns) {
         context.incomplete_values.missing.gradebook_columns = [];
       }
-      context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
+      if (ret) {
+        context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
+      }
     }
     if (
       ret.incomplete_values !== null &&

@@ -201,7 +201,7 @@ INSERT INTO public.gradebook_columns (id, sort_order, gradebook_id, class_id, sl
 (20, 20, 1, 1, 'hw-4', 'HW #4', 'Score for HW #4', NULL, NULL, 100, NULL),
 (21, 21, 1, 1, 'hw-5', 'HW #5', 'Score for HW #5', NULL, NULL, 100, NULL),
 -- Avg HW
-(22, 22, 1, 1, 'average.hw', 'Avg HW', 'Average of all homework assignments', 'mean(gradebook_columns("hw-*"))', NULL, 100, '{"gradebook_columns": [17,18,19,20,21]}'),
+(22, 22, 1, 1, 'average.hw', 'Avg HW', 'Average of all homework assignments', 'mean(gradebook_columns("assignment-hw-*"))', NULL, 100, '{"gradebook_columns": [17,18,19,20,21]}'),
 -- Lab columns 1-10
 (23, 23, 1, 1, 'lab-1', 'Lab #1', 'Participation in Lab #1', NULL, 'checkOrX(score)', 1, NULL),
 (24, 24, 1, 1, 'lab-2', 'Lab #2', 'Participation in Lab #2', NULL, 'checkOrX(score)', 1, NULL),
@@ -214,7 +214,7 @@ INSERT INTO public.gradebook_columns (id, sort_order, gradebook_id, class_id, sl
 (31, 31, 1, 1, 'lab-9', 'Lab #9', 'Participation in Lab #9', NULL, 'checkOrX(score)', 1, NULL),
 (32, 32, 1, 1, 'lab-10', 'Lab #10', 'Participation in Lab #10', NULL, 'checkOrX(score)', 1, NULL),
 -- Total Labs
-(33, 33, 1, 1, 'total-labs', 'Total Labs', 'Total number of labs participated in', 'countif(gradebook_columns("lab-*"), f(x) = not x.is_missing and x.score>0)', NULL, 10, '{"gradebook_columns": [23,24,25,26,27,28,29,30,31,32]}'),
+(33, 33, 1, 1, 'total-labs', 'Total Labs', 'Total number of labs participated in', 'countif(gradebook_columns("assignment-lab-*"), f(x) = not x.is_missing and x.score>0)', NULL, 10, '{"gradebook_columns": [23,24,25,26,27,28,29,30,31,32]}'),
 -- Final Score
 (34, 34, 1, 1, 'final', 'Final Score', 'Grades will be primarily assigned by achievement levels of the course Skills, with required grade thresholds on HW for each letter grade, and + (other than A) given for participation in 8 or more out of 10 labs, - given for participating in fewer than 6 out of ten labs.
 Grade | Skills Needed | HW Needed 
