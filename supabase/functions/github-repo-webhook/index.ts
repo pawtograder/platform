@@ -1,4 +1,11 @@
-import { createEventHandler } from "https://esm.sh/@octokit/webhooks?dts";
+import { createEventHandler } from "https://esm.sh/@octokit/webhooks@13?dts";
+import type {
+  PushEvent,
+  CheckRunEvent,
+  MembershipEvent,
+  OrganizationEvent,
+  WorkflowRunEvent
+} from "https://esm.sh/@octokit/webhooks-types";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parse } from "jsr:@std/yaml";
@@ -25,17 +32,32 @@ if (Deno.env.get("SENTRY_DSN")) {
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
-type GitHubCommit = {
-  message: string;
-  id: string;
-  author: {
-    name: string;
-    email: string;
-  };
+// Extend CheckRunStatus locally to track idempotent step markers without using 'any'
+type ExtendedCheckRunStatus = CheckRunStatus & {
+  check_run_created_at?: string;
+  workflow_triggered_at?: string;
+  check_run_marked_in_progress_at?: string;
 };
+
+// Fault injection helper for testing resiliency
+function maybeCrash(tag: string) {
+  const prob = parseFloat(Deno.env.get("WEBHOOK_FAULT_PROB") || "0");
+  if (!(prob > 0)) return;
+  const tags = (Deno.env.get("WEBHOOK_FAULT_TAGS") || "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  const enabled = tags.length === 0 || tags.includes(tag);
+  if (enabled && Math.random() < prob) {
+    console.error(`[FAULT] Injecting crash at ${tag}`);
+    throw new Error(`Injected crash at ${tag}`);
+  }
+}
+
+type GitHubCommit = PushEvent["commits"][number];
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
-  payload: any,
+  payload: PushEvent,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
   scope: Sentry.Scope
 ) {
@@ -51,27 +73,78 @@ async function handlePushToStudentRepo(
     // If we make a #submit commit or otherwise create a submission, it will trigger creating the tag, so don't do anything on the tag push.
     return;
   }
+  if (!payload.head_commit) {
+    console.error("No head commit found in payload");
+    scope.setTag("error_source", "no_head_commit");
+    scope.setTag("error_context", "No head commit found in payload");
+    Sentry.captureException(new Error("No head commit found in payload"), scope);
+    return;
+  }
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
   const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${studentRepo.class_id}/assignments/${studentRepo.assignment_id}`;
 
   for (const commit of payload.commits) {
+    maybeCrash("push.student.for_each_commit.before_lookup");
+    // Idempotency: if a row already exists for this repo+sha, do not create a new check run
+    const { data: existing, error: existingErr } = await adminSupabase
+      .from("repository_check_runs")
+      .select("id, check_run_id, status")
+      .eq("repository_id", studentRepo.id)
+      .eq("sha", commit.id)
+      .maybeSingle();
+    if (existingErr) {
+      console.error(existingErr);
+      scope.setTag("error_source", "repository_check_run_lookup_failed");
+      scope.setTag("error_context", "Error checking existing repository_check_runs");
+      Sentry.captureException(existingErr, scope);
+      throw existingErr;
+    }
+
+    if (existing && existing.id) {
+      // If the record exists but lacks a check_run_id (partial prior failure), create and update it
+      if (!existing.check_run_id) {
+        console.log(`Completing partial check run setup for ${commit.id}`);
+        maybeCrash("push.student.complete_partial.before_create_check_run");
+        const { id: checkRunId } = await createCheckRun(repoName, commit.id, detailsUrl);
+        const newStatus = {
+          ...(existing.status as ExtendedCheckRunStatus),
+          check_run_created_at: new Date().toISOString()
+        } as ExtendedCheckRunStatus;
+        const { error: updateErr } = await adminSupabase
+          .from("repository_check_runs")
+          .update({ check_run_id: checkRunId, status: newStatus as unknown as Json })
+          .eq("id", existing.id);
+        if (updateErr) {
+          console.error(updateErr);
+          scope.setTag("error_source", "repository_check_run_update_failed");
+          scope.setTag("error_context", "Could not update repository_check_run with check_run_id");
+          Sentry.captureException(updateErr, scope);
+          throw updateErr;
+        }
+      }
+      continue;
+    }
+
     console.log(`Adding check run for ${commit.id}`);
+    maybeCrash("push.student.before_create_check_run");
     const checkRunId = await createCheckRun(repoName, commit.id, detailsUrl);
     console.log(`Check run created: ${checkRunId}`);
+    const status: ExtendedCheckRunStatus = {
+      created_at: new Date().toISOString(),
+      commit_author: commit.author.name,
+      commit_date: commit.timestamp,
+      created_by: "github push by " + payload.pusher.name,
+      check_run_created_at: new Date().toISOString()
+    };
     const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
       repository_id: studentRepo.id,
-      check_run_id: checkRunId,
+      check_run_id: checkRunId.id,
       class_id: studentRepo.class_id,
       assignment_group_id: studentRepo.assignment_group_id,
       commit_message: commit.message,
       sha: commit.id,
       profile_id: studentRepo.profile_id,
-      status: {
-        created_at: new Date().toISOString(),
-        commit_author: commit.author.name,
-        commit_date: commit.timestamp,
-        created_by: "github push by " + payload.pusher.name
-      }
+      status: status as unknown as Json
     });
     if (checkRunError) {
       console.error(checkRunError);
@@ -84,13 +157,47 @@ async function handlePushToStudentRepo(
   if (payload.head_commit.message.includes("#submit")) {
     console.log(`Ref: ${payload.ref}`);
     //Create a submission for this commit
-    await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+    // Find the head commit check run row to gate workflow triggering idempotently
+    const { data: headRow, error: headRowErr } = await adminSupabase
+      .from("repository_check_runs")
+      .select("id, status")
+      .eq("repository_id", studentRepo.id)
+      .eq("sha", payload.head_commit.id)
+      .maybeSingle();
+    if (headRowErr) {
+      console.error(headRowErr);
+      scope.setTag("error_source", "repository_check_run_head_lookup_failed");
+      scope.setTag("error_context", "Error getting head commit repository_check_run");
+      Sentry.captureException(headRowErr, scope);
+      throw headRowErr;
+    }
+    const currentStatus = (headRow?.status || {}) as ExtendedCheckRunStatus;
+    if (!currentStatus.workflow_triggered_at) {
+      maybeCrash("push.student.before_trigger_workflow");
+      await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+      const { error: statusUpdateErr } = await adminSupabase
+        .from("repository_check_runs")
+        .update({
+          status: {
+            ...(currentStatus as ExtendedCheckRunStatus),
+            workflow_triggered_at: new Date().toISOString()
+          } as unknown as Json
+        })
+        .eq("id", headRow?.id || 0);
+      if (statusUpdateErr) {
+        console.error(statusUpdateErr);
+        scope.setTag("error_source", "repository_check_run_status_update_failed");
+        scope.setTag("error_context", "Failed to set workflow_triggered_at");
+        Sentry.captureException(statusUpdateErr, scope);
+        throw statusUpdateErr;
+      }
+    }
   }
 }
 const PAWTOGRADER_YML_PATH = "pawtograder.yml";
 async function handlePushToGraderSolution(
   adminSupabase: SupabaseClient<Database>,
-  payload: any,
+  payload: PushEvent,
   autograders: Database["public"]["Tables"]["autograder"]["Row"][],
   scope: Sentry.Scope
 ) {
@@ -104,6 +211,13 @@ async function handlePushToGraderSolution(
   If we pushed to main, then update the autograder config and latest_autograder_sha
   */
   if (ref === "refs/heads/main") {
+    if (!payload.head_commit) {
+      console.error("No head commit found in payload");
+      scope.setTag("error_source", "no_head_commit");
+      scope.setTag("error_context", "No head commit found in payload");
+      Sentry.captureException(new Error("No head commit found in payload"), scope);
+      return;
+    }
     const isModified = payload.head_commit.modified.includes(PAWTOGRADER_YML_PATH);
     const isRemoved = payload.head_commit.removed.includes(PAWTOGRADER_YML_PATH);
     const isAdded = payload.head_commit.added.includes(PAWTOGRADER_YML_PATH);
@@ -177,15 +291,24 @@ async function handlePushToGraderSolution(
   Regardless of where we pushed, update the commit list
   */
   for (const autograder of autograders) {
-    const { error } = await adminSupabase.from("autograder_commits").insert(
+    const { class_id } = autograder;
+    if (class_id === null || class_id === undefined) {
+      console.error("Autograder has no class_id");
+      scope.setTag("error_source", "autograder_no_class_id");
+      scope.setTag("error_context", "Autograder has no class_id");
+      Sentry.captureException(new Error("Autograder has no class_id"), scope);
+      continue;
+    }
+    const { error } = await adminSupabase.from("autograder_commits").upsert(
       payload.commits.map((commit: GitHubCommit) => ({
         autograder_id: autograder.id,
         message: commit.message,
         sha: commit.id,
         author: commit.author.name,
-        class_id: autograder.class_id,
+        class_id: class_id,
         ref
-      }))
+      })),
+      { onConflict: "autograder_id,sha" }
     );
     if (error) {
       scope.setTag("error_source", "autograder_commits_insert_failed");
@@ -199,7 +322,7 @@ async function handlePushToGraderSolution(
 
 async function handlePushToTemplateRepo(
   adminSupabase: SupabaseClient<Database>,
-  payload: any,
+  payload: PushEvent,
   assignments: Database["public"]["Tables"]["assignments"]["Row"][],
   scope: Sentry.Scope
 ) {
@@ -211,6 +334,13 @@ async function handlePushToTemplateRepo(
     return;
   }
   scope?.setTag("is_main_branch", "true");
+  if (!payload.head_commit) {
+    console.error("No head commit found in payload");
+    scope.setTag("error_source", "no_head_commit");
+    scope.setTag("error_context", "No head commit found in payload");
+    Sentry.captureException(new Error("No head commit found in payload"), scope);
+    return;
+  }
   //Check for modifications
   const isModified = payload.head_commit.modified.includes(GRADER_WORKFLOW_PATH);
   const isRemoved = payload.head_commit.removed.includes(GRADER_WORKFLOW_PATH);
@@ -261,14 +391,15 @@ async function handlePushToTemplateRepo(
       throw assignmentUpdateError;
     }
     //Store the commit for the template repo
-    const { error } = await adminSupabase.from("assignment_handout_commits").insert(
+    const { error } = await adminSupabase.from("assignment_handout_commits").upsert(
       payload.commits.map((commit: GitHubCommit) => ({
         assignment_id: assignment.id,
         message: commit.message,
         sha: commit.id,
         author: commit.author.name,
         class_id: assignment.class_id
-      }))
+      })),
+      { onConflict: "assignment_id,sha" }
     );
     if (error) {
       scope.setTag("error_source", "assignment_handout_commits_insert_failed");
@@ -279,16 +410,28 @@ async function handlePushToTemplateRepo(
   }
 }
 
-function tagScopeWithGenericPayload(scope: Sentry.Scope, name: string, payload: any) {
+type KnownEventPayload = PushEvent | CheckRunEvent | MembershipEvent | OrganizationEvent | WorkflowRunEvent;
+function tagScopeWithGenericPayload(scope: Sentry.Scope, name: string, payload: KnownEventPayload) {
   scope.setTag("webhook_handler", name);
-  scope.setTag("action", payload.action);
-  scope.setTag("repository", payload.repository?.full_name);
-  scope.setTag("ref", payload.ref);
-  scope.setTag("check_run_id", payload.check_run?.id?.toString() || "");
-  scope.setTag("id", payload.id);
-  scope.setTag("organization", payload.organization?.login || "");
+  if ("action" in payload) {
+    scope.setTag("action", (payload as { action?: string }).action || "");
+  }
+  // repository may not be present on some events (e.g., organization)
+  if ("repository" in payload) {
+    scope.setTag("repository", (payload as { repository?: { full_name?: string } }).repository?.full_name || "");
+  }
+  if ("ref" in payload) {
+    scope.setTag("ref", (payload as { ref?: string }).ref || "");
+  }
+  if ("check_run" in payload) {
+    const id = (payload as { check_run?: { id?: number } }).check_run?.id;
+    scope.setTag("check_run_id", id ? String(id) : "");
+  }
+  if ("organization" in payload) {
+    scope.setTag("organization", (payload as { organization?: { login?: string } }).organization?.login || "");
+  }
 }
-eventHandler.on("push", async ({ name, payload }) => {
+eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, name, payload);
   try {
@@ -298,6 +441,7 @@ eventHandler.on("push", async ({ name, payload }) => {
         Deno.env.get("SUPABASE_URL") || "",
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
       );
+      console.log(`[PUSH] repo=${repoName}`);
       //Is it a student repo?
       const { data: studentRepo, error: studentRepoError } = await adminSupabase
         .from("repositories")
@@ -313,6 +457,7 @@ eventHandler.on("push", async ({ name, payload }) => {
       }
       if (studentRepo) {
         scope.setTag("student_repo", studentRepo.id.toString());
+        maybeCrash("push.before_student_repo");
         await handlePushToStudentRepo(adminSupabase, payload, studentRepo, scope);
         return;
       }
@@ -330,6 +475,7 @@ eventHandler.on("push", async ({ name, payload }) => {
       }
       if (graderSolution.length > 0) {
         scope.setTag("grader_solution", graderSolution[0].id.toString());
+        maybeCrash("push.before_grader_solution");
         await handlePushToGraderSolution(adminSupabase, payload, graderSolution, scope);
         return;
       }
@@ -345,6 +491,7 @@ eventHandler.on("push", async ({ name, payload }) => {
         throw templateRepoError;
       }
       if (templateRepo.length > 0) {
+        maybeCrash("push.before_template_repo");
         await handlePushToTemplateRepo(adminSupabase, payload, templateRepo, scope);
         return;
       }
@@ -354,7 +501,7 @@ eventHandler.on("push", async ({ name, payload }) => {
     throw err;
   }
 });
-eventHandler.on("check_run", async ({ payload }) => {
+eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "check_run", payload);
   try {
@@ -362,6 +509,7 @@ eventHandler.on("check_run", async ({ payload }) => {
       scope?.setTag("check_run_created", "true");
     } else if (payload.action === "requested_action") {
       if (payload.requested_action?.identifier === "submit") {
+        maybeCrash("check_run.before_db_lookup");
         const adminSupabase = createClient<Database>(
           Deno.env.get("SUPABASE_URL") || "",
           Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -373,19 +521,52 @@ eventHandler.on("check_run", async ({ payload }) => {
           .maybeSingle();
         if (checkRun && checkRun.data) {
           scope?.setTag("check_run_id", checkRun.data.id.toString());
-          const status = checkRun.data?.status as CheckRunStatus;
-          scope?.setTag("check_run_status", status.toString());
+          const status = (checkRun.data?.status as ExtendedCheckRunStatus) || ({} as ExtendedCheckRunStatus);
+          scope?.setTag("check_run_status_started", (!!status.started_at).toString());
+
+          // Step 1: mark started_at if missing
           if (!status.started_at) {
+            console.log(`[CHECK_RUN] Marking started for check_run_id=${payload.check_run.id}`);
+            maybeCrash("check_run.before_mark_started");
+            const newStatus = {
+              ...(status as ExtendedCheckRunStatus),
+              started_at: new Date().toISOString()
+            } as ExtendedCheckRunStatus;
             await adminSupabase
               .from("repository_check_runs")
-              .update({
-                status: {
-                  ...(status as CheckRunStatus),
-                  started_at: new Date().toISOString()
-                }
-              })
+              .update({ status: newStatus as unknown as Json })
               .eq("id", checkRun.data.id);
+          }
+
+          // Step 2: trigger workflow once
+          const startedStatus = (
+            status.started_at ? status : { ...(status as ExtendedCheckRunStatus), started_at: new Date().toISOString() }
+          ) as ExtendedCheckRunStatus;
+          if (!startedStatus.workflow_triggered_at) {
+            console.log(
+              `[CHECK_RUN] Triggering workflow for repo=${payload.repository.full_name} sha=${payload.check_run.head_sha}`
+            );
+            maybeCrash("check_run.before_trigger_workflow");
             await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
+            const afterTrigger = {
+              ...(startedStatus as ExtendedCheckRunStatus),
+              workflow_triggered_at: new Date().toISOString()
+            } as ExtendedCheckRunStatus;
+            await adminSupabase
+              .from("repository_check_runs")
+              .update({ status: afterTrigger as unknown as Json })
+              .eq("id", checkRun.data.id);
+          }
+
+          // Step 3: mark check run in progress once
+          const statusForCheckRun = (
+            startedStatus.workflow_triggered_at
+              ? startedStatus
+              : { ...(startedStatus as ExtendedCheckRunStatus), workflow_triggered_at: new Date().toISOString() }
+          ) as ExtendedCheckRunStatus;
+          if (!statusForCheckRun.check_run_marked_in_progress_at) {
+            console.log(`[CHECK_RUN] Marking GitHub check run in_progress id=${payload.check_run.id}`);
+            maybeCrash("check_run.before_update_check_run_in_progress");
             await updateCheckRun({
               owner: payload.repository.owner.login,
               repo: payload.repository.name,
@@ -398,6 +579,14 @@ eventHandler.on("check_run", async ({ payload }) => {
               },
               actions: []
             });
+            const afterMark = {
+              ...(statusForCheckRun as ExtendedCheckRunStatus),
+              check_run_marked_in_progress_at: new Date().toISOString()
+            } as ExtendedCheckRunStatus;
+            await adminSupabase
+              .from("repository_check_runs")
+              .update({ status: afterMark as unknown as Json })
+              .eq("id", checkRun.data.id);
           }
         } else {
           Sentry.captureMessage("Check run not found", scope);
@@ -410,7 +599,7 @@ eventHandler.on("check_run", async ({ payload }) => {
   }
 });
 // Handle team membership changes (when users are added to GitHub teams)
-eventHandler.on("membership", async ({ payload }) => {
+eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "membership", payload);
 
@@ -423,7 +612,7 @@ eventHandler.on("membership", async ({ payload }) => {
     }
 
     // Extract team information - cast to any to access team property
-    const teamSlug = (payload as any).team?.slug;
+    const teamSlug = payload.team?.slug;
     const memberGithubUsername = payload.member?.login;
 
     if (!teamSlug || !memberGithubUsername) {
@@ -528,12 +717,16 @@ eventHandler.on("membership", async ({ payload }) => {
 });
 
 // Handle organization invitation events
-eventHandler.on("organization", async ({ payload }) => {
+eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "organization", payload);
-  const payloadAny = payload as any;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-  scope?.setTag("user_login", payloadAny.invitation?.login || payloadAny.membership?.user?.login || "");
+  if ("invitation" in payload) {
+    scope?.setTag("user_login", payload.invitation?.login || "");
+  } else if ("membership" in payload) {
+    scope?.setTag("user_login", payload.membership?.user?.login || "");
+  } else {
+    Sentry.captureMessage("Neither invitation nor membership present", scope);
+  }
 
   try {
     const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -544,14 +737,14 @@ eventHandler.on("organization", async ({ payload }) => {
     }
 
     // Extract invitation information
-    const invitedUserLogin = payloadAny.invitation?.login;
+    const invitedUserLogin = payload.invitation?.login;
 
     if (!invitedUserLogin) {
       return;
     }
 
     // Extract organization from the payload
-    const organizationName = payloadAny.organization?.login;
+    const organizationName = payload.organization?.login;
 
     if (!organizationName) {
       return;
@@ -616,14 +809,7 @@ eventHandler.on("organization", async ({ payload }) => {
 
 async function handleWorkflowCompletionErrors(
   adminSupabase: SupabaseClient<Database>,
-  workflowRun: {
-    id: number;
-    head_sha: string;
-    run_number: number;
-    run_attempt: number;
-    conclusion: string;
-    status: string;
-  },
+  workflowRun: WorkflowRunEvent["workflow_run"],
   repository: { full_name: string; owner: { login: string }; name: string },
   repositoryId: number,
   classId: number,
@@ -685,25 +871,28 @@ async function handleWorkflowCompletionErrors(
           }
 
           // Create workflow_run_error record
-          const { error: insertError } = await adminSupabase.from("workflow_run_error").insert({
-            repository_id: repositoryId,
-            class_id: classId,
-            submission_id: submission.id,
-            run_number: workflowRun.id,
-            run_attempt: workflowRun.run_attempt,
-            name: userErrorMessage,
-            data: {
-              workflow_run_id: workflowRun.id,
-              workflow_conclusion: workflowRun.conclusion,
-              workflow_status: workflowRun.status,
-              check_run_id: submission.repository_check_runs?.check_run_id,
-              repository_name: repository.full_name,
-              sha: workflowRun.head_sha,
-              error_type: "missing_grader_result",
-              detected_at: new Date().toISOString(),
-              technical_details: sentryMessage
-            }
-          });
+          const { error: insertError } = await adminSupabase.from("workflow_run_error").upsert(
+            {
+              repository_id: repositoryId,
+              class_id: classId,
+              submission_id: submission.id,
+              run_number: workflowRun.id,
+              run_attempt: workflowRun.run_attempt,
+              name: userErrorMessage,
+              data: {
+                workflow_run_id: workflowRun.id,
+                workflow_conclusion: workflowRun.conclusion,
+                workflow_status: workflowRun.status,
+                check_run_id: submission.repository_check_runs?.check_run_id,
+                repository_name: repository.full_name,
+                sha: workflowRun.head_sha,
+                error_type: "missing_grader_result",
+                detected_at: new Date().toISOString(),
+                technical_details: sentryMessage
+              }
+            },
+            { onConflict: "repository_id,run_number,run_attempt,name" }
+          );
 
           if (insertError) {
             Sentry.captureException(insertError, scope);
@@ -745,10 +934,7 @@ async function handleWorkflowCompletionErrors(
 }
 
 // Handle workflow_run events (requested, in_progress, completed, cancelled)
-eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const payload = payloadBroken as any;
-
+eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "workflow_run", payload);
 
@@ -758,8 +944,8 @@ eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
   );
 
   try {
-    const workflowRun = payload.workflow_run;
-    const repository = payload.repository;
+    const workflowRun = payload.workflow_run as WorkflowRunEvent["workflow_run"];
+    const repository = payload.repository as WorkflowRunEvent["repository"];
 
     // Map GitHub workflow action to our event_type
     let eventType: string;
@@ -774,7 +960,7 @@ eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
         eventType = "completed";
         break;
       default:
-        Sentry.captureMessage(`Unknown workflow_run action: ${payload.action}, skipping`, scope);
+        Sentry.captureMessage(`Unknown workflow_run action, skipping`, scope);
         return;
     }
 
@@ -804,7 +990,7 @@ eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
 
     // Extract pull request information if available
     const pullRequests =
-      workflowRun.pull_requests?.map((pr: any) => ({
+      workflowRun.pull_requests?.map((pr: WorkflowRunEvent["workflow_run"]["pull_requests"][number]) => ({
         id: pr.id,
         number: pr.number,
         head: {
@@ -817,31 +1003,35 @@ eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
         }
       })) || [];
 
-    // Insert workflow event into database
-    const { error: insertError } = await adminSupabase.from("workflow_events").insert({
-      workflow_run_id: workflowRun.id,
-      repository_name: repository.full_name,
-      github_repository_id: repository.id,
-      repository_id: repositoryId,
-      class_id: classId,
-      workflow_name: workflowRun.name,
-      workflow_path: workflowRun.path,
-      event_type: eventType,
-      status: workflowRun.status,
-      conclusion: workflowRun.conclusion,
-      head_sha: workflowRun.head_sha,
-      head_branch: workflowRun.head_branch,
-      run_number: workflowRun.run_number,
-      run_attempt: workflowRun.run_attempt,
-      actor_login: workflowRun.actor?.login,
-      triggering_actor_login: workflowRun.triggering_actor?.login,
-      started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
-      updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
-      run_started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
-      run_updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
-      pull_requests: pullRequests.length > 0 ? pullRequests : null,
-      payload: payload
-    });
+    // Upsert workflow event into database (dedupe by workflow_run_id, event_type, run_attempt)
+    maybeCrash("workflow_run.before_upsert");
+    const { error: insertError } = await adminSupabase.from("workflow_events").upsert(
+      {
+        workflow_run_id: workflowRun.id,
+        repository_name: repository.full_name,
+        github_repository_id: repository.id,
+        repository_id: repositoryId,
+        class_id: classId,
+        workflow_name: workflowRun.name,
+        workflow_path: workflowRun.path,
+        event_type: eventType,
+        status: workflowRun.status,
+        conclusion: workflowRun.conclusion,
+        head_sha: workflowRun.head_sha,
+        head_branch: workflowRun.head_branch,
+        run_number: workflowRun.run_number,
+        run_attempt: workflowRun.run_attempt,
+        actor_login: workflowRun.actor?.login,
+        triggering_actor_login: workflowRun.triggering_actor?.login,
+        started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
+        updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
+        run_started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
+        run_updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
+        pull_requests: pullRequests.length > 0 ? pullRequests : null,
+        payload: payload as unknown as Json
+      },
+      { onConflict: "workflow_run_id,event_type,run_attempt" }
+    );
 
     if (insertError) {
       scope.setTag("error_source", "workflow_events_insert_failed");
@@ -851,9 +1041,11 @@ eventHandler.on("workflow_run", async ({ payload: payloadBroken }) => {
     }
 
     scope?.setTag("workflow_event_logged", "true");
+    console.log(`[WORKFLOW_RUN] Logged ${eventType} for run=${workflowRun.id} attempt=${workflowRun.run_attempt}`);
 
     // Add error detection for completed workflows
     if (eventType === "completed" && repositoryId && classId) {
+      maybeCrash("workflow_run.before_handle_completion_errors");
       await handleWorkflowCompletionErrors(adminSupabase, workflowRun, repository, repositoryId, classId, scope);
     }
   } catch (error) {
@@ -873,6 +1065,7 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
 }
 
 Deno.serve(async (req) => {
+  console.log("[ENTRY] Received webhook request");
   if (req.headers.get("Authorization") !== Deno.env.get("EVENTBRIDGE_SECRET")) {
     return Response.json(
       {
@@ -902,55 +1095,107 @@ Deno.serve(async (req) => {
   scope.addAttachment({ filename: "webhook.json", data: JSON.stringify(body) });
   const eventName = body["detail-type"];
   const id = body.id;
+  console.log(`[ENTRY] id=${id} type=${eventName}`);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
 
   try {
-    const { error: repoError } = await adminSupabase.from("webhook_process_status").insert({
-      webhook_id: id,
-      completed: false
-    });
-    if (repoError) {
-      if (repoError.code === "23505") {
-        console.log(`Ignoring duplicate webhook id ${id}`);
-        return Response.json(
-          {
-            message: "Duplicate webhook received"
-          },
-          {
-            status: 200
-          }
-        );
-      }
-      Sentry.captureException(repoError, scope);
-      console.error(repoError);
-      return Response.json(
-        {
-          message: "Error processing webhook"
-        },
-        {
-          status: 500
-        }
-      );
+    maybeCrash("entry.before_status_upsert");
+    // Read existing status row
+    const existingResult = await adminSupabase
+      .from("webhook_process_status")
+      .select("id, completed, attempt_count")
+      .eq("webhook_id", id)
+      .maybeSingle();
+    const existingError = existingResult.error;
+    const existingRow = existingResult.data as { id: number; completed: boolean; attempt_count: number } | null;
+    if (existingError) {
+      Sentry.captureException(existingError, scope);
+      console.error(existingError);
+      return Response.json({ message: "Error processing webhook" }, { status: 500 });
     }
+
+    let attemptCount = 1;
+    if (!existingRow) {
+      // First delivery
+      const { error: insertErr } = await adminSupabase.from("webhook_process_status").insert({
+        webhook_id: id,
+        completed: false,
+        attempt_count: 1,
+        event_name: eventName,
+        last_attempt_at: new Date().toISOString()
+      } as unknown as never);
+      if (insertErr) {
+        // If unique violation due to race, re-read
+        if ((insertErr as { code?: string }).code !== "23505") {
+          Sentry.captureException(insertErr, scope);
+          console.error(insertErr);
+          return Response.json({ message: "Error processing webhook" }, { status: 500 });
+        }
+        const reread = await adminSupabase
+          .from("webhook_process_status")
+          .select("id, completed, attempt_count")
+          .eq("webhook_id", id)
+          .maybeSingle();
+        if (reread.error) {
+          Sentry.captureException(reread.error, scope);
+          return Response.json({ message: "Error processing webhook" }, { status: 500 });
+        }
+        attemptCount = (reread.data?.attempt_count || 1) + 1;
+        await adminSupabase
+          .from("webhook_process_status")
+          .update({ attempt_count: attemptCount, last_attempt_at: new Date().toISOString(), event_name: eventName })
+          .eq("webhook_id", id);
+      }
+    } else {
+      // Redelivery
+      if (existingRow.completed) {
+        if (existingRow.attempt_count >= 3) {
+          scope.setTag("attempt_count", String(existingRow.attempt_count));
+          Sentry.captureMessage("Webhook redelivered 3+ times after completion", scope);
+        }
+        console.log(`[ENTRY] Duplicate completed id=${id}`);
+        return Response.json({ message: "Duplicate webhook received" }, { status: 200 });
+      }
+      attemptCount = (existingRow.attempt_count || 0) + 1;
+      await adminSupabase
+        .from("webhook_process_status")
+        .update({ attempt_count: attemptCount, last_attempt_at: new Date().toISOString(), event_name: eventName })
+        .eq("id", existingRow.id);
+    }
+
+    if (attemptCount >= 3) {
+      scope.setTag("attempt_count", String(attemptCount));
+      Sentry.captureMessage("Webhook redelivered 3+ times", scope);
+    }
+
     try {
+      console.log(`[DISPATCH] id=${id} type=${eventName} attempt=${attemptCount}`);
+      maybeCrash("entry.before_dispatch");
       await eventHandler.receive({
         id: id || "",
         name: eventName as "push" | "check_run" | "workflow_run" | "workflow_job" | "membership" | "organization",
         payload: body.detail
       });
+      maybeCrash("entry.after_dispatch_before_complete");
       await adminSupabase
         .from("webhook_process_status")
         .update({
-          completed: true
+          completed: true,
+          last_error: null
         })
         .eq("webhook_id", id);
     } catch (err) {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
       Sentry.captureException(err, scope);
+      // Log transient error and leave completed=false for retry
+      await adminSupabase
+        .from("webhook_process_status")
+        .update({ last_error: (err as Error)?.message || "unknown error", last_attempt_at: new Date().toISOString() })
+        .eq("webhook_id", id);
       return Response.json(
         {
           message: "Error processing webhook"

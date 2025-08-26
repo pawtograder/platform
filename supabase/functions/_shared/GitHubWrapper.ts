@@ -186,7 +186,7 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
         },
         Redis
       });
-      connection.on("error", (err) => console.error(err));
+      connection.on("error", (err: Error) => console.error(err));
     }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
@@ -1114,7 +1114,7 @@ export async function createCheckRun(repo_full_name: string, sha: string, detail
       }
     ]
   });
-  return res.data.id;
+  return res.data;
 }
 export async function getRepo(org: string, repo: string, scope?: Sentry.Scope) {
   const octokit = await getOctoKit(org, scope);

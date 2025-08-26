@@ -14,6 +14,8 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   cloneRepository,
+  createCheckRun,
+  getOctoKit,
   getRepoTarballURL,
   GitHubOIDCToken,
   updateCheckRun,
@@ -210,7 +212,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
       // Fetch check run with retry logic for race conditions
       const fetchCheckRun = async () => {
-        const { data: checkRun, error: checkRunError } = await adminSupabase
+        const { data: initialCheckRun, error: checkRunError } = await adminSupabase
           .from("repository_check_runs")
           .select("*, user_roles(*), classes(time_zone), commit_message")
           .eq("repository_id", repoData.id)
@@ -221,8 +223,134 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
         }
 
+        let checkRun = initialCheckRun;
+
         if (!checkRun) {
-          throw new Error(`Check run not found for ${repoData.id}@${sha} - may be racing with external operation`);
+          //We might have lost a webhook. Instead of bailing, we'll fetch the check run info from GitHub.
+          scope?.setTag("check_run_db_found", "false");
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "CheckRun missing in DB; fetching from GitHub",
+            data: { repository, sha }
+          });
+          const octokit = await getOctoKit(repository.split("/")[0], scope);
+          if (!octokit) {
+            throw new Error("No octokit found for organization " + repository.split("/")[0]);
+          }
+          //List check runs for reference from github
+          const fetchedCheckRuns = await octokit.rest.checks.listForRef({
+            owner: repository.split("/")[0],
+            repo: repository.split("/")[1],
+            ref: sha,
+            check_name: "pawtograder"
+          });
+          if (fetchedCheckRuns.status !== 200) {
+            scope?.setTag("check_run_fetch_error", "check_run_not_found");
+            throw new Error(`Check run returned error code ${fetchedCheckRuns.status}`);
+          }
+          scope?.setContext("fetched_check_runs", {
+            check_runs: fetchedCheckRuns.data.check_runs
+          });
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Fetched check runs from GitHub",
+            data: { count: fetchedCheckRuns.data.check_runs.length }
+          });
+          //Take the most recent check run
+          let fetchedCheckRun = fetchedCheckRuns.data.check_runs.sort((a, b) => {
+            if (a.started_at && b.started_at) {
+              return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
+            }
+            return 0;
+          })[0];
+          if (!fetchedCheckRun) {
+            scope?.setTag("check_run_fetch_error", "check_run_not_found");
+            // If there are no check runs for this repo yet, we must have raced with the webhook. Create it here.
+            Sentry.addBreadcrumb({
+              category: "fallback",
+              level: "info",
+              message: "No GitHub check runs; creating check run",
+              data: { repository, sha }
+            });
+            fetchedCheckRun = await createCheckRun(repository, sha, workflow_ref);
+            Sentry.addBreadcrumb({
+              category: "fallback",
+              level: "info",
+              message: "Created GitHub check run",
+              data: { check_run_id: fetchedCheckRun.id }
+            });
+          }
+
+          // Try to insert repository_check_runs row if missing, then retrieve it
+          const owner = repository.split("/")[0];
+          const repoNameOnly = repository.split("/")[1];
+          // Fetch commit message/details for DB record
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Fetching commit metadata",
+            data: { owner, repo: repoNameOnly, sha }
+          });
+          const commitResponse = await (await getOctoKit(owner, scope))!.rest.repos.getCommit({
+            owner,
+            repo: repoNameOnly,
+            ref: sha
+          });
+          const commitMessage = commitResponse.data.commit.message || "";
+          const commitAuthorName =
+            commitResponse.data.commit.author?.name || commitResponse.data.commit.committer?.name || "unknown";
+          const commitDate =
+            commitResponse.data.commit.author?.date ||
+            commitResponse.data.commit.committer?.date ||
+            new Date().toISOString();
+
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Upserting repository_check_runs",
+            data: { repository_id: repoData.id, sha, check_run_id: fetchedCheckRun.id }
+          });
+          const upsertResult = await adminSupabase
+            .from("repository_check_runs")
+            .upsert(
+              {
+                repository_id: repoData.id,
+                check_run_id: fetchedCheckRun.id,
+                class_id: repoData.assignments.class_id!,
+                assignment_group_id: repoData.assignment_group_id,
+                commit_message: commitMessage,
+                sha,
+                profile_id: repoData.profile_id,
+                status: {
+                  created_at: new Date().toISOString(),
+                  commit_author: commitAuthorName,
+                  commit_date: commitDate,
+                  created_by: "autograder-create-submission fallback"
+                } as unknown as Json
+              },
+              { onConflict: "repository_id,check_run_id,sha" }
+            )
+            .select("*, user_roles(*), classes(time_zone), commit_message")
+            .single();
+
+          if (upsertResult.error) {
+            Sentry.captureException(upsertResult.error, scope);
+            throw new Error(
+              `Failed to upsert repository_check_runs for ${repoData.id}@${sha}: ${upsertResult.error.message}`
+            );
+          }
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Upserted repository_check_runs successfully",
+            data: { id: upsertResult.data?.id }
+          });
+          checkRun = upsertResult.data;
+          Sentry.captureMessage(
+            `We made it through the fallback on ${repository}@${sha}, check_run_id=${checkRun.check_run_id}`
+          );
         }
 
         return checkRun;
