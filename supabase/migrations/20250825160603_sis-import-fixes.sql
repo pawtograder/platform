@@ -181,6 +181,7 @@ CREATE OR REPLACE FUNCTION "public"."create_user_role_for_existing_user"(
     "p_sis_id" integer DEFAULT NULL
 ) RETURNS bigint
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
     AS $$
 DECLARE
     v_user_role_id bigint;
@@ -195,9 +196,11 @@ DECLARE
     v_number integer;
     v_secure_seed text;
 BEGIN
-    -- Set safe search_path to prevent schema hijacking
-    PERFORM set_config('search_path','pg_catalog, public', true);
-    
+    -- Check authorization - must be instructor of the class or admin
+    IF NOT (authorize_for_admin() OR authorizeforclassinstructor(p_class_id)) THEN
+        RAISE EXCEPTION 'Access denied: Instructor or admin role required';
+    END IF;
+
     -- Check if user exists
     SELECT name, email INTO v_user_name, v_user_email
     FROM public.users 
@@ -216,11 +219,6 @@ BEGIN
         WHERE user_id = p_user_id AND class_id = p_class_id
     ) THEN
         RAISE EXCEPTION 'User is already enrolled in this class';
-    END IF;
-    
-    -- Check authorization - must be instructor of the class or admin
-    IF NOT (authorize_for_admin() OR authorizeforclassinstructor(p_class_id)) THEN
-        RAISE EXCEPTION 'Access denied: Instructor or admin role required';
     END IF;
     
     -- Generate secure, non-PII seed for avatar URLs
