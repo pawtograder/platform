@@ -180,13 +180,14 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
     // Test adding a due date exception for a student for a given assignment
     await page.getByRole("button", { name: "Add Exception" }).click();
-    await page
+    const addExceptionModal = page.getByRole("dialog");
+    await addExceptionModal
       .locator("div")
       .filter({ hasText: /^Select assignment$/ })
       .first()
       .click();
     await page.getByRole("option", { name: testAssignment!.title }).click();
-    await page
+    await addExceptionModal
       .locator("div")
       .filter({ hasText: /^Select student$/ })
       .first()
@@ -194,11 +195,11 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByRole("option", { name: student2!.private_profile_name }).click();
     const hours = 24;
     const tokensConsumed = 1;
-    await page.locator('input[name="hours"]').fill(hours.toString());
-    await page.locator('input[name="tokens_consumed"]').fill(tokensConsumed.toString());
+    await addExceptionModal.locator('input[name="hours"]').fill(hours.toString());
+    await addExceptionModal.locator('input[name="tokens_consumed"]').fill(tokensConsumed.toString());
     const note = "This is a test exception";
-    await page.getByPlaceholder("Optional note").fill(note);
-    await page.getByRole("button", { name: "Add Exception" }).click();
+    await addExceptionModal.getByPlaceholder("Optional note").fill(note);
+    await addExceptionModal.getByRole("button", { name: "Add Exception" }).click();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
@@ -219,21 +220,22 @@ test.describe("Due Date Exceptions & Extensions", () => {
     ).not.toBeVisible();
     // Test Gift Tokens to a student
     await page.getByRole("button", { name: "Gift Tokens" }).click();
-    await page
+    const giftTokensModal = page.getByRole("dialog");
+    await giftTokensModal
       .locator("div")
       .filter({ hasText: /^Select assignment$/ })
       .first()
       .click();
     await page.getByRole("option", { name: testAssignment!.title }).click();
-    await page
+    await giftTokensModal
       .locator("div")
       .filter({ hasText: /^Select student$/ })
       .first()
       .click();
     await page.getByRole("option", { name: student2!.private_profile_name }).click();
     const tokensGifted = 13;
-    await page.locator('input[type="number"]').fill(tokensGifted.toString());
-    await page.getByRole("button", { name: "Gift Tokens" }).click();
+    await giftTokensModal.locator('input[type="number"]').fill(tokensGifted.toString());
+    await giftTokensModal.getByRole("button", { name: "Gift Tokens" }).click();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} 0 0 ${-tokensGifted} ${instructor!.private_profile_name} Tokens gifted by instructor`
@@ -253,15 +255,16 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByText("Student Extensions").click();
     await expect(page.getByText("Due Date Extensions").first()).toBeVisible();
     await page.getByRole("button", { name: "Add Extension" }).click();
-    await page
+    const addExtensionModal = page.getByRole("dialog");
+    await addExtensionModal
       .locator("div")
       .filter({ hasText: /^Select student$/ })
       .first()
       .click();
     await page.getByRole("option", { name: student2!.private_profile_name }).click();
     const hours = 24;
-    await page.locator('input[name="hours"]').fill(hours.toString());
-    await page.getByRole("button", { name: "Add Extension" }).click();
+    await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
+    await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
@@ -277,7 +280,11 @@ test.describe("Due Date Exceptions & Extensions", () => {
     ).toBeVisible();
     // Test Delete
     await page.getByText("Student Extensions").click();
-    await page.getByLabel("Student Extensions").getByLabel("Delete").click();
+    await page.getByText("Student Extensions").click();
+    const studentExtRow = page.getByRole("row", {
+      name: `${student2!.private_profile_name} ${hours} No`
+    });
+    await studentExtRow.getByLabel("Delete").click();
     await page.getByRole("button", { name: "Confirm action" }).click();
     await expect(
       page.getByRole("row", {
