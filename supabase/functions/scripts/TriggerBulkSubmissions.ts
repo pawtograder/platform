@@ -233,7 +233,7 @@ async function triggerBulkSubmissions(args: Args): Promise<void> {
 
       try {
         // Wait for rate limiter to allow this request
-        // await rateLimiter.acquire();
+        await rateLimiter.acquire();
 
         console.log(`  [${submissionIndex}/${args.totalSubmissions}] Triggering workflow...`);
 

@@ -220,7 +220,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .order("created_at", { ascending: false }) // Order by most recent first
           .maybeSingle();
 
-        console.log("This is the new version")
+        console.log("This is the new version");
         //Fetch the role of the user who triggered the check run, so that we can check if they are an instructor or grader
         let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
         if (checkRun?.profile_id) {
@@ -628,8 +628,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           Sentry.captureMessage("workflow sha mismatch", scope);
           if (isGraderOrInstructor) {
             await recordWorkflowRunError({
-              name:
-                `.github/workflows/grade.yml SHA is different from that in handout!!! You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+              name: `.github/workflows/grade.yml SHA is different from that in handout!!! You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
               data: {
                 type: "security_error"
               },
