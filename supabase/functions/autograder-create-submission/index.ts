@@ -190,7 +190,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       class_id: repoData.assignments.class_id!,
       submission_id: submission_id ?? null,
       repository_id: repoData.id,
-      name,
+      name: name.length > 500 ? name.slice(0, 500) : name,
       data,
       is_private
     });
@@ -214,11 +214,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       const fetchCheckRun = async () => {
         const { data: initialCheckRun, error: checkRunError } = await adminSupabase
           .from("repository_check_runs")
-          .select("*, user_roles(*), classes(time_zone), commit_message")
+          .select("*, classes(time_zone), commit_message")
           .eq("repository_id", repoData.id)
           .eq("sha", sha)
-          .maybeSingle(); //TODO: Select the MOST RECENT check run, so that when we call Regrade, we know who triggered it
+          .order("created_at", { ascending: false }) // Order by most recent first
+          .maybeSingle();
 
+        console.log("This is the new version")
+        //Fetch the role of the user who triggered the check run, so that we can check if they are an instructor or grader
+        let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
+        if (checkRun?.profile_id) {
+          const { data: userRolesData } = await adminSupabase
+            .from("user_roles")
+            .select("*")
+            .eq("private_profile_id", checkRun.profile_id)
+            .eq("class_id", checkRun.class_id)
+            .maybeSingle();
+
+          if (!userRolesData) {
+            scope.setContext("user_roles_data", { user_roles_data: userRolesData });
+            Sentry.captureMessage("User roles data not found", scope);
+            throw new Error("User roles data not found");
+          }
+          userRoles = userRolesData;
+        }
         if (checkRunError) {
           throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
         }
@@ -352,8 +371,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             `We made it through the fallback on ${repository}@${sha}, check_run_id=${checkRun.check_run_id}`
           );
         }
-
-        return checkRun;
+        return { ...checkRun, user_roles: userRoles };
       };
 
       const checkRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
@@ -600,13 +618,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // Allow graders and instructors to submit even if the workflow SHA doesn't match, but show a warning.
         const isGraderOrInstructor =
           checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
-        if (hashStr !== config.workflow_sha && !isE2ERun) {
+        scope.setTag("check_run_profile_id", checkRun.profile_id);
+        scope.setTag("check_run_assignment_group_id", checkRun.assignment_group_id);
+        scope.setTag("check_run_user_role", checkRun.user_roles?.role);
+        if (hashStr !== config.workflow_sha && !isE2ERun && !isNotGradedSubmission) {
+          scope.setTag("hash_in_db", config.workflow_sha);
+          scope.setTag("hash_in_student_repo", hashStr);
           const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
+          Sentry.captureMessage("workflow sha mismatch", scope);
           if (isGraderOrInstructor) {
             await recordWorkflowRunError({
               name:
-                errorMessage +
-                `You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+                `.github/workflows/grade.yml SHA is different from that in handout!!! You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
               data: {
                 type: "security_error"
               },
