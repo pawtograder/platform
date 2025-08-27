@@ -109,9 +109,9 @@ function CommitHistory({
                       {relatedSubmission.is_active && <ActiveSubmissionIcon />}#{relatedSubmission.ordinal},{" "}
                       {!relatedSubmission.grader_results
                         ? "In Progress"
-                        : relatedSubmission.grader_results && relatedSubmission.grader_results.errors
+                        : relatedSubmission.grader_results.errors
                           ? "Error"
-                          : `${relatedSubmission.grader_results?.score}/${relatedSubmission.assignments.autograder_points}`}
+                          : `${relatedSubmission.grader_results.score}/${relatedSubmission.grader_results.max_score ?? relatedSubmission.assignments.autograder_points}`}
                     </Link>
                   ) : (
                     <Box>

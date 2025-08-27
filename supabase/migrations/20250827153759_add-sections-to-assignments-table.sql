@@ -66,11 +66,12 @@ CREATE OR REPLACE VIEW "public"."submissions_with_grades_for_assignment" WITH ("
         ), "due_date_extensions" AS (
          SELECT COALESCE("ade"."student_id", "ag_1"."profile_id") AS "effective_student_id",
             COALESCE("ade"."assignment_group_id", "ag_1"."assignment_group_id") AS "effective_assignment_group_id",
+            "ade"."assignment_id",
             "sum"("ade"."tokens_consumed") AS "tokens_consumed",
             "sum"("ade"."hours") AS "hours"
            FROM ("public"."assignment_due_date_exceptions" "ade"
              LEFT JOIN "public"."assignment_groups_members" "ag_1" ON (("ade"."assignment_group_id" = "ag_1"."assignment_group_id")))
-          GROUP BY COALESCE("ade"."student_id", "ag_1"."profile_id"), COALESCE("ade"."assignment_group_id", "ag_1"."assignment_group_id")
+          GROUP BY COALESCE("ade"."student_id", "ag_1"."profile_id"), COALESCE("ade"."assignment_group_id", "ag_1"."assignment_group_id"), "ade"."assignment_id"
         ), "submissions_with_extensions" AS (
          SELECT "asub"."user_role_id",
             "asub"."private_profile_id",
@@ -85,7 +86,7 @@ CREATE OR REPLACE VIEW "public"."submissions_with_grades_for_assignment" WITH ("
             "asub"."class_section_id",
             "asub"."lab_section_id"
            FROM ("all_submissions" "asub"
-             LEFT JOIN "due_date_extensions" "dde" ON ((("dde"."effective_student_id" = "asub"."private_profile_id") AND ((("asub"."assignment_group_id" IS NULL) AND ("dde"."effective_assignment_group_id" IS NULL)) OR ("asub"."assignment_group_id" = "dde"."effective_assignment_group_id")))))
+             LEFT JOIN "due_date_extensions" "dde" ON ((("dde"."effective_student_id" = "asub"."private_profile_id") AND ("dde"."assignment_id" = "asub"."assignment_id") AND ((("asub"."assignment_group_id" IS NULL) AND ("dde"."effective_assignment_group_id" IS NULL)) OR ("asub"."assignment_group_id" = "dde"."effective_assignment_group_id")))))
         )
  SELECT "swe"."user_role_id" AS "id",
     "swe"."class_id",
@@ -190,9 +191,10 @@ CREATE OR REPLACE VIEW "public"."submissions_with_grades_for_assignment_and_regr
              LEFT JOIN ( SELECT "sum"("assignment_due_date_exceptions"."tokens_consumed") AS "tokens_consumed",
                     "sum"("assignment_due_date_exceptions"."hours") AS "hours",
                     "assignment_due_date_exceptions"."student_id",
-                    "assignment_due_date_exceptions"."assignment_group_id"
+                    "assignment_due_date_exceptions"."assignment_group_id",
+                    "assignment_due_date_exceptions"."assignment_id"
                    FROM "public"."assignment_due_date_exceptions"
-                  GROUP BY "assignment_due_date_exceptions"."student_id", "assignment_due_date_exceptions"."assignment_group_id") "lt" ON (((("agm"."assignment_group_id" IS NULL) AND ("lt"."student_id" = "r"."private_profile_id")) OR (("agm"."assignment_group_id" IS NOT NULL) AND ("lt"."assignment_group_id" = "agm"."assignment_group_id")))))
+                  GROUP BY "assignment_due_date_exceptions"."student_id", "assignment_due_date_exceptions"."assignment_group_id", "assignment_due_date_exceptions"."assignment_id") "lt" ON (((("agm"."assignment_group_id" IS NULL) AND ("lt"."student_id" = "r"."private_profile_id") AND ("lt"."assignment_id" = "a"."id")) OR (("agm"."assignment_group_id" IS NOT NULL) AND ("lt"."assignment_group_id" = "agm"."assignment_group_id") AND ("lt"."assignment_id" = "a"."id")))))
              LEFT JOIN "public"."submissions" "gsub" ON ((("gsub"."assignment_group_id" = "agm"."assignment_group_id") AND ("gsub"."is_active" = true) AND ("gsub"."assignment_id" = "a"."id") AND ("gsub"."class_id" = "r"."class_id"))))
           WHERE ("r"."role" = 'student'::"public"."app_role")) "activesubmissionsbystudent"
      JOIN "public"."profiles" "p" ON (("p"."id" = "activesubmissionsbystudent"."private_profile_id")))

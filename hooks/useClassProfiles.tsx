@@ -91,24 +91,32 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       if (!userId) {
         return;
       }
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select(
-          "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)"
-        )
-        .eq("user_id", userId)
-        .eq("disabled", false)
-        .eq("classes.archived", false);
-      if (error) {
-        throw error;
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select(
+            "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)"
+          )
+          .eq("user_id", userId)
+          .eq("disabled", false)
+          .eq("classes.archived", false);
+        if (error) {
+          throw error;
+        }
+        if (cleanedUp) {
+          return;
+        }
+        setRoles(data || []);
+      } catch (error) {
+        if (!cleanedUp) {
+          console.error("Error fetching user roles:", error);
+        }
+      } finally {
+        if (!cleanedUp) {
+          setIsLoading(false);
+        }
       }
-      if (cleanedUp) {
-        return;
-      }
-      setRoles(data || []);
-      setIsLoading(false);
-      return;
     }
     fetchRoles();
     return () => {

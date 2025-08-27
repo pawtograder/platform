@@ -9,7 +9,7 @@ declare const EdgeRuntime: {
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createInvitationsBulk, type InvitationRequest } from "../_shared/InvitationUtils.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
+import type { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
 
 // SIS API Types
 interface SISCRNResponse {

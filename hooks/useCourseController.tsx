@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
   AssignmentDueDateException,
+  ClassSection,
   Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
@@ -298,7 +299,7 @@ export function useLabSections() {
 
 export function useClassSections() {
   const controller = useCourseController();
-  const [classSections, setClassSections] = useState<LabSection[]>([]);
+  const [classSections, setClassSections] = useState<ClassSection[]>([]);
   useEffect(() => {
     const { data, unsubscribe } = controller.classSections.list((data) => {
       setClassSections(data);
@@ -462,7 +463,7 @@ export class CourseController {
     return this._labSectionMeetings;
   }
 
-  get classSections(): TableController<"lab_sections"> {
+  get classSections(): TableController<"class_sections"> {
     if (!this._classSections) {
       this._classSections = new TableController({
         client: this._client,
