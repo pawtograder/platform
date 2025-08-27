@@ -8143,6 +8143,39 @@ export type Database = {
           }
         ];
       };
+      submissions_with_reviews_by_round_for_assignment: {
+        Row: {
+          assignment_id: number | null;
+          assignment_slug: string | null;
+          class_id: number | null;
+          scores_by_round_private: Json | null;
+          scores_by_round_public: Json | null;
+          student_private_profile_id: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignments_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "user_roles_private_profile_id_fkey";
+            columns: ["student_private_profile_id"];
+            isOneToOne: true;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "user_roles_private_profile_id_fkey";
+            columns: ["student_private_profile_id"];
+            isOneToOne: true;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       workflow_events_summary: {
         Row: {
           actor_login: string | null;
@@ -8412,7 +8445,6 @@ export type Database = {
           p_meeting_times?: string;
           p_name: string;
           p_sis_crn?: number;
-          p_campus?: string;
         };
         Returns: number;
       };
@@ -8536,7 +8568,6 @@ export type Database = {
       };
       admin_update_class: {
         Args: {
-          p_start_date?: string;
           p_class_id: number;
           p_course_title?: string;
           p_description?: string;
@@ -8584,8 +8615,8 @@ export type Database = {
       };
       authorize_for_submission_reviewable: {
         Args: {
-          requested_submission_review_id: number;
           requested_submission_id: number;
+          requested_submission_review_id: number;
         };
         Returns: boolean;
       };
@@ -8634,7 +8665,7 @@ export type Database = {
         Returns: boolean;
       };
       calculate_effective_due_date: {
-        Args: { student_profile_id_param: string; assignment_id_param: number };
+        Args: { assignment_id_param: number; student_profile_id_param: string };
         Returns: string;
       };
       calculate_final_due_date: {
@@ -8784,7 +8815,7 @@ export type Database = {
         Returns: Json;
       };
       delete_system_notifications_by_campaign: {
-        Args: { p_deleted_by?: string; p_campaign_id: string };
+        Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
       finalize_submission_early: {
@@ -8937,7 +8968,7 @@ export type Database = {
         Returns: boolean;
       };
       is_instructor_for_student: {
-        Args: { _student_id: string; _person_id: string };
+        Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
       log_flashcard_interaction: {
@@ -8945,7 +8976,6 @@ export type Database = {
           p_action: string;
           p_card_id?: number;
           p_class_id: number;
-          p_action: string;
           p_deck_id: number;
           p_duration_on_card_ms: number;
           p_student_id: string;
@@ -9027,7 +9057,7 @@ export type Database = {
         Returns: undefined;
       };
       update_class_late_tokens_per_student: {
-        Args: { p_late_tokens_per_student: number; p_class_id: number };
+        Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
       update_regrade_request_status: {
@@ -9042,6 +9072,7 @@ export type Database = {
       };
       update_sis_sync_status: {
         Args: {
+          p_course_id: number;
           p_course_section_id?: number;
           p_lab_section_id?: number;
           p_sync_message?: string;
@@ -9050,7 +9081,7 @@ export type Database = {
         Returns: number;
       };
       user_is_in_help_request: {
-        Args: { p_user_id?: string; p_help_request_id: number };
+        Args: { p_help_request_id: number; p_user_id?: string };
         Returns: boolean;
       };
     };
