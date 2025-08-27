@@ -831,7 +831,7 @@ async function handleWorkflowCompletionErrors(
     const { data: submissions, error: submissionsError } = await adminSupabase
       .from("submissions")
       .select(
-        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs(check_run_id)"
+        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs(check_run_id), profile_id, assignment_group_id, assignment_id"
       )
       .eq("repository_id", repositoryId)
       .eq("sha", workflowRun.head_sha)
@@ -928,6 +928,29 @@ async function handleWorkflowCompletionErrors(
             } catch (checkRunError) {
               Sentry.captureException(checkRunError, scope);
             }
+          }
+
+          const graderResultError: Json = {
+            error: userErrorMessage
+          };
+
+          // Insert a grader result with the error message
+          const { error: insertGraderResultError } = await adminSupabase.from("grader_results").insert({
+            submission_id: submission.id,
+            errors: graderResultError,
+            score: 0,
+            ret_code: 137,
+            lint_output: "",
+            lint_output_format: "text",
+            lint_passed: false,
+            profile_id: submission.profile_id,
+            assignment_group_id: submission.assignment_group_id,
+            class_id: classId
+          });
+          if (insertGraderResultError) {
+            Sentry.captureException(insertGraderResultError, scope);
+          } else {
+            scope.setTag("grader_result_created", "true");
           }
 
           // Log to Sentry

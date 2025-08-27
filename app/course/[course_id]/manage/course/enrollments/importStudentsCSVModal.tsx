@@ -503,7 +503,7 @@ const ImportStudentsCSVModalContent = () => {
       onOpenChange={(details) => !details.open && handleClose()}
     >
       <Dialog.Trigger asChild>
-        <Button onClick={() => setIsOpen(true)}>
+        <Button onClick={() => setIsOpen(true)} variant="surface">
           <Icon as={FaFileImport} />
           Import from CSV
         </Button>

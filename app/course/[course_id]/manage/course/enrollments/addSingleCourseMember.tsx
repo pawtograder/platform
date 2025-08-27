@@ -56,7 +56,7 @@ export default function AddSingleCourseMember() {
   return (
     <Dialog.Root aria-label="Add Course Member Dialog" lazyMount open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Dialog.Trigger asChild>
-        <Button marginLeft="auto">
+        <Button variant="surface">
           <Icon as={FaPlus} />
           Add Course Member
         </Button>

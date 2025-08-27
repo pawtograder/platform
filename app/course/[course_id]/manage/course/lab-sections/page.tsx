@@ -30,7 +30,7 @@ import {
 import { useList } from "@refinedev/core";
 import { format } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaCalendar, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import { useCourseController } from "@/hooks/useCourseController";
@@ -575,7 +575,11 @@ function LabSectionsTable() {
   } = useModalManager<LabSection | undefined>();
 
   // Get lab sections from course controller
-  const labSections = useTableControllerTableValues(controller.labSections);
+  const unsortedLabSections = useTableControllerTableValues(controller.labSections);
+  const labSections = useMemo(
+    () => unsortedLabSections.sort((a, b) => a.name.localeCompare(b.name)),
+    [unsortedLabSections]
+  );
 
   // Get lab section meetings from course controller
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);

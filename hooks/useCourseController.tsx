@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
   AssignmentDueDateException,
+  ClassSection,
   Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
@@ -30,7 +31,7 @@ import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useList, useUpdate } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -296,6 +297,19 @@ export function useLabSections() {
   return labSections;
 }
 
+export function useClassSections() {
+  const controller = useCourseController();
+  const [classSections, setClassSections] = useState<ClassSection[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.classSections.list((data) => {
+      setClassSections(data);
+    });
+    setClassSections(data);
+    return unsubscribe;
+  }, [controller]);
+  return classSections;
+}
+
 export type UpdateCallback<T> = (data: T) => void;
 export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {
@@ -321,6 +335,7 @@ export class CourseController {
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
@@ -446,6 +461,18 @@ export class CourseController {
       });
     }
     return this._labSectionMeetings;
+  }
+
+  get classSections(): TableController<"class_sections"> {
+    if (!this._classSections) {
+      this._classSections = new TableController({
+        client: this._client,
+        table: "class_sections",
+        query: this._client.from("class_sections").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._classSections;
   }
 
   get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
@@ -844,6 +871,7 @@ export class CourseController {
       | TableController<"discussion_thread_read_status">
       | TableController<"tags">
       | TableController<"lab_sections">
+      | TableController<"class_sections">
       | TableController<"lab_section_meetings">
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
     > = [];
@@ -854,6 +882,7 @@ export class CourseController {
     if (this._tags) createdControllers.push(this._tags);
     if (this._labSections) createdControllers.push(this._labSections);
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
+    if (this._classSections) createdControllers.push(this._classSections);
     return createdControllers.every((c) => c.ready);
   }
 
@@ -867,6 +896,7 @@ export class CourseController {
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
+    this._classSections?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();

@@ -6,6 +6,7 @@ import Link from "@/components/ui/link";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
+  useClassSections,
   useCourseController,
   useObfuscatedGradesMode,
   useSetOnlyShowGradesFor
@@ -15,6 +16,7 @@ import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
+  Assignment,
   GraderResultTest,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
@@ -25,7 +27,6 @@ import {
   HStack,
   Icon,
   IconButton,
-  Input,
   NativeSelect,
   Popover,
   Skeleton,
@@ -37,11 +38,12 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
+import { Select } from "chakra-react-select";
 
 function StudentNameCell({
   course_id,
@@ -65,10 +67,10 @@ function StudentNameCell({
     <HStack w="100%">
       {activeSubmissionId !== null ? (
         <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`}>
-          <PersonName uid={uid} size="2xs" />
+          <PersonName uid={uid} showAvatar={false} />
         </Link>
       ) : (
-        <PersonName uid={uid} size="2xs" />
+        <PersonName uid={uid} showAvatar={false} />
       )}
       <Box flex="1" display="flex" justifyContent="flex-end">
         {isObfuscated && (
@@ -103,6 +105,7 @@ function ScoreLink({
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
+  const router = useRouter();
   const { role: classRole } = useClassProfiles();
   const course = classRole.classes;
   const { classRealTimeController } = useCourseController();
@@ -110,6 +113,63 @@ export default function AssignmentsTable() {
   const supabase = createClient();
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
+
+  // Get sections and assignment data for default visibility logic
+  const classSections = useClassSections();
+
+  // Fetch assignment data to check minutes_due_after_lab and group config
+  const [assignment, setAssignment] = useState<Assignment | null>(null);
+  const [hasGroups, setHasGroups] = useState(false);
+
+  useEffect(() => {
+    const fetchAssignment = async () => {
+      const { data } = await supabase.from("assignments").select("*").eq("id", Number(assignment_id)).single();
+      setAssignment(data);
+    };
+    fetchAssignment();
+  }, [assignment_id, supabase]);
+
+  // Check if there are any groups for this assignment
+  useEffect(() => {
+    const checkForGroups = async () => {
+      const { count } = await supabase
+        .from("assignment_groups")
+        .select("id", { count: "exact" })
+        .eq("assignment_id", Number(assignment_id))
+        .limit(1);
+      setHasGroups((count || 0) > 0);
+    };
+    checkForGroups();
+  }, [assignment_id, supabase]);
+
+  // Column visibility state with dynamic defaults
+  const [columnVisibility, setColumnVisibility] = useState(() => {
+    return {
+      groupname: false,
+      class_section_name: false,
+      lab_section_name: false,
+      late_due_date: false,
+      created_at: false,
+      gradername: false,
+      checkername: false
+    };
+  });
+
+  // Update column visibility when data loads
+  useEffect(() => {
+    if (classSections.length > 0 || assignment || hasGroups !== undefined) {
+      const hasMultipleClassSections = classSections.length > 2;
+      const hasLabScheduling = assignment?.minutes_due_after_lab !== null;
+
+      setColumnVisibility((prev) => ({
+        ...prev,
+        groupname: hasGroups,
+        class_section_name: hasMultipleClassSections,
+        lab_section_name: hasLabScheduling
+      }));
+    }
+  }, [classSections.length, assignment, hasGroups]);
+
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
       {
@@ -126,9 +186,10 @@ export default function AssignmentsTable() {
         header: "Student",
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (!row.original.name) return false;
-          const filterString = String(filterValue).toLowerCase();
-          return row.original.name.toLowerCase().includes(filterString);
+          return values.some((val) => row.original.name!.toLowerCase().includes(val.toLowerCase()));
         },
         cell: ({ row }) => (
           <StudentNameCell
@@ -145,6 +206,30 @@ export default function AssignmentsTable() {
         header: "Group"
       },
       {
+        id: "class_section_name",
+        accessorKey: "class_section_name",
+        header: "Class Section",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          if (!row.original.class_section_name) return values.includes("Not assigned");
+          return values.some((val) => row.original.class_section_name!.toLowerCase().includes(val.toLowerCase()));
+        }
+      },
+      {
+        id: "lab_section_name",
+        accessorKey: "lab_section_name",
+        header: "Lab Section",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          if (!row.original.lab_section_name) return values.includes("Not assigned");
+          return values.some((val) => row.original.lab_section_name!.toLowerCase().includes(val.toLowerCase()));
+        }
+      },
+      {
         id: "late_due_date",
         accessorKey: "late_due_date",
         header: "Late Due Date",
@@ -152,15 +237,46 @@ export default function AssignmentsTable() {
           if (props.getValue() === null) {
             return <Text></Text>;
           }
-          return <Text>{new TZDate(props.getValue() as string).toLocaleString()}</Text>;
+
+          // If late due date is the same as assignment due date, show empty cell
+          const lateDueDate = props.getValue() as string;
+          if (assignment?.due_date && lateDueDate === assignment.due_date) {
+            return <Text></Text>;
+          }
+
+          return (
+            <Text>
+              {new TZDate(lateDueDate).toLocaleString(undefined, {
+                year: "numeric",
+                month: "numeric",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit"
+              })}
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (row.original.late_due_date === null) {
-            return false;
+            return values.includes("No late due date");
           }
+
+          // If late due date is the same as assignment due date, treat as "Same as due date"
+          if (assignment?.due_date && row.original.late_due_date === assignment.due_date) {
+            return values.includes("Same as due date");
+          }
+
           const date = new TZDate(row.original.late_due_date);
-          const filterString = String(filterValue).toLowerCase();
-          return date.toLocaleString().toLowerCase().includes(filterString);
+          const formattedDate = date.toLocaleString(undefined, {
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit"
+          });
+          return values.some((val) => formattedDate.toLowerCase().includes(val.toLowerCase()));
         }
       },
 
@@ -168,6 +284,7 @@ export default function AssignmentsTable() {
         id: "autograder_score",
         accessorKey: "autograder_score",
         header: "Autograder Score",
+        enableColumnFilter: true,
         cell: (props) => {
           return (
             <ScoreLink
@@ -178,12 +295,20 @@ export default function AssignmentsTable() {
               assignment_id={assignment_id as string}
             />
           );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const score = row.original.autograder_score;
+          if (score === null || score === undefined) return values.includes("No score");
+          return values.includes(score.toString());
         }
       },
       {
         id: "total_score",
         accessorKey: "total_score",
         header: "Total Score",
+        enableColumnFilter: true,
         cell: (props) => {
           return (
             <ScoreLink
@@ -194,6 +319,13 @@ export default function AssignmentsTable() {
               assignment_id={assignment_id as string}
             />
           );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const score = row.original.total_score;
+          if (score === null || score === undefined) return values.includes("No score");
+          return values.includes(score.toString());
         }
       },
       // {
@@ -221,32 +353,55 @@ export default function AssignmentsTable() {
           return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
         },
         filterFn: (row, id, filterValue) => {
-          if (!row.original.created_at) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          if (!row.original.created_at) return values.includes("No submission");
           const date = new TZDate(row.original.created_at, timeZone);
-          const filterString = String(filterValue);
-          return date.toLocaleString().toLowerCase().includes(filterString.toLowerCase());
+          return values.some((val) => date.toLocaleString().toLowerCase().includes(val.toLowerCase()));
         }
       },
       {
         id: "gradername",
         accessorKey: "gradername",
-        header: "Grader"
+        header: "Grader",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          if (!row.original.gradername) return values.includes("Not assigned");
+          return values.some((val) => row.original.gradername!.toLowerCase().includes(val.toLowerCase()));
+        }
       },
       {
         id: "checkername",
         accessorKey: "checkername",
-        header: "Checker"
+        header: "Checker",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          if (!row.original.checkername) return values.includes("Not assigned");
+          return values.some((val) => row.original.checkername!.toLowerCase().includes(val.toLowerCase()));
+        }
       },
       {
         id: "released",
         accessorKey: "released",
         header: "Released",
+        enableColumnFilter: true,
         cell: (props) => {
           return props.getValue() ? <Icon as={FaCheck} /> : <Icon as={FaTimes} />;
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const isReleased = row.original.released;
+          const status = isReleased ? "Released" : "Not Released";
+          return values.includes(status);
         }
       }
     ],
-    [timeZone, course_id, assignment_id]
+    [timeZone, course_id, assignment_id, assignment]
   );
 
   const tableController = useMemo(() => {
@@ -293,9 +448,17 @@ export default function AssignmentsTable() {
     }
   });
   const isInstructor = classRole.role === "instructor";
+
+  const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
+    setColumnVisibility((prev) => ({
+      ...prev,
+      [columnId]: !prev[columnId]
+    }));
+  };
+
   return (
     <VStack w="100%">
-      <VStack paddingBottom="55px" w="100%">
+      <VStack paddingBottom="55px" w="100%" gap={0}>
         {isInstructor && (
           <HStack alignItems="flex-end" gap={2} w="100%" justifyContent="flex-end">
             <Button
@@ -367,13 +530,68 @@ export default function AssignmentsTable() {
             <DownloadAllButton />
           </HStack>
         )}
-        <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto">
-          <Table.Root minW="0">
+        {/* Column Visibility Controls */}
+        <Box w="100%" p={4} bg="bg.subtle" borderRadius="md" mb={0}>
+          <Text fontSize="sm" fontWeight="medium" mb={3}>
+            Toggle Column Visibility:
+          </Text>
+          <HStack wrap="wrap" gap={4}>
+            <Checkbox checked={columnVisibility.groupname} onCheckedChange={() => toggleColumnVisibility("groupname")}>
+              Group
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.class_section_name}
+              onCheckedChange={() => toggleColumnVisibility("class_section_name")}
+            >
+              Class Section
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.lab_section_name}
+              onCheckedChange={() => toggleColumnVisibility("lab_section_name")}
+            >
+              Lab Section
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.late_due_date}
+              onCheckedChange={() => toggleColumnVisibility("late_due_date")}
+            >
+              Late Due Date
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.created_at}
+              onCheckedChange={() => toggleColumnVisibility("created_at")}
+            >
+              Submission Date
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.gradername}
+              onCheckedChange={() => toggleColumnVisibility("gradername")}
+            >
+              Grader
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.checkername}
+              onCheckedChange={() => toggleColumnVisibility("checkername")}
+            >
+              Checker
+            </Checkbox>
+          </HStack>
+        </Box>
+        <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
+          <Table.Root minW="0" w="100%">
             <Table.Header>
               {getHeaderGroups().map((headerGroup) => (
                 <Table.Row key={headerGroup.id}>
                   {headerGroup.headers
-                    .filter((h) => h.id !== "assignment_id")
+                    .filter(
+                      (h) =>
+                        h.id !== "assignment_id" &&
+                        (h.id === "name" ||
+                          h.id === "autograder_score" ||
+                          h.id === "total_score" ||
+                          h.id === "released" ||
+                          columnVisibility[h.id as keyof typeof columnVisibility])
+                    )
                     .map((header, colIdx) => (
                       <Table.ColumnHeader
                         key={header.id}
@@ -408,13 +626,273 @@ export default function AssignmentsTable() {
                                 </Icon>
                               )}
                             </Text>
-                            <Input
-                              id={header.id}
-                              value={(header.column.getFilterValue() as string) ?? ""}
-                              onChange={(e) => {
-                                header.column.setFilterValue(e.target.value);
-                              }}
-                            />
+                            {header.id === "name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const name = row.original.name;
+                                      if (name && !map.has(name)) {
+                                        map.set(name, name);
+                                      }
+                                      return map;
+                                    }, new Map())
+                                    .values()
+                                ).map((name) => ({ label: name, value: name }))}
+                                placeholder="Filter by name..."
+                              />
+                            )}
+                            {header.id === "class_section_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const sectionName = row.original.class_section_name;
+                                        if (sectionName && !map.has(sectionName)) {
+                                          map.set(sectionName, sectionName);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((name) => ({ label: name, value: name })),
+                                  { label: "Not assigned", value: "Not assigned" }
+                                ]}
+                                placeholder="Filter by class section..."
+                              />
+                            )}
+                            {header.id === "lab_section_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const sectionName = row.original.lab_section_name;
+                                        if (sectionName && !map.has(sectionName)) {
+                                          map.set(sectionName, sectionName);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((name) => ({ label: name, value: name })),
+                                  { label: "Not assigned", value: "Not assigned" }
+                                ]}
+                                placeholder="Filter by lab section..."
+                              />
+                            )}
+                            {header.id === "gradername" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const graderName = row.original.gradername;
+                                        if (graderName && !map.has(graderName)) {
+                                          map.set(graderName, graderName);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((name) => ({ label: name, value: name })),
+                                  { label: "Not assigned", value: "Not assigned" }
+                                ]}
+                                placeholder="Filter by grader..."
+                              />
+                            )}
+                            {header.id === "checkername" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const checkerName = row.original.checkername;
+                                        if (checkerName && !map.has(checkerName)) {
+                                          map.set(checkerName, checkerName);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((name) => ({ label: name, value: name })),
+                                  { label: "Not assigned", value: "Not assigned" }
+                                ]}
+                                placeholder="Filter by checker..."
+                              />
+                            )}
+                            {header.id === "released" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Released", value: "Released" },
+                                  { label: "Not Released", value: "Not Released" }
+                                ]}
+                                placeholder="Filter by release status..."
+                              />
+                            )}
+                            {header.id === "created_at" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        if (row.original.created_at) {
+                                          const date = new TZDate(row.original.created_at, timeZone);
+                                          const dateStr = date.toLocaleDateString();
+                                          if (!map.has(dateStr)) {
+                                            map.set(dateStr, dateStr);
+                                          }
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((date) => ({ label: date, value: date })),
+                                  { label: "No submission", value: "No submission" }
+                                ]}
+                                placeholder="Filter by submission date..."
+                              />
+                            )}
+                            {header.id === "late_due_date" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        if (row.original.late_due_date) {
+                                          // Check if late due date is same as assignment due date
+                                          if (
+                                            assignment?.due_date &&
+                                            row.original.late_due_date === assignment.due_date
+                                          ) {
+                                            map.set("Same as due date", "Same as due date");
+                                          } else {
+                                            const date = new TZDate(row.original.late_due_date);
+                                            const dateStr = date.toLocaleString(undefined, {
+                                              year: "numeric",
+                                              month: "numeric",
+                                              day: "numeric",
+                                              hour: "numeric",
+                                              minute: "2-digit"
+                                            });
+                                            if (!map.has(dateStr)) {
+                                              map.set(dateStr, dateStr);
+                                            }
+                                          }
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((date) => ({ label: date, value: date })),
+                                  { label: "No late due date", value: "No late due date" }
+                                ]}
+                                placeholder="Filter by late due date..."
+                              />
+                            )}
+                            {header.id === "autograder_score" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const score = row.original.autograder_score;
+                                        if (score !== null && score !== undefined) {
+                                          const scoreStr = score.toString();
+                                          if (!map.has(scoreStr)) {
+                                            map.set(scoreStr, scoreStr);
+                                          }
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  )
+                                    .sort((a, b) => parseFloat(a) - parseFloat(b))
+                                    .map((score) => ({ label: score, value: score })),
+                                  { label: "No score", value: "No score" }
+                                ]}
+                                placeholder="Filter by autograder score..."
+                              />
+                            )}
+                            {header.id === "total_score" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const score = row.original.total_score;
+                                        if (score !== null && score !== undefined) {
+                                          const scoreStr = score.toString();
+                                          if (!map.has(scoreStr)) {
+                                            map.set(scoreStr, scoreStr);
+                                          }
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  )
+                                    .sort((a, b) => parseFloat(a) - parseFloat(b))
+                                    .map((score) => ({ label: score, value: score })),
+                                  { label: "No score", value: "No score" }
+                                ]}
+                                placeholder="Filter by total score..."
+                              />
+                            )}
                           </>
                         )}
                       </Table.ColumnHeader>
@@ -426,11 +904,20 @@ export default function AssignmentsTable() {
               {isLoading && (
                 <Table.Row>
                   <Table.Cell
-                    colSpan={
-                      getHeaderGroups()
-                        .map((h) => h.headers.length)
-                        .reduce((a, b) => a + b, 0) - 1
-                    }
+                    colSpan={getHeaderGroups()
+                      .map(
+                        (h) =>
+                          h.headers.filter(
+                            (header) =>
+                              header.id !== "assignment_id" &&
+                              (header.id === "name" ||
+                                header.id === "autograder_score" ||
+                                header.id === "total_score" ||
+                                header.id === "released" ||
+                                columnVisibility[header.id as keyof typeof columnVisibility])
+                          ).length
+                      )
+                      .reduce((a, b) => a + b, 0)}
                     bg="bg.subtle"
                   >
                     <VStack w="100%" alignItems="center" justifyContent="center" h="100%" p={12}>
@@ -455,11 +942,34 @@ export default function AssignmentsTable() {
                     }
                     return linkContent;
                   };
+                  const handleRowClick = () => {
+                    if (row.original.activesubmissionid) {
+                      router.push(
+                        `/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`
+                      );
+                    }
+                  };
+
                   return (
-                    <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined} _hover={{ bg: "bg.info" }}>
+                    <Table.Row
+                      key={row.id}
+                      bg={idx % 2 === 0 ? "bg.subtle" : undefined}
+                      _hover={{ bg: "bg.info" }}
+                      onClick={handleRowClick}
+                      cursor={row.original.activesubmissionid ? "pointer" : "default"}
+                      title={row.original.activesubmissionid ? "Click to view submission" : "No active submission"}
+                    >
                       {row
                         .getVisibleCells()
-                        .filter((c) => c.column.id !== "assignment_id")
+                        .filter(
+                          (c) =>
+                            c.column.id !== "assignment_id" &&
+                            (c.column.id === "name" ||
+                              c.column.id === "autograder_score" ||
+                              c.column.id === "total_score" ||
+                              c.column.id === "released" ||
+                              columnVisibility[c.column.id as keyof typeof columnVisibility])
+                        )
                         .map((cell, colIdx) => (
                           <Table.Cell
                             key={cell.id}
