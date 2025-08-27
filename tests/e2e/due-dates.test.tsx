@@ -14,6 +14,8 @@ import {
 
 let course: Course;
 let student: TestingUser | undefined;
+let student2: TestingUser | undefined;
+let instructor: TestingUser | undefined;
 let labLeader: TestingUser | undefined;
 let testAssignment: Assignment | undefined;
 let testLabAssignment: Assignment | undefined;
@@ -24,7 +26,7 @@ const labAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"),
 labAssignmentDueDate.setHours(10, 0, 0, 0);
 test.beforeAll(async () => {
   course = await createClass();
-  [labLeader, student] = await createUsersInClass([
+  [labLeader, student, student2, instructor] = await createUsersInClass([
     {
       name: "Due Dates Lab Leader",
       email: "due-dates-lab-leader@pawtograder.net",
@@ -36,6 +38,20 @@ test.beforeAll(async () => {
       name: "Due Dates Student",
       email: "due-dates-student@pawtograder.net",
       role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Due Dates Student 2",
+      email: "due-dates-student-2@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Due Dates Instructor",
+      email: "due-dates-instructor@pawtograder.net",
+      role: "instructor",
       class_id: course.id,
       useMagicLink: true
     }
@@ -132,6 +148,149 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
     await expect(
       page.getByText(getDueDateString(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
+    ).toBeVisible();
+  });
+});
+
+test.describe("Due Date Exceptions & Extensions", () => {
+  test.beforeEach(async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
+    await expect(page.getByRole("menuitem", { name: "Due Date Extensions" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "Due Date Extensions" }).click();
+  });
+  test("Edit Late Token Allocation works correctly", async ({ page }) => {
+    await expect(page.getByRole("heading", { name: "Due Date Extensions" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Due Date Exceptions Management" })).toBeVisible();
+    await expect(page.getByText(`Manage late tokens and due date exceptions for ${course.name}`)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Class Late Token Settings" })).toBeVisible();
+    await expect(page.getByText(`Manage late tokens and due date exceptions for ${course.name}`)).toBeVisible();
+    await expect(page.getByText("Configure how many late tokens each student gets in this class.")).toBeVisible();
+    await expect(
+      page.getByText(`Current Setting: Each student receives ${course.late_tokens_per_student} late tokens`)
+    ).toBeVisible();
+    const newLateTokenAllocation = course.late_tokens_per_student + 2;
+    await page.getByRole("button", { name: "Edit Late Token Allocation" }).click();
+    await page.locator('input[name="late_tokens_per_student"]').fill(newLateTokenAllocation.toString());
+    await page.getByRole("button", { name: "Save Changes" }).click();
+    await expect(
+      page.getByText(`Current Setting: Each student receives ${newLateTokenAllocation} late tokens`)
+    ).toBeVisible();
+  });
+  test("Assignment Due Date Exceptions work correctly", async ({ page }) => {
+    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    // Test adding a due date exception for a student for a given assignment
+    await page.getByRole("button", { name: "Add Exception" }).click();
+    await page
+      .locator("div")
+      .filter({ hasText: /^Select assignment$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: testAssignment!.title }).click();
+    await page
+      .locator("div")
+      .filter({ hasText: /^Select student$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: student2!.private_profile_name }).click();
+    const hours = 24;
+    const tokensConsumed = 1;
+    await page.locator('input[name="hours"]').fill(hours.toString());
+    await page.locator('input[name="tokens_consumed"]').fill(tokensConsumed.toString());
+    const note = "This is a test exception";
+    await page.getByPlaceholder("Optional note").fill(note);
+    await page.getByRole("button", { name: "Add Exception" }).click();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
+      })
+    ).toBeVisible();
+    // Test Delete
+    await page
+      .getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
+      })
+      .getByLabel("Delete")
+      .click();
+    await page.getByRole("button", { name: "Confirm action" }).click();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
+      })
+    ).not.toBeVisible();
+    // Test Gift Tokens to a student
+    await page.getByRole("button", { name: "Gift Tokens" }).click();
+    await page
+      .locator("div")
+      .filter({ hasText: /^Select assignment$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: testAssignment!.title }).click();
+    await page
+      .locator("div")
+      .filter({ hasText: /^Select student$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: student2!.private_profile_name }).click();
+    const tokensGifted = 13;
+    await page.locator('input[type="number"]').fill(tokensGifted.toString());
+    await page.getByRole("button", { name: "Gift Tokens" }).click();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} 0 0 ${-tokensGifted} ${instructor!.private_profile_name} Tokens gifted by instructor`
+      })
+    ).toBeVisible();
+    // Clean up
+    await page
+      .getByRole("row", {
+        name: `${student2!.private_profile_name} 0 0 ${-tokensGifted} ${instructor!.private_profile_name} Tokens gifted by instructor`
+      })
+      .getByLabel("Delete")
+      .click();
+    await page.getByRole("button", { name: "Confirm action" }).click();
+  });
+  test("Student Due Date Extensions work correctly", async ({ page }) => {
+    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    await page.getByText("Student Extensions").click();
+    await expect(page.getByText("Due Date Extensions").first()).toBeVisible();
+    await page.getByRole("button", { name: "Add Extension" }).click();
+    await page
+      .locator("div")
+      .filter({ hasText: /^Select student$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: student2!.private_profile_name }).click();
+    const hours = 24;
+    await page.locator('input[name="hours"]').fill(hours.toString());
+    await page.getByRole("button", { name: "Add Extension" }).click();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} No`
+      })
+    ).toBeVisible();
+    // Check that the extension is applied to the assignment exceptions
+    await page.getByText("Assignment Exceptions").click();
+    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Class-wide extension applied by instructor`
+      })
+    ).toBeVisible();
+    // Test Delete
+    await page.getByText("Student Extensions").click();
+    await page.getByLabel("Student Extensions").getByLabel("Delete").click();
+    await page.getByRole("button", { name: "Confirm action" }).click();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} No`
+      })
+    ).not.toBeVisible();
+    // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions
+    await page.getByText("Assignment Exceptions").click();
+    await expect(
+      page.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Class-wide extension applied by instructor`
+      })
     ).toBeVisible();
   });
 });
