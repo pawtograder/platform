@@ -1,8 +1,13 @@
-import * as EdgeRuntime from "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookCellCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
+
+// Declare EdgeRuntime for type safety
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({

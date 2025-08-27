@@ -1,10 +1,15 @@
-import * as EdgeRuntime from "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
 import type { Notification } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
+
+// Declare EdgeRuntime for type safety
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
