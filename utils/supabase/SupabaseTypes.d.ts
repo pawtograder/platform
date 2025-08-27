@@ -8004,6 +8004,7 @@ export type Database = {
           assignment_id: number | null;
           class_id: number | null;
           completed_at: string | null;
+          conclusion: string | null;
           head_branch: string | null;
           head_sha: string | null;
           in_progress_at: string | null;
@@ -8316,17 +8317,17 @@ export type Database = {
       admin_get_sis_sync_status: {
         Args: Record<PropertyKey, never>;
         Returns: {
-          sis_sections_count: number;
-          term: number;
-          class_name: string;
           class_id: number;
-          pending_invitations: number;
-          sync_enabled: boolean;
-          last_sync_message: string;
-          last_sync_status: string;
+          term: number;
+          sis_sections_count: number;
           last_sync_time: string;
-          expired_invitations: number;
+          last_sync_status: string;
+          last_sync_message: string;
+          sync_enabled: boolean;
           total_invitations: number;
+          pending_invitations: number;
+          expired_invitations: number;
+          class_name: string;
         }[];
       };
       admin_set_section_sync_enabled: {
@@ -8591,11 +8592,11 @@ export type Database = {
       };
       create_user_role_for_existing_user: {
         Args: {
-          p_role: Database["public"]["Enums"]["app_role"];
-          p_name: string;
           p_sis_id?: number;
-          p_user_id: string;
+          p_name: string;
+          p_role: Database["public"]["Enums"]["app_role"];
           p_class_id: number;
+          p_user_id: string;
         };
         Returns: number;
       };
@@ -8636,9 +8637,9 @@ export type Database = {
         Returns: {
           total_notifications: number;
           active_notifications: number;
+          recent_campaigns: Json;
           notifications_by_severity: Json;
           notifications_by_display: Json;
-          recent_campaigns: Json;
         }[];
       };
       get_user_id_by_email: {
@@ -8654,7 +8655,6 @@ export type Database = {
       get_workflow_statistics: {
         Args: { p_class_id: number; p_duration_hours?: number };
         Returns: {
-          class_id: number;
           period_end: string;
           period_start: string;
           success_rate: number;
@@ -8667,15 +8667,16 @@ export type Database = {
           completed_runs: number;
           total_runs: number;
           duration_hours: number;
+          class_id: number;
         }[];
       };
       gift_tokens_to_student: {
         Args: {
+          p_assignment_id: number;
+          p_student_id: string;
           p_note?: string;
           p_tokens_to_gift: number;
-          p_assignment_id: number;
           p_class_id: number;
-          p_student_id: string;
         };
         Returns: undefined;
       };
