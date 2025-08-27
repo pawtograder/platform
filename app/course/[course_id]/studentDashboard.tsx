@@ -17,10 +17,10 @@ import {
 } from "@chakra-ui/react";
 import { formatInTimeZone } from "date-fns-tz";
 
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
-import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import LinkAccount from "@/components/github/link-account";
 export default async function StudentDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
@@ -68,6 +68,17 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
             const mostRecentSubmission = assignment.submissions?.sort(
               (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
             )[0];
+
+            let mostRecentSubmissionScoreAdvice = "In Progress";
+            if (mostRecentSubmission) {
+              if (mostRecentSubmission.grader_results) {
+                if (mostRecentSubmission.grader_results.errors) {
+                  mostRecentSubmissionScoreAdvice = "Error";
+                } else {
+                  mostRecentSubmissionScoreAdvice = `${mostRecentSubmission.grader_results?.score}/${mostRecentSubmission.grader_results?.max_score}`;
+                }
+              }
+            }
             return (
               <CardRoot key={assignment.id}>
                 <CardHeader>
@@ -93,7 +104,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
                       <DataListItemLabel>Most recent submission</DataListItemLabel>
                       <DataListItemValue>
                         {mostRecentSubmission
-                          ? `#${mostRecentSubmission.ordinal}, score: ${mostRecentSubmission.grader_results?.score}/${mostRecentSubmission.grader_results?.max_score}`
+                          ? `#${mostRecentSubmission.ordinal}, ${mostRecentSubmissionScoreAdvice}`
                           : "No submissions"}
                       </DataListItemValue>
                     </DataListItem>

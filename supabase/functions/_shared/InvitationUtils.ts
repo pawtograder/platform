@@ -146,10 +146,14 @@ async function processInvitation(
         .single();
 
       if (existingEnrollment) {
-        //Set canvas_id to the sis_user_id
+        //Set canvas_id to the sis_user_id, update class_section_id and lab_section_id if provided
         await supabaseClient
           .from("user_roles")
-          .update({ canvas_id: invitation.sis_user_id })
+          .update({
+            canvas_id: invitation.sis_user_id,
+            class_section_id: invitation.class_section_id,
+            lab_section_id: invitation.lab_section_id
+          })
           .eq("user_id", existingUser.user_id)
           .eq("class_id", courseId);
 
@@ -166,13 +170,24 @@ async function processInvitation(
     // Check if invitation already exists
     const { data: existingInvitation } = await supabaseClient
       .from("invitations")
-      .select("id, status")
+      .select("id, status, class_section_id, lab_section_id")
       .eq("class_id", courseId)
       .eq("sis_user_id", invitation.sis_user_id)
       .eq("status", "pending")
       .single();
 
     if (existingInvitation) {
+      //If needed, update the invitation to the new class_section_id and lab_section_id
+      if (
+        invitation.class_section_id !== existingInvitation.class_section_id ||
+        invitation.lab_section_id !== existingInvitation.lab_section_id
+      ) {
+        await supabaseClient
+          .from("invitations")
+          .update({ class_section_id: invitation.class_section_id, lab_section_id: invitation.lab_section_id })
+          .eq("id", existingInvitation.id);
+      }
+
       return {
         success: false,
         error: {

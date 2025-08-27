@@ -7,7 +7,7 @@ import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeContro
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
-type TablesThatHaveAnIDField = {
+export type TablesThatHaveAnIDField = {
   [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
 }[keyof DatabaseTableTypes];
 
@@ -285,9 +285,13 @@ export function useTableControllerValueById<
 
   return value;
 }
-export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller: TableController<T>): boolean {
-  const [ready, setReady] = useState(controller.ready);
+export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller?: TableController<T>): boolean {
+  const [ready, setReady] = useState(controller?.ready ?? false);
   useEffect(() => {
+    if (!controller) {
+      setReady(false);
+      return;
+    }
     let cleanedUp = false;
     // Reset state when controller changes
     setReady(controller.ready);

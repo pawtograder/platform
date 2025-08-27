@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
   AssignmentDueDateException,
+  ClassSection,
   Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
@@ -297,6 +298,19 @@ export function useLabSections() {
   return labSections;
 }
 
+export function useClassSections() {
+  const controller = useCourseController();
+  const [classSections, setClassSections] = useState<ClassSection[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.classSections.list((data) => {
+      setClassSections(data);
+    });
+    setClassSections(data);
+    return unsubscribe;
+  }, [controller]);
+  return classSections;
+}
+
 export type UpdateCallback<T> = (data: T) => void;
 export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {
@@ -322,6 +336,7 @@ export class CourseController {
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
@@ -452,6 +467,18 @@ export class CourseController {
       });
     }
     return this._labSectionMeetings;
+  }
+
+  get classSections(): TableController<"class_sections"> {
+    if (!this._classSections) {
+      this._classSections = new TableController({
+        client: this._client,
+        table: "class_sections",
+        query: this._client.from("class_sections").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._classSections;
   }
 
   get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
@@ -874,6 +901,7 @@ export class CourseController {
       | TableController<"discussion_thread_read_status">
       | TableController<"tags">
       | TableController<"lab_sections">
+      | TableController<"class_sections">
       | TableController<"lab_section_meetings">
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
       | TableController<"student_deadline_extensions">
@@ -888,7 +916,8 @@ export class CourseController {
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
     if (this._studentDeadlineExtensions) createdControllers.push(this._studentDeadlineExtensions);
     if (this._assignmentDueDateExceptions) createdControllers.push(this._assignmentDueDateExceptions);
-
+    if (this._classSections) createdControllers.push(this._classSections);
+    
     return createdControllers.every((c) => c.ready);
   }
 
@@ -904,6 +933,8 @@ export class CourseController {
     this._labSectionMeetings?.close();
     this._studentDeadlineExtensions?.close();
     this._assignmentDueDateExceptions?.close();
+    this._classSections?.close();
+
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
     }
