@@ -917,7 +917,7 @@ export class CourseController {
     if (this._studentDeadlineExtensions) createdControllers.push(this._studentDeadlineExtensions);
     if (this._assignmentDueDateExceptions) createdControllers.push(this._assignmentDueDateExceptions);
     if (this._classSections) createdControllers.push(this._classSections);
-    
+
     return createdControllers.every((c) => c.ready);
   }
 

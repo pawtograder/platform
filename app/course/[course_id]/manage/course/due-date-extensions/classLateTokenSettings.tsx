@@ -2,7 +2,7 @@
 
 import { Field } from "@/components/ui/field";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Card, Heading, HStack, Input, Link, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate, useList } from "@refinedev/core";
 import { createClient } from "@/utils/supabase/client";
@@ -20,8 +20,8 @@ export default function DueDateExceptionsManagement() {
   const { course_id } = useParams();
   const { role } = useClassProfiles();
   const invalidate = useInvalidate();
-  const course = role.classes;
   const [isEditingTokens, setIsEditingTokens] = useState(false);
+  const [course, setCourse] = useState<Course | undefined>(role.classes);
 
   // Custom function to update class late tokens using our secure database function
 
@@ -55,17 +55,19 @@ export default function DueDateExceptionsManagement() {
         throw new Error(error.message || "Failed to update late tokens");
       }
 
+      const { data: courseData } = await supabase
+        .from("classes")
+        .select("*")
+        .eq("id", Number.parseInt(course_id as string))
+        .single();
+      if (courseData) {
+        // Invalidate self
+        setCourse(courseData);
+      }
+
       setIsEditingTokens(false);
 
       // Invalidate related resources so dependent UIs refresh
-      invalidate({
-        resource: "user_roles",
-        invalidates: ["all"]
-      });
-      invalidate({
-        resource: "classes",
-        invalidates: ["all"]
-      });
       invalidate({
         resource: "assignments",
         invalidates: ["all"]
