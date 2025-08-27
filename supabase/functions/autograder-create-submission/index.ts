@@ -218,6 +218,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .eq("repository_id", repoData.id)
           .eq("sha", sha)
           .order("created_at", { ascending: false }) // Order by most recent first
+          .limit(1)
           .maybeSingle();
 
         //Fetch the role of the user who triggered the check run, so that we can check if they are an instructor or grader
