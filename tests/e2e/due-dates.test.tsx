@@ -164,7 +164,6 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await expect(page.getByRole("heading", { name: "Due Date Exceptions Management" })).toBeVisible();
     await expect(page.getByText(`Manage late tokens and due date exceptions for ${course.name}`)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Class Late Token Settings" })).toBeVisible();
-    await expect(page.getByText(`Manage late tokens and due date exceptions for ${course.name}`)).toBeVisible();
     await expect(page.getByText("Configure how many late tokens each student gets in this class.")).toBeVisible();
     await expect(
       page.getByText(`Current Setting: Each student receives ${course.late_tokens_per_student} late tokens`)
