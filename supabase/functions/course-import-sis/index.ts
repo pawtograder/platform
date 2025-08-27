@@ -553,17 +553,30 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const invitationFilters = [];
       const enrollmentFilters = [];
 
-      if (enabledClassSections.length > 0) {
-        const enabledClassSectionIds = enabledClassSections.map((s) => s.id);
+      // Only include sections that actually have SIS CRNs
+      const enabledClassSectionsWithSIS = enabledClassSections.filter((s) => s.sis_crn !== null);
+      const enabledLabSectionsWithSIS = enabledLabSections.filter((s) => s.sis_crn !== null);
+
+      if (enabledClassSectionsWithSIS.length > 0) {
+        const enabledClassSectionIds = enabledClassSectionsWithSIS.map((s) => s.id);
         invitationFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
         enrollmentFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
       }
 
-      if (enabledLabSections.length > 0) {
-        const enabledLabSectionIds = enabledLabSections.map((s) => s.id);
+      if (enabledLabSectionsWithSIS.length > 0) {
+        const enabledLabSectionIds = enabledLabSectionsWithSIS.map((s) => s.id);
         invitationFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
         enrollmentFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
       }
+
+      // Debug logging for section filtering
+      console.log("=== SECTION FILTERING DEBUG ===");
+      console.log(`Total enabled class sections: ${enabledClassSections.length}`);
+      console.log(`Class sections with SIS CRN: ${enabledClassSectionsWithSIS.length}`);
+      console.log(`Total enabled lab sections: ${enabledLabSections.length}`);
+      console.log(`Lab sections with SIS CRN: ${enabledLabSectionsWithSIS.length}`);
+      console.log(`Invitation filters: ${invitationFilters}`);
+      console.log("==============================");
 
       // Only fetch if we have any enabled sections
       if (invitationFilters.length > 0) {
@@ -747,15 +760,15 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const classSectionsByCRN = new Map<number, number>();
       const labSectionsByCRN = new Map<number, number>();
 
-      // Fetch all enabled class sections
-      if (enabledClassSections.length > 0) {
+      // Fetch all enabled class sections (only those with SIS CRNs)
+      if (enabledClassSectionsWithSIS.length > 0) {
         const { data: classSections } = await adminSupabase
           .from("class_sections")
           .select("id, sis_crn")
           .eq("class_id", classData.id)
           .in(
             "id",
-            enabledClassSections.map((s) => s.id)
+            enabledClassSectionsWithSIS.map((s) => s.id)
           )
           .limit(1000);
 
@@ -772,22 +785,22 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           category: "debug",
           data: {
             classId: classData.id,
-            enabledClassSectionCount: enabledClassSections.length,
+            enabledClassSectionCount: enabledClassSectionsWithSIS.length,
             fetchedClassSectionCount: classSections?.length || 0,
             classSectionCRNs: Array.from(classSectionsByCRN.keys())
           }
         });
       }
 
-      // Fetch all enabled lab sections
-      if (enabledLabSections.length > 0) {
+      // Fetch all enabled lab sections (only those with SIS CRNs)
+      if (enabledLabSectionsWithSIS.length > 0) {
         const { data: labSections } = await adminSupabase
           .from("lab_sections")
           .select("id, sis_crn")
           .eq("class_id", classData.id)
           .in(
             "id",
-            enabledLabSections.map((s) => s.id)
+            enabledLabSectionsWithSIS.map((s) => s.id)
           )
           .limit(1000);
 
@@ -804,7 +817,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           category: "debug",
           data: {
             classId: classData.id,
-            enabledLabSectionCount: enabledLabSections.length,
+            enabledLabSectionCount: enabledLabSectionsWithSIS.length,
             fetchedLabSectionCount: labSections?.length || 0,
             labSectionCRNs: Array.from(labSectionsByCRN.keys())
           }
@@ -1106,6 +1119,43 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const invitationsToExpire = currentInvitations.filter(
         (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id))
       );
+
+      // Debug logging for expiration logic
+      if (invitationsToExpire.length > 0) {
+        console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
+        console.log(`Total current invitations: ${currentInvitations.length}`);
+        console.log(`Total SIS users: ${sisUserIds.size}`);
+        console.log(`Invitations to expire: ${invitationsToExpire.length}`);
+
+        invitationsToExpire.slice(0, 5).forEach((inv) => {
+          console.log(`Expiring invitation:`, {
+            id: inv.id,
+            sisUserId: inv.sis_user_id,
+            role: inv.role,
+            status: inv.status,
+            classSectionId: inv.class_section_id,
+            labSectionId: inv.lab_section_id,
+            isInSISUsers: sisUserIds.has(Number(inv.sis_user_id))
+          });
+        });
+        console.log("==================================");
+
+        scope?.addBreadcrumb({
+          message: `About to expire ${invitationsToExpire.length} invitations`,
+          category: "warning",
+          data: {
+            classId: classData.id,
+            totalCurrentInvitations: currentInvitations.length,
+            totalSISUsers: sisUserIds.size,
+            invitationsToExpire: invitationsToExpire.length,
+            sampleExpiring: invitationsToExpire.slice(0, 3).map((inv) => ({
+              sisUserId: inv.sis_user_id,
+              classSectionId: inv.class_section_id,
+              labSectionId: inv.lab_section_id
+            }))
+          }
+        });
+      }
 
       if (invitationsToExpire.length > 0) {
         const { error: expireError } = await adminSupabase

@@ -950,7 +950,7 @@ export default function EnrollmentsTable() {
                               {{
                                 asc: " 🔼",
                                 desc: " 🔽"
-                              }[header.column.getIsSorted() as string] ?? null}
+                              }[header.column.getIsSorted() as string] ?? " 🔄"}
                             </Text>
                             {header.id === "checkbox" && (
                               <Checkbox.Root
