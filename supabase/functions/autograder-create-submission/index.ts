@@ -220,15 +220,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .order("created_at", { ascending: false }) // Order by most recent first
           .maybeSingle();
 
-        console.log("This is the new version");
         //Fetch the role of the user who triggered the check run, so that we can check if they are an instructor or grader
         let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
-        if (checkRun?.profile_id) {
+        if (initialCheckRun?.profile_id) {
           const { data: userRolesData } = await adminSupabase
             .from("user_roles")
             .select("*")
-            .eq("private_profile_id", checkRun.profile_id)
-            .eq("class_id", checkRun.class_id)
+            .eq("private_profile_id", initialCheckRun.profile_id)
+            .eq("class_id", initialCheckRun.class_id)
             .maybeSingle();
 
           if (!userRolesData) {
