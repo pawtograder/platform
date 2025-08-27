@@ -260,7 +260,10 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
         field: "created_at",
         order: "desc"
       }
-    ]
+    ],
+    pagination: {
+      pageSize: 500
+    }
   });
   useList<Submission>({
     resource: "submissions",
@@ -366,12 +369,11 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                       </Table.Cell>
                       <Table.Cell>
                         <Link href={link}>
-                          {historical_submission.grader_results?.score !== undefined &&
-                          historical_submission.grader_results?.errors === null
-                            ? historical_submission.grader_results?.score +
-                              "/" +
-                              historical_submission.grader_results?.max_score
-                            : "Error"}
+                          {!historical_submission.grader_results
+                            ? "In Progress"
+                            : historical_submission.grader_results && historical_submission.grader_results.errors
+                              ? "Error"
+                              : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>

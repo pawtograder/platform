@@ -2,27 +2,13 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import {
-  Box,
-  Container,
-  Heading,
-  HStack,
-  List,
-  Text,
-  Badge,
-  Flex,
-  Collapsible,
-  Icon,
-  Accordion
-} from "@chakra-ui/react";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Accordion, Badge, Box, Collapsible, Container, Flex, Heading, Icon, List, Text } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { AlertCircle, CheckCircle, ChevronDown, ChevronRight, ChevronUp, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import AddSingleCourseMember from "./addSingleCourseMember";
 import EnrollmentsTable from "./enrollmentsTable";
-import ImportStudentsCSVModal from "./importStudentsCSVModal";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
 type ClassWithSyncStatus = GetResult<
   Database["public"],
   Database["public"]["Tables"]["classes"]["Row"],
@@ -569,13 +555,6 @@ export default function EnrollmentsPage() {
     <Container>
       <Heading my="4">Enrollments</Heading>
       <LinkedSectionsTab />
-      <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
-        <HStack justifyContent="flex-end">
-          {" "}
-          <ImportStudentsCSVModal />
-          <AddSingleCourseMember />
-        </HStack>
-      </Box>
       <EnrollmentsTable />
     </Container>
   );
