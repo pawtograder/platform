@@ -2,14 +2,14 @@
 import { signOutAction } from "@/app/actions";
 import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
+import { createClient } from "@/utils/supabase/client";
 import { CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
-import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
-import { useParams } from "next/navigation";
-import { createContext, useContext } from "react";
-import useAuthState from "./useAuthState";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { useList } from "@refinedev/core";
+import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { useParams } from "next/navigation";
+import { createContext, useContext, useEffect, useState } from "react";
+import useAuthState from "./useAuthState";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -78,29 +78,48 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   const { course_id } = useParams();
   const { user } = useAuthState();
   const userId = user?.id;
-  const { data: roles, isLoading } = useList<UserRoleWithClassAndUser>({
-    resource: "user_roles",
-    meta: {
-      select:
-        "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes(*), users(*)"
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    queryOptions: {
-      cacheTime: Infinity,
-      staleTime: Infinity
-    },
-    filters: [{ field: "user_id", operator: "eq", value: userId }]
-  });
+  const [roles, setRoles] = useState<UserRoleWithClassAndUser[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  useEffect(() => {
+    if (!userId) {
+      setIsLoading(false);
+      return;
+    }
+
+    let cleanedUp = false;
+    async function fetchRoles() {
+      if (!userId) {
+        return;
+      }
+      const supabase = createClient();
+      const { data, error } = await supabase.from("user_roles")
+        .select("*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)")
+        .eq("user_id", userId)
+        .eq("disabled", false)
+        .eq("classes.archived", false);
+      if (error) {
+        throw error;
+      }
+      if (cleanedUp) {
+        return;
+      }
+      setRoles(data || []);
+      setIsLoading(false);
+      return;
+    }
+    fetchRoles();
+    return () => {
+      cleanedUp = true;
+    };
+  }, [userId]);
 
   if (isLoading) {
     return <Skeleton height="100px" width="100%" />;
   }
-  const myRole = roles?.data.find(
+  const myRole = roles.find(
     (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
   );
-  if (!roles?.data || roles?.data.length === 0) {
+  if (!myRole) {
     return (
       <Container maxW="md" py={{ base: "12", md: "24" }}>
         <Stack gap="6">
@@ -158,7 +177,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         role: myRole,
         private_profile_id: myRole.private_profile_id,
         public_profile_id: myRole.public_profile_id,
-        allOfMyRoles: roles?.data,
+        allOfMyRoles: roles,
         private_profile: myRole.privateProfile,
         public_profile: myRole.publicProfile
       }}

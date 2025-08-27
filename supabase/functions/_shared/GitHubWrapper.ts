@@ -479,7 +479,9 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
     true,
     ["verify"]
   );
-  const verified = await verify(token, key);
+  const verified = await verify(token, key, {
+    expLeeway: 3600, // 1 hour
+  });
   return verified as GitHubOIDCToken;
 }
 

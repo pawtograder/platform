@@ -62,6 +62,9 @@ export default function AssignmentPage() {
       select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)",
       order: "created_at, { ascending: false }"
     },
+    pagination: {
+      pageSize: 500
+    },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
     sorters: [
       {
@@ -205,7 +208,7 @@ export default function AssignmentPage() {
               </Table.Cell>
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                  {submission.grader_results?.errors || submission.grader_results?.score === undefined
+                  {!submission.grader_results ? "In Progress" : submission.grader_results && submission.grader_results.errors
                     ? "Error"
                     : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                 </Link>

@@ -104,7 +104,7 @@ export default function TestAssignmentPage() {
                 </Table.Cell>
                 <Table.Cell>
                   <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {submission.grader_results?.errors || submission.grader_results?.score === undefined
+                    {!submission.grader_results ? "In Progress" : submission.grader_results && submission.grader_results.errors
                       ? "Error"
                       : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                   </Link>
