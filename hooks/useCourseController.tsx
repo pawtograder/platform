@@ -871,6 +871,7 @@ export class CourseController {
       | TableController<"discussion_thread_read_status">
       | TableController<"tags">
       | TableController<"lab_sections">
+      | TableController<"class_sections">
       | TableController<"lab_section_meetings">
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
     > = [];
