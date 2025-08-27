@@ -1,4 +1,4 @@
-import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
@@ -232,7 +232,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
     keys: ExprDependencyInstance[];
     supabase: SupabaseClient<Database>;
   }): Promise<ResolvedExprDependencyInstance[]> {
-    // Fetch assignments referenced by keys (ids)
+    // Fetch assignments referenced by keys (ids) for slug/class mapping
     const assignmentIds = Array.from(new Set(keys.map((key) => Number(key.key))));
     if (assignmentIds.length === 0) return [];
 
@@ -249,108 +249,70 @@ class AssignmentsDependencySource extends DependencySourceBase {
       this.assignmentMap.set(assignment.id, assignment as unknown as Assignment);
     }
 
-    // Gather students in this batch
+    // Gather target students in this batch
     const students = new Set<string>(keys.map((key) => key.student_id));
 
-    // Fetch active submissions for these assignments
-    const allSubmissions: { id: number; assignment_id: number; profile_id: string }[] = [];
+    // Query optimized view that returns one row per student per assignment with scores by review round
+    type ReviewsByRoundRow = {
+      assignment_id: number;
+      class_id: number;
+      student_private_profile_id: string;
+      assignment_slug: string | null;
+      scores_by_round_private: Record<string, number | null> | null;
+      scores_by_round_public: Record<string, number | null> | null;
+    };
+
+    const allRows: ReviewsByRoundRow[] = [];
     let from = 0;
     const pageSize = 1000;
     while (true) {
       const to = from + pageSize - 1;
-      const { data: subs, error: subsError } = await supabase
-        .from("submissions")
-        .select("id, assignment_id, profile_id")
+      const { data: rows, error } = await supabase
+        .from("submissions_with_reviews_by_round_for_assignment")
+        .select(
+          "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public"
+        )
         .in("assignment_id", assignmentIds)
-        .eq("is_active", true)
         .range(from, to);
-      if (subsError) {
-        throw subsError;
+      if (error) {
+        throw error;
       }
-      if (!subs || subs.length === 0) break;
-      allSubmissions.push(...subs);
-      if (subs.length < pageSize) break;
+      if (!rows || rows.length === 0) break;
+      allRows.push(...(rows as unknown as ReviewsByRoundRow[]));
+      if (rows.length < pageSize) break;
       from += pageSize;
     }
 
-    const submissionIds = allSubmissions.map((s) => s.id);
-    if (submissionIds.length === 0) {
-      return [];
-    }
-
-    // Fetch submission reviews joined with rubrics to get review_round
-    const allReviews: Array<{
-      submission_id: number;
-      total_score: number | null;
-      released: boolean | null;
-      review_round: string | null;
-    }> = [];
-    from = 0;
-    while (true) {
-      const to = from + pageSize - 1;
-      const { data: reviews, error: reviewsError } = await supabase
-        .from("submission_reviews")
-        .select("submission_id, total_score, released, rubrics(review_round)")
-        .in("submission_id", submissionIds)
-        .range(from, to);
-      if (reviewsError) {
-        throw reviewsError;
-      }
-      if (!reviews || reviews.length === 0) break;
-      for (const r of reviews) {
-        allReviews.push({
-          submission_id: r.submission_id as number,
-          total_score: (r as unknown as { total_score: number | null }).total_score ?? null,
-          released: (r as unknown as { released: boolean | null }).released ?? null,
-          review_round:
-            (r as unknown as { rubrics: { review_round: string | null } | null }).rubrics?.review_round ?? null
-        });
-      }
-      if (reviews.length < pageSize) break;
-      from += pageSize;
-    }
-
-    // Build maps for quick lookup
-    const submissionByAssignmentAndStudent = new Map<
-      string,
-      { id: number; assignment_id: number; profile_id: string }
-    >();
-    for (const sub of allSubmissions) {
-      submissionByAssignmentAndStudent.set(`${sub.assignment_id}:${sub.profile_id}`, sub);
-    }
-
-    const reviewsBySubmission = new Map<
-      number,
-      Array<{ total_score: number | null; released: boolean | null; review_round: string | null }>
-    >();
-    for (const rev of allReviews) {
-      const arr = reviewsBySubmission.get(rev.submission_id) ?? [];
-      arr.push(rev);
-      reviewsBySubmission.set(rev.submission_id, arr);
-    }
-
-    // Build resolved values per student and assignment
     const results: ResolvedExprDependencyInstance[] = [];
-    for (const student_id of students) {
-      for (const assignmentId of assignmentIds) {
-        const sub = submissionByAssignmentAndStudent.get(`${assignmentId}:${student_id}`);
-        const assignment = this.assignmentMap.get(assignmentId);
-        if (!assignment || !assignment.slug) continue;
-        const keySlug = assignment.slug;
-        const class_id = assignment.class_id!;
-        const reviews = sub ? (reviewsBySubmission.get(sub.id) ?? []) : [];
-        // Aggregate scores by review_round
-        const privateScoreByRound: Record<string, number | undefined> = {};
-        const publicScoreByRound: Record<string, number | undefined> = {};
-        for (const rv of reviews) {
-          const round = rv.review_round ?? "grading-review";
-          const score = rv.total_score ?? undefined;
-          privateScoreByRound[round] = score;
-          publicScoreByRound[round] = rv.released ? score : undefined;
+    for (const row of allRows) {
+      if (!students.has(row.student_private_profile_id)) continue;
+      const slug = row.assignment_slug ?? this.assignmentMap.get(row.assignment_id)?.slug ?? "";
+      const privateByRound: Record<string, number | undefined> = {};
+      const publicByRound: Record<string, number | undefined> = {};
+      if (row.scores_by_round_private) {
+        for (const [round, score] of Object.entries(row.scores_by_round_private)) {
+          privateByRound[round] = score === null ? undefined : (score as number);
         }
-        results.push({ key: keySlug, student_id, value: privateScoreByRound, class_id, is_private: true });
-        results.push({ key: keySlug, student_id, value: publicScoreByRound, class_id, is_private: false });
       }
+      if (row.scores_by_round_public) {
+        for (const [round, score] of Object.entries(row.scores_by_round_public)) {
+          publicByRound[round] = score === null ? undefined : (score as number);
+        }
+      }
+      results.push({
+        key: slug,
+        student_id: row.student_private_profile_id,
+        value: privateByRound,
+        class_id: row.class_id,
+        is_private: true
+      });
+      results.push({
+        key: slug,
+        student_id: row.student_private_profile_id,
+        value: publicByRound,
+        class_id: row.class_id,
+        is_private: false
+      });
     }
 
     return results;
@@ -445,7 +407,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .range(from, to);
 
       if (gradebookColumnsFetchError) {
-        console.error(`Error fetching gradebook column students (range ${from}-${to}):`, gradebookColumnsFetchError);
         throw gradebookColumnsFetchError;
       }
 
@@ -475,7 +436,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .range(from, to);
 
       if (gradebookColumnsError) {
-        console.error(`Error fetching gradebook columns (range ${from}-${to}):`, gradebookColumnsError);
         throw gradebookColumnsError;
       }
 
@@ -806,7 +766,6 @@ export async function addDependencySourceFunctions({
         return ret;
       }
     }
-    console.log("Mean called with non-matrix value", value);
     throw new Error("Mean called with non-matrix value");
   };
   imports["drop_lowest"] = (
