@@ -17,11 +17,10 @@ import {
 } from "@chakra-ui/react";
 import { formatInTimeZone } from "date-fns-tz";
 
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
-import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import LinkAccount from "@/components/github/link-account";
-import { Submission } from "@/utils/supabase/DatabaseTypes";
 export default async function StudentDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
@@ -94,10 +93,10 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
                       <DataListItemValue>
                         {assignment.due_date
                           ? formatInTimeZone(
-                            new TZDate(assignment.due_date),
-                            assignment.classes?.time_zone || "America/New_York",
-                            "Pp"
-                          )
+                              new TZDate(assignment.due_date),
+                              assignment.classes?.time_zone || "America/New_York",
+                              "Pp"
+                            )
                           : "No due date"}
                       </DataListItemValue>
                     </DataListItem>

@@ -369,9 +369,11 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                       </Table.Cell>
                       <Table.Cell>
                         <Link href={link}>
-                          {!historical_submission.grader_results ? "In Progress" : historical_submission.grader_results && historical_submission.grader_results.errors
-                            ? "Error"
-                            : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
+                          {!historical_submission.grader_results
+                            ? "In Progress"
+                            : historical_submission.grader_results && historical_submission.grader_results.errors
+                              ? "Error"
+                              : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>

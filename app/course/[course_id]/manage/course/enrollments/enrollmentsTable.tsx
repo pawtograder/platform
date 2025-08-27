@@ -80,7 +80,6 @@ export default function EnrollmentsTable() {
   const labSections = useLabSections();
   const classSections = useClassSections();
 
-
   const deleteUserRole = useCallback(
     async (userRoleId: string) => {
       const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
@@ -333,11 +332,11 @@ export default function EnrollmentsTable() {
 
           if (row.original.type === "invitation") {
             const invitationName = row.original.name || `${row.original.sis_user_id}` || "";
-            return values.some(val => invitationName.toLowerCase().includes(val.toLowerCase()));
+            return values.some((val) => invitationName.toLowerCase().includes(val.toLowerCase()));
           }
           const name = row.original.profiles?.name;
           if (!name) return false;
-          return values.some(val => name.toLowerCase().includes(val.toLowerCase()));
+          return values.some((val) => name.toLowerCase().includes(val.toLowerCase()));
         }
       },
       {
@@ -363,11 +362,11 @@ export default function EnrollmentsTable() {
           if (row.original.type === "invitation") {
             const email = row.original.email;
             if (!email) return false;
-            return values.some(val => email.toLowerCase().includes(val.toLowerCase()));
+            return values.some((val) => email.toLowerCase().includes(val.toLowerCase()));
           }
           const email = row.original.users?.email;
           if (!email) return false;
-          return values.some(val => email.toLowerCase().includes(val.toLowerCase()));
+          return values.some((val) => email.toLowerCase().includes(val.toLowerCase()));
         }
       },
       {
@@ -392,15 +391,10 @@ export default function EnrollmentsTable() {
           if (row.original.type === "invitation") {
             const invitation = row.original;
             if (invitation.class_section_id && classSections) {
-              const classSection = classSections.find(section => section.id === invitation.class_section_id);
+              const classSection = classSections.find((section) => section.id === invitation.class_section_id);
               if (classSection) {
-                return (
-                  <Text fontSize="sm">
-                    {classSection.name || `Section ${classSection.id}`}
-                  </Text>
-                );
-              }
-              else {
+                return <Text fontSize="sm">{classSection.name || `Section ${classSection.id}`}</Text>;
+              } else {
                 return (
                   <Text color="gray.400" fontSize="sm">
                     {invitation.class_section_id}
@@ -417,13 +411,9 @@ export default function EnrollmentsTable() {
 
           const userRole = row.original;
           if (userRole.class_section_id && classSections) {
-            const classSection = classSections.find(section => section.id === userRole.class_section_id);
+            const classSection = classSections.find((section) => section.id === userRole.class_section_id);
             if (classSection) {
-              return (
-                <Text fontSize="sm">
-                  {classSection.name || `Section ${classSection.id}`}
-                </Text>
-              );
+              return <Text fontSize="sm">{classSection.name || `Section ${classSection.id}`}</Text>;
             }
           }
           return (
@@ -442,7 +432,7 @@ export default function EnrollmentsTable() {
               return values.includes("Not assigned");
             }
 
-            const classSection = classSections.find(section => section.id === invitation.class_section_id);
+            const classSection = classSections.find((section) => section.id === invitation.class_section_id);
             if (!classSection) return values.includes("Not assigned");
 
             const sectionName = classSection.name || `Section ${classSection.id}`;
@@ -454,7 +444,7 @@ export default function EnrollmentsTable() {
             return values.includes("Not assigned");
           }
 
-          const classSection = classSections.find(section => section.id === userRole.class_section_id);
+          const classSection = classSections.find((section) => section.id === userRole.class_section_id);
           if (!classSection) return values.includes("Not assigned");
 
           const sectionName = classSection.name || `Section ${classSection.id}`;
@@ -468,13 +458,9 @@ export default function EnrollmentsTable() {
           if (row.original.type === "invitation") {
             const invitation = row.original;
             if (invitation.lab_section_id && labSections) {
-              const labSection = labSections.find(section => section.id === invitation.lab_section_id);
+              const labSection = labSections.find((section) => section.id === invitation.lab_section_id);
               if (labSection) {
-                return (
-                  <Text fontSize="sm">
-                    {labSection.name || `Lab ${labSection.id}`}
-                  </Text>
-                );
+                return <Text fontSize="sm">{labSection.name || `Lab ${labSection.id}`}</Text>;
               }
             }
             return (
@@ -486,13 +472,9 @@ export default function EnrollmentsTable() {
 
           const userRole = row.original;
           if (userRole.lab_section_id && labSections) {
-            const labSection = labSections.find(section => section.id === userRole.lab_section_id);
+            const labSection = labSections.find((section) => section.id === userRole.lab_section_id);
             if (labSection) {
-              return (
-                <Text fontSize="sm">
-                  {labSection.name || `Lab ${labSection.id}`}
-                </Text>
-              );
+              return <Text fontSize="sm">{labSection.name || `Lab ${labSection.id}`}</Text>;
             }
           }
           return (
@@ -511,7 +493,7 @@ export default function EnrollmentsTable() {
               return values.includes("Not assigned");
             }
 
-            const labSection = labSections.find(section => section.id === invitation.lab_section_id);
+            const labSection = labSections.find((section) => section.id === invitation.lab_section_id);
             if (!labSection) return values.includes("Not assigned");
 
             const sectionName = labSection.name || `Lab ${labSection.id}`;
@@ -523,7 +505,7 @@ export default function EnrollmentsTable() {
             return values.includes("Not assigned");
           }
 
-          const labSection = labSections.find(section => section.id === userRole.lab_section_id);
+          const labSection = labSections.find((section) => section.id === userRole.lab_section_id);
           if (!labSection) return values.includes("Not assigned");
 
           const sectionName = labSection.name || `Lab ${labSection.id}`;
@@ -582,9 +564,7 @@ export default function EnrollmentsTable() {
           // Return a string representation of tags for this profile
           const profileTags = tagData
             .filter((tag) => {
-              return (
-                tag.profile_id === row.private_profile_id || tag.profile_id === row.public_profile_id
-              );
+              return tag.profile_id === row.private_profile_id || tag.profile_id === row.public_profile_id;
             })
             .map((tag) => tag.name);
           return profileTags.length > 0 ? profileTags.join(", ") : "No tags";
@@ -606,7 +586,7 @@ export default function EnrollmentsTable() {
             .map((tag) => {
               return tag.name;
             });
-          return values.some(val => profileTagNames.includes(val));
+          return values.some((val) => profileTagNames.includes(val));
         },
         cell: ({ row }) => {
           if (row.original.type === "invitation") {
@@ -840,7 +820,7 @@ export default function EnrollmentsTable() {
     ];
 
     // Convert data to CSV format
-    const csvData = filteredRows.map(row => {
+    const csvData = filteredRows.map((row) => {
       const original = row.original;
 
       // Get status
@@ -852,14 +832,13 @@ export default function EnrollmentsTable() {
       }
 
       // Get name
-      const name = original.type === "invitation"
-        ? (original.name || `${original.sis_user_id}` || "N/A")
-        : (original.profiles?.name || "N/A");
+      const name =
+        original.type === "invitation"
+          ? original.name || `${original.sis_user_id}` || "N/A"
+          : original.profiles?.name || "N/A";
 
       // Get email
-      const email = original.type === "invitation"
-        ? (original.email || "N/A")
-        : (original.users?.email || "N/A");
+      const email = original.type === "invitation" ? original.email || "N/A" : original.users?.email || "N/A";
 
       // Get role
       const role = original.role || "N/A";
@@ -868,13 +847,13 @@ export default function EnrollmentsTable() {
       let classSection = "Not assigned";
       if (original.type === "invitation") {
         if (original.class_section_id && classSections) {
-          const section = classSections.find(s => s.id === original.class_section_id);
-          classSection = section ? (section.name || `Section ${section.id}`) : "Not assigned";
+          const section = classSections.find((s) => s.id === original.class_section_id);
+          classSection = section ? section.name || `Section ${section.id}` : "Not assigned";
         }
       } else {
         if (original.class_section_id && classSections) {
-          const section = classSections.find(s => s.id === original.class_section_id);
-          classSection = section ? (section.name || `Section ${section.id}`) : "Not assigned";
+          const section = classSections.find((s) => s.id === original.class_section_id);
+          classSection = section ? section.name || `Section ${section.id}` : "Not assigned";
         }
       }
 
@@ -882,62 +861,46 @@ export default function EnrollmentsTable() {
       let labSection = "Not assigned";
       if (original.type === "invitation") {
         if (original.lab_section_id && labSections) {
-          const section = labSections.find(s => s.id === original.lab_section_id);
-          labSection = section ? (section.name || `Lab ${section.id}`) : "Not assigned";
+          const section = labSections.find((s) => s.id === original.lab_section_id);
+          labSection = section ? section.name || `Lab ${section.id}` : "Not assigned";
         }
       } else {
         if (original.lab_section_id && labSections) {
-          const section = labSections.find(s => s.id === original.lab_section_id);
-          labSection = section ? (section.name || `Lab ${section.id}`) : "Not assigned";
+          const section = labSections.find((s) => s.id === original.lab_section_id);
+          labSection = section ? section.name || `Lab ${section.id}` : "Not assigned";
         }
       }
 
       // Get GitHub username
-      const githubUsername = original.type === "invitation"
-        ? "N/A"
-        : (original.users?.github_username || "N/A");
+      const githubUsername = original.type === "invitation" ? "N/A" : original.users?.github_username || "N/A";
 
       // Get SIS User ID
-      const sisUserId = original.type === "invitation"
-        ? (original.sis_user_id?.toString() || "N/A")
-        : (original.users?.sis_user_id?.toString() || "N/A");
+      const sisUserId =
+        original.type === "invitation"
+          ? original.sis_user_id?.toString() || "N/A"
+          : original.users?.sis_user_id?.toString() || "N/A";
 
       // Get SIS Linked status
-      const sisLinked = original.type === "invitation"
-        ? "N/A"
-        : (original.canvas_id ? "Yes" : "No");
+      const sisLinked = original.type === "invitation" ? "N/A" : original.canvas_id ? "Yes" : "No";
 
       // Get tags
       let tags = "N/A (Pending)";
       if (original.type === "enrollment") {
         const profileTags = tagData
           .filter((tag) => {
-            return (
-              tag.profile_id === original.private_profile_id || tag.profile_id === original.public_profile_id
-            );
+            return tag.profile_id === original.private_profile_id || tag.profile_id === original.public_profile_id;
           })
           .map((tag) => tag.name);
         tags = profileTags.length > 0 ? profileTags.join("; ") : "No tags";
       }
 
-      return [
-        status,
-        name,
-        email,
-        role,
-        classSection,
-        labSection,
-        githubUsername,
-        sisUserId,
-        sisLinked,
-        tags
-      ];
+      return [status, name, email, role, classSection, labSection, githubUsername, sisUserId, sisLinked, tags];
     });
 
     // Create CSV content
     const csvContent = [
       headers.join(","),
-      ...csvData.map(row => row.map(cell => `"${cell.toString().replace(/"/g, '""')}"`).join(","))
+      ...csvData.map((row) => row.map((cell) => `"${cell.toString().replace(/"/g, '""')}"`).join(","))
     ].join("\n");
 
     // Create and download file
@@ -945,7 +908,7 @@ export default function EnrollmentsTable() {
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `enrollments-${course_id}-${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `enrollments-${course_id}-${new Date().toISOString().split("T")[0]}.csv`);
     link.style.visibility = "hidden";
     document.body.appendChild(link);
     link.click();
@@ -961,10 +924,7 @@ export default function EnrollmentsTable() {
             <ImportStudentsCSVModal />
             <AddSingleCourseMember />
             {/* Export Button */}
-            <Button
-              onClick={exportToCSV}
-              variant="surface"
-            >
+            <Button onClick={exportToCSV} variant="surface">
               <Icon as={FaFileExport} />
               Export to CSV
             </Button>
@@ -1020,7 +980,7 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
@@ -1039,23 +999,24 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
                                 options={Array.from(
                                   combinedData
                                     .reduce((map, row) => {
-                                      const name = row.type === "invitation"
-                                        ? (row.name || `${row.sis_user_id}` || "N/A")
-                                        : (row.profiles?.name || "N/A");
+                                      const name =
+                                        row.type === "invitation"
+                                          ? row.name || `${row.sis_user_id}` || "N/A"
+                                          : row.profiles?.name || "N/A";
                                       if (name && !map.has(name)) {
                                         map.set(name, name);
                                       }
                                       return map;
                                     }, new Map())
                                     .values()
-                                ).map(name => ({ label: name, value: name }))}
+                                ).map((name) => ({ label: name, value: name }))}
                                 placeholder="Filter by name..."
                               />
                             )}
@@ -1064,23 +1025,22 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
                                 options={Array.from(
                                   combinedData
                                     .reduce((map, row) => {
-                                      const email = row.type === "invitation"
-                                        ? (row.email || "N/A")
-                                        : (row.users?.email || "N/A");
+                                      const email =
+                                        row.type === "invitation" ? row.email || "N/A" : row.users?.email || "N/A";
                                       if (email && !map.has(email)) {
                                         map.set(email, email);
                                       }
                                       return map;
                                     }, new Map())
                                     .values()
-                                ).map(email => ({ label: email, value: email }))}
+                                ).map((email) => ({ label: email, value: email }))}
                                 placeholder="Filter by email..."
                               />
                             )}
@@ -1089,7 +1049,7 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
@@ -1102,7 +1062,7 @@ export default function EnrollmentsTable() {
                                       return map;
                                     }, new Map())
                                     .values()
-                                ).map(role => ({ label: role, value: role }))}
+                                ).map((role) => ({ label: role, value: role }))}
                                 placeholder="Filter by role..."
                               />
                             )}
@@ -1111,7 +1071,7 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
@@ -1126,7 +1086,7 @@ export default function EnrollmentsTable() {
                                         return map;
                                       }, new Map())
                                       .values()
-                                  ).map(name => ({ label: name, value: name })),
+                                  ).map((name) => ({ label: name, value: name })),
                                   { label: "Not assigned", value: "Not assigned" }
                                 ]}
                                 placeholder="Filter by class section..."
@@ -1137,7 +1097,7 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
@@ -1152,7 +1112,7 @@ export default function EnrollmentsTable() {
                                         return map;
                                       }, new Map())
                                       .values()
-                                  ).map(name => ({ label: name, value: name })),
+                                  ).map((name) => ({ label: name, value: name })),
                                   { label: "Not assigned", value: "Not assigned" }
                                 ]}
                                 placeholder="Filter by lab section..."
@@ -1163,14 +1123,14 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
                                 options={Array.from(
                                   combinedData
-                                    .filter(row => row.type === "enrollment")
-                                    .map(row => row as UserRoleWithPrivateProfileAndUser & { type: "enrollment" })
+                                    .filter((row) => row.type === "enrollment")
+                                    .map((row) => row as UserRoleWithPrivateProfileAndUser & { type: "enrollment" })
                                     .reduce((map, row) => {
                                       const username = row.users?.github_username || "N/A";
                                       if (!map.has(username)) {
@@ -1179,7 +1139,7 @@ export default function EnrollmentsTable() {
                                       return map;
                                     }, new Map())
                                     .values()
-                                ).map(username => ({ label: username, value: username }))}
+                                ).map((username) => ({ label: username, value: username }))}
                                 placeholder="Filter by GitHub username..."
                               />
                             )}
@@ -1188,7 +1148,7 @@ export default function EnrollmentsTable() {
                                 isMulti={true}
                                 id={header.id}
                                 onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map(item => item.value) : [];
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                   checkboxClear();
                                 }}
@@ -1317,33 +1277,33 @@ export default function EnrollmentsTable() {
                       checkedBoxes.size === 0
                         ? []
                         : Array.from(
-                          tagData
-                            .reduce((map, tag) => {
-                              const key = JSON.stringify({ name: tag.name, color: tag.color, visible: tag.visible });
-                              if (!map.has(key)) {
-                                map.set(key, tag);
-                              }
-                              return map;
-                            }, new Map())
-                            .values()
-                        ).filter((tag) => {
-                          const checkedProfileIds = Array.from(checkedBoxes)
-                            .filter((row) => row.type === "enrollment")
-                            .map(
-                              (box) =>
-                                (box as UserRoleWithPrivateProfileAndUser & { type: "enrollment" }).private_profile_id
-                            );
+                            tagData
+                              .reduce((map, tag) => {
+                                const key = JSON.stringify({ name: tag.name, color: tag.color, visible: tag.visible });
+                                if (!map.has(key)) {
+                                  map.set(key, tag);
+                                }
+                                return map;
+                              }, new Map())
+                              .values()
+                          ).filter((tag) => {
+                            const checkedProfileIds = Array.from(checkedBoxes)
+                              .filter((row) => row.type === "enrollment")
+                              .map(
+                                (box) =>
+                                  (box as UserRoleWithPrivateProfileAndUser & { type: "enrollment" }).private_profile_id
+                              );
 
-                          return checkedProfileIds.every((profileId) =>
-                            tagData.some(
-                              (t) =>
-                                t.profile_id === profileId &&
-                                t.name === tag.name &&
-                                t.color === tag.color &&
-                                t.visible === tag.visible
-                            )
-                          );
-                        })
+                            return checkedProfileIds.every((profileId) =>
+                              tagData.some(
+                                (t) =>
+                                  t.profile_id === profileId &&
+                                  t.name === tag.name &&
+                                  t.color === tag.color &&
+                                  t.visible === tag.visible
+                              )
+                            );
+                          })
                     }
                     removeTag={(tagName: string, tagColor: string, tagVisibility: boolean) => {
                       Promise.all(

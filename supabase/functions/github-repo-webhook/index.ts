@@ -930,8 +930,8 @@ async function handleWorkflowCompletionErrors(
             }
           }
 
-          const graderResultError : Json = {
-            error: userErrorMessage,
+          const graderResultError: Json = {
+            error: userErrorMessage
           };
 
           // Insert a grader result with the error message

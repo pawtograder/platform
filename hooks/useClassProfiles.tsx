@@ -92,8 +92,11 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         return;
       }
       const supabase = createClient();
-      const { data, error } = await supabase.from("user_roles")
-        .select("*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)")
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select(
+          "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)"
+        )
         .eq("user_id", userId)
         .eq("disabled", false)
         .eq("classes.archived", false);

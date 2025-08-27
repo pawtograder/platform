@@ -492,8 +492,8 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             isClassSection,
             isLabSection,
             determinedSectionType: sectionType,
-            enabledClassCRNs: enabledClassSections.map(s => s.sis_crn),
-            enabledLabCRNs: enabledLabSections.map(s => s.sis_crn)
+            enabledClassCRNs: enabledClassSections.map((s) => s.sis_crn),
+            enabledLabCRNs: enabledLabSections.map((s) => s.sis_crn)
           }
         });
 
@@ -507,7 +507,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         } else if (!isClassSection && !isLabSection) {
           scope?.addBreadcrumb({
             message: `WARNING: CRN ${crn} not found in any enabled sections - defaulting to lab`,
-            category: "warning", 
+            category: "warning",
             data: { crn, classId: classData.id }
           });
         }
@@ -534,23 +534,35 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       });
 
       // Step 2: Get current invitations and enrollments for this class (only from SIS-enabled sections)
-      let currentInvitations: GetResult<Database["public"], Database["public"]["Tables"]["invitations"]["Row"], "invitations", Database["public"]["Tables"]["invitations"]["Relationships"], "id, sis_user_id, role, status, class_section_id, lab_section_id">[] = [];
-      let currentEnrollments: GetResult<Database["public"], Database["public"]["Tables"]["user_roles"]["Row"], "user_roles", Database["public"]["Tables"]["user_roles"]["Relationships"], "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)">[] = [];
+      let currentInvitations: GetResult<
+        Database["public"],
+        Database["public"]["Tables"]["invitations"]["Row"],
+        "invitations",
+        Database["public"]["Tables"]["invitations"]["Relationships"],
+        "id, sis_user_id, role, status, class_section_id, lab_section_id"
+      >[] = [];
+      let currentEnrollments: GetResult<
+        Database["public"],
+        Database["public"]["Tables"]["user_roles"]["Row"],
+        "user_roles",
+        Database["public"]["Tables"]["user_roles"]["Relationships"],
+        "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
+      >[] = [];
 
       // Build filters based on which section types have enabled sections
       const invitationFilters = [];
       const enrollmentFilters = [];
 
       if (enabledClassSections.length > 0) {
-        const enabledClassSectionIds = enabledClassSections.map(s => s.id);
-        invitationFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(',')})`);
-        enrollmentFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(',')})`);
+        const enabledClassSectionIds = enabledClassSections.map((s) => s.id);
+        invitationFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
+        enrollmentFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
       }
 
       if (enabledLabSections.length > 0) {
-        const enabledLabSectionIds = enabledLabSections.map(s => s.id);
-        invitationFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(',')})`);
-        enrollmentFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(',')})`);
+        const enabledLabSectionIds = enabledLabSections.map((s) => s.id);
+        invitationFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
+        enrollmentFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
       }
 
       // Only fetch if we have any enabled sections
@@ -559,7 +571,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           .from("invitations")
           .select("id, sis_user_id, role, status, class_section_id, lab_section_id")
           .eq("class_id", classData.id)
-          .or(invitationFilters.join(','))
+          .or(invitationFilters.join(","))
           .limit(1000);
         currentInvitations = invitations || [];
 
@@ -568,7 +580,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           .select("id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)")
           .eq("class_id", classData.id)
           .not("users.sis_user_id", "is", null)
-          .or(enrollmentFilters.join(','))
+          .or(enrollmentFilters.join(","))
           .limit(1000);
         currentEnrollments = enrollments || [];
       }
@@ -617,12 +629,12 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           } else {
             // Existing user - handle role hierarchy and section assignment
             const shouldUpdateRole = roleHierarchy[user.role] > roleHierarchy[existing.role];
-            
+
             if (shouldUpdateRole) {
               // Update role and preserve existing section assignments
               existing.role = user.role;
               existing.name = user.name; // Update name in case it changed
-              
+
               scope?.addBreadcrumb({
                 message: `User ${user.sis_user_id} role upgraded`,
                 category: "debug",
@@ -687,20 +699,25 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         classId: classData.id,
         className: classData.name,
         totalUsers: allSISUsers.size,
-        usersByRole: Array.from(allSISUsers.values()).reduce((acc, user) => {
-          acc[user.role] = (acc[user.role] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>),
-        usersWithBothSections: Array.from(allSISUsers.values()).filter(user => user.classCRN && user.labCRN).length,
-        usersWithOnlyClass: Array.from(allSISUsers.values()).filter(user => user.classCRN && !user.labCRN).length,
-        usersWithOnlyLab: Array.from(allSISUsers.values()).filter(user => !user.classCRN && user.labCRN).length,
-        sampleUsers: Array.from(allSISUsers.entries()).slice(0, 5).map(([id, user]) => ({
-          sisUserId: id,
-          name: user.name,
-          role: user.role,
-          classCRN: user.classCRN,
-          labCRN: user.labCRN
-        }))
+        usersByRole: Array.from(allSISUsers.values()).reduce(
+          (acc, user) => {
+            acc[user.role] = (acc[user.role] || 0) + 1;
+            return acc;
+          },
+          {} as Record<string, number>
+        ),
+        usersWithBothSections: Array.from(allSISUsers.values()).filter((user) => user.classCRN && user.labCRN).length,
+        usersWithOnlyClass: Array.from(allSISUsers.values()).filter((user) => user.classCRN && !user.labCRN).length,
+        usersWithOnlyLab: Array.from(allSISUsers.values()).filter((user) => !user.classCRN && user.labCRN).length,
+        sampleUsers: Array.from(allSISUsers.entries())
+          .slice(0, 5)
+          .map(([id, user]) => ({
+            sisUserId: id,
+            name: user.name,
+            role: user.role,
+            classCRN: user.classCRN,
+            labCRN: user.labCRN
+          }))
       };
 
       // Console logging for immediate visibility during testing
@@ -729,18 +746,21 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // Pre-fetch all class and lab sections by CRN for efficient lookup across multiple steps
       const classSectionsByCRN = new Map<number, number>();
       const labSectionsByCRN = new Map<number, number>();
-      
+
       // Fetch all enabled class sections
       if (enabledClassSections.length > 0) {
         const { data: classSections } = await adminSupabase
           .from("class_sections")
           .select("id, sis_crn")
           .eq("class_id", classData.id)
-          .in("id", enabledClassSections.map(s => s.id))
+          .in(
+            "id",
+            enabledClassSections.map((s) => s.id)
+          )
           .limit(1000);
-        
+
         if (classSections) {
-          classSections.forEach(section => {
+          classSections.forEach((section) => {
             if (section.sis_crn) {
               classSectionsByCRN.set(section.sis_crn, section.id);
             }
@@ -758,18 +778,21 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           }
         });
       }
-      
+
       // Fetch all enabled lab sections
       if (enabledLabSections.length > 0) {
         const { data: labSections } = await adminSupabase
           .from("lab_sections")
           .select("id, sis_crn")
           .eq("class_id", classData.id)
-          .in("id", enabledLabSections.map(s => s.id))
+          .in(
+            "id",
+            enabledLabSections.map((s) => s.id)
+          )
           .limit(1000);
-        
+
         if (labSections) {
-          labSections.forEach(section => {
+          labSections.forEach((section) => {
             if (section.sis_crn) {
               labSectionsByCRN.set(section.sis_crn, section.id);
             }
@@ -818,9 +841,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             scope?.addBreadcrumb({
               message: `Missing class section for CRN ${userData.classCRN}`,
               category: "error",
-              data: { 
-                classId: classData.id, 
-                userId: sisUserId, 
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
                 crn: userData.classCRN,
                 availableClassCRNs: Array.from(classSectionsByCRN.keys())
               }
@@ -839,9 +862,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             scope?.addBreadcrumb({
               message: `Missing lab section for CRN ${userData.labCRN}`,
               category: "error",
-              data: { 
-                classId: classData.id, 
-                userId: sisUserId, 
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
                 crn: userData.labCRN,
                 availableLabCRNs: Array.from(labSectionsByCRN.keys())
               }
@@ -944,7 +967,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // Step 6: Update section assignments for existing users (if they've moved between sections)
       let updatedSectionAssignmentsCount = 0;
-      
+
       for (const [sisUserId, userData] of allSISUsers) {
         // Get the correct section IDs for this user based on their current SIS assignment using cached data
         let correctClassSectionId = null;
@@ -957,9 +980,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             scope?.addBreadcrumb({
               message: `Missing class section for CRN ${userData.classCRN} during section update`,
               category: "error",
-              data: { 
-                classId: classData.id, 
-                userId: sisUserId, 
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
                 crn: userData.classCRN,
                 availableClassCRNs: Array.from(classSectionsByCRN.keys())
               }
@@ -978,9 +1001,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             scope?.addBreadcrumb({
               message: `Missing lab section for CRN ${userData.labCRN} during section update`,
               category: "error",
-              data: { 
-                classId: classData.id, 
-                userId: sisUserId, 
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
                 crn: userData.labCRN,
                 availableLabCRNs: Array.from(labSectionsByCRN.keys())
               }
@@ -995,7 +1018,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         // Check if user has an existing invitation that needs section updates
         const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
         if (existingInvitation && existingInvitation.status === "pending") {
-          const needsUpdate = 
+          const needsUpdate =
             existingInvitation.class_section_id !== correctClassSectionId ||
             existingInvitation.lab_section_id !== correctLabSectionId;
 
@@ -1013,9 +1036,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
               scope?.addBreadcrumb({
                 message: `Failed to update invitation sections for user ${sisUserId}`,
                 category: "error",
-                data: { 
-                  classId: classData.id, 
-                  userId: sisUserId, 
+                data: {
+                  classId: classData.id,
+                  userId: sisUserId,
                   error: updateError,
                   oldClassSection: existingInvitation.class_section_id,
                   newClassSection: correctClassSectionId,
@@ -1032,7 +1055,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         // Check if user has an existing enrollment that needs section updates
         const existingEnrollment = currentEnrollmentsBySIS.get(Number(sisUserId));
         if (existingEnrollment && !existingEnrollment.disabled) {
-          const needsUpdate = 
+          const needsUpdate =
             existingEnrollment.class_section_id !== correctClassSectionId ||
             existingEnrollment.lab_section_id !== correctLabSectionId;
 
@@ -1050,9 +1073,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
               scope?.addBreadcrumb({
                 message: `Failed to update user role sections for user ${sisUserId}`,
                 category: "error",
-                data: { 
-                  classId: classData.id, 
-                  userId: sisUserId, 
+                data: {
+                  classId: classData.id,
+                  userId: sisUserId,
                   error: updateError,
                   oldClassSection: existingEnrollment.class_section_id,
                   newClassSection: correctClassSectionId,
