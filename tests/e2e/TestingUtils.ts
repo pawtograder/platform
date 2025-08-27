@@ -134,7 +134,7 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
 
-    const magicLink = `${process.env.BASE_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL || "http://localhost:3000"}/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+    const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
 
     // Use magic link for login
     await page.goto(magicLink);
