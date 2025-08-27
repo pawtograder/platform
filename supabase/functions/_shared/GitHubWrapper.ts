@@ -169,25 +169,25 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   });
   if (installations.length === 0) {
     let connection: Bottleneck.IORedisConnection | undefined;
-    if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
-      console.log("Using Upstash Redis for GitHub API rate limiting", Deno.env.get("UPSTASH_REDIS_REST_URL"));
-      const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
-      const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-      connection = new Bottleneck({
-        datastore: "ioredis",
-        clearDatastore: false,
-        id: "gitHubRateLimiter" + (Deno.env.get("GITHUB_APP_ID") || ""),
-        clientOptions: {
-          host,
-          password,
-          username: "default",
-          tls: {},
-          port: 6379
-        },
-        Redis
-      });
-      connection.on("error", (err: Error) => console.error(err));
-    }
+    // if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+    //   console.log("Using Upstash Redis for GitHub API rate limiting", Deno.env.get("UPSTASH_REDIS_REST_URL"));
+    //   const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
+    //   const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+    //   connection = new Bottleneck({
+    //     datastore: "ioredis",
+    //     clearDatastore: false,
+    //     id: "gitHubRateLimiter" + (Deno.env.get("GITHUB_APP_ID") || ""),
+    //     clientOptions: {
+    //       host,
+    //       password,
+    //       username: "default",
+    //       tls: {},
+    //       port: 6379
+    //     },
+    //     Redis
+    //   });
+    //   connection.on("error", (err: Error) => console.error(err));
+    // }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
       installations.push({

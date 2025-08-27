@@ -59,7 +59,8 @@ aggregated_events AS (
     r.profile_id,
     MAX(CASE WHEN wef.event_type = 'requested' THEN wef.updated_at END) AS requested_at,
     MAX(CASE WHEN wef.event_type = 'in_progress' THEN wef.updated_at END) AS in_progress_at,
-    MAX(CASE WHEN wef.event_type = 'completed' THEN wef.updated_at END) AS completed_at
+    MAX(CASE WHEN wef.event_type = 'completed' THEN wef.updated_at END) AS completed_at,
+    MAX(CASE WHEN wef.event_type = 'completed' THEN wef.conclusion END) AS conclusion
   FROM workflow_events_filtered wef
   JOIN "public"."repositories" r ON (wef.repository_id = r.id)
   GROUP BY 
@@ -92,6 +93,7 @@ SELECT
   requested_at,
   in_progress_at,
   completed_at,
+  conclusion,
   CASE
     WHEN (requested_at IS NOT NULL AND in_progress_at IS NOT NULL) 
     THEN EXTRACT(epoch FROM (in_progress_at - requested_at))
@@ -131,11 +133,9 @@ CREATE OR REPLACE FUNCTION "public"."refresh_workflow_events_summary"()
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 BEGIN
-  -- Set explicit search_path to harden SECURITY DEFINER
-  SET LOCAL search_path = pg_catalog, public;
-  
   -- Refresh the materialized view concurrently if possible
   -- Falls back to regular refresh if concurrent refresh fails
   BEGIN
@@ -204,7 +204,7 @@ RETURNS TABLE(
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp;
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_period_start timestamptz;
