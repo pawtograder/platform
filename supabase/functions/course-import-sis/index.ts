@@ -603,6 +603,26 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       const currentEnrollmentsBySIS = new Map(currentEnrollments.map((enr) => [enr.users.sis_user_id, enr]));
 
+      // CRITICAL: Also check for ANY existing user roles in this class (regardless of sections)
+      // This catches instructors/users who might not have specific section assignments
+      const { data: allExistingUserRoles } = await adminSupabase
+        .from("user_roles")
+        .select("users!inner(sis_user_id)")
+        .eq("class_id", classData.id)
+        .not("users.sis_user_id", "is", null)
+        .eq("disabled", false)
+        .limit(1000);
+
+      const allExistingUsersBySIS = new Set(
+        (allExistingUserRoles || []).map(enr => enr.users.sis_user_id).filter(id => id !== null)
+      );
+
+      console.log("=== EXISTING USERS DEBUG ===");
+      console.log(`Existing users from SIS-enabled sections: ${currentEnrollmentsBySIS.size}`);
+      console.log(`ALL existing users in class: ${allExistingUsersBySIS.size}`);
+      console.log(`Difference: ${allExistingUsersBySIS.size - currentEnrollmentsBySIS.size}`);
+      console.log("============================");
+
       // Step 4: Collect all SIS users across all sections for this class
       const allSISUsers = new Map<
         number,
@@ -827,9 +847,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // Step 5: Create invitations for new SIS users
       const newInvitations: InvitationRequest[] = [];
 
+      console.log("=== INVITATION CREATION DEBUG ===");
+      console.log(`Total SIS users to process: ${allSISUsers.size}`);
+      
       for (const [sisUserId, userData] of allSISUsers) {
-        // Skip if user is already enrolled
-        if (currentEnrollmentsBySIS.has(sisUserId)) {
+        // Skip if user is already enrolled (check ALL user roles, not just section-specific ones)
+        if (allExistingUsersBySIS.has(sisUserId)) {
+          console.log(`Skipping invitation for user ${sisUserId} - already has user role in class`);
           continue;
         }
 
@@ -897,6 +921,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           lab_section_id: labSectionId || undefined
         });
       }
+
+      console.log(`=== INVITATION SUMMARY ===`);
+      console.log(`Total SIS users: ${allSISUsers.size}`);
+      console.log(`New invitations to create: ${newInvitations.length}`);
+      console.log(`Users skipped (already enrolled): ${Array.from(allSISUsers.keys()).filter(id => allExistingUsersBySIS.has(id)).length}`);
+      console.log(`Users with pending invitations: ${Array.from(allSISUsers.keys()).filter(id => currentInvitationsBySIS.has(id) && currentInvitationsBySIS.get(id)?.status === 'pending').length}`);
+      console.log(`==========================`);
 
       // Create new invitations in bulk using shared utility (no limit on count)
       if (newInvitations.length > 0) {
@@ -1066,6 +1097,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         }
 
         // Check if user has an existing enrollment that needs section updates
+        // Only update if they're in the section-filtered enrollments (they have specific section assignments)
         const existingEnrollment = currentEnrollmentsBySIS.get(Number(sisUserId));
         if (existingEnrollment && !existingEnrollment.disabled) {
           const needsUpdate =
