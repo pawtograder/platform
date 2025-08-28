@@ -3,13 +3,13 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useUserRolesWithProfiles, useCourseController } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Checkbox, Dialog, HStack, Input, Portal, Text, VStack } from "@chakra-ui/react";
-import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 
 type SDEInsert = Database["public"]["Tables"]["student_deadline_extensions"]["Insert"];
 
@@ -31,8 +31,10 @@ export default function AddExtensionModal({
   onClose: () => void;
   defaults?: AddExtensionDefaults;
 }) {
-  const { course_id } = useParams<{ course_id: string }>();
+  const { private_profile_id, role } = useClassProfiles();
+  const course_id = role.class_id;
   const allUserRoles = useUserRolesWithProfiles();
+  const { studentDeadlineExtensions } = useCourseController();
 
   const studentOptions = useMemo(
     () =>
@@ -59,28 +61,38 @@ export default function AddExtensionModal({
     register,
     handleSubmit,
     reset,
-    setValue,
-    formState: { errors, isSubmitting },
-    refineCore
-  } = useForm<SDEInsert>({ refineCoreProps: { resource: "student_deadline_extensions", action: "create" } });
+    formState: { errors, isSubmitting }
+  } = useForm<SDEInsert>();
 
-  const onCloseInternal = () => {
+  const onCloseInternal = useCallback(() => {
     reset();
     onClose();
-  };
+  }, [reset, onClose]);
 
-  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedStudentId) {
-      toaster.error({ title: "Missing data", description: "Please select a student." });
-      return;
-    }
-    setValue("class_id", Number(course_id));
-    setValue("student_id", selectedStudentId);
-    setValue("includes_lab", includeLab);
-    handleSubmit(async (values) => {
+  const onSubmitCallback = useCallback(
+    async (values: SDEInsert) => {
+      if (!selectedStudentId) {
+        toaster.error({ title: "Missing data", description: "Please select a student." });
+        return;
+      }
+
+      if (!private_profile_id) {
+        toaster.error({
+          title: "Missing creator",
+          description: "Your profile isn't loaded yet. Please try again in a moment."
+        });
+        return;
+      }
+
+      const data: SDEInsert = {
+        ...values,
+        class_id: course_id,
+        student_id: selectedStudentId,
+        includes_lab: includeLab
+      };
+
       try {
-        await refineCore.onFinish?.(values);
+        await studentDeadlineExtensions.create(data);
         toaster.create({
           title: "Extension added",
           description: "The student-wide extension has been created.",
@@ -93,8 +105,11 @@ export default function AddExtensionModal({
           description: error instanceof Error ? error.message : "An unknown error occurred."
         });
       }
-    })();
-  };
+    },
+    [selectedStudentId, private_profile_id, course_id, includeLab, onCloseInternal, studentDeadlineExtensions]
+  );
+
+  const onSubmit = handleSubmit(onSubmitCallback);
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(d) => !d.open && onCloseInternal()}>

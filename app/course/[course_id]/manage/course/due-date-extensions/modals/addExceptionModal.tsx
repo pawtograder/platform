@@ -3,16 +3,15 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
 import { Assignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Dialog, HStack, Input, Portal, Textarea, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
-import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 
 type ADEInsert = Database["public"]["Tables"]["assignment_due_date_exceptions"]["Insert"];
 
@@ -33,10 +32,11 @@ export default function AddExceptionModal({
   onClose: () => void;
   defaults?: AddExtensionDefaults;
 }) {
-  const { course_id } = useParams<{ course_id: string }>();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
+  const course_id = role.class_id;
 
   const students = useAllStudentProfiles();
+  const { assignmentDueDateExceptions } = useCourseController();
 
   // Load all assignments for this class
   const { data: assignmentsData } = useList<Assignment>({
@@ -79,39 +79,42 @@ export default function AddExceptionModal({
     register,
     handleSubmit,
     reset,
-    setValue,
-    formState: { errors, isSubmitting },
-    refineCore
-  } = useForm<ADEInsert>({ refineCoreProps: { resource: "assignment_due_date_exceptions", action: "create" } });
+    formState: { errors, isSubmitting }
+  } = useForm<ADEInsert>();
 
-  const onCloseInternal = () => {
+  const onCloseInternal = useCallback(() => {
     reset();
     onClose();
-  };
+  }, [reset, onClose]);
 
-  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedAssignmentId || !selectedStudentId) {
-      toaster.error({
-        title: "Missing data",
-        description: !selectedAssignmentId ? "Please select an assignment." : "Please select a student."
-      });
-      return;
-    }
-    setValue("class_id", Number(course_id));
-    setValue("assignment_id", selectedAssignmentId);
-    setValue("student_id", selectedStudentId);
-    if (!private_profile_id) {
-      toaster.error({
-        title: "Missing creator",
-        description: "Your profile isn’t loaded yet. Please try again in a moment."
-      });
-      return;
-    }
-    setValue("creator_id", private_profile_id);
-    handleSubmit(async (values) => {
+  const onSubmitCallback = useCallback(
+    async (values: ADEInsert) => {
+      if (!selectedAssignmentId || !selectedStudentId) {
+        toaster.error({
+          title: "Missing data",
+          description: !selectedAssignmentId ? "Please select an assignment." : "Please select a student."
+        });
+        return;
+      }
+
+      if (!private_profile_id) {
+        toaster.error({
+          title: "Missing creator",
+          description: "Your profile isn't loaded yet. Please try again in a moment."
+        });
+        return;
+      }
+
+      const data: ADEInsert = {
+        ...values,
+        class_id: course_id,
+        assignment_id: selectedAssignmentId,
+        student_id: selectedStudentId,
+        creator_id: private_profile_id
+      };
+
       try {
-        await refineCore.onFinish?.(values);
+        await assignmentDueDateExceptions.create(data);
         toaster.create({
           title: "Extension added",
           description: "The due date exception has been created.",
@@ -124,8 +127,18 @@ export default function AddExceptionModal({
           description: error instanceof Error ? error.message : "An unknown error occurred."
         });
       }
-    })();
-  };
+    },
+    [
+      selectedAssignmentId,
+      selectedStudentId,
+      private_profile_id,
+      course_id,
+      onCloseInternal,
+      assignmentDueDateExceptions
+    ]
+  );
+
+  const onSubmit = handleSubmit(onSubmitCallback);
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(d) => !d.open && onCloseInternal()}>

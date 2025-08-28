@@ -1428,7 +1428,7 @@ export function useProfileRole(profileId: string | undefined): "student" | "grad
 
 /**
  * Hook to get student deadline extensions
- * This provides access to class-wide extensions that apply to all assignments
+ * This provides access to extensions that apply to all assignments for a student in a class
  */
 export function useStudentDeadlineExtensions() {
   const controller = useCourseController();

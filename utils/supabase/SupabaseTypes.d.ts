@@ -8700,7 +8700,7 @@ export type Database = {
           p_student_id: string;
           p_tokens_to_gift: number;
         };
-        Returns: undefined;
+        Returns: number;
       };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };

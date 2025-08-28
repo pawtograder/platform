@@ -1,16 +1,16 @@
 "use client";
 
 import { Field } from "@/components/ui/field";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { createClient } from "@/utils/supabase/client";
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Card, Heading, HStack, Input, Link, Skeleton, Text, VStack } from "@chakra-ui/react";
-import { useInvalidate, useList } from "@refinedev/core";
-import { createClient } from "@/utils/supabase/client";
+import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { FaClock } from "react-icons/fa";
-import { toaster } from "@/components/ui/toaster";
 
 interface ClassLateTokenUpdateFormData {
   late_tokens_per_student: number;
@@ -19,7 +19,6 @@ interface ClassLateTokenUpdateFormData {
 export default function DueDateExceptionsManagement() {
   const { course_id } = useParams();
   const { role } = useClassProfiles();
-  const invalidate = useInvalidate();
   const [isEditingTokens, setIsEditingTokens] = useState(false);
   const [course, setCourse] = useState<Course | undefined>(role.classes);
 
@@ -66,12 +65,6 @@ export default function DueDateExceptionsManagement() {
       }
 
       setIsEditingTokens(false);
-
-      // Invalidate related resources so dependent UIs refresh
-      invalidate({
-        resource: "assignments",
-        invalidates: ["all"]
-      });
 
       toaster.success({
         title: "Success",

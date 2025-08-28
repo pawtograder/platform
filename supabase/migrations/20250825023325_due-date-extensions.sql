@@ -78,7 +78,7 @@ BEGIN
         sde.hours,
         0,
         0,
-        'Class-wide extension automatically applied'
+        'Instructor-granted extension for all assignments in class'
     FROM student_deadline_extensions sde
     WHERE sde.class_id = NEW.class_id
       AND (sde.includes_lab = true OR NEW.minutes_due_after_lab IS NULL)
@@ -149,7 +149,7 @@ BEGIN
         NEW.hours,
         0, -- No additional minutes
         0, -- No tokens consumed for instructor-granted extensions
-        'Class-wide extension applied by instructor'
+        'Instructor-granted extension for all assignments in class'
     FROM assignments a
     WHERE a.class_id = NEW.class_id
         AND a.archived_at IS NULL
@@ -168,7 +168,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.gift_tokens_to_student(p_student_id uuid, p_class_id bigint, p_assignment_id bigint, p_tokens_to_gift integer, p_note text DEFAULT 'Tokens gifted by instructor'::text)
- RETURNS void
+ RETURNS bigint
  LANGUAGE plpgsql
  SECURITY DEFINER
 AS $function$
@@ -176,6 +176,7 @@ DECLARE
     v_creator_profile_id uuid;
     v_assignment_class_id bigint;
     v_student_in_class boolean;
+    v_new_exception_id bigint;
 BEGIN
     -- Verify instructor authorization
     IF NOT authorizeforclassinstructor(p_class_id) THEN
@@ -240,7 +241,11 @@ BEGIN
         0,
         -p_tokens_to_gift, -- Negative value represents gifted tokens
         p_note
-    );
+    )
+    RETURNING id INTO v_new_exception_id;
+    
+    -- Return the ID of the newly created exception
+    RETURN v_new_exception_id;
 END;
 $function$
 ;

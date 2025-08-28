@@ -9,7 +9,8 @@ import {
   createUsersInClass,
   insertAssignment,
   loginAsUser,
-  TestingUser
+  TestingUser,
+  supabase
 } from "./TestingUtils";
 
 let course: Course;
@@ -19,11 +20,15 @@ let instructor: TestingUser | undefined;
 let labLeader: TestingUser | undefined;
 let testAssignment: Assignment | undefined;
 let testLabAssignment: Assignment | undefined;
+let testGroupAssignment: Assignment | undefined;
+let assignmentGroup: { id: number } | undefined;
 
 const assignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"), 14);
 assignmentDueDate.setHours(9, 0, 0, 0);
 const labAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"), 14);
 labAssignmentDueDate.setHours(10, 0, 0, 0);
+const groupAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"), 14);
+groupAssignmentDueDate.setHours(11, 0, 0, 0);
 test.beforeAll(async () => {
   course = await createClass();
   [labLeader, student, student2, instructor] = await createUsersInClass([
@@ -35,7 +40,7 @@ test.beforeAll(async () => {
       useMagicLink: true
     },
     {
-      name: "Due Dates Student",
+      name: "Due Dates Student 1",
       email: "due-dates-student@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -75,6 +80,92 @@ test.beforeAll(async () => {
     class_id: course.id,
     name: "Due Dates Lab Assignment"
   });
+
+  // Create group assignment
+  const { data: selfReviewSettingData, error: selfReviewSettingError } = await supabase
+    .from("assignment_self_review_settings")
+    .insert({
+      class_id: course.id,
+      enabled: true,
+      deadline_offset: 2,
+      allow_early: true
+    })
+    .select("id")
+    .single();
+
+  if (selfReviewSettingError) {
+    throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
+  }
+
+  const { data: insertedGroupAssignmentData, error: groupAssignmentError } = await supabase
+    .from("assignments")
+    .insert({
+      title: "Due Dates Group Assignment",
+      description: "This is a test group assignment for E2E testing",
+      due_date: groupAssignmentDueDate.toUTCString(),
+      template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+      autograder_points: 100,
+      total_points: 100,
+      max_late_tokens: 10,
+      release_date: addDays(new Date(), -1).toUTCString(),
+      class_id: course.id,
+      slug: "group-assignment-due-dates",
+      group_config: "groups",
+      allow_not_graded_submissions: false,
+      self_review_setting_id: selfReviewSettingData.id,
+      max_group_size: 6,
+      group_formation_deadline: addDays(new Date(), -1).toUTCString()
+    })
+    .select("*")
+    .single();
+
+  if (groupAssignmentError) {
+    throw new Error(`Failed to create group assignment: ${groupAssignmentError.message}`);
+  }
+
+  testGroupAssignment = insertedGroupAssignmentData;
+
+  // Create assignment group
+  const { data: insertedGroupData, error: groupError } = await supabase
+    .from("assignment_groups")
+    .insert({
+      name: "Test Group 1",
+      class_id: course.id,
+      assignment_id: testGroupAssignment.id
+    })
+    .select("id")
+    .single();
+
+  if (groupError) {
+    throw new Error(`Failed to create assignment group: ${groupError.message}`);
+  }
+
+  assignmentGroup = insertedGroupData;
+
+  // Add both students to the group
+  const { error: member1Error } = await supabase.from("assignment_groups_members").insert({
+    assignment_group_id: assignmentGroup.id,
+    profile_id: student!.private_profile_id,
+    assignment_id: testGroupAssignment.id,
+    class_id: course.id,
+    added_by: instructor!.private_profile_id
+  });
+
+  if (member1Error) {
+    throw new Error(`Failed to add student 1 to group: ${member1Error.message}`);
+  }
+
+  const { error: member2Error } = await supabase.from("assignment_groups_members").insert({
+    assignment_group_id: assignmentGroup.id,
+    profile_id: student2!.private_profile_id,
+    assignment_id: testGroupAssignment.id,
+    class_id: course.id,
+    added_by: instructor!.private_profile_id
+  });
+
+  if (member2Error) {
+    throw new Error(`Failed to add student 2 to group: ${member2Error.message}`);
+  }
 });
 const expectedLabAssignmentDueDate =
   labAssignmentDueDate.getDay() === 1 ? labAssignmentDueDate : previousMonday(labAssignmentDueDate);
@@ -97,6 +188,9 @@ test.describe("Assignment due dates", () => {
     await expect(page.locator("body")).toContainText(
       `${testLabAssignment!.title}Due${getDueDateShortString(new TZDate(expectedLabAssignmentDueDate, "America/New_York"))}Most recent submissionNo submissions`
     );
+    await expect(page.locator("body")).toContainText(
+      `${testGroupAssignment!.title}Due${getDueDateShortString(new TZDate(testGroupAssignment!.due_date, "America/New_York"))}Most recent submissionNo submissions`
+    );
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
@@ -114,6 +208,11 @@ test.describe("Assignment due dates", () => {
     const labRow = page.getByRole("row").filter({ has: page.getByText(testLabAssignment!.title) });
     await expect(
       labRow.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
+    ).toBeVisible();
+
+    const groupRow = page.getByRole("row").filter({ has: page.getByText(testGroupAssignment!.title) });
+    await expect(
+      groupRow.getByText(getDueDateString(new TZDate(testGroupAssignment!.due_date, "America/New_York")))
     ).toBeVisible();
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
@@ -149,6 +248,21 @@ test.describe("Assignment due dates", () => {
     await expect(
       page.getByText(getDueDateString(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
+
+    //Test with the group assignment
+    await link.click();
+    await page.getByRole("link", { name: testGroupAssignment!.title }).click();
+
+    await expect(page.getByText("This is a test group assignment for E2E testing")).toBeVisible();
+    await expect(
+      page.getByText(getDueDateString(new TZDate(groupAssignmentDueDate, "America/New_York")))
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Extend Due Date" }).click();
+    await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
+    await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(
+      page.getByText(getDueDateString(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
+    ).toBeVisible();
   });
 });
 
@@ -179,7 +293,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
   test("Assignment Due Date Exceptions work correctly", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
     // Test adding a due date exception for a student for a given assignment
-    await page.getByRole("button", { name: "Add Exception" }).click();
+    const globalAddExceptionButton = page.getByRole("button", { name: "Add Exception" }).first();
+    await globalAddExceptionButton.click();
     const addExceptionModal = page.getByRole("dialog");
     await addExceptionModal
       .locator("div")
@@ -273,13 +388,29 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // Check that the extension is applied to the assignment exceptions
     await page.getByText("Assignment Exceptions").click();
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    const dueDatesAssignment = page
+      .getByLabel("Assignment Exceptions")
+      .locator("div")
+      .filter({ hasText: "Due Dates Assignment" })
+      .nth(1);
     await expect(
-      page.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Class-wide extension applied by instructor`
+      dueDatesAssignment.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
       })
     ).toBeVisible();
+
+    const dueDatesGroupAssignment = page
+      .getByLabel("Assignment Exceptions")
+      .locator("div")
+      .filter({ hasText: "Due Dates Group Assignment" })
+      .nth(1);
+    await expect(
+      dueDatesGroupAssignment.getByRole("row", {
+        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
+      })
+    ).toBeVisible();
+
     // Test Delete
-    await page.getByText("Student Extensions").click();
     await page.getByText("Student Extensions").click();
     const studentExtRow = page.getByRole("row", {
       name: `${student2!.private_profile_name} ${hours} No`
@@ -295,7 +426,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByText("Assignment Exceptions").click();
     await expect(
       page.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Class-wide extension applied by instructor`
+        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
       })
     ).toBeVisible();
   });

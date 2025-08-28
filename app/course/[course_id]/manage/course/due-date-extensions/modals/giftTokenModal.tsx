@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, HStack, Input, Portal, Textarea, VStack } from "@chakra-ui/react";
@@ -66,6 +66,7 @@ export default function GiftTokenModal({
   const [tokensToGift, setTokensToGift] = useState<number>(1);
   const [note, setNote] = useState<string>("Tokens gifted by instructor");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { assignmentDueDateExceptions } = useCourseController();
 
   useEffect(() => {
     setSelectedAssignmentId(defaults?.assignmentId);
@@ -93,13 +94,16 @@ export default function GiftTokenModal({
     }
     setIsSubmitting(true);
     try {
-      const { error } = await supabase.rpc("gift_tokens_to_student", {
+      const { error, data: newExceptionId } = await supabase.rpc("gift_tokens_to_student", {
         p_student_id: selectedStudentId,
         p_class_id: Number(course_id),
         p_assignment_id: selectedAssignmentId,
         p_tokens_to_gift: tokensToGift,
         p_note: note
       });
+      if (newExceptionId) {
+        await assignmentDueDateExceptions.getByIdAsync(newExceptionId);
+      }
       if (error) throw error;
       toaster.create({ title: "Tokens gifted", description: "Late tokens have been granted.", type: "success" });
       onCloseInternal();
