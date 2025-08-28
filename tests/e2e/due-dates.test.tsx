@@ -425,9 +425,11 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions
     await page.getByText("Assignment Exceptions").click();
     await expect(
-      page.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
-      })
+      page
+        .getByRole("row", {
+          name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
+        })
+        .first()
     ).toBeVisible();
   });
 });
