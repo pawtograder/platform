@@ -524,6 +524,7 @@ export async function createRepo(
 
   try {
     scope?.setTag("github_operation", "create_repo_request");
+    console.log("creating repo", org, repoName);
     await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
@@ -534,6 +535,7 @@ export async function createRepo(
     scope?.setTag("github_operation", "create_repo_request_done");
     //Disable squash merging, make template
     scope?.setTag("github_operation", "patch_repo_settings");
+    console.log("patching repo settings", org, repoName);
     await retryWithBackoff(
       () =>
         octokit.request("PATCH /repos/{owner}/{repo}", {
@@ -734,6 +736,7 @@ export async function syncTeam(
   scope?.setTag("github_operation", "sync_team");
   scope?.setTag("org", org);
   scope?.setTag("team_slug", team_slug);
+  console.log("Creating team", team_slug, org);
 
   if (!org || !team_slug) {
     console.warn("Invalid org or team_slug", org, team_slug);
@@ -755,12 +758,29 @@ export async function syncTeam(
   } catch (e) {
     if (e instanceof RequestError && e.message.includes("Not Found")) {
       // Team doesn't exist, create it
-      const newTeam = await octokit.request("POST /orgs/{org}/teams", {
-        org,
-        name: team_slug
-      });
-      team_id = newTeam.data.id;
-      console.log(`Created team ${team_slug} with id ${team_id}`);
+      try {
+        const newTeam = await octokit.request("POST /orgs/{org}/teams", {
+          org,
+          name: team_slug
+        });
+        team_id = newTeam.data.id;
+        console.log(`Created team ${team_slug} with id ${team_id}`);
+      } catch (createError) {
+        // Handle race condition: another process might have created the team
+        if (createError instanceof RequestError && 
+            (createError.message.includes("already exists") || 
+             createError.message.includes("Name must be unique for this org") ||
+             createError.status === 422)) {
+          // Try to fetch the team again
+          const existingTeam = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
+            org,
+            team_slug
+          });
+          team_id = existingTeam.data.id;
+        } else {
+          throw createError;
+        }
+      }
     } else {
       throw e;
     }
@@ -860,6 +880,7 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
 }
 const staffTeamCache = new Map<string, string[]>();
 const orgMembershipCache = new Map<string, string[]>();
+const orgAdminCache = new Map<string, string[]>();
 export async function syncRepoPermissions(
   org: string,
   repo: string,
@@ -905,30 +926,17 @@ export async function syncRepoPermissions(
     );
   }
 
-  const existingInvitations = await octokit.paginate("GET /repos/{owner}/{repo}/invitations", {
-    owner: org,
-    repo
-  });
-
-  //Find expired invitations and re-send
-  const expiredInvitations = existingInvitations.filter((i) => i.expired);
-  for (const invitation of expiredInvitations) {
-    const invitee = invitation.invitee?.login;
-    if (invitee) {
-      console.log(`re-sending invitation for ${invitee}`);
-      await octokit.request("DELETE /repos/{owner}/{repo}/invitations/{invitation_id}", {
-        owner: org,
-        repo,
-        invitation_id: invitation.id
-      });
-      await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
-        owner: org,
-        repo,
-        username: invitee,
-        permission: "write"
-      });
-    }
+  // Cache organization admins (they can't be removed from repos)
+  if (!orgAdminCache.has(org)) {
+    const orgAdmins = await octokit.paginate("GET /orgs/{org}/members", {
+      org,
+      role: "admin"
+    });
+    const adminUsernames = orgAdmins.map((m) => m.login);
+    orgAdminCache.set(org, adminUsernames);
+    console.log("org admins", adminUsernames);
   }
+  const orgAdminUsernames = orgAdminCache.get(org) || [];
 
   const existingAccess = await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
     owner: org,
@@ -955,9 +963,9 @@ export async function syncRepoPermissions(
     });
   }
   const newAccess = githubUsernames.filter(
-    (u) => !existingUsernames.includes(u) && !existingInvitations.some((i) => i.invitee?.login === u)
+    (u) => !existingUsernames.includes(u) && u
   );
-  const removeAccess = existingUsernames.filter((u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u));
+  const removeAccess = existingUsernames.filter((u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u) && !orgAdminUsernames.includes(u));
   for (const username of newAccess) {
     console.log(`adding collaborator ${username} to ${org}/${repo}`);
     const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {

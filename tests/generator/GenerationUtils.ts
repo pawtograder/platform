@@ -58,7 +58,7 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   help_requests: { maxInsertsPerSecond: 15, description: "Help requests" },
   help_request_messages: { maxInsertsPerSecond: 40, description: "Help request messages" },
   help_request_students: { maxInsertsPerSecond: 100, description: "Help request student associations" },
-  discussion_threads: { maxInsertsPerSecond: 4, description: "Discussion threads", batchSize: 10 },
+  discussion_threads: { maxInsertsPerSecond: 40, description: "Discussion threads", batchSize: 10 },
 
   // Metadata operations (some batched)
   tags: { maxInsertsPerSecond: 30, description: "Tag assignments" },

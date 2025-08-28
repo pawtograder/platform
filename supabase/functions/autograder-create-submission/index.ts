@@ -641,12 +641,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
         if (!pawtograderConfig) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
+            `Incorrect instructor setup for assignment ID ${repoData.assignment_id}: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
           );
         }
         if (!pawtograderConfig.submissionFiles) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+            `Incorrect instructor setup for assignment ID ${repoData.assignment_id}: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
           );
         }
         const expectedFiles = [
@@ -656,7 +656,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (expectedFiles.length === 0) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+            `Incorrect instructor setup for assignment ID ${repoData.assignment_id}: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
           );
         }
         const submittedFiles = zip.files.filter(

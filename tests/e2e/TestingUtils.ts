@@ -40,7 +40,7 @@ export async function createClass({
       .from("classes")
       .insert({
         name: className,
-        slug: className.toLowerCase().replace(/ /g, "-"),
+        slug: className.toLowerCase().replace(/ /g, "-") + Math.random().toString(36).substring(2, 10),
         github_org: "pawtograder-playground",
         start_date: addDays(new Date(), -30).toISOString(),
         end_date: addDays(new Date(), 180).toISOString(),
@@ -592,7 +592,7 @@ export async function insertPreBakedSubmission({
   grading_review_id: number;
 }> {
   const test_run_prefix = repositorySuffix ?? getTestRunPrefix();
-  const repository = `not-actually/repository-${test_run_prefix}-${repoCounter}`;
+  const repository = `pawtograder-playground/test-e2e-student-repo-java--${test_run_prefix}-${repoCounter}`;
   repoCounter++;
   const { data: repositoryDataList, error: repositoryError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER

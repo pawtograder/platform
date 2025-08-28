@@ -205,9 +205,9 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
         const [org, repoName] = repo.repository.split("/");
         let student_github_usernames = [];
         if (repo.assignment_groups?.assignment_groups_members) {
-          student_github_usernames = repo.assignment_groups.assignment_groups_members.map(
-            (member) => member.user_roles.users.github_username!
-          );
+          student_github_usernames = repo.assignment_groups.assignment_groups_members.
+            filter((member) => member.user_roles.users.github_username)
+            .map((member) => member.user_roles.users.github_username!);
         } else {
           const github_username = repo.profiles?.user_roles?.users.github_username;
           if (!github_username) {

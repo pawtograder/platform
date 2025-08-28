@@ -66,6 +66,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       throw new Error("Authentication failed");
     }
 
+    console.log("=== USER DEBUG ===");
+    console.log(user.email);
+    console.log("=== END USER DEBUG ===");
+
     scope?.setUser({ id: user.id, email: user.email });
 
     // Get the access token from request body
@@ -90,6 +94,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       scope?.setContext("user_fetch_error", { error: userFetchError });
       throw new Error("Failed to fetch user data");
     }
+    console.log("=== EXISTING USER DEBUG ===");
+    console.log(existingUser);
+    console.log("=== END EXISTING USER DEBUG ===");
 
     if (existingUser?.sis_user_id) {
       scope?.addBreadcrumb({
@@ -130,6 +137,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
     );
 
+    console.log(`GraphResponse OK: ${graphResponse.ok}`);
+
     if (!graphResponse.ok) {
       const errorText = await graphResponse.text();
       scope?.setContext("graph_api_error", {
@@ -141,6 +150,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
 
     const azureProfile: AzureUserProfile = await graphResponse.json();
+    console.log("=== AZURE PROFILE DEBUG ===");
+    console.log(azureProfile);
+    console.log("=== END AZURE PROFILE DEBUG ===");
+
     scope?.setContext("azure_profile", {
       employeeId: azureProfile.employeeId,
       mail: azureProfile.mail,

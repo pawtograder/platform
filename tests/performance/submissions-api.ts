@@ -33,8 +33,8 @@ export const options = {
       preAllocatedVUs: 100, // Pre-allocate VUs to handle peak load
       maxVUs: 200, // Maximum VUs if needed during peaks
       stages: [
-        { duration: "1m", target: 20 }, // Ramp up to 60 RPS over 1 minute
-        { duration: "2m", target: 20 }, // Maintain 60 RPS for 2 minutes
+        { duration: "1m", target: 20 }, // Ramp up to 20 RPS over 1 minute
+        { duration: "2m", target: 20 }, // Maintain 20 RPS for 2 minutes
         { duration: "30s", target: 0 } // Ramp down to 0 RPS over 30 seconds
       ]
     }
@@ -193,8 +193,8 @@ export default function (data: TestData | undefined): void {
 
     const duration = Date.now() - startTime;
 
-    console.log(`📊 Submission response status: ${submissionResponse.status}`);
-    console.log(`⏱️ Request duration: ${duration}ms`);
+    // console.log(`📊 Submission response status: ${submissionResponse.status}`);
+    // console.log(`⏱️ Request duration: ${duration}ms`);
 
     // Check if the submission was successful
     const success = submissionResponse.status === 200;
@@ -229,10 +229,9 @@ export default function (data: TestData | undefined): void {
         );
         console.error(`❌ Response body: ${submissionResponse.body}`);
       } else {
-        const submissionId = (submissionData as Record<string, unknown>)?.submission_id || "unknown";
-        console.log(
-          `✅ Submission created successfully! Submission ID: ${submissionId}, Duration: ${duration}ms, Repository: ${repository}`
-        );
+        // console.log(
+          // `✅ Submission created successfully! Duration: ${duration}ms, Repository: ${repository}`
+        // );
       }
     } else {
       // Record failed submission

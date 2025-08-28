@@ -1731,12 +1731,24 @@ export class DatabaseSeeder {
       }
 
       // Update autograder config
-      await supabase
+      const { data: autograderData, error: autograderError } = await supabase
         .from("autograder")
         .update({
           grader_repo: "pawtograder-playground/test-e2e-java-solution",
           grader_commit_sha: "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177",
+          max_submissions_count: null,
+          max_submissions_period_secs: null,
           config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
+        })
+        .eq("id", assignmentData.id)
+        .single();
+      if (autograderError) {
+        throw new Error(`Failed to update autograder: ${autograderError.message}`);
+      }
+      await supabase
+        .from("assignments")
+        .update({
+          template_repo: "pawtograder-playground/test-e2e-java-handout"
         })
         .eq("id", assignmentData.id);
 
@@ -2707,7 +2719,6 @@ export class DatabaseSeeder {
       // Get existing comments for this submission
       const submissionComments = commentsBySubmission[submission_id];
       if (!submissionComments || submissionComments.length === 0) {
-        console.log(`No existing comments found for submission ${submission_id}, skipping regrade request`);
         continue;
       }
 
@@ -3118,7 +3129,6 @@ final;`,
         })
         .select("id, name, slug, max_score, score_expression")
     );
-    console.log("Column inserted");
     if (columnError) {
       throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
     }
@@ -3654,7 +3664,7 @@ final;`,
               .insert({
                 assignment_id: assignment_id,
                 class_id: class_id,
-                name: `Group ${String.fromCharCode(65 + i)}` // A, B, C, etc.
+                name: `group-${String.fromCharCode(65 + i)}` // A, B, C, etc.
               })
               .select("id, name")
         );
@@ -3739,7 +3749,7 @@ final;`,
         // Prepare repository data for this chunk
         const repositoryInserts = chunk.map((item, index) => ({
           assignment_id: item.assignment.id,
-          repository: `not-actually/repository-${test_run_prefix}-${chunkRepoCounterBase + index}`,
+          repository: `pawtograder-playground/test-e2e-student-repo-java--${test_run_prefix}-${chunkRepoCounterBase + index}`,
           class_id: class_id,
           profile_id: item.student?.private_profile_id,
           assignment_group_id: item.group?.id,
