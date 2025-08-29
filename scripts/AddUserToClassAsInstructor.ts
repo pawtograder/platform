@@ -32,26 +32,39 @@ function printUsage() {
 }
 
 // Parse command line arguments
-const courseID = parseInt(process.argv[2]);
+const courseIdArg = process.argv[2];
 const isCSVMode = process.argv[3] === "--csv";
 const userEmail = isCSVMode ? undefined : process.argv[3];
 const csvFile = isCSVMode ? process.argv[4] : undefined;
 
 // Validate arguments
-if (!courseID || isNaN(courseID)) {
+if (!courseIdArg) {
+  console.error("Invalid course ID provided");
+  printUsage();
+  process.exit(1);
+}
+
+const courseID = Number.parseInt(courseIdArg, 10);
+if (!Number.isFinite(courseID)) {
   console.error("Invalid course ID provided");
   printUsage();
   process.exit(1);
 }
 
 if (isCSVMode) {
-  if (process.argv.length !== 5 || !csvFile) {
+  if (process.argv.length !== 5) {
     console.error("CSV file path required when using --csv option");
     printUsage();
     process.exit(1);
   }
-  if (!fs.existsSync(csvFile)) {
-    console.error(`CSV file not found: ${csvFile}`);
+  if (!csvFile) {
+    console.error("CSV file path required when using --csv option");
+    printUsage();
+    process.exit(1);
+  }
+  const csvFilePath = csvFile;
+  if (!fs.existsSync(csvFilePath)) {
+    console.error(`CSV file not found: ${csvFilePath}`);
     process.exit(1);
   }
 } else {
@@ -62,7 +75,10 @@ if (isCSVMode) {
   }
 }
 
-const supabase = createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+const supabase = createClient<Database>(
+  process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
+  process.env["SUPABASE_SERVICE_ROLE_KEY"]!
+);
 
 interface CsvUser {
   name: string;
@@ -76,7 +92,8 @@ function parseCSV(csvContent: string): CsvUser[] {
     throw new Error("CSV file must have at least a header row and one data row");
   }
 
-  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const headerLine = lines[0] ?? "";
+  const headers = headerLine.split(",").map((h) => h.trim().toLowerCase());
   const nameIndex = headers.indexOf("name");
   const emailIndex = headers.indexOf("email");
   const roleIndex = headers.indexOf("role");
@@ -90,13 +107,18 @@ function parseCSV(csvContent: string): CsvUser[] {
 
   const users: CsvUser[] = [];
   for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(",").map((v) => v.trim());
+    const line = lines[i];
+    if (!line) continue;
+    const values = line.split(",").map((v) => v.trim());
     const requiredColumns = Math.max(nameIndex + 1, emailIndex + 1);
 
     if (values.length >= requiredColumns) {
-      const name = values[nameIndex].replace(/^"(.*)"$/, "$1"); // Remove quotes if present
-      const email = values[emailIndex].replace(/^"(.*)"$/, "$1"); // Remove quotes if present
-      const role = roleIndex !== -1 && values[roleIndex] ? values[roleIndex].replace(/^"(.*)"$/, "$1") : undefined;
+      const rawName = values[nameIndex] ?? "";
+      const rawEmail = values[emailIndex] ?? "";
+      const name = rawName.replace(/^"(.*)"$/, "$1");
+      const email = rawEmail.replace(/^"(.*)"$/, "$1");
+      const roleRaw = roleIndex !== -1 ? values[roleIndex] : undefined;
+      const role = roleRaw ? roleRaw.replace(/^"(.*)"$/, "$1") : undefined;
 
       if (name && email) {
         const user: CsvUser = { name, email };
@@ -266,10 +288,10 @@ async function addUserToClass(
     privateProfileAvatarUrl = gravatarUrl;
   } else if (existingPrivateProfiles && existingPrivateProfiles.length > 0) {
     console.log("Using name and avatar from existing private profile");
-    const existingProfile = existingPrivateProfiles[0];
-    privateProfileName = existingProfile.name || privateProfileName;
+    const existingProfile = existingPrivateProfiles[0]!;
+    privateProfileName = existingProfile.name ?? privateProfileName;
     privateProfileAvatarUrl =
-      existingProfile.avatar_url ||
+      existingProfile.avatar_url ??
       `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(privateProfileName || email)}`;
   } else {
     console.log("No existing profile found, generating new identicon for private profile");
@@ -354,8 +376,7 @@ async function main() {
       let skippedCount = 0;
       let failureCount = 0;
 
-      for (let i = 0; i < users.length; i++) {
-        const user = users[i];
+      for (const [i, user] of users.entries()) {
         const roleInfo = user.role ? ` as ${user.role}` : " as instructor (default)";
         console.log(`Processing user ${i + 1}/${users.length}: ${user.name} (${user.email})${roleInfo}`);
 

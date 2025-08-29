@@ -318,7 +318,7 @@ export default function HelpRequestForm() {
             // Ensure these fields have proper defaults
             status: "open" as const,
             is_video_live: false,
-            is_private: values.is_private || false
+            is_private: values["is_private"] || false
           };
 
           try {

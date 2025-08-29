@@ -184,6 +184,26 @@ export class RateLimitManager {
     });
   }
 
+  private ensurePerformanceMetrics(dataType: string): PerformanceMetrics {
+    const existing = this.performanceTracker[dataType];
+    if (existing) return existing;
+    const created: PerformanceMetrics = {
+      totalInserted: 0,
+      startTime: Date.now(),
+      operations: []
+    };
+    this.performanceTracker[dataType] = created;
+    return created;
+  }
+
+  private ensureProgressTracker(dataType: string): { totalProcessed: number; lastUpdate: number; progressBar: string } {
+    const existing = this.progressTracker[dataType];
+    if (existing) return existing;
+    const created = { totalProcessed: 0, lastUpdate: 0, progressBar: "" };
+    this.progressTracker[dataType] = created;
+    return created;
+  }
+
   async trackAndLimit<
     T extends keyof DatabaseTableTypes,
     Query extends string = "*",
@@ -227,7 +247,7 @@ export class RateLimitManager {
     });
 
     // Track performance
-    const metrics = this.performanceTracker[dataType];
+    const metrics = this.ensurePerformanceMetrics(String(dataType));
     metrics.totalInserted += count;
     metrics.operations.push({
       timestamp: Date.now(),
@@ -235,7 +255,7 @@ export class RateLimitManager {
     });
 
     // Update progress bar
-    this.updateProgressBar(dataType, count);
+    this.updateProgressBar(String(dataType), count);
 
     return result as unknown as {
       data: ResultType[];
@@ -275,7 +295,7 @@ export class RateLimitManager {
     });
 
     // Track performance
-    const metrics = this.performanceTracker["users"];
+    const metrics = this.ensurePerformanceMetrics("users");
     metrics.totalInserted += 1;
     metrics.operations.push({
       timestamp: Date.now(),
@@ -289,8 +309,8 @@ export class RateLimitManager {
   }
 
   private updateProgressBar(dataType: string, count: number): void {
-    const progress = this.progressTracker[dataType];
-    const metrics = this.performanceTracker[dataType];
+    const progress = this.ensureProgressTracker(dataType);
+    const metrics = this.ensurePerformanceMetrics(dataType);
 
     progress.totalProcessed += count;
 
@@ -340,7 +360,7 @@ export class RateLimitManager {
     Object.entries(this.progressTracker).forEach(([dataType, progress]) => {
       if (progress.totalProcessed > 0) {
         // Ensure final progress is displayed
-        const metrics = this.performanceTracker[dataType];
+        const metrics = this.ensurePerformanceMetrics(dataType);
         const elapsedSeconds = (Date.now() - metrics.startTime) / 1000;
         const avgRate = elapsedSeconds > 0 ? (progress.totalProcessed / elapsedSeconds).toFixed(1) : "0.0";
 
@@ -393,6 +413,7 @@ export class RateLimitManager {
 
     sortedMetrics.forEach(([dataType]) => {
       const config = rateLimits[dataType];
+      if (!config) return;
       const batchInfo = config.batchSize ? config.batchSize.toString() : "N/A";
       console.log(
         dataType.padEnd(25) +
@@ -415,18 +436,19 @@ export class RateLimitManager {
 
     sortedMetrics.forEach(([dataType, metrics]) => {
       const config = rateLimits[dataType];
-      const efficiency = ((metrics.actualRate || 0) / config.maxInsertsPerSecond) * 100;
+      const maxRate = config?.maxInsertsPerSecond ?? 0;
+      const efficiency = maxRate === 0 ? 0 : ((metrics.actualRate || 0) / maxRate) * 100;
       const efficiencyStr = `${efficiency.toFixed(1)}%`;
 
       let batchInfo = "Individual";
-      if (config.batchSize) {
+      if (config?.batchSize) {
         batchInfo = `Batch size: ${config.batchSize}`;
       }
 
       console.log(
         dataType.padEnd(25) +
           metrics.totalInserted.toLocaleString().padEnd(12) +
-          config.maxInsertsPerSecond.toString().padEnd(12) +
+          maxRate.toString().padEnd(12) +
           (metrics.actualRate?.toFixed(2) || "0").padEnd(12) +
           batchInfo.padEnd(15) +
           efficiencyStr
@@ -441,7 +463,7 @@ export class RateLimitManager {
 
     const overallRate = totalInserted / (totalDuration / 1000);
     const totalTargetRate = sortedMetrics.reduce(
-      (sum, [dataType]) => sum + rateLimits[dataType].maxInsertsPerSecond,
+      (sum, [dataType]) => sum + (rateLimits[dataType]?.maxInsertsPerSecond ?? 0),
       0
     );
     const overallEfficiency = (overallRate / totalTargetRate) * 100;

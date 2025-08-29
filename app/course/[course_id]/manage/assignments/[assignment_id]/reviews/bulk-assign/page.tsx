@@ -23,7 +23,7 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
 import type { CrudFilters } from "@refinedev/core";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
@@ -40,7 +40,7 @@ import { useLabSections } from "@/hooks/useCourseController";
 import { Alert } from "@/components/ui/alert";
 import { addDays } from "date-fns";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
+import type { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 
 // Main Page Component
 export default function BulkAssignGradingPage() {
@@ -406,11 +406,11 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
     referenceReviewAssignments.data.forEach((reviewAssignment) => {
       // Filter by selected rubric if one is chosen
-      if (selectedReferenceRubric && reviewAssignment.rubric_id !== selectedReferenceRubric.id) {
+      if (selectedReferenceRubric && reviewAssignment["rubric_id"] !== selectedReferenceRubric.id) {
         return; // Skip this assignment if it's not for the selected rubric
       }
 
-      const submission = reviewAssignment.submissions;
+      const submission = reviewAssignment["submissions"];
       if (submission) {
         // Handle individual submissions
         if (submission.profile_id) {
@@ -437,7 +437,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
 
     exclusionReviewAssignments.data.forEach((reviewAssignment) => {
-      const submission = reviewAssignment.submissions;
+      const submission = reviewAssignment["submissions"];
       if (submission) {
         // Helper function to add exclusion
         const addExclusion = (studentId: string, graderId: string) => {
@@ -449,13 +449,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
         // Handle individual submissions
         if (submission.profile_id) {
-          addExclusion(submission.profile_id, reviewAssignment.assignee_profile_id);
+          addExclusion(submission.profile_id, reviewAssignment["assignee_profile_id"]);
         }
 
         // Handle group submissions
         if (submission.assignment_groups?.assignment_groups_members) {
           submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
-            addExclusion(member.profile_id, reviewAssignment.assignee_profile_id);
+            addExclusion(member.profile_id, reviewAssignment["assignee_profile_id"]);
           });
         }
       }

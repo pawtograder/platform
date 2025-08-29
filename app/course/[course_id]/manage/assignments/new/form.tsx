@@ -30,7 +30,7 @@ import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import type { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { formatInTimeZone } from "date-fns-tz";
 
@@ -64,6 +64,9 @@ function calculateLabSectionDueDate(
   const mostRecentMeeting = relevantMeetings[0];
 
   // Combine meeting date with lab section end time
+  if (!mostRecentMeeting) {
+    return null;
+  }
   const labMeetingEndTime = new TZDate(
     mostRecentMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
     timezone
@@ -358,7 +361,7 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   useEffect(() => {
     const subscription = watch((value, { name }) => {
       if (name === "minutes_due_after_lab" || !name) {
-        const minutesDueAfterLab = value.minutes_due_after_lab;
+        const minutesDueAfterLab = value["minutes_due_after_lab"];
         setWithLabDueDate(minutesDueAfterLab !== null && minutesDueAfterLab !== undefined && minutesDueAfterLab !== "");
       }
     });
@@ -399,8 +402,8 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
             <Field
               label="Minutes due after lab meeting"
               helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
-              errorText={errors.minutes_due_after_lab?.message?.toString()}
-              invalid={errors.minutes_due_after_lab ? true : false}
+              errorText={errors["minutes_due_after_lab"]?.message?.toString()}
+              invalid={errors["minutes_due_after_lab"] ? true : false}
               required={withLabDueDate}
             >
               <Input
@@ -619,8 +622,8 @@ export default function AssignmentForm({
             <Field
               label={`Release Date (${course.time_zone})`}
               helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
-              errorText={errors.release_date?.message?.toString()}
-              invalid={errors.release_date ? true : false}
+              errorText={errors["release_date"]?.message?.toString()}
+              invalid={errors["release_date"] ? true : false}
               required={true}
             >
               <Controller

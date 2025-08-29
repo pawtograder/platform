@@ -1,6 +1,6 @@
 "use client";
 
-import { SystemNotification } from "@/components/notifications/notification-teaser";
+import type { SystemNotification } from "@/components/notifications/notification-teaser";
 import { toaster } from "@/components/ui/toaster";
 import { Badge, Box, HStack, IconButton, Text, VStack, Table } from "@chakra-ui/react";
 import { Eye, Trash2, ChevronLeft, ChevronRight } from "lucide-react";

@@ -1,6 +1,6 @@
 "use client";
 import { Tooltip } from "@/components/ui/tooltip";
-import { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import {
   Box,
@@ -18,7 +18,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";

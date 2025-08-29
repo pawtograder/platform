@@ -51,6 +51,7 @@ export function useMeetingWindows() {
             }
           });
         } catch (error) {
+          // eslint-disable-next-line no-console
           console.error(`Failed to log video_left activity:`, error);
         }
       }

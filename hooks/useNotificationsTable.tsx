@@ -4,8 +4,8 @@ import { useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
 import TableController from "@/lib/TableController";
 import { useTableControllerTable } from "./useTableControllerTable";
-import { ColumnDef } from "@tanstack/react-table";
-import { Notification } from "@/utils/supabase/DatabaseTypes";
+import type { ColumnDef } from "@tanstack/react-table";
+import type { Notification } from "@/utils/supabase/DatabaseTypes";
 
 export function useNotificationsTableController() {
   const supabase = useMemo(() => createClient(), []);

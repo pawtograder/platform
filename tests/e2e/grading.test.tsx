@@ -1,4 +1,4 @@
-import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { type Page } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
@@ -11,7 +11,7 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser
+  type TestingUser
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -86,14 +86,14 @@ test.beforeAll(async () => {
   });
 
   const submission_res = await insertPreBakedSubmission({
-    student_profile_id: student.private_profile_id,
+    student_profile_id: student!.private_profile_id,
     assignment_id: assignment!.id,
     class_id: course.id
   });
   submission_id = submission_res.submission_id;
 
   const submission_res2 = await insertPreBakedSubmission({
-    student_profile_id: student2.private_profile_id,
+    student_profile_id: student2!.private_profile_id,
     assignment_id: assignment!.id,
     class_id: course.id
   });
@@ -114,7 +114,6 @@ test.beforeAll(async () => {
     .select("id")
     .single();
   if (review_assignment_res.error) {
-    console.error(review_assignment_res.error);
     throw new Error(`Failed to create review assignment: ${review_assignment_res.error.message}`);
   }
   await supabase

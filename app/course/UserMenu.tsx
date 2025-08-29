@@ -11,7 +11,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { createClient } from "@/utils/supabase/client";
-import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
   Box,

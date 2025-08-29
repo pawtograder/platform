@@ -11,7 +11,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true, // exclude node_modules doesn't work when you import from .ts files that don't explicitly use the type keyword like csv-writer
+    // "verbatimModuleSyntax": true, // exclude node_modules doesn't work when you import from .ts files that don't explicitly use the type keyword like csv-writer
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": true,
     "module": "preserve",

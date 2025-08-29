@@ -5,7 +5,7 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
-import {
+import type {
   DayOfWeek,
   LabSection,
   LabSectionMeeting,

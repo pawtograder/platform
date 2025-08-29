@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useStudentRoster } from "@/hooks/useCourseController";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroup,

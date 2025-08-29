@@ -11,7 +11,7 @@ import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/ho
 import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
 import { createClient } from "@/utils/supabase/client";
-import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
@@ -30,7 +30,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import {
-  ColumnDef,
+  type ColumnDef,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,

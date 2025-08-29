@@ -283,8 +283,8 @@ function generateRubricStructure(config: RubricConfig) {
 }
 
 // Helper function to define tag types (name/color combinations)
-export function defineTagTypes(prefix: string, numTagTypes: number) {
-  const tagTypes = [];
+export function defineTagTypes(prefix: string, numTagTypes: number): Array<{ name: string; color: string }> {
+  const tagTypes: Array<{ name: string; color: string }> = [];
   const colors = [
     "#ef4444",
     "#f97316",
@@ -302,7 +302,7 @@ export function defineTagTypes(prefix: string, numTagTypes: number) {
     const colorIndex = (i - 1) % colors.length;
     tagTypes.push({
       name: `${prefix} ${String(i).padStart(2, "0")}`,
-      color: colors[colorIndex]
+      color: colors[colorIndex]!
     });
   }
 
@@ -362,7 +362,7 @@ export async function findExistingPawtograderUsers(): Promise<{
   for (const user of pawtograderUsers) {
     if (!user.user_roles || user.user_roles.length === 0) continue;
 
-    const testingUser = convertToTestingUser(user, user.user_roles[0]);
+    const testingUser = convertToTestingUser(user, user.user_roles[0]!);
 
     // Categorize by email pattern (instructor-, grader-, student-)
     if (user.email && user.email.startsWith("instructor-")) {
@@ -429,8 +429,8 @@ export async function enrollExistingUserInClass(
         user_id: user.user_id,
         role: role,
         class_id: class_id,
-        private_profile_id: privateProfile[0].id,
-        public_profile_id: publicProfile[0].id
+        private_profile_id: privateProfile?.[0]!.id,
+        public_profile_id: publicProfile?.[0]!.id
       })
       .select("user_id")
   );
@@ -443,8 +443,8 @@ export async function enrollExistingUserInClass(
   return {
     ...user,
     class_id,
-    private_profile_id: privateProfile[0].id,
-    public_profile_id: publicProfile[0].id
+    private_profile_id: privateProfile?.[0]!.id,
+    public_profile_id: publicProfile?.[0]!.id
   };
 }
 
@@ -620,6 +620,10 @@ export class DatabaseSeeder {
 
       // Create users
       const { instructors, graders, students } = await this.createUsers(config, class_id);
+      const primaryInstructor = instructors[0];
+      if (!primaryInstructor) {
+        throw new Error("No instructors created");
+      }
 
       // Create class structure (sections, tags)
       const { classSections, labSections, studentTagTypes, graderTagTypes } = await this.createClassStructure(
@@ -637,11 +641,11 @@ export class DatabaseSeeder {
         studentTagTypes,
         graderTagTypes,
         class_id,
-        instructors[0].user_id
+        primaryInstructor.user_id
       );
 
       // Create grader conflicts
-      await this.createGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
+      await this.createGraderConflicts(graders, students, class_id, primaryInstructor.private_profile_id);
 
       // Create discussion threads if configured
       if (config.discussionConfig) {
@@ -871,12 +875,17 @@ export class DatabaseSeeder {
     console.log(`   Grading Scheme: ${config.gradingScheme}`);
 
     console.log(`\n🔐 Login Credentials:`);
-    console.log(`   Instructor: ${instructors[0].email} / ${instructors[0].password}`);
-    if (graders.length > 0) {
-      console.log(`   Grader: ${graders[0].email} / ${graders[0].password}`);
+    const firstInstructor = instructors[0];
+    if (firstInstructor) {
+      console.log(`   Instructor: ${firstInstructor.email} / ${firstInstructor.password}`);
     }
-    if (students.length > 0) {
-      console.log(`   Student: ${students[0].email} / ${students[0].password}`);
+    const firstGrader = graders[0];
+    if (firstGrader) {
+      console.log(`   Grader: ${firstGrader.email} / ${firstGrader.password}`);
+    }
+    const firstStudent = students[0];
+    if (firstStudent) {
+      console.log(`   Student: ${firstStudent.email} / ${firstStudent.password}`);
     }
 
     console.log(`\n🔗 View the instructor dashboard at: /course/${testClass.id}`);
@@ -1003,7 +1012,7 @@ export class DatabaseSeeder {
       day_of_week: "monday" as const,
       start_time: "09:00",
       end_time: "10:00",
-      lab_leader_id: instructors[i % instructors.length].private_profile_id
+      lab_leader_id: instructors.length > 0 ? instructors[i % instructors.length]!.private_profile_id : undefined
     }));
 
     const { data: labSections } = await this.rateLimitManager.trackAndLimit(
@@ -1051,15 +1060,20 @@ export class DatabaseSeeder {
       userType: "student" | "grader",
       creatorId: string
     ) => {
-      const batchSize = this.rateLimits["user_roles"].batchSize || 100;
-      const assignments = [];
+      const batchSize = this.rateLimits["user_roles"]?.batchSize ?? 100;
+      const assignments = [] as Array<{
+        user: string;
+        classSection: string;
+        labSection: string | null;
+        tags: string[];
+      }>;
 
       for (let i = 0; i < users.length; i += batchSize) {
         const batch = users.slice(i, i + batchSize);
         // Process this batch of users in parallel
         const batchPromises = batch.map(async (user) => {
           // Randomly assign to class section (all users get one)
-          const classSection = classSections[Math.floor(Math.random() * classSections.length)];
+          const classSection = classSections[Math.floor(Math.random() * classSections.length)]!;
 
           // Randomly assign to lab section (students only, ~80% chance)
           let labSection = null;
@@ -1085,7 +1099,7 @@ export class DatabaseSeeder {
           }
 
           // Randomly assign tags (30-60% chance per tag type)
-          const userTags = [];
+          const userTags: Array<{ id: string | number; name: string; color: string }> = [];
           for (const tagType of tagTypes) {
             if (Math.random() < 0.3 + Math.random() * 0.3) {
               // 30-60% chance
@@ -1107,7 +1121,7 @@ export class DatabaseSeeder {
               if (tagError) {
                 console.warn(`Failed to create tag ${tagType.name} for user: ${tagError.message}`);
               } else if (tagData && tagData.length > 0) {
-                userTags.push(tagData[0]);
+                userTags.push(tagData[0]!);
               }
             }
           }
@@ -1418,7 +1432,7 @@ export class DatabaseSeeder {
     }
 
     // Insert threads in batches (in parallel)
-    const threadBatchSize = this.rateLimitManager.batchSizes.discussion_threads;
+    const threadBatchSize = this.rateLimitManager.batchSizes["discussion_threads"] ?? 50;
     const totalBatches = Math.ceil(threadsToInsert.length / threadBatchSize);
     console.log(
       `Inserting ${threadsToInsert.length} root discussion threads in ${totalBatches} parallel batches of ${threadBatchSize}...`
@@ -1465,10 +1479,12 @@ export class DatabaseSeeder {
       .forEach(({ threads, metadata }) => {
         if (threads) {
           threads.forEach((thread, index) => {
+            const md = metadata[index];
+            if (!md) return;
             createdThreads.push({
               id: thread.id,
-              topic_id: metadata[index].topic_id,
-              is_question: metadata[index].is_question
+              topic_id: md.topic_id,
+              is_question: md.is_question
             });
           });
         }
@@ -1528,7 +1544,7 @@ export class DatabaseSeeder {
 
     // Insert replies in batches (in parallel)
     const insertedReplies: Array<{ id: number }> = [];
-    const replyBatchSize = this.rateLimitManager.batchSizes.discussion_threads;
+    const replyBatchSize = this.rateLimitManager.batchSizes["discussion_threads"] ?? 50;
     const totalReplyBatches = Math.ceil(repliesToInsert.length / replyBatchSize);
     console.log(
       `Inserting ${repliesToInsert.length} replies in ${totalReplyBatches} parallel batches of ${replyBatchSize}...`
@@ -1574,8 +1590,11 @@ export class DatabaseSeeder {
     // Mark some replies as answers for question threads
     for (const { rootThreadId, replyIndex } of potentialAnswers) {
       if (replyIndex < insertedReplies.length) {
-        const replyId = insertedReplies[replyIndex].id;
-        await supabase.from("discussion_threads").update({ answer: replyId }).eq("id", rootThreadId);
+        const reply = insertedReplies[replyIndex];
+        if (reply) {
+          const replyId = reply.id;
+          await supabase.from("discussion_threads").update({ answer: replyId }).eq("id", rootThreadId);
+        }
       }
     }
 
@@ -1723,7 +1742,7 @@ export class DatabaseSeeder {
       const { data: assignmentData, error: assignmentDataError } = await supabase
         .from("assignments")
         .select("*")
-        .eq("id", insertedAssignmentData[0].id)
+        .eq("id", insertedAssignmentData[0]!.id)
         .single();
 
       if (assignmentDataError || !assignmentData) {
@@ -2035,11 +2054,11 @@ export class DatabaseSeeder {
 
     // Batch insert workflow events
     if (workflowEventsToCreate.length > 0) {
-      const BATCH_SIZE = this.rateLimits["workflow_events"].batchSize || 1;
+      const BATCH_SIZE = this.rateLimits["workflow_events"]?.batchSize ?? 1;
       const chunks = chunkArray(workflowEventsToCreate, BATCH_SIZE);
 
       for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
+        const chunk = chunks[i]!;
         await this.rateLimitManager.trackAndLimit(
           "workflow_events",
           () =>
@@ -2186,19 +2205,19 @@ export class DatabaseSeeder {
         if (errorTypeIndex === 0) {
           // User visible error
           const messageIndex = (submission.submission_id + i) % userVisibleErrors.length;
-          errorMessage = userVisibleErrors[messageIndex];
+          errorMessage = userVisibleErrors[messageIndex]!;
           isPrivate = Math.random() < 0.3; // 30% chance to be private
           errorType = "user_visible_error";
         } else if (errorTypeIndex === 1) {
           // Security error (always private)
           const messageIndex = (submission.submission_id + i) % securityErrors.length;
-          errorMessage = securityErrors[messageIndex];
+          errorMessage = securityErrors[messageIndex]!;
           isPrivate = true;
           errorType = "security_error";
         } else {
           // Instructor config error
           const messageIndex = (submission.submission_id + i) % instructorConfigErrors.length;
-          errorMessage = instructorConfigErrors[messageIndex];
+          errorMessage = instructorConfigErrors[messageIndex]!;
           isPrivate = Math.random() < 0.5; // 50% chance to be private
           errorType = "config_error";
         }
@@ -2219,11 +2238,11 @@ export class DatabaseSeeder {
 
     // Batch insert workflow errors
     if (workflowErrorsToCreate.length > 0) {
-      const BATCH_SIZE = this.rateLimits["workflow_run_error"].batchSize || 100;
+      const BATCH_SIZE = this.rateLimits["workflow_run_error"]?.batchSize ?? 100;
       const chunks = chunkArray(workflowErrorsToCreate, BATCH_SIZE);
 
       for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
+        const chunk = chunks[i]!;
         const { error: workflowErrorsError } = await this.rateLimitManager.trackAndLimit(
           "workflow_run_error",
           () => supabase.from("workflow_run_error").insert(chunk).select("id"),
@@ -2378,7 +2397,7 @@ export class DatabaseSeeder {
     >();
 
     rubricCheckResults.forEach((result, index) => {
-      const rubricId = Array.from(reviewsByRubric.keys())[index];
+      const rubricId = Array.from(reviewsByRubric.keys())[index]!;
       if (result.data) {
         rubricChecksMap.set(rubricId, result.data);
       }
@@ -2433,7 +2452,11 @@ export class DatabaseSeeder {
 
     for (const review of reviewInfo || []) {
       const isCompleted = Math.random() < 0.95; // 95% chance review is completed
-      const grader = graders[Math.floor(Math.random() * graders.length)];
+      if (graders.length === 0) {
+        // No graders available; skip grading data for this review
+        continue;
+      }
+      const grader = graders[Math.floor(Math.random() * graders.length)]!;
       const rubricChecks = rubricChecksMap.get(review.rubric_id) || [];
       const files = submissionFilesMap.get(review.submission_id) || [];
 
@@ -2454,7 +2477,7 @@ export class DatabaseSeeder {
         let remainingPoints = targetTotalPoints;
 
         for (let i = 0; i < applicableChecks.length; i++) {
-          const check = applicableChecks[i];
+          const check = applicableChecks[i]!;
 
           if (i === applicableChecks.length - 1) {
             // Last check gets all remaining points
@@ -2484,7 +2507,7 @@ export class DatabaseSeeder {
 
           if (check.is_annotation && files.length > 0) {
             // Create submission file comment (annotation)
-            const file = files[Math.floor(Math.random() * files.length)];
+            const file = files[Math.floor(Math.random() * files.length)]!;
             const lineNumber = Math.floor(Math.random() * 5) + 1;
 
             submissionFileComments.push({
@@ -2516,22 +2539,22 @@ export class DatabaseSeeder {
       }
 
       reviewUpdates.set(review.id, {
-        grader: grader.private_profile_id,
+        grader: grader!.private_profile_id,
         released: isCompleted,
-        completed_by: isCompleted ? grader.private_profile_id : null,
+        completed_by: isCompleted ? grader!.private_profile_id : null,
         completed_at: isCompleted ? new Date().toISOString() : null
       });
     }
 
     // Batch insert comments sequentially in chunks of 50
-    const COMMENT_BATCH_SIZE = this.rateLimits["submission_comments"].batchSize || 1;
+    const COMMENT_BATCH_SIZE = this.rateLimits["submission_comments"]?.batchSize ?? 1;
 
     console.log(`   Preparing submission comments batch ${submissionComments.length} comments`);
     if (submissionComments.length > 0) {
       const commentChunks = chunkArray(submissionComments, COMMENT_BATCH_SIZE);
 
       for (let index = 0; index < commentChunks.length; index++) {
-        const chunk = commentChunks[index];
+        const chunk = commentChunks[index]!;
         const { error: commentsError } = await this.rateLimitManager.trackAndLimit(
           "submission_comments",
           () => supabase.from("submission_comments").insert(chunk).select("id"),
@@ -2546,11 +2569,11 @@ export class DatabaseSeeder {
 
     console.log(`   Preparing submission file comments batch ${submissionFileComments.length} comments`);
     if (submissionFileComments.length > 0) {
-      const batchSize = this.rateLimits["submission_file_comments"].batchSize || 50;
+      const batchSize = this.rateLimits["submission_file_comments"]?.batchSize ?? 50;
       const fileCommentChunks = chunkArray(submissionFileComments, batchSize);
 
       for (let index = 0; index < fileCommentChunks.length; index++) {
-        const chunk = fileCommentChunks[index];
+        const chunk = fileCommentChunks[index]!;
         const { error: fileCommentsError } = await this.rateLimitManager.trackAndLimit(
           "submission_file_comments",
           () => supabase.from("submission_file_comments").insert(chunk).select("id"),
@@ -2586,9 +2609,9 @@ export class DatabaseSeeder {
             "Update errors:",
             updateErrors.map((e) => ({ error: e.error, data: e.data }))
           );
-          console.error("Sample update data:", chunk[0][1]);
+          console.error("Sample update data:", chunk[0]![1]);
           throw new Error(
-            `Failed to update ${updateErrors.length} submission reviews in batch ${chunkIndex + 1}: ${updateErrors[0].error?.message}`
+            `Failed to update ${updateErrors.length} submission reviews in batch ${chunkIndex + 1}: ${updateErrors[0]!.error?.message}`
           );
         }
       })
@@ -2620,7 +2643,7 @@ export class DatabaseSeeder {
     const shuffledSubmissions = [...submissionData].sort(() => Math.random() - 0.5);
 
     for (let i = 0; i < Math.min(numSubmissionsForExtensions, shuffledSubmissions.length); i++) {
-      submissionsForExtensions.add(shuffledSubmissions[i].submission_id);
+      submissionsForExtensions.add(shuffledSubmissions[i]!.submission_id);
     }
     console.log(`   ✓ Selected ${submissionsForExtensions.size} submissions for extensions`);
 
@@ -2640,7 +2663,7 @@ export class DatabaseSeeder {
       }));
 
     // Insert extensions in batches of 100
-    const batchSize = this.rateLimits["assignment_due_date_exceptions"].batchSize || 100;
+    const batchSize = this.rateLimits["assignment_due_date_exceptions"]?.batchSize ?? 100;
     for (let i = 0; i < extensionsToInsert.length; i += batchSize) {
       const batch = extensionsToInsert.slice(i, i + batchSize);
 
@@ -2674,7 +2697,7 @@ export class DatabaseSeeder {
         if (!acc[comment.submission_id]) {
           acc[comment.submission_id] = [];
         }
-        acc[comment.submission_id].push(comment);
+        acc[comment.submission_id]!.push(comment);
         return acc;
       },
       {} as Record<number, Array<(typeof submissionComments)[number]>>
@@ -2712,18 +2735,18 @@ export class DatabaseSeeder {
       }
 
       // Randomly select one of the existing comments
-      const selectedComment = submissionComments[Math.floor(Math.random() * submissionComments.length)];
+      const selectedComment = submissionComments[Math.floor(Math.random() * submissionComments.length)]!;
 
       // Add regrade request data to batch
       regradeRequestsData.push({
         submission_id: submission_id,
         assignment_id: assignment.id,
-        assignee: grader.private_profile_id,
-        created_by: student ? student.private_profile_id : group ? group.members[0] : "",
+        assignee: grader!.private_profile_id,
+        created_by: student ? student.private_profile_id : group ? group.members[0]! : "",
         class_id: class_id,
-        status: status,
+        status: status!,
         resolved_at: status !== "opened" ? new Date().toISOString() : null,
-        resolved_by: status !== "opened" ? grader.private_profile_id : null,
+        resolved_by: status !== "opened" ? grader!.private_profile_id : null,
         submission_comment_id: selectedComment.id, // Reference existing comment
         initial_points: selectedComment.points,
         resolved_points: status === "resolved" || status === "closed" ? Math.floor(Math.random() * 100) : null,
@@ -2733,13 +2756,13 @@ export class DatabaseSeeder {
 
     // Perform batch insert if we have data
     if (regradeRequestsData.length > 0) {
-      const BATCH_SIZE = this.rateLimits["submission_regrade_requests"].batchSize || 1;
+      const BATCH_SIZE = this.rateLimits["submission_regrade_requests"]?.batchSize ?? 1;
       const regradeChunks = chunkArray(regradeRequestsData, BATCH_SIZE);
 
       console.log(`   Processing ${regradeRequestsData.length} regrade requests in ${regradeChunks.length} batches...`);
 
       for (let i = 0; i < regradeChunks.length; i++) {
-        const chunk = regradeChunks[i];
+        const chunk = regradeChunks[i]!;
         const { error: regradeError } = await this.rateLimitManager.trackAndLimit(
           "submission_regrade_requests",
           () => supabase.from("submission_regrade_requests").insert(chunk).select("id"),
@@ -2788,7 +2811,7 @@ export class DatabaseSeeder {
     console.log("   Creating specification grading scheme columns...");
 
     // Create skill columns (12 skills)
-    const skillColumns = [];
+    const skillColumns: Array<{ id: number; name: string }> = [];
     for (let i = 1; i <= 12; i++) {
       const skillColumn = await this.createGradebookColumn({
         class_id,
@@ -2903,10 +2926,10 @@ final;`,
     const good = shuffledStudents.slice(Math.floor(students.length * 0.9), Math.floor(students.length * 0.95)); // 5%
 
     for (let i = 0; i < skillColumns.length; i++) {
-      const skillColumn = skillColumns[i];
+      const skillColumn = skillColumns[i]!;
 
       // Create custom score distribution for this skill
-      const customScores = students.map((student, index) => {
+      const customScores: number[] = students.map((student, index) => {
         const studentCategory =
           index < excellent.length ? "excellent" : index < excellent.length + good.length ? "good" : "random";
 
@@ -2928,7 +2951,9 @@ final;`,
           }
         } else {
           // 5% of students: completely random distribution
-          return [0, 1, 2][Math.floor(Math.random() * 3)];
+          const choices = [0, 1, 2] as const;
+          const index = Math.floor(Math.random() * choices.length);
+          return (choices[index] ?? 0) as number;
         }
       });
 
@@ -3123,7 +3148,7 @@ final;`,
       throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
     }
 
-    return column[0];
+    return column[0]!;
   }
 
   // Helper method to set custom scores for students in a gradebook column
@@ -3361,7 +3386,7 @@ final;`,
 
       const batchPromises = batch.map(async () => {
         // Select a random student as the creator
-        const creator = students[Math.floor(Math.random() * students.length)];
+        const creator = students[Math.floor(Math.random() * students.length)]!;
         const isPrivate = Math.random() < 0.3; // 30% chance of being private
         const isResolved = Math.random() < 0.8; // 80% chance of being resolved
         const status = isResolved ? (Math.random() < 0.5 ? "resolved" : "closed") : "open";
@@ -3378,12 +3403,12 @@ final;`,
               .insert({
                 class_id: class_id,
                 help_queue: queueId,
-                request: messageTemplate,
+                request: messageTemplate!,
                 is_private: isPrivate,
-                status: status,
+                status: status!,
                 created_by: creator.private_profile_id,
                 assignee: isResolved
-                  ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id
+                  ? instructors[Math.floor(Math.random() * instructors.length)]!.private_profile_id
                   : null,
                 resolved_at: isResolved
                   ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString()
@@ -3396,7 +3421,7 @@ final;`,
           throw new Error(`Failed to create help request: ${helpRequestError.message}`);
         }
 
-        const helpRequestId = helpRequestData[0].id;
+        const helpRequestId = helpRequestData[0]!.id;
 
         // Add the creator as a member
         await this.rateLimitManager.trackAndLimit("help_request_students", () =>
@@ -3439,7 +3464,7 @@ final;`,
           config.minRepliesPerRequest;
 
         if (numReplies > 0) {
-          const allParticipants = [creator, ...instructors];
+          const allParticipants: TestingUser[] = [creator, ...instructors];
           const messageInserts: Array<{
             help_request_id: number;
             author: string;
@@ -3452,10 +3477,10 @@ final;`,
           for (let i = 0; i < numReplies; i++) {
             const isFromInstructor = Math.random() < 0.4; // 40% chance message is from instructor
             const sender = isFromInstructor
-              ? instructors[Math.floor(Math.random() * instructors.length)]
-              : allParticipants[Math.floor(Math.random() * allParticipants.length)];
+              ? instructors[Math.floor(Math.random() * instructors.length)]!
+              : allParticipants[Math.floor(Math.random() * allParticipants.length)]!;
 
-            const replyTemplate = HELP_REQUEST_REPLIES[Math.floor(Math.random() * HELP_REQUEST_REPLIES.length)];
+            const replyTemplate = HELP_REQUEST_REPLIES[Math.floor(Math.random() * HELP_REQUEST_REPLIES.length)]!;
             const messageTime = new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Random time in last 7 days
 
             messageInserts.push({
@@ -3562,11 +3587,11 @@ final;`,
             .from("rubric_parts")
             .insert({
               class_id: assignment.class_id,
-              name: partTemplate.name,
-              description: partTemplate.description,
+              name: partTemplate.name!,
+              description: partTemplate.description!,
               ordinal: partTemplate.ordinal,
               rubric_id: rubricId
-            })
+            } as unknown as Database["public"]["Tables"]["rubric_parts"]["Insert"])
             .select("id")
         );
 
@@ -3574,7 +3599,7 @@ final;`,
           throw new Error(`Failed to create rubric part: ${partError?.message || "No data returned"}`);
         }
 
-        const partId = partData[0].id;
+        const partId = partData[0]!.id;
 
         // Create criteria for this part
         for (const criteriaTemplate of partTemplate.criteria) {
@@ -3585,14 +3610,14 @@ final;`,
                 .from("rubric_criteria")
                 .insert({
                   class_id: assignment.class_id,
-                  name: criteriaTemplate.name,
-                  description: criteriaTemplate.description,
+                  name: criteriaTemplate.name!,
+                  description: criteriaTemplate.description!,
                   ordinal: criteriaTemplate.ordinal,
                   total_points: criteriaTemplate.total_points,
                   is_additive: true,
                   rubric_part_id: partId,
                   rubric_id: rubricId
-                })
+                } as unknown as Database["public"]["Tables"]["rubric_criteria"]["Insert"])
                 .select("id")
           );
 
@@ -3600,7 +3625,7 @@ final;`,
             throw new Error(`Failed to create rubric criteria: ${criteriaError?.message || "No data returned"}`);
           }
 
-          const criteriaId = criteriaData[0].id;
+          const criteriaId = criteriaData[0]!.id;
 
           // Create checks for this criteria
           for (const checkTemplate of criteriaTemplate.checks) {
@@ -3610,14 +3635,14 @@ final;`,
                 .insert({
                   class_id: assignment.class_id,
                   rubric_criteria_id: criteriaId,
-                  name: checkTemplate.name,
+                  name: checkTemplate.name!,
                   description: `${checkTemplate.name} evaluation`,
                   ordinal: checkTemplate.ordinal,
                   points: checkTemplate.points,
                   is_annotation: checkTemplate.is_annotation,
                   is_comment_required: checkTemplate.is_comment_required,
                   is_required: checkTemplate.is_required
-                })
+                } as unknown as Database["public"]["Tables"]["rubric_checks"]["Insert"])
                 .select("*")
             );
           }
@@ -3663,7 +3688,7 @@ final;`,
           throw new Error(`Failed to create assignment group: ${groupError?.message || "No data returned"}`);
         }
 
-        const group = groupData[0];
+        const group = groupData[0]!;
 
         // Add members to the group
         const memberInserts = groupStudents.map((student) => ({
@@ -3724,7 +3749,7 @@ final;`,
       return [];
     }
 
-    const batch_size = this.rateLimits["submissions"].batchSize || 100;
+    const batch_size = this.rateLimits["submissions"]?.batchSize ?? 100;
     const submissionChunks = chunkArray(submissionsToCreate, batch_size);
     const test_run_prefix = getTestRunPrefix();
 
@@ -3784,12 +3809,12 @@ final;`,
           profile_id: item.student?.private_profile_id,
           assignment_group_id: item.group?.id,
           sha: "none",
-          repository: repositoryInserts[index].repository,
+          repository: repositoryInserts[index]!.repository,
           run_attempt: 1,
           run_number: 1,
           class_id: class_id,
-          repository_check_run_id: checkRunData[index].id,
-          repository_id: repositoryData[index].id
+          repository_check_run_id: checkRunData[index]!.id,
+          repository_id: repositoryData[index]!.id
         }));
 
         // Batch insert submissions for this chunk
@@ -3837,8 +3862,8 @@ public class Entrypoint {
           contents: sampleJavaCode,
           class_id: class_id,
           submission_id: submission.id,
-          profile_id: chunk[index].student?.private_profile_id,
-          assignment_group_id: chunk[index].group?.id
+          profile_id: chunk[index]!.student?.private_profile_id,
+          assignment_group_id: chunk[index]!.group?.id
         }));
 
         // Batch insert submission files for this chunk
@@ -3859,8 +3884,8 @@ public class Entrypoint {
           submission_id: submission.id,
           score: 5,
           class_id: class_id,
-          profile_id: chunk[index].student?.private_profile_id,
-          assignment_group_id: chunk[index].group?.id,
+          profile_id: chunk[index]!.student?.private_profile_id,
+          assignment_group_id: chunk[index]!.group?.id,
           lint_passed: true,
           lint_output: "no lint output",
           lint_output_format: "markdown",
@@ -3890,8 +3915,8 @@ public class Entrypoint {
             output: "here is a bunch of output\n**wow**",
             output_format: "markdown",
             class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
+            student_id: chunk[index]!.student?.private_profile_id,
+            assignment_group_id: chunk[index]!.group?.id,
             grader_result_id: graderResult.id,
             is_released: true
           },
@@ -3903,8 +3928,8 @@ public class Entrypoint {
             output: "here is a bunch of output\n**wow**",
             output_format: "markdown",
             class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
+            student_id: chunk[index]!.student?.private_profile_id,
+            assignment_group_id: chunk[index]!.group?.id,
             grader_result_id: graderResult.id,
             is_released: true
           }
@@ -3925,11 +3950,11 @@ public class Entrypoint {
 
         // Return the results for this chunk
         return chunk.map((item, index) => ({
-          submission_id: submissionData[index].id,
+          submission_id: submissionData[index]!.id,
           assignment: { id: item.assignment.id, due_date: item.assignment.due_date },
           student: item.student,
           group: item.group,
-          repository_id: repositoryData[index].id
+          repository_id: repositoryData[index]!.id
         }));
       })
     );

@@ -1,5 +1,5 @@
 import { useFindTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
-import { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { useCallback, useMemo } from "react";
 import { useCourseController } from "./useCourseController";
 

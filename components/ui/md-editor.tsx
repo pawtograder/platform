@@ -3,7 +3,7 @@ import MDEditor from "@uiw/react-md-editor";
 import { useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
-import { MDEditorProps } from "@uiw/react-md-editor";
+import type { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { isTextFile, getLanguageFromFile } from "@/lib/utils";

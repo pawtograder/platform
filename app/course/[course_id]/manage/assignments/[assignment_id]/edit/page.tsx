@@ -3,7 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading } from "@chakra-ui/react";
 import { useOne, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";

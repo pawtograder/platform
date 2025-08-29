@@ -31,7 +31,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
+import Editor, { type Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { memo, useCallback, useEffect, useRef, useState } from "react";

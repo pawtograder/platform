@@ -52,6 +52,7 @@ export function useConnectionStatus(): UseConnectionStatusReturn {
         setConnectionStatus(status);
         setConnectionError(null);
       } catch (error) {
+        // eslint-disable-next-line no-console
         console.error("Failed to get connection status:", error);
         setConnectionError(error instanceof Error ? error.message : "Unknown connection error");
       }
@@ -65,6 +66,7 @@ export function useConnectionStatus(): UseConnectionStatusReturn {
     try {
       unsubscribe = controller.officeHoursRealTimeController?.subscribeToStatus?.(updateStatus);
     } catch (error) {
+      // eslint-disable-next-line no-console
       console.warn("Could not subscribe to status changes:", error);
     }
 

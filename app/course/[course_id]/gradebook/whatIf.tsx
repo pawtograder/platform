@@ -478,8 +478,8 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
           displayName = "Other";
         } else if (baseGroupName.startsWith("assignment-")) {
           // For assignment sub-groups, capitalize and format nicely
-          const subType = baseGroupName.split("-")[1];
-          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
+          const [, subType = "assignment"] = baseGroupName.split("-");
+          displayName = subType.charAt(0).toUpperCase() + subType.slice(1);
         } else {
           displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
         }
@@ -594,7 +594,7 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
   return (
     <VStack minW="md" maxW="xl" align="flex-start" role="region" aria-label="Student Gradebook" gap={0}>
       {/* Expand/Collapse All Buttons */}
-      {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+      {Object.values(groupedColumns).some((group) => group.columns.length > 1) && (
         <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>
           <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
             <Icon as={LuChevronDown} mr={2} /> Expand All

@@ -26,16 +26,16 @@ export default defineConfig({
 
   reporter: [
     // Use "dot" reporter on CI, "list" otherwise (Playwright default).
-    process.env.CI ? ["dot"] : ["list"],
+    process.env["CI"] ? ["dot"] : ["list"],
     // Add Argos reporter.
     [
       "@argos-ci/playwright/reporter",
       {
         // Upload to Argos on CI only.
-        uploadToArgos: !!process.env.CI,
+        uploadToArgos: !!process.env["CI"],
 
         // Set your Argos token (required if not using GitHub Actions).
-        token: process.env.ARGOS_TOKEN || ""
+        token: process.env["ARGOS_TOKEN"] || ""
       }
     ],
     // Add built-in HTML reporter to save traces for later upload.

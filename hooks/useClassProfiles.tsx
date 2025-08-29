@@ -2,6 +2,7 @@
 import { signOutAction } from "@/app/actions";
 import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import type { CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -10,6 +11,7 @@ import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
+
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -110,7 +112,10 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         setRoles(data || []);
       } catch (error) {
         if (!cleanedUp) {
-          console.error("Error fetching user roles:", error);
+          toaster.error({
+            title: "Error",
+            description: `Error fetching user roles: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
         }
       } finally {
         if (!cleanedUp) {

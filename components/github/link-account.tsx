@@ -8,6 +8,8 @@ import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/p
 import { useIdentity } from "@/hooks/useIdentities";
 import { useSearchParams } from "next/navigation";
 import { Alert } from "../ui/alert";
+import { toaster } from "../ui/toaster";
+
 function HelpDialog() {
   return (
     <PopoverRoot>

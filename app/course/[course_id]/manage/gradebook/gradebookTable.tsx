@@ -71,12 +71,12 @@ import {
   type RowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import pluralize from "pluralize";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FieldValues } from "react-hook-form";
+import type { FieldValues } from "react-hook-form";
 import { FaLock } from "react-icons/fa";
 import { FaLockOpen } from "react-icons/fa6";
 import { FiChevronDown, FiDownload, FiFilter, FiPlus } from "react-icons/fi";
@@ -1728,7 +1728,7 @@ export default function GradebookTable() {
           displayName = "Other";
         } else if (baseGroupName.startsWith("assignment-")) {
           // For assignment sub-groups, capitalize and format nicely
-          const subType = baseGroupName.split("-")[1];
+          const subType = baseGroupName.split("-")[1] ?? "Assignment";
           displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
         } else {
           displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
@@ -1749,8 +1749,8 @@ export default function GradebookTable() {
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
   useEffect(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const allGroupKeys = Object.keys(groupedColumns).filter((key) => (groupedColumns[key]?.columns.length ?? 0) > 1);
+    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key]!.groupName))];
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -2351,7 +2351,7 @@ export default function GradebookTable() {
               6. Expand/collapse all buttons are positioned discretely above the Student Name header
             */}
             <Table.Row>
-              {headerGroups[0].headers
+              {(headerGroups[0]?.headers ?? [])
                 .filter((header) => {
                   // Filter out headers that should be hidden when collapsed
                   if (header.column.id.startsWith("grade_")) {
@@ -2481,48 +2481,46 @@ export default function GradebookTable() {
                       }}
                     >
                       {/* Add expand/collapse buttons in the space above Student Name */}
-                      {colIdx === 0 &&
-                        Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
-                          0 && (
-                          <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
-                            <WrappedTooltip content="Auto-layout columns">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={autoLayout}
-                                colorPalette="blue"
-                                aria-label="Auto-layout columns"
-                                disabled={isAutoLayouting}
-                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-                              >
-                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
-                              </IconButton>
-                            </WrappedTooltip>
+                      {colIdx === 0 && Object.values(groupedColumns).filter((g) => g.columns.length > 1).length > 0 && (
+                        <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                          <WrappedTooltip content="Auto-layout columns">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={autoLayout}
+                              colorPalette="blue"
+                              aria-label="Auto-layout columns"
+                              disabled={isAutoLayouting}
+                              _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                            >
+                              {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                            </IconButton>
+                          </WrappedTooltip>
 
-                            <WrappedTooltip content="Expand all groups">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={expandAll}
-                                colorPalette="blue"
-                                aria-label="Expand all groups"
-                              >
-                                <Icon as={LuChevronDown} boxSize={3} />
-                              </IconButton>
-                            </WrappedTooltip>
-                            <WrappedTooltip content="Collapse all groups">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={collapseAll}
-                                colorPalette="blue"
-                                aria-label="Collapse all groups"
-                              >
-                                <Icon as={LuChevronRight} boxSize={3} />
-                              </IconButton>
-                            </WrappedTooltip>
-                          </HStack>
-                        )}
+                          <WrappedTooltip content="Expand all groups">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={expandAll}
+                              colorPalette="blue"
+                              aria-label="Expand all groups"
+                            >
+                              <Icon as={LuChevronDown} boxSize={3} />
+                            </IconButton>
+                          </WrappedTooltip>
+                          <WrappedTooltip content="Collapse all groups">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={collapseAll}
+                              colorPalette="blue"
+                              aria-label="Collapse all groups"
+                            >
+                              <Icon as={LuChevronRight} boxSize={3} />
+                            </IconButton>
+                          </WrappedTooltip>
+                        </HStack>
+                      )}
                     </Table.ColumnHeader>
                   );
                 })}

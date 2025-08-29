@@ -1,11 +1,12 @@
 import type { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import type { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
 dotenv.config({ path: ".env.local" });
+import * as mathjs from "mathjs";
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createClient<Database>(process.env["SUPABASE_URL"]!, process.env["SUPABASE_SERVICE_ROLE_KEY"]!);
@@ -270,8 +271,8 @@ export async function createUserInClass({
     // User already enrolled in class, get existing profile data
     // eslint-disable-next-line no-console
     console.log(`User already enrolled in class ${class_id}, using existing profiles`);
-    publicProfileData = { id: existingRole[0].public_profile_id };
-    privateProfileData = { id: existingRole[0].private_profile_id };
+    publicProfileData = { id: existingRole![0]!.public_profile_id! };
+    privateProfileData = { id: existingRole![0]!.private_profile_id! };
   } else if (class_id !== 1) {
     // User not enrolled or new class, create profiles and enrollment
     const { data: newPublicProfileDataList, error: publicProfileError } = await (
@@ -473,8 +474,8 @@ export async function createUsersInClass(
       // User already enrolled in class, get existing profile data
       // eslint-disable-next-line no-console
       console.log(`User already enrolled in class ${class_id}, using existing profiles`);
-      publicProfileData = { id: existingRole[0].public_profile_id };
-      privateProfileData = { id: existingRole[0].private_profile_id };
+      publicProfileData = { id: existingRole![0]!.public_profile_id! };
+      privateProfileData = { id: existingRole![0]!.private_profile_id! };
     } else if (class_id !== 1) {
       // User not enrolled or new class, create profiles and enrollment
       const { data: newPublicProfileDataList, error: publicProfileError } = await (
@@ -612,8 +613,11 @@ export async function insertPreBakedSubmission({
   if (repositoryError) {
     throw new Error(`Failed to create repository: ${repositoryError.message}`);
   }
-  const repositoryData = repositoryDataList[0];
-  const repository_id = repositoryData?.id;
+  const repositoryData = repositoryDataList && repositoryDataList[0];
+  if (!repositoryData) {
+    throw new Error("Failed to create repository: no data returned");
+  }
+  const repository_id = repositoryData.id;
 
   const { data: checkRunDataList, error: checkRunError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
@@ -624,7 +628,7 @@ export async function insertPreBakedSubmission({
         class_id: class_id,
         repository_id: repository_id,
         check_run_id: 1,
-        status: "{}",
+        status: {},
         sha: "none",
         commit_message: "none"
       })
@@ -635,8 +639,11 @@ export async function insertPreBakedSubmission({
     console.error(checkRunError);
     throw new Error("Failed to create check run");
   }
-  const checkRunData = checkRunDataList[0];
-  const check_run_id = checkRunData?.id;
+  const checkRunData = checkRunDataList && checkRunDataList[0];
+  if (!checkRunData) {
+    throw new Error("Failed to create check run: no data returned");
+  }
+  const check_run_id = checkRunData.id;
   const { data: submissionDataList, error: submissionError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
   ).trackAndLimit("submissions", () =>
@@ -661,8 +668,11 @@ export async function insertPreBakedSubmission({
     console.error(submissionError);
     throw new Error("Failed to create submission");
   }
-  const submissionData = submissionDataList[0];
-  const submission_id = submissionData?.id;
+  const submissionData = submissionDataList && submissionDataList[0];
+  if (!submissionData) {
+    throw new Error("Failed to create submission: no data returned");
+  }
+  const submission_id = submissionData.id;
   const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
     "submission_files",
     () =>
@@ -732,7 +742,10 @@ public class Entrypoint {
     console.error(graderResultError);
     throw new Error("Failed to create grader result");
   }
-  const graderResultData = graderResultDataList[0];
+  const graderResultData = graderResultDataList && graderResultDataList[0];
+  if (!graderResultData) {
+    throw new Error("Failed to create grader result: no data returned");
+  }
   const { error: graderResultTestError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
     "grader_result_tests",
     () =>
@@ -780,8 +793,7 @@ public class Entrypoint {
     .eq("id", submission_id)
     .single();
   if (submissionWithReviewIdError) {
-    console.error(submissionWithReviewIdError);
-    throw new Error("Failed to get submission with review id");
+    throw new Error(`Failed to get submission with review id: ${submissionWithReviewIdError.message}`);
   }
   return {
     submission_id: submission_id,
@@ -892,7 +904,10 @@ export async function insertAssignment({
   if (selfReviewSettingError) {
     throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
   }
-  const selfReviewSettingData = selfReviewSettingDataList[0];
+  const selfReviewSettingData = selfReviewSettingDataList && selfReviewSettingDataList[0];
+  if (!selfReviewSettingData) {
+    throw new Error("Failed to create self review setting: no data returned");
+  }
   const self_review_setting_id = selfReviewSettingData.id;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
@@ -1166,8 +1181,11 @@ export async function insertSubmissionViaAPI({
   if (repositoryError) {
     throw new Error(`Failed to create repository: ${repositoryError.message}`);
   }
-  const repositoryData = repositoryDataList[0];
-  const repository_id = repositoryData?.id;
+  const repositoryData = repositoryDataList && repositoryDataList[0];
+  if (!repositoryData) {
+    throw new Error("Failed to create repository: no data returned");
+  }
+  const repository_id = repositoryData.id;
 
   const { error: checkRunError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
     "repository_check_runs",
@@ -1178,7 +1196,7 @@ export async function insertSubmissionViaAPI({
           class_id: class_id,
           repository_id: repository_id,
           check_run_id: 1,
-          status: "{}",
+          status: {},
           sha: sha || "HEAD",
           commit_message: commit_message || "none"
         })
@@ -1708,7 +1726,7 @@ export async function createAssignmentsAndGradebookColumns({
           slug,
           max_score,
           score_expression,
-          dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
+          dependencies: (finalDependencies as unknown as Json) ?? null,
           released,
           sort_order
         })
@@ -1718,8 +1736,10 @@ export async function createAssignmentsAndGradebookColumns({
     if (columnError) {
       throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
     }
-
-    const column = columnList[0];
+    const column = columnList && columnList[0];
+    if (!column) {
+      throw new Error("Failed to create gradebook column: no data returned");
+    }
     return column;
   }
 
@@ -1936,7 +1956,10 @@ export async function createAssignmentsAndGradebookColumns({
       throw new Error(`Failed to create assignment: ${assignmentError.message}`);
     }
 
-    const insertedAssignmentData = insertedAssignmentDataList[0];
+    const insertedAssignmentData = insertedAssignmentDataList && insertedAssignmentDataList[0];
+    if (!insertedAssignmentData) {
+      throw new Error("Failed to create assignment: no data returned");
+    }
     // Get assignment data
     const { data: assignmentDataList } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
       "assignments",
@@ -2025,7 +2048,10 @@ export async function createAssignmentsAndGradebookColumns({
         throw new Error(`Failed to create rubric part: ${partError.message}`);
       }
 
-      const partData = partDataList[0];
+      const partData = partDataList && partDataList[0];
+      if (!partData) {
+        throw new Error("Failed to create rubric part: no data returned");
+      }
       createdParts.push({ ...partTemplate, id: partData.id, rubric_id: rubricId });
 
       // Create criteria for this part
@@ -2039,8 +2065,8 @@ export async function createAssignmentsAndGradebookColumns({
               class_id: class_id,
               name: criteriaTemplate.name,
               description: criteriaTemplate.description,
-              ordinal: criteriaTemplate.ordinal,
-              total_points: criteriaTemplate.total_points,
+              ordinal: (criteriaTemplate as { ordinal?: number }).ordinal ?? 0,
+              total_points: (criteriaTemplate as { total_points?: number }).total_points ?? 0,
               is_additive: true,
               rubric_part_id: partData.id,
               rubric_id: rubricId || 0
@@ -2052,7 +2078,10 @@ export async function createAssignmentsAndGradebookColumns({
           throw new Error(`Failed to create rubric criteria: ${criteriaError.message}`);
         }
 
-        const criteriaData = criteriaDataList[0];
+        const criteriaData = criteriaDataList && criteriaDataList[0];
+        if (!criteriaData) {
+          throw new Error("Failed to create rubric criteria: no data returned");
+        }
         // Create checks for this criteria
         for (const checkTemplate of criteriaTemplate.checks) {
           const { data: checkDataList, error: checkError } = await (
@@ -2064,8 +2093,8 @@ export async function createAssignmentsAndGradebookColumns({
                 rubric_criteria_id: criteriaData.id,
                 name: checkTemplate.name,
                 description: `${checkTemplate.name} evaluation`,
-                ordinal: checkTemplate.ordinal,
-                points: checkTemplate.points,
+                ordinal: (checkTemplate as { ordinal?: number }).ordinal ?? 0,
+                points: (checkTemplate as { points?: number }).points ?? 0,
                 is_annotation: checkTemplate.is_annotation,
                 is_comment_required: checkTemplate.is_comment_required,
                 class_id: class_id,

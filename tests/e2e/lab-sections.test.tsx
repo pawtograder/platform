@@ -1,8 +1,8 @@
-import { Course, DayOfWeek } from "@/utils/supabase/DatabaseTypes";
+import type { Course, DayOfWeek } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { supabase, createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { supabase, createClass, createUsersInClass, loginAsUser, type TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
 
 let course: Course;

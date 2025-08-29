@@ -1,7 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { Link, Box, Flex, VStack, HStack, Heading, Text } from "@chakra-ui/react";
 import { redirect } from "next/navigation";
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 
 interface AdminLayoutProps {
   children: ReactNode;

@@ -21,7 +21,7 @@
  */
 
 import { createClient } from "@/utils/supabase/client";
-import { SystemSetting, SystemSettingKey, SystemSettingsTypes, SystemSettingValue } from "@/types/SystemSettings";
+import type { SystemSetting, SystemSettingKey, SystemSettingValue } from "@/types/SystemSettings";
 
 /**
  * Get a system setting by key with proper typing
@@ -82,9 +82,14 @@ export async function setSystemSetting<K extends SystemSettingKey>(
 
       if (error) throw error;
       return data as SystemSetting<K>;
-    } catch (error: any) {
+    } catch (caughtError: unknown) {
       // Handle unique constraint violation (duplicate key race condition)
-      if (error?.code === "23505") {
+      if (
+        typeof caughtError === "object" &&
+        caughtError !== null &&
+        "code" in caughtError &&
+        (caughtError as { code?: string }).code === "23505"
+      ) {
         // Another process created the setting, update it instead
         const { data, error: updateError } = await supabase
           .from("system_settings")
@@ -101,7 +106,7 @@ export async function setSystemSetting<K extends SystemSettingKey>(
         return data as SystemSetting<K>;
       }
       // Surface other errors as before
-      throw error;
+      throw caughtError;
     }
   }
 }

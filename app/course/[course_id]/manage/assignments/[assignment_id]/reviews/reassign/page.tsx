@@ -5,7 +5,7 @@ import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
 import useTags from "@/hooks/useTags";
-import { RubricPart, Tag, Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { RubricPart, Tag, Assignment } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -28,7 +28,12 @@ import { useCallback, useEffect, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
 import { type AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
-import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import type {
+  DraftReviewAssignment,
+  RubricWithParts,
+  SubmissionWithGrading,
+  UserRoleWithConflictsAndName
+} from "../page";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 import * as Sentry from "@sentry/nextjs";
@@ -615,7 +620,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const returnResult = [];
     for (let x = 0; x < groups.length; x += 1) {
       const result = new TAAssignmentSolver(
-        groups[x],
+        groups[x]!,
         submissionsToDo,
         historicalWorkload,
         graderPreferences,
@@ -662,7 +667,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
 
     for (let x = 0; x < groups.length && x < selectedParts.length; x += 1) {
       const result = new TAAssignmentSolver(
-        groups[x],
+        groups[x]!,
         submissionsToDo,
         historicalWorkload,
         graderPreferences,

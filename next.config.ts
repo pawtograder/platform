@@ -17,7 +17,7 @@ export default withSentryConfig(nextConfig, {
   },
   // Only print logs for uploading source maps in CI
   // Set to `true` to suppress logs
-  silent: !process.env.CI,
+  silent: !process.env["CI"],
   // Automatically tree-shake Sentry logger statements to reduce bundle size
   disableLogger: true
 });

@@ -89,7 +89,7 @@ export function setup() {
     // 3. Create students
     console.log("👥 Creating students...");
     const students = [];
-    const workerIndex = __ENV.TEST_WORKER_INDEX ? `${__ENV.TEST_WORKER_INDEX}-vu${__VU}` : `k6-worker-vu${__VU}`;
+    const workerIndex = __ENV["TEST_WORKER_INDEX"] ? `${__ENV["TEST_WORKER_INDEX"]}-vu${__VU}` : `k6-worker-vu${__VU}`;
 
     for (let i = 0; i < 5; i++) {
       // Create fewer students to reduce load
@@ -168,12 +168,21 @@ export default function (data: TestData | undefined): void {
   }
 
   const config = getSupabaseConfig();
-  const endToEndSecret = __ENV.END_TO_END_SECRET || "not-a-secret";
+  const endToEndSecret = __ENV["END_TO_END_SECRET"] || "not-a-secret";
 
   const { class_id, repositories } = data;
 
   // Randomly select a pre-created repository (which has associated student and assignment)
-  const randomRepository = repositories[Math.floor(Math.random() * repositories.length)];
+  const repoIndex = Math.floor(Math.random() * repositories.length);
+  const randomRepository = repositories[repoIndex];
+
+  if (!randomRepository) {
+    console.error("❌ No repository available to create a submission");
+    errorCounter.add(1);
+    submissionRate.add(false);
+    return;
+  }
+
   const { student: randomStudent, assignment: randomAssignment } = randomRepository;
 
   const startTime = Date.now();
@@ -216,7 +225,7 @@ export default function (data: TestData | undefined): void {
               submissionData &&
                 typeof submissionData === "object" &&
                 "grader_url" in submissionData &&
-                typeof (submissionData as Record<string, unknown>).grader_url === "string"
+                typeof (submissionData as Record<string, unknown>)["grader_url"] === "string"
             );
           }
         }
@@ -229,7 +238,7 @@ export default function (data: TestData | undefined): void {
         );
         console.error(`❌ Response body: ${submissionResponse.body}`);
       } else {
-        const submissionId = (submissionData as Record<string, unknown>)?.submission_id || "unknown";
+        const submissionId = (submissionData as Record<string, unknown>)?.["submission_id"] || "unknown";
         console.log(
           `✅ Submission created successfully! Submission ID: ${submissionId}, Duration: ${duration}ms, Repository: ${repository}`
         );

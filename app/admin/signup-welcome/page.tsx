@@ -4,11 +4,11 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, Text, Flex, VStack, Heading, HStack } from "@chakra-ui/react";
 import { Save, MessageSquare, User, Check } from "lucide-react";
-import NotificationForm, { NotificationFormData } from "@/components/notifications/NotificationForm";
+import NotificationForm, { type NotificationFormData } from "@/components/notifications/NotificationForm";
 import { toaster } from "@/components/ui/toaster";
 import { Alert } from "@/components/ui/alert";
 import {
-  SystemSetting,
+  type SystemSetting,
   notificationFormToWelcomeMessage,
   welcomeMessageToNotificationForm
 } from "@/types/SystemSettings";

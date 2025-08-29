@@ -1,5 +1,5 @@
 "use client";
-import { User } from "@supabase/supabase-js";
+import type { User } from "@supabase/supabase-js";
 import { createContext, useContext } from "react";
 type AuthStateContextType = {
   user: User | null;

@@ -1,4 +1,4 @@
-import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { addDays, addMinutes } from "date-fns";
 import {
@@ -7,7 +7,7 @@ import {
   insertSubmissionViaAPI,
   loginAsUser,
   supabase,
-  TestingUser,
+  type TestingUser,
   createUsersInClass
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
@@ -55,8 +55,8 @@ test.beforeAll(async () => {
   await supabase.from("assignment_due_date_exceptions").insert({
     assignment_id: assignmentExtended.id,
     class_id: course.id,
-    creator_id: student.private_profile_id,
-    student_id: student.private_profile_id,
+    creator_id: student!.private_profile_id,
+    student_id: student!.private_profile_id,
     hours: 24,
     minutes: 0,
     tokens_consumed: 1,
