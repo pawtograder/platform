@@ -548,17 +548,14 @@ function EditablePoints({
     setIsUpdating(true);
     try {
       const supabase = createClient();
-      
+
       // Convert empty string to 0, otherwise parse the number
       const numericValue = editValue === "" ? 0 : Math.round(parseFloat(editValue) || 0);
-      
+
       const rpcParams = {
         regrade_request_id: regradeRequestId,
         profile_id: privateProfileId,
-        ...(type === "resolved" 
-          ? { resolved_points: numericValue }
-          : { closed_points: numericValue }
-        )
+        ...(type === "resolved" ? { resolved_points: numericValue } : { closed_points: numericValue })
       };
 
       const { error } = await supabase.rpc("update_regrade_request_points", rpcParams);
@@ -597,7 +594,7 @@ function EditablePoints({
           value={editValue}
           onChange={(e) => {
             const inputValue = e.target.value;
-            
+
             // Allow empty string or valid number strings (including negative and decimal)
             if (inputValue === "" || inputValue === "-" || /^-?\d*\.?\d*$/.test(inputValue)) {
               setEditValue(inputValue);
@@ -614,20 +611,10 @@ function EditablePoints({
             }
           }}
         />
-        <Button
-          size="xs"
-          colorPalette="blue"
-          onClick={handleSave}
-          loading={isUpdating}
-        >
+        <Button size="xs" colorPalette="blue" onClick={handleSave} loading={isUpdating}>
           Save
         </Button>
-        <Button
-          size="xs"
-          variant="ghost"
-          onClick={handleCancel}
-          disabled={isUpdating}
-        >
+        <Button size="xs" variant="ghost" onClick={handleCancel} disabled={isUpdating}>
           Cancel
         </Button>
       </HStack>
