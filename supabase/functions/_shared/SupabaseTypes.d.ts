@@ -8828,6 +8828,15 @@ export type Database = {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
+      update_regrade_request_points: {
+        Args: {
+          closed_points?: number;
+          profile_id: string;
+          regrade_request_id: number;
+          resolved_points?: number;
+        };
+        Returns: boolean;
+      };
       update_regrade_request_status: {
         Args: {
           closed_points?: number;
