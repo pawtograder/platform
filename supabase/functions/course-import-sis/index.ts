@@ -1441,6 +1441,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         category: "error",
         data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
       });
+      Sentry.captureException(error, scope);
       errorCount++;
     }
   }
