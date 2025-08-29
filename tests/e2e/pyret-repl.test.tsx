@@ -132,7 +132,7 @@ async function insertPyretSubmission({
     contents: `use context dcic2024
 fun double(n):
   n * 2
-with:
+where:
   double(5) is 10
   double(0) is 0
   double(-3) is -6
@@ -185,7 +185,7 @@ end`,
       extra_data: {
         pyret_repl: {
           initial_code:
-            "use context dcic2024\n# Test your double function here\nfun double(n):\n  n * 2\nwith:\n  double(5) is 10\n  double(0) is 0\nend",
+            "use context dcic2024\n# Test your double function here\nfun double(n):\n  n * 2\nwhere:\n  double(5) is 10\n  double(0) is 0\nend",
           initial_interactions: ["double(5)", "double(10)", "double(-3)"],
           repl_contents: "Ready to test your code!"
         }
@@ -205,7 +205,7 @@ end`,
       extra_data: {
         pyret_repl: {
           initial_code:
-            "use context dcic2024\n# Advanced challenge code\nfun process-list(lst):\n  # Your implementation here\n  lst\nwith:\n  process-list([list: 1, 2, 3]) is [list: 1, 2, 3]\n  process-list([list:]) is [list:]\nend",
+            "use context dcic2024\n# Advanced challenge code\nfun process-list(lst):\n  # Your implementation here\n  lst\nwhere:\n  process-list([list: 1, 2, 3]) is [list: 1, 2, 3]\n  process-list([list:]) is [list:]\nend",
           initial_interactions: ["process-list([list: 1, 2, 3])", "process-list([list:])"]
         }
       }
@@ -241,7 +241,7 @@ end`,
       extra_data: {
         pyret_repl: {
           initial_code:
-            "use context dcic2024\n# Debug REPL for instructors\n# This contains sensitive test information\nfun debug-trace(f):\n  # Debug implementation\n  f\nwith:\n  debug-trace(double) is double\nend",
+            "use context dcic2024\n# Debug REPL for instructors\n# This contains sensitive test information\nfun debug-trace(f):\n  # Debug implementation\n  f\nwhere:\n  debug-trace(double) is double\nend",
           initial_interactions: ["debug-trace(double)", "# Check memory usage"],
           repl_contents: "Instructor debug session ready"
         }
@@ -266,6 +266,7 @@ test.describe("Pyret REPL Integration", () => {
       page.getByRole("tabpanel").getByRole("link", { name: "Hidden Test (Instructor Only)" })
     ).not.toBeVisible();
 
+    await page.waitForLoadState("networkidle");
     await argosScreenshot(page, "pyret-repl-test-results-initial");
 
     const replToggle = page.getByRole("button", { name: /Interactive Pyret REPL/i }).first();
@@ -278,6 +279,11 @@ test.describe("Pyret REPL Integration", () => {
     const replContainer = page.locator('[id^="pyret-repl-region-"]');
     await expect(replContainer).toBeVisible();
 
+    await page.waitForFunction(() => {
+      const replElement = document.querySelector('[id^="pyret-repl-region-"]');
+      return replElement && replElement.children.length > 0;
+    });
+
     await argosScreenshot(page, "pyret-repl-expanded");
 
     await replToggle.click();
@@ -286,6 +292,14 @@ test.describe("Pyret REPL Integration", () => {
     const secondReplToggle = page.getByRole("button", { name: /Interactive Pyret REPL/i }).nth(1);
     await secondReplToggle.click();
     await page.waitForTimeout(3000);
+
+    const newReplContainer = page.locator('[id^="pyret-repl-region-"]').first();
+    await expect(newReplContainer).toBeVisible();
+
+    await page.waitForFunction(() => {
+      const replElement = document.querySelector('[id^="pyret-repl-region-"]');
+      return replElement && replElement.children.length > 0;
+    });
 
     await argosScreenshot(page, "pyret-repl-second-expanded");
   });
@@ -304,6 +318,7 @@ test.describe("Pyret REPL Integration", () => {
     }
 
     await expect(page.getByRole("tabpanel").getByRole("link", { name: "Hidden Test (Instructor Only)" })).toBeVisible();
+    await page.waitForLoadState("networkidle");
     await argosScreenshot(page, "pyret-repl-instructor-view");
 
     const instructorReplToggle = page.getByRole("button", { name: /Instructor-Only.*Interactive Pyret REPL/i });
@@ -311,6 +326,12 @@ test.describe("Pyret REPL Integration", () => {
     if ((await instructorReplToggle.count()) > 0) {
       await instructorReplToggle.first().click();
       await page.waitForTimeout(3000);
+
+      await page.waitForFunction(() => {
+        const replElement = document.querySelector('[id^="pyret-repl-region-"]');
+        return replElement && replElement.children.length > 0;
+      });
+
       await argosScreenshot(page, "pyret-repl-instructor-only-expanded");
     }
 
@@ -340,6 +361,7 @@ test.describe("Pyret REPL Integration", () => {
       await replToggle.click();
       await replToggle.click();
       await page.waitForTimeout(5000);
+      await page.waitForLoadState("networkidle");
       await argosScreenshot(page, "pyret-repl-error-handling");
     }
   });
@@ -365,6 +387,17 @@ test.describe("Pyret REPL Integration", () => {
 
     const visibleCount = await replContainers.count();
     expect(visibleCount).toBeGreaterThanOrEqual(expectedOpenReplCount);
+
+    await page.waitForFunction((expectedCount) => {
+      const replElements = document.querySelectorAll('[id^="pyret-repl-region-"]');
+      let loadedCount = 0;
+      for (let i = 0; i < Math.min(replElements.length, expectedCount); i++) {
+        if (replElements[i].children.length > 0) {
+          loadedCount++;
+        }
+      }
+      return loadedCount >= expectedCount;
+    }, expectedOpenReplCount);
 
     await argosScreenshot(page, "pyret-repl-multiple-open");
   });
