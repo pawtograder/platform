@@ -63,8 +63,8 @@ const statusConfig: Record<
     bgColor: "bg.warning",
     borderColor: "border.warning",
     icon: ArrowUp,
-    label: "Appealed",
-    description: "Student appealed to instructor for final review"
+    label: "Escalated",
+    description: "Student escalated to instructor for final review"
   },
   closed: {
     bgColor: "bg.emphasized",
@@ -260,10 +260,10 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
         <PopoverBody>
           <VStack gap={3} align="start">
             <Text fontWeight="semibold">Resolve Regrade Request</Text>
-            <Text fontSize="sm">The initial score for this regrade request is {initialPoints || 0}.</Text>
+            <Text fontSize="sm">The initial score for this rubric item is {initialPoints || 0}.</Text>
             <Text fontSize="sm">
-              Enter the final score for this comment after reviewing the regrade request. It will overwrite the score
-              for the comment.
+              Enter the final score for this rubric item after reviewing the regrade request. It will overwrite the
+              score for the rubric item.
             </Text>
             <VStack gap={2} align="start" w="100%">
               <Text fontSize="sm" fontWeight="medium">
@@ -342,7 +342,7 @@ function EscalateRequestDialog({
     <DialogRoot open={isOpen} onOpenChange={(e) => onOpenChange(e.open)}>
       <DialogTrigger asChild>
         <Button colorPalette="orange" size="sm" loading={isUpdating}>
-          Appeal to Instructor
+          Escalate to Instructor
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -351,16 +351,18 @@ function EscalateRequestDialog({
         </DialogHeader>
         <DialogBody>
           <VStack gap={4} align="start">
-            <Text>You can appeal this regrade request to an instructor for final review.</Text>
+            <Text>You can escalate this regrade request to an instructor for final review.</Text>
             <Box bg="bg.info" p={3} borderRadius="md" w="100%">
               <Text fontWeight="semibold" mb={2}>
                 ⚠️ Important Guidelines
               </Text>
               <VStack gap={1} align="start">
-                <Text fontSize="sm">• Only appeal if you believe the rubric is not being fairly applied</Text>
-                <Text fontSize="sm">• Don&apos;t appeal simply because you disagree with the grade</Text>
+                <Text fontSize="sm">• Only escalate if you have a substantive concern about the grading decision</Text>
+                <Text fontSize="sm">
+                  • Provide clear reasoning for why you believe the decision should be reconsidered
+                </Text>
                 <Text fontSize="sm">• The instructor&apos;s decision will be final</Text>
-                <Text fontSize="sm">• Frivolous appeals may affect future regrade requests</Text>
+                <Text fontSize="sm">• Frivolous escalations may affect future regrade requests</Text>
               </VStack>
             </Box>
           </VStack>
@@ -445,15 +447,15 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
       <PopoverTrigger asChild>
         <Button colorPalette="orange" variant="solid" size="sm">
-          Decide Appeal
+          Decide Escalation
         </Button>
       </PopoverTrigger>
       <PopoverContent>
         <PopoverArrow />
         <PopoverBody>
           <VStack gap={3} align="start">
-            <Text fontWeight="semibold">Decide Appeal</Text>
-            <Text fontSize="sm">Enter the final decision for this appealed regrade request.</Text>
+            <Text fontWeight="semibold">Decide Escalation</Text>
+            <Text fontSize="sm">Enter the final decision for this escalated regrade request.</Text>
             <Text fontSize="sm">Initial score: {initialPoints}.</Text>
             <Text fontSize="sm">Revised score: {resolvedPoints}.</Text>
             <VStack gap={2} align="start" w="100%">
@@ -507,7 +509,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
               w="100%"
               disabled={closeScore === undefined}
             >
-              Decide Appeal and Close Request
+              Decide Escalation and Close Request
             </Button>
           </VStack>
         </PopoverBody>
@@ -693,7 +695,7 @@ export default function RegradeRequestWrapper({
                 )}
                 {regradeRequest.escalated_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
-                    Appealed {formatRelative(regradeRequest.escalated_at, new Date())} by {escalator?.name}
+                    Escalated {formatRelative(regradeRequest.escalated_at, new Date())} by {escalator?.name}
                   </Text>
                 )}
                 {regradeRequest.closed_at && (
