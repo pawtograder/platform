@@ -106,7 +106,11 @@ export default function RosterTokensTable() {
         <Text fontSize="sm" color="fg.muted">
           {(() => {
             const base = course?.late_tokens_per_student ?? 0;
-            return <>Each student receives {base} late token{base !== 1 ? "s" : ""}</>;
+            return (
+              <>
+                Each student receives {base} late token{base !== 1 ? "s" : ""}
+              </>
+            );
           })()}
         </Text>
       </HStack>
