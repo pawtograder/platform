@@ -20,13 +20,20 @@ export default function RosterTokensTable() {
   // I don't think this needs to be realtime
   useEffect(() => {
     let cancelled = false;
+    const id = course?.id;
+    if (!id) {
+      setLoadingGroups(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     const fetchGroupMembers = async () => {
       try {
         const supabase = createClient();
         const { data, error } = await supabase
           .from("assignment_groups_members")
           .select("assignment_group_id, profile_id")
-          .eq("class_id", course.id);
+          .eq("class_id", id);
         if (error) throw error;
         if (cancelled) return;
         const map: GroupMembersMap = new Map();
@@ -37,6 +44,8 @@ export default function RosterTokensTable() {
           map.get(agid)!.add(pid);
         });
         setGroupMembers(map);
+      } catch (e) {
+        console.error("Failed to fetch assignment group members", e);
       } finally {
         if (!cancelled) setLoadingGroups(false);
       }
@@ -45,8 +54,7 @@ export default function RosterTokensTable() {
     return () => {
       cancelled = true;
     };
-  }, [course.id]);
-
+  }, [course?.id]);
   // Compute tokens used and gifted per student
   const tokensByStudent = useMemo(() => {
     const usedMap = new Map<string, { used: number; gifted: number }>();
