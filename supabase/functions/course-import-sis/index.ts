@@ -614,7 +614,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         .limit(1000);
 
       const allExistingUsersBySIS = new Set(
-        (allExistingUserRoles || []).map(enr => enr.users.sis_user_id).filter(id => id !== null)
+        (allExistingUserRoles || []).map((enr) => enr.users.sis_user_id).filter((id) => id !== null)
       );
 
       console.log("=== EXISTING USERS DEBUG ===");
@@ -849,7 +849,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       console.log("=== INVITATION CREATION DEBUG ===");
       console.log(`Total SIS users to process: ${allSISUsers.size}`);
-      
+
       for (const [sisUserId, userData] of allSISUsers) {
         // Skip if user is already enrolled (check ALL user roles, not just section-specific ones)
         if (allExistingUsersBySIS.has(sisUserId)) {
@@ -925,8 +925,12 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       console.log(`=== INVITATION SUMMARY ===`);
       console.log(`Total SIS users: ${allSISUsers.size}`);
       console.log(`New invitations to create: ${newInvitations.length}`);
-      console.log(`Users skipped (already enrolled): ${Array.from(allSISUsers.keys()).filter(id => allExistingUsersBySIS.has(id)).length}`);
-      console.log(`Users with pending invitations: ${Array.from(allSISUsers.keys()).filter(id => currentInvitationsBySIS.has(id) && currentInvitationsBySIS.get(id)?.status === 'pending').length}`);
+      console.log(
+        `Users skipped (already enrolled): ${Array.from(allSISUsers.keys()).filter((id) => allExistingUsersBySIS.has(id)).length}`
+      );
+      console.log(
+        `Users with pending invitations: ${Array.from(allSISUsers.keys()).filter((id) => currentInvitationsBySIS.has(id) && currentInvitationsBySIS.get(id)?.status === "pending").length}`
+      );
       console.log(`==========================`);
 
       // Create new invitations in bulk using shared utility (no limit on count)
