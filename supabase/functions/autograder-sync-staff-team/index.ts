@@ -44,13 +44,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("github_org", classData.github_org!);
     scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
-        adminSupabase
-          .from("user_roles")
-          .select("users(github_username)")
-          .eq("class_id", course_id)
-          .or("role.eq.instructor,role.eq.grader")
-      );
+      const { data: staff, error: staffError } = await adminSupabase
+        .from("user_roles")
+        .select("users(github_username)")
+        .eq("class_id", course_id)
+        .or("role.eq.instructor,role.eq.grader")
+        .limit(1000);
       if (staffError) {
         console.error(staffError);
         throw new UserVisibleError("Error fetching staff");
@@ -75,13 +74,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("github_org", classData.github_org!);
     scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
-        supabase
-          .from("user_roles")
-          .select("users(github_username)")
-          .eq("class_id", course_id)
-          .or("role.eq.instructor,role.eq.grader")
-      );
+      const { data: staff, error: staffError } = await supabase
+        .from("user_roles")
+        .select("users(github_username)")
+        .eq("class_id", course_id)
+        .or("role.eq.instructor,role.eq.grader")
+        .limit(1000);
       if (staffError) {
         console.error(staffError);
         throw new UserVisibleError("Error fetching staff");

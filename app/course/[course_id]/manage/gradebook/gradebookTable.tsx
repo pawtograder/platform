@@ -1,25 +1,29 @@
 "use client";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { MenuContent, MenuItem, MenuRoot, MenuTrigger, MenuSeparator } from "@/components/ui/menu";
+import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsInstructor, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import {
+  useAllStudentRoles,
   useCanShowGradeFor,
   useCourseController,
   useObfuscatedGradesMode,
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
 import {
+  useAreAllDependenciesReleased,
   useGradebookColumn,
   useGradebookColumnGrades,
   useGradebookColumns,
   useGradebookController,
-  useStudentDetailView,
-  useAreAllDependenciesReleased
+  useGradebookRefetchStatus,
+  useStudentDetailView
 } from "@/hooks/useGradebook";
+import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 import { createClient } from "@/utils/supabase/client";
 import {
   ClassSection,
@@ -41,11 +45,11 @@ import {
   Input,
   Link,
   List,
-  Portal,
+  PopoverBody,
+  PopoverContent,
   PopoverRoot,
   PopoverTrigger,
-  PopoverContent,
-  PopoverBody,
+  Portal,
   Spinner,
   Table,
   Text,
@@ -53,8 +57,7 @@ import {
   Tooltip,
   VStack
 } from "@chakra-ui/react";
-import { Checkbox } from "@/components/ui/checkbox";
-import { useCreate, useInvalidate, useUpdate, useList } from "@refinedev/core";
+import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
   Column,
@@ -69,41 +72,45 @@ import {
   useReactTable
 } from "@tanstack/react-table";
 import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
-import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { Select } from "chakra-react-select";
+import { useParams } from "next/navigation";
+import pluralize from "pluralize";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FieldValues } from "react-hook-form";
-import { FiDownload, FiPlus, FiFilter, FiChevronDown } from "react-icons/fi";
+import { FaLock } from "react-icons/fa";
+import { FaLockOpen } from "react-icons/fa6";
+import { FiChevronDown, FiDownload, FiFilter, FiPlus } from "react-icons/fi";
 import {
   LuArrowDown,
   LuArrowLeft,
   LuArrowRight,
   LuArrowUp,
+  LuCalculator,
   LuCheck,
-  LuPencil,
-  LuTrash,
-  LuX,
   LuChevronDown,
   LuChevronRight,
-  LuCalculator,
-  LuFile
+  LuFile,
+  LuLayoutGrid,
+  LuPencil,
+  LuTrash,
+  LuX
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
-import pluralize from "pluralize";
 import { WhatIf } from "../../gradebook/whatIf";
 import GradebookCell from "./gradebookCell";
 import ImportGradebookColumn from "./importGradebookColumn";
-import { FaLock } from "react-icons/fa";
-import { FaLockOpen } from "react-icons/fa6";
-import { Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
 const MemoizedGradebookCell = React.memo(GradebookCell);
 
 function RenderExprDocs() {
   return (
     <Text fontSize="sm" color="fg.muted">
       Refers to the score as variable <Code>score</Code>. Convert to letter with <Code>letter(score)</Code>
-      See{" "}
-      <Link href="https://mathjs.org/examples/index.html" target="_blank">
-        mathjs documentation
+      <Link
+        href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation"
+        target="_blank"
+        colorPalette="green"
+      >
+        Read the docs
       </Link>
     </Text>
   );
@@ -111,10 +118,13 @@ function RenderExprDocs() {
 function ScoreExprDocs() {
   return (
     <Text fontSize="sm" color="fg.muted">
-      Reference a gradebook column or assignment with <Code>gradebook_columns(&quot;slug&quot;)</Code> or{" "}
-      <Code>assignments(&quot;slug&quot;)</Code>, globs supported See{" "}
-      <Link href="https://mathjs.org/examples/index.html" target="_blank">
-        mathjs documentation
+      Reference a gradebook column or assignment with <Code>gradebook_columns(&quot;slug&quot;)</Code>, globs supported.{" "}
+      <Link
+        href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation"
+        target="_blank"
+        colorPalette="green"
+      >
+        Read the docs
       </Link>
     </Text>
   );
@@ -383,6 +393,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   if (!column) throw new Error(`Column ${columnId} not found`);
 
   const scoreExpression = watch("scoreExpression");
+  const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
 
   const onSubmit = async (data: FieldValues) => {
     toaster.create({
@@ -501,6 +512,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   <Label htmlFor="scoreExpression">Score Expression</Label>
                   <Textarea
                     id="scoreExpression"
+                    disabled={!canEditScoreExpression}
                     {...register("scoreExpression")}
                     placeholder="Score Expression"
                     rows={4}
@@ -1143,6 +1155,10 @@ function GradebookColumnHeader({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [isMovingLeft, setIsMovingLeft] = useState(false);
+  const [isMovingRight, setIsMovingRight] = useState(false);
+  const [isReleasing, setIsReleasing] = useState(false);
+  const [isUnreleasing, setIsUnreleasing] = useState(false);
   const supabase = createClient();
   const invalidate = useInvalidate();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -1151,60 +1167,127 @@ function GradebookColumnHeader({
 
   const moveLeft = useCallback(async () => {
     if (column.sort_order == null || column.sort_order === 0) return;
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order!
-      })
-      .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", column.sort_order! - 1);
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order! - 1
-      })
-      .eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
+
+    setIsMovingLeft(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_column_move_left", {
+        p_column_id: column_id
+      });
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column moved left",
+        description: `Successfully moved "${column.name}" to the left`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to move column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsMovingLeft(false);
+    }
   }, [column_id, column, invalidate, supabase]);
 
   const moveRight = useCallback(async () => {
     if (column.sort_order == null) return;
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order!
-      })
-      .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", (column.sort_order ?? 0) + 1);
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: (column.sort_order ?? 0) + 1
-      })
-      .eq("id", column_id);
-  }, [column_id, column, supabase]);
+
+    setIsMovingRight(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_column_move_right", {
+        p_column_id: column_id
+      });
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column moved right",
+        description: `Successfully moved "${column.name}" to the right`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to move column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsMovingRight(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const releaseColumn = useCallback(async () => {
-    await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
-  }, [column_id, invalidate, supabase]);
+    setIsReleasing(true);
+    try {
+      const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column released",
+        description: `Successfully released "${column.name}" column`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to release column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsReleasing(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const unreleaseColumn = useCallback(async () => {
-    await supabase.from("gradebook_columns").update({ released: false }).eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
-  }, [column_id, invalidate, supabase]);
+    setIsUnreleasing(true);
+    try {
+      const { error } = await supabase.from("gradebook_columns").update({ released: false }).eq("id", column_id);
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column unreleased",
+        description: `Successfully unreleased "${column.name}" column`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to unrelease column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsUnreleasing(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
@@ -1317,22 +1400,32 @@ function GradebookColumnHeader({
                 <Icon as={LuPencil} boxSize={3} mr={2} />
                 Edit Column
               </MenuItem>
-              <MenuItem value="moveLeft" onClick={moveLeft}>
-                <Icon as={LuArrowLeft} boxSize={3} mr={2} />
+              <MenuItem
+                value="moveLeft"
+                onClick={moveLeft}
+                disabled={isMovingLeft || isMovingRight}
+                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+              >
+                {isMovingLeft ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowLeft} boxSize={3} mr={2} />}
                 Move Left
               </MenuItem>
-              <MenuItem value="moveRight" onClick={moveRight}>
-                <Icon as={LuArrowRight} boxSize={3} mr={2} />
+              <MenuItem
+                value="moveRight"
+                onClick={moveRight}
+                disabled={isMovingLeft || isMovingRight}
+                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+              >
+                {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
               <MenuSeparator />
               <MenuItem
                 value="release"
                 onClick={releaseColumn}
-                disabled={!!column.score_expression}
+                disabled={!!column.score_expression || isReleasing || isUnreleasing}
                 _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
               >
-                <Icon as={LuCheck} boxSize={3} mr={2} />
+                {isReleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuCheck} boxSize={3} mr={2} />}
                 Release Column
                 {column.score_expression && (
                   <WrappedTooltip content="Auto-calculated columns cannot be manually released">
@@ -1345,10 +1438,10 @@ function GradebookColumnHeader({
               <MenuItem
                 value="unrelease"
                 onClick={unreleaseColumn}
-                disabled={!!column.score_expression}
+                disabled={!!column.score_expression || isReleasing || isUnreleasing}
                 _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
               >
-                <Icon as={LuX} boxSize={3} mr={2} />
+                {isUnreleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuX} boxSize={3} mr={2} />}
                 Unrelease Column
                 {column.score_expression && (
                   <WrappedTooltip content="Auto-calculated columns cannot be manually unreleased">
@@ -1500,7 +1593,7 @@ function StudentNameCell({ uid }: { uid: string }) {
 function StudentDetailDialog() {
   const { view, setView } = useStudentDetailView();
   return (
-    <Dialog.Root open={!!view} onOpenChange={(details) => (!details.open ? setView(null) : undefined)}>
+    <Dialog.Root open={!!view} onOpenChange={(details) => (!details.open ? setView(null) : undefined)} lazyMount>
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content>
@@ -1512,7 +1605,11 @@ function StudentDetailDialog() {
               This view allows you to simulate the impact of a grade change. Students have the exact same interface (but
               can only see released gradebook columns and scores).
             </Text>
-            {view && <WhatIf private_profile_id={view} />}
+            {view && (
+              <GradebookWhatIfProvider private_profile_id={view}>
+                <WhatIf private_profile_id={view} />
+              </GradebookWhatIfProvider>
+            )}
           </Dialog.Body>
         </Dialog.Content>
       </Dialog.Positioner>
@@ -1521,15 +1618,17 @@ function StudentDetailDialog() {
 }
 export default function GradebookTable() {
   const { course_id } = useParams();
-  const students = useStudentRoster();
+  const students = useAllStudentRoles();
   const courseController = useCourseController();
   const gradebookController = useGradebookController();
-  const { allVisibleRoles } = useClassProfiles();
   const gradebookColumns = useGradebookColumns();
   const isInstructor = useIsInstructor();
+  const isRefetching = useGradebookRefetchStatus();
+  const isGradebookDataReady = gradebookController.table.ready;
 
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [isAutoLayouting, setIsAutoLayouting] = useState(false);
 
   // Fetch class sections
   const { data: classSections } = useList<ClassSection>({
@@ -1538,6 +1637,9 @@ export default function GradebookTable() {
     queryOptions: {
       staleTime: Infinity,
       cacheTime: Infinity
+    },
+    pagination: {
+      pageSize: 1000
     }
   });
 
@@ -1554,7 +1656,7 @@ export default function GradebookTable() {
       }
     > = {};
 
-    allVisibleRoles.forEach((role) => {
+    students.forEach((role) => {
       if (role.role === "student") {
         const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
         const labSection = labSections?.find((s) => s.id === role.lab_section_id);
@@ -1572,7 +1674,7 @@ export default function GradebookTable() {
       }
     });
     return map;
-  }, [allVisibleRoles, classSections?.data, labSections]);
+  }, [students, classSections?.data, labSections]);
 
   const columnsForGrouping = gradebookColumns.map((col) => ({
     id: col.id,
@@ -1583,7 +1685,7 @@ export default function GradebookTable() {
   }));
   columnsForGrouping.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   const cachedColumnsKey = JSON.stringify(columnsForGrouping);
-  // Group gradebook columns by slug prefix before first hyphen
+  // Group gradebook columns by slug prefix, with special handling for assignment sub-groups
   const groupedColumns = useMemo(() => {
     const groups: Record<string, { groupName: string; columns: typeof columnsForGrouping }> = {};
     const columns = JSON.parse(cachedColumnsKey) as typeof columnsForGrouping;
@@ -1595,9 +1697,17 @@ export default function GradebookTable() {
     let lastSortOrder = -1;
 
     columns.forEach((col) => {
-      // Extract prefix before first hyphen
-      const prefix = col.slug.split("-")[0];
-      const baseGroupName = prefix || "other";
+      const slugParts = col.slug.split("-");
+      let baseGroupName: string;
+
+      // Special handling for assignment columns
+      if (slugParts[0] === "assignment" && slugParts.length >= 3) {
+        // For assignment-assignment-*, assignment-lab-*, etc., use "assignment-{type}" as the base group
+        baseGroupName = `${slugParts[0]}-${slugParts[1]}`;
+      } else {
+        // For all other columns, use the first part as the base group
+        baseGroupName = slugParts[0] || "other";
+      }
 
       // Check if this column is contiguous with the previous one
       const currentSortOrder = col.sort_order ?? 0;
@@ -1612,8 +1722,20 @@ export default function GradebookTable() {
       const groupKey = `${baseGroupName}-${currentGroupIndex}`;
 
       if (!groups[groupKey]) {
+        // Format group name for display
+        let displayName: string;
+        if (baseGroupName === "other") {
+          displayName = "Other";
+        } else if (baseGroupName.startsWith("assignment-")) {
+          // For assignment sub-groups, capitalize and format nicely
+          const subType = baseGroupName.split("-")[1];
+          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
+        } else {
+          displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
+        }
+
         groups[groupKey] = {
-          groupName: baseGroupName === "other" ? "Other" : baseGroupName,
+          groupName: displayName,
           columns: []
         };
       }
@@ -1629,7 +1751,6 @@ export default function GradebookTable() {
   useEffect(() => {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -1649,30 +1770,98 @@ export default function GradebookTable() {
     });
   }, [groupedColumns]);
 
-  // Toggle group collapse/expand using base group name
-  const toggleGroup = useCallback((baseGroupName: string) => {
-    setCollapsedGroups((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(baseGroupName)) {
-        newSet.delete(baseGroupName);
-      } else {
-        newSet.add(baseGroupName);
+  // Force recalculation helper
+  const forceRecalculation = useCallback(() => {
+    setTimeout(() => {
+      // Recalculate header height
+      if (headerRef.current) {
+        const height = headerRef.current.offsetHeight;
+        setHeaderHeight(height);
       }
-      return newSet;
-    });
-  }, []);
+
+      // Recalculate first column width
+      if (students && students.length > 0) {
+        const tempElement = document.createElement("div");
+        tempElement.style.position = "absolute";
+        tempElement.style.visibility = "hidden";
+        tempElement.style.whiteSpace = "nowrap";
+        tempElement.style.fontSize = "14px";
+        tempElement.style.fontFamily = "inherit";
+        document.body.appendChild(tempElement);
+
+        let maxWidth = 180;
+        students.forEach((student) => {
+          tempElement.textContent = student.profiles.name || student.profiles.short_name || "Unknown Student";
+          const textWidth = tempElement.offsetWidth;
+          maxWidth = Math.max(maxWidth, textWidth + 60);
+        });
+
+        document.body.removeChild(tempElement);
+        const finalWidth = Math.min(maxWidth, 400);
+        setFirstColumnWidth(finalWidth);
+      }
+    }, 50);
+  }, [students]);
+
+  // Toggle group collapse/expand using base group name
+  const toggleGroup = useCallback(
+    (baseGroupName: string) => {
+      setCollapsedGroups((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(baseGroupName)) {
+          newSet.delete(baseGroupName);
+        } else {
+          newSet.add(baseGroupName);
+        }
+        return newSet;
+      });
+
+      // Force recalculation after toggle to fix alignment
+      forceRecalculation();
+    },
+    [forceRecalculation]
+  );
+
+  const autoLayout = useCallback(async () => {
+    const supabase = createClient();
+
+    setIsAutoLayouting(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_auto_layout", {
+        p_gradebook_id: gradebookController.gradebook_id
+      });
+
+      if (error) throw error;
+
+      toaster.create({
+        title: "Auto-layout complete",
+        description: "Successfully reorganized gradebook columns",
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Auto-layout failed",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsAutoLayouting(false);
+    }
+  }, [gradebookController]);
 
   // Expand all groups
   const expandAll = useCallback(() => {
     setCollapsedGroups(new Set());
-  }, []);
+    forceRecalculation();
+  }, [forceRecalculation]);
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
     setCollapsedGroups(new Set(baseGroupNames));
-  }, [groupedColumns]);
+    forceRecalculation();
+  }, [groupedColumns, forceRecalculation]);
 
   // Helper function to find the best column to show when collapsed
   const findBestColumnToShow = useCallback(
@@ -1684,7 +1873,7 @@ export default function GradebookTable() {
 
         // Check if this column has any non-missing values
         for (const student of students) {
-          const controller = gradebookController.getStudentGradebookController(student.id);
+          const controller = gradebookController.getStudentGradebookController(student.private_profile_id);
           const { item } = controller.getColumnForStudent(col.id);
           const score = item?.score_override ?? item?.score;
 
@@ -1705,7 +1894,23 @@ export default function GradebookTable() {
     [students, gradebookController]
   );
 
-  // Build columns with header groups
+  /**
+   * Build columns with header groups
+   *
+   * Header groups are created from gradebook columns that share the same slug prefix
+   * (everything before the first hyphen). Groups are only created when multiple
+   * contiguous columns share the same prefix.
+   *
+   * Header Group Behavior:
+   * - When EXPANDED: The group header spans all child columns using colSpan,
+   *   and all individual column headers are shown below it
+   * - When COLLAPSED: Only one representative column is shown (the one with
+   *   the most recent non-missing data), and the group header covers just that column
+   *
+   * The width calculation ensures proper rendering:
+   * - Collapsed: 120px (single column width)
+   * - Expanded: 120px * number_of_columns_in_group
+   */
   const columns: ColumnDef<UserProfile, unknown>[] = useMemo(() => {
     const cols: ColumnDef<UserProfile, unknown>[] = [
       {
@@ -1832,9 +2037,12 @@ export default function GradebookTable() {
     labSections
   ]);
 
+  const studentProfiles = useMemo(() => {
+    return students.map((student) => student.profiles);
+  }, [students]);
   // Table instance
   const table = useReactTable({
-    data: students,
+    data: studentProfiles,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -1854,6 +2062,15 @@ export default function GradebookTable() {
   // Dynamic first column width calculation
   const [firstColumnWidth, setFirstColumnWidth] = useState(180); // Default width
 
+  // Header height state for Safari compatibility
+  const [headerHeight, setHeaderHeight] = useState(0);
+
+  // Detect Safari browser
+  const isSafari = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  }, []);
+
   const calculateFirstColumnWidth = useCallback(() => {
     if (!students || students.length === 0) return;
 
@@ -1870,7 +2087,7 @@ export default function GradebookTable() {
 
     // Measure each student name
     students.forEach((student) => {
-      tempElement.textContent = student.name || student.short_name || "Unknown Student";
+      tempElement.textContent = student.profiles.name || student.profiles.short_name || "Unknown Student";
       const textWidth = tempElement.offsetWidth;
       maxWidth = Math.max(maxWidth, textWidth + 60); // Add padding for icons and spacing
     });
@@ -1883,16 +2100,51 @@ export default function GradebookTable() {
     setFirstColumnWidth(finalWidth);
   }, [students]);
 
+  const calculateHeaderHeight = useCallback(() => {
+    if (headerRef.current) {
+      const height = headerRef.current.offsetHeight;
+      setHeaderHeight(height);
+    }
+  }, []);
+
   // Calculate width when students change
   useEffect(() => {
     calculateFirstColumnWidth();
   }, [calculateFirstColumnWidth]);
 
+  // Calculate header height after render and when columns/groups change
+  useEffect(() => {
+    calculateHeaderHeight();
+  }, [calculateHeaderHeight, gradebookColumns.length, groupedColumns, collapsedGroups]);
+
+  // Force recalculation after a short delay to handle async rendering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      forceRecalculation();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [forceRecalculation, groupedColumns, collapsedGroups]);
+
+  // Add ResizeObserver to handle layout changes
+  useEffect(() => {
+    if (!parentRef.current) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      forceRecalculation();
+    });
+
+    resizeObserver.observe(parentRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [forceRecalculation]);
+
   const virtualizer = useVirtualizer({
     count: rowModel.rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 45, // Estimated row height in pixels
-    overscan: 10 // Number of items to render outside visible area
+    overscan: 40 // Number of items to render outside visible area
   });
 
   const virtualRows = virtualizer.getVirtualItems();
@@ -1907,6 +2159,8 @@ export default function GradebookTable() {
       return (
         <Table.Row
           key={`${row.id}-${virtualRow.index}`}
+          role="row"
+          aria-label={`Student ${row.original.name || "Unknown"} grades`}
           bg={idx % 2 === 0 ? "bg.subtle" : "bg.muted"}
           _hover={{ bg: "bg.info" }}
           style={{
@@ -1915,18 +2169,18 @@ export default function GradebookTable() {
             left: 0,
             width: "100%",
             height: `${virtualRow.size}px`,
-            transform: `translateY(${virtualRow.start}px)`,
-            display: "flex"
+            transform: `translateY(${virtualRow.start + (isSafari ? headerHeight || 120 : 0)}px)`,
+            display: "table",
+            tableLayout: "fixed"
           }}
         >
           {row.getVisibleCells().map((cell, colIdx) => {
-            // Check if this cell belongs to a collapsed group
             const isCollapsedColumn = (cell.column.columnDef.meta as { isCollapsed?: boolean })?.isCollapsed;
 
             return (
               <Table.Cell
                 key={cell.id}
-                p={0}
+                p={2}
                 position="relative"
                 bg={
                   colIdx === 0
@@ -1942,28 +2196,27 @@ export default function GradebookTable() {
                     ? {
                         position: "sticky",
                         left: 0,
-                        zIndex: 10,
-                        borderRight: "1px solid",
-                        borderColor: "border.muted",
-                        minWidth: firstColumnWidth,
-                        width: firstColumnWidth,
-                        flexShrink: 0
+                        zIndex: 18,
+                        borderRight: "1px solid var(--chakra-colors-border-muted)",
+                        width: `${firstColumnWidth}px`,
+                        maxWidth: `${firstColumnWidth}px`,
+                        minWidth: `${firstColumnWidth}px`
                       }
                     : {
-                        minWidth: 120,
-                        width: 120,
-                        flexShrink: 0,
+                        width: "120px",
+                        maxWidth: "120px",
+                        minWidth: "120px",
                         zIndex: 1
                       }),
                   ...(isCollapsedColumn
                     ? {
-                        borderLeft: "2px solid",
-                        borderColor: "border.warning"
+                        borderLeft: "2px solid var(--chakra-colors-border-warning)"
                       }
                     : {}),
                   height: `${virtualRow.size}px`,
-                  display: "flex",
-                  alignItems: "center"
+                  verticalAlign: "middle",
+                  display: "table-cell",
+                  boxSizing: "border-box"
                 }}
                 className={colIdx === 0 ? "sticky-first-cell" : undefined}
               >
@@ -2004,15 +2257,46 @@ export default function GradebookTable() {
         </Table.Row>
       );
     },
-    [rowModel.rows, toggleGroup, firstColumnWidth]
+    [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
   );
 
-  if (!students) {
-    return <Spinner />;
+  if (!students || !isGradebookDataReady) {
+    return (
+      <VStack gap={2} align="center" justify="center" minH="40vh">
+        <Spinner size="lg" color="blue.500" />
+        <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+          {!students ? "Loading students..." : "Loading gradebook data..."}
+        </Text>
+      </VStack>
+    );
   }
 
   return (
-    <VStack align="stretch" w="100%" gap={0}>
+    <VStack align="stretch" w="100%" gap={0} position="relative">
+      {/* Refetch loading overlay */}
+      {(isRefetching || !isGradebookDataReady) && (
+        <Box
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          bottom={0}
+          bg="rgba(255, 255, 255, 0.8)"
+          zIndex={1000}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          borderRadius="md"
+        >
+          <VStack gap={2}>
+            <Spinner size="lg" color="blue.500" />
+            <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+              {isRefetching ? "Refreshing gradebook data..." : "Loading gradebook index..."}
+            </Text>
+          </VStack>
+        </Box>
+      )}
+
       <style jsx global>{`
         tr:hover .sticky-first-cell {
           background-color: var(--chakra-colors-bg-info) !important;
@@ -2020,69 +2304,48 @@ export default function GradebookTable() {
       `}</style>
       <Toaster />
       <StudentDetailDialog />
-      {isInstructor && (
-        <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              const csv = gradebookController.exportGradebook(courseController);
-              const blob = new Blob(
-                [
-                  csv
-                    .map((row) =>
-                      row.map((cell) => (typeof cell === "string" ? `"${cell.replace(/"/g, "")}"` : cell)).join(",")
-                    )
-                    .join("\n")
-                ],
-                { type: "text/csv" }
-              );
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "gradebook.csv";
-              a.click();
-            }}
-          >
-            <Icon as={FiDownload} mr={2} /> Download Gradebook
-          </Button>
-          <ImportGradebookColumn />
-          <AddColumnDialog />
-        </HStack>
-      )}
       <Box
         ref={parentRef}
         overflowX="auto"
         overflowY="auto"
-        maxW="calc(100vw - 20px)"
-        maxH="calc(100vh - 200px)"
-        height="calc(100vh - 200px)"
+        maxW="100%"
+        maxH="80vh"
+        height="80vh"
+        position="relative"
+        role="region"
+        aria-label="Instructor Gradebook Table"
+        tabIndex={0}
       >
-        {/* Expand/Collapse All Buttons */}
-        {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
-          <HStack gap={2} justifyContent="flex-end" px={4} py={2}>
-            <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
-              <Icon as={LuChevronDown} mr={2} /> Expand All
-            </Button>
-            <Button variant="ghost" size="sm" onClick={collapseAll} colorPalette="blue">
-              <Icon as={LuChevronRight} mr={2} /> Collapse All
-            </Button>
-          </HStack>
-        )}
-        <Table.Root minW="0" style={{ tableLayout: "fixed", width: "100%", margin: 0, padding: 0, borderSpacing: 0 }}>
+        <Table.Root
+          minW="100%"
+          w="100%"
+          role="table"
+          aria-label="Student grades by assignment"
+          style={{ tableLayout: "fixed", width: "100%", margin: 0, padding: 0, borderSpacing: 0, position: "relative" }}
+        >
           <Table.Header
             ref={headerRef}
             style={{
               position: "sticky",
               top: 0,
-              zIndex: 102,
-              backgroundColor: "bg.subtle",
-              borderBottom: "2px solid border.muted", // Clear bottom border
-              boxShadow: "0 2px 4px rgba(0,0,0,0.1)" // Subtle shadow for definition
+              zIndex: 20,
+              backgroundColor: "var(--chakra-colors-bg-subtle)",
+              borderBottom: "2px solid var(--chakra-colors-border-muted)",
+              boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
             }}
           >
-            {/* Single row with all grouped headers */}
-            <Table.Row style={{ display: "flex" }}>
+            {/* 
+              Group Header Row - This row contains the collapsible group headers
+              
+              Key behaviors:
+              1. Each group header uses colSpan to span across all its child columns when expanded
+              2. When collapsed, only shows one representative column with colSpan=1
+              3. Width is calculated as 120px * colSpan to ensure proper visual alignment
+              4. Clicking the header toggles the group's collapsed state
+              5. Expanded groups have emphasized styling for clear visual grouping
+              6. Expand/collapse all buttons are positioned discretely above the Student Name header
+            */}
+            <Table.Row>
               {headerGroups[0].headers
                 .filter((header) => {
                   // Filter out headers that should be hidden when collapsed
@@ -2142,37 +2405,33 @@ export default function GradebookTable() {
 
                         // Show group header for first column when expanded, or for the visible column when collapsed
                         if (isFirstInGroup || (isCollapsed && isVisibleInCollapsedGroup)) {
-                          // Create group header spanning all columns in this group
-                          const groupColumnIds = groupColumns.map((col) => `grade_${col.id}`);
-                          const groupHeaders = headerGroups[0].headers.filter((h) => groupColumnIds.includes(h.id));
-
-                          // Calculate width based on column positions
-                          // First column is dynamic, others are 120px
-                          const groupWidth = isCollapsed
-                            ? 120 // Single column width
-                            : groupHeaders.reduce((total, groupHeader) => {
-                                const headerColIdx = headerGroups[0].headers.findIndex((h) => h.id === groupHeader.id);
-                                return total + (headerColIdx === 0 ? firstColumnWidth : 120);
-                              }, 0);
+                          // Calculate the number of columns this header should span
+                          // - When collapsed: span only 1 column (the representative column)
+                          // - When expanded: span all columns in the group for proper visual grouping
+                          const colSpan = isCollapsed ? 1 : groupColumns.length;
 
                           return (
                             <Table.ColumnHeader
                               key={header.id}
-                              bg={isCollapsed ? "bg.warning" : "bg.subtle"}
+                              colSpan={colSpan}
+                              bg={isCollapsed ? "bg.warning" : "bg.emphasized"}
                               cursor="pointer"
                               onClick={() => toggleGroup(groupEntry[1].groupName)}
                               _hover={{ bg: "bg.info" }}
                               style={{
                                 position: "sticky",
-                                borderBottom: "1px solid",
-                                borderColor: "border.emphasized",
+                                // Add emphasized border when expanded to show clear grouping
+                                borderBottom: "1px solid var(--chakra-colors-border-emphasized)",
                                 top: 0,
-                                zIndex: 100,
+                                zIndex: 19,
                                 textAlign: "center",
-                                minWidth: groupWidth,
-                                width: groupWidth,
-                                flexShrink: 0,
-                                backgroundColor: isCollapsed ? "bg.warning" : "bg.subtle" // Consistent background
+                                // When expanded, width should span all columns; when collapsed, just one column
+                                width: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
+                                minWidth: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
+                                maxWidth: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
+                                backgroundColor: isCollapsed
+                                  ? "var(--chakra-colors-bg-warning)"
+                                  : "var(--chakra-colors-bg-emphasized)"
                               }}
                             >
                               <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
@@ -2191,8 +2450,11 @@ export default function GradebookTable() {
                               </HStack>
                             </Table.ColumnHeader>
                           );
+                        } else if (!isCollapsed) {
+                          // When expanded, skip non-first columns as they're covered by the group header's colspan
+                          return null;
                         } else {
-                          // Skip this column as it's covered by the group header
+                          // When collapsed, this column should not be rendered at all (filtered out earlier)
                           return null;
                         }
                       }
@@ -2207,19 +2469,62 @@ export default function GradebookTable() {
                         position: "sticky",
                         top: 0,
                         left: colIdx === 0 ? 0 : undefined,
-                        zIndex: colIdx === 0 ? 101 : 100,
+                        zIndex: colIdx === 0 ? 21 : 19,
                         minWidth: colIdx === 0 ? firstColumnWidth : 120,
                         width: colIdx === 0 ? firstColumnWidth : 120,
-                        flexShrink: 0,
-                        backgroundColor: "bg.subtle"
+                        backgroundColor: "var(--chakra-colors-bg-subtle)"
                       }}
-                    ></Table.ColumnHeader>
+                    >
+                      {/* Add expand/collapse buttons in the space above Student Name */}
+                      {colIdx === 0 &&
+                        Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
+                          0 && (
+                          <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                            <WrappedTooltip content="Auto-layout columns">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={autoLayout}
+                                colorPalette="blue"
+                                aria-label="Auto-layout columns"
+                                disabled={isAutoLayouting}
+                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                              >
+                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                              </IconButton>
+                            </WrappedTooltip>
+
+                            <WrappedTooltip content="Expand all groups">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={expandAll}
+                                colorPalette="blue"
+                                aria-label="Expand all groups"
+                              >
+                                <Icon as={LuChevronDown} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+                            <WrappedTooltip content="Collapse all groups">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={collapseAll}
+                                colorPalette="blue"
+                                aria-label="Collapse all groups"
+                              >
+                                <Icon as={LuChevronRight} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+                          </HStack>
+                        )}
+                    </Table.ColumnHeader>
                   );
                 })}
             </Table.Row>
             {/* Regular header row */}
             {headerGroups.map((headerGroup) => (
-              <Table.Row key={headerGroup.id} style={{ display: "flex" }}>
+              <Table.Row key={headerGroup.id}>
                 {headerGroup.headers
                   .filter((header) => {
                     // Filter out headers that should be hidden when collapsed
@@ -2264,12 +2569,11 @@ export default function GradebookTable() {
                         position: "sticky",
                         top: 0,
                         left: colIdx === 0 ? 0 : undefined,
-                        zIndex: colIdx === 0 ? 101 : 100,
+                        zIndex: colIdx === 0 ? 21 : 19,
                         minWidth: colIdx === 0 ? firstColumnWidth : 120,
                         width: colIdx === 0 ? firstColumnWidth : 120,
-                        height: "auto", // Allow content to determine height naturally
-                        flexShrink: 0,
-                        backgroundColor: "bg.subtle"
+                        height: "auto",
+                        backgroundColor: "var(--chakra-colors-bg-subtle)"
                       }}
                     >
                       {header.column.id.startsWith("grade_") ? (
@@ -2300,7 +2604,7 @@ export default function GradebookTable() {
           </Table.Header>
           <Table.Body
             style={{
-              height: `${virtualizer.getTotalSize()}px`,
+              height: `${virtualizer.getTotalSize() + (isSafari ? headerHeight || 120 : 0)}px`,
               position: "relative",
               margin: 0,
               padding: 0,
@@ -2314,10 +2618,40 @@ export default function GradebookTable() {
         </Table.Root>
       </Box>
       {/* Show row count info */}
-      <HStack mt={4} gap={2} justifyContent="center" alignItems="center" width="100%">
+      <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
         <Text fontSize="sm" color="fg.muted">
           Showing {rowModel.rows.length} {pluralize("student", rowModel.rows.length)}
         </Text>
+        {isInstructor && (
+          <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const csv = gradebookController.exportGradebook(courseController);
+                const blob = new Blob(
+                  [
+                    csv
+                      .map((row) =>
+                        row.map((cell) => (typeof cell === "string" ? `"${cell.replace(/"/g, "")}"` : cell)).join(",")
+                      )
+                      .join("\n")
+                  ],
+                  { type: "text/csv" }
+                );
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "gradebook.csv";
+                a.click();
+              }}
+            >
+              <Icon as={FiDownload} mr={2} /> Download Gradebook
+            </Button>
+            <ImportGradebookColumn />
+            <AddColumnDialog />
+          </HStack>
+        )}
       </HStack>
     </VStack>
   );

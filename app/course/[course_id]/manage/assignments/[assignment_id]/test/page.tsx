@@ -53,6 +53,9 @@ export default function TestAssignmentPage() {
         However, when you view the details of your submission, you will see the autograder results and the rubric
         (students may not see the rubric or hidden autograder results).
       </Text>
+      {/* {repository?.data.length ? (
+        <CreateStudentReposButton syncAllPermissions />
+      ): <></>} */}
       {repository?.data.length ? (
         <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
           <Heading size="md">Repository</Heading>
@@ -61,7 +64,7 @@ export default function TestAssignmentPage() {
           </Text>
         </Box>
       ) : (
-        <CreateStudentReposButton />
+        <CreateStudentReposButton assignmentId={Number.parseInt(assignment_id as string)} />
       )}
       <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
         <Heading size="md">Submission History</Heading>
@@ -101,9 +104,11 @@ export default function TestAssignmentPage() {
                 </Table.Cell>
                 <Table.Cell>
                   <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {submission.grader_results?.errors || submission.grader_results?.score === undefined
-                      ? "Error"
-                      : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                    {!submission.grader_results
+                      ? "In Progress"
+                      : submission.grader_results && submission.grader_results.errors
+                        ? "Error"
+                        : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                   </Link>
                 </Table.Cell>
                 <Table.Cell>

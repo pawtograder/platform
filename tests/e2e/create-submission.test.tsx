@@ -1,16 +1,16 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
-import { expect, test } from "@playwright/test";
+import { test, expect } from "../global-setup";
 import { addDays, addMinutes } from "date-fns";
 import {
   createClass,
-  createUserInClass,
   insertAssignment,
   insertSubmissionViaAPI,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  createUsersInClass
 } from "./TestingUtils";
-import percySnapshot from "@percy/playwright";
+import { argosScreenshot } from "@argos-ci/playwright";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -23,23 +23,34 @@ let assignmentWithGradedAndNotGraded: Assignment | undefined;
 
 test.beforeAll(async () => {
   course = await createClass();
-  student = await createUserInClass({ role: "student", class_id: course.id });
+  [student] = await createUsersInClass([
+    {
+      name: "Create Submission Student",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
   assignmentInFuture = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Create Submission Assignment Future"
   });
   assignmentInPast = await insertAssignment({
     due_date: addMinutes(new Date(), -5).toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Create Submission Assignment Past"
   });
   assignmentExtended = await insertAssignment({
     due_date: addMinutes(new Date(), -5).toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Create Submission Assignment Extended"
   });
   assignmentWithGradedAndNotGraded = await insertAssignment({
     due_date: addMinutes(new Date(), 5).toUTCString(),
     allow_not_graded_submissions: true,
-    class_id: course.id
+    class_id: course.id,
+    name: "Create Submission Assignment Graded and Not Graded"
   });
   await supabase.from("assignment_due_date_exceptions").insert({
     assignment_id: assignmentExtended.id,
@@ -56,7 +67,8 @@ test.beforeAll(async () => {
   assignmentWithNotGraded = await insertAssignment({
     due_date: addMinutes(new Date(), -5).toUTCString(),
     allow_not_graded_submissions: true,
-    class_id: course.id
+    class_id: course.id,
+    name: "Create Submission Assignment Not Graded"
   });
 });
 test.describe("Create submission", () => {
@@ -143,7 +155,7 @@ test.describe("Create submission", () => {
     await expect(notGradedRow).toBeVisible();
     await expect(activeRow.getByText("Pending")).toBeVisible();
     await expect(notGradedRow.getByText("Not for grading")).toBeVisible();
-    await percySnapshot(page, "Showing active and not-graded submissions");
+    await argosScreenshot(page, "Showing active and not-graded submissions");
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
   });

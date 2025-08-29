@@ -8,7 +8,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Container, EmptyState, Heading, Icon, Table, Text } from "@chakra-ui/react";
+import { Container, EmptyState, Heading, Icon, Skeleton, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { UserIdentity } from "@supabase/supabase-js";
@@ -78,7 +78,7 @@ export default function StudentPage() {
   });
   const groups: AssignmentGroupMemberWithGroupAndRepo[] | null = groupsData?.data ?? null;
 
-  const { data: assignmentsData } = useList<AssignmentsForStudentDashboard>({
+  const { data: assignmentsData, isLoading } = useList<AssignmentsForStudentDashboard>({
     resource: "assignments_for_student_dashboard",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -93,6 +93,7 @@ export default function StudentPage() {
     },
     sorters: [{ field: "due_date", order: "desc" }]
   });
+
   const assignments = assignmentsData?.data ?? null;
 
   const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
@@ -206,7 +207,7 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {workInFuture.length === 0 && (
+          {workInFuture.length === 0 && !isLoading && (
             <Table.Row>
               <Table.Cell colSpan={5}>
                 <EmptyState.Root size="md">
@@ -220,6 +221,14 @@ export default function StudentPage() {
                     </EmptyState.Description>
                   </EmptyState.Content>
                 </EmptyState.Root>
+              </Table.Cell>
+            </Table.Row>
+          )}
+          {isLoading && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <Skeleton height="20px" />
+                <Skeleton height="20px" />
               </Table.Cell>
             </Table.Row>
           )}
@@ -282,7 +291,7 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {workInPast.length === 0 && (
+          {workInPast.length === 0 && !isLoading && (
             <Table.Row>
               <Table.Cell colSpan={5}>
                 <EmptyState.Root size="md">
@@ -293,6 +302,14 @@ export default function StudentPage() {
                     <EmptyState.Title>No due dates have passed</EmptyState.Title>
                   </EmptyState.Content>
                 </EmptyState.Root>
+              </Table.Cell>
+            </Table.Row>
+          )}
+          {isLoading && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <Skeleton height="20px" />
+                <Skeleton height="20px" />
               </Table.Cell>
             </Table.Row>
           )}

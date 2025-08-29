@@ -1,58 +1,84 @@
 import { createClient } from "@/utils/supabase/server";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { jwtDecode } from "jwt-decode";
 
-type UserRoleJwt = Pick<
+type UserRoleData = Pick<
   Database["public"]["Tables"]["user_roles"]["Row"],
   "role" | "class_id" | "public_profile_id" | "private_profile_id"
 >;
 
-type DecodedToken = {
-  user_roles: UserRoleJwt[];
-  // Add other expected JWT claims here if needed
-};
-
-async function getRolesForCourse(course_id: number): Promise<UserRoleJwt["role"][]> {
+export async function getUserRolesForCourse(course_id: number): Promise<UserRoleData | undefined> {
   const client = await createClient();
-  const token = (await client.auth.getSession()).data.session?.access_token;
-  // Handle the case where the token might be undefined or invalid
-  if (!token) {
+  const {
+    data: { user }
+  } = await client.auth.getUser();
+
+  if (!user) {
+    return undefined;
+  }
+
+  const { data: userRole } = await client
+    .from("user_roles")
+    .select("role, class_id, public_profile_id, private_profile_id")
+    .eq("class_id", course_id)
+    .eq("user_id", user.id)
+    .eq("disabled", false)
+    .single();
+
+  return userRole || undefined;
+}
+
+async function getRolesForCourse(course_id: number): Promise<UserRoleData["role"][]> {
+  const client = await createClient();
+  const {
+    data: { user }
+  } = await client.auth.getUser();
+
+  if (!user) {
     return [];
   }
-  try {
-    const decoded = jwtDecode<DecodedToken>(token);
-    // Ensure user_roles exists and is an array before filtering/mapping
-    if (!decoded.user_roles || !Array.isArray(decoded.user_roles)) {
-      console.error("JWT does not contain valid user_roles array");
-      return [];
-    }
-    return decoded.user_roles.filter((role) => role.class_id === course_id).map((role) => role.role);
-  } catch (error) {
-    console.error("Failed to decode JWT:", error);
+
+  const { data: userRoles, error } = await client
+    .from("user_roles")
+    .select("role")
+    .eq("class_id", course_id)
+    .eq("user_id", user.id)
+    .eq("disabled", false);
+
+  if (error) {
+    console.error("Failed to fetch user roles from database:", error);
     return [];
   }
+
+  return userRoles?.map((role) => role.role) || [];
 }
 export async function getPrivateProfileId(course_id: number) {
   const client = await createClient();
-  const token = (await client.auth.getSession()).data.session?.access_token;
-  if (!token) {
+  const {
+    data: { user }
+  } = await client.auth.getUser();
+
+  if (!user) {
     return null;
   }
-  try {
-    const decoded = jwtDecode<DecodedToken>(token);
-    const private_profile_id = decoded.user_roles.find((role) => role.class_id === course_id)?.private_profile_id;
-    if (!private_profile_id) {
-      return null;
-    }
-    return private_profile_id;
-  } catch (error) {
-    console.error("Failed to decode JWT:", error);
+
+  const { data: userRole, error } = await client
+    .from("user_roles")
+    .select("private_profile_id")
+    .eq("class_id", course_id)
+    .eq("user_id", user.id)
+    .eq("disabled", false)
+    .single();
+
+  if (error) {
+    console.error("Failed to fetch private profile ID from database:", error);
     return null;
   }
+
+  return userRole?.private_profile_id || null;
 }
 export async function getCourse(course_id: number) {
   const client = await createClient();
-  const course = await client.from("classes").select("*").eq("id", course_id).single();
+  const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
   return course.data;
 }
 export async function isInstructor(course_id: number) {

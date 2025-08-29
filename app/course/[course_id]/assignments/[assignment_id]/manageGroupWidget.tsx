@@ -4,7 +4,7 @@ import Link from "@/components/ui/link";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useCourse, useProfiles } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -153,7 +153,7 @@ function CreateGroupButton({
 }
 
 export function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
-  const { profiles } = useClassProfiles();
+  const profiles = useProfiles();
   const ungroupedProfiles = useMemo(() => {
     if (!groups) {
       return [];
@@ -266,7 +266,7 @@ function InviteButton({
 }
 
 function GroupMemberList({ group }: { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) {
-  const { profiles } = useClassProfiles();
+  const profiles = useProfiles();
   return (
     <HStack>
       {group.assignment_groups_members.map((m) => (
@@ -418,7 +418,6 @@ function JoinGroupButton({
                                 }
                                 invalidateInvites();
                               }}
-                              onCancel={() => {}}
                             />
                           </HStack>
                         </VStack>
@@ -565,7 +564,6 @@ function LeaveGroupButton({ assignment }: { assignment: Assignment }) {
   const invalidate = useInvalidate();
   return (
     <PopConfirm
-      onCancel={() => {}}
       trigger={
         <Button variant="ghost" colorPalette="red">
           Leave group
@@ -710,10 +708,8 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
         triggerLabel="Approve"
         confirmHeader="Approve Join Request"
         confirmText="Are you sure you want to approve this join request?"
-        onCancel={() => {}}
       />
       <PopConfirm
-        onCancel={() => {}}
         onConfirm={async () => {
           try {
             const { error } = await supabase
@@ -835,7 +831,9 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+        <Link href={`https://github.com/${repositories[0].repository}`} data-visual-test="blackout">
+          {repositories[0].repository}
+        </Link>
       </HStack>
     );
   }
@@ -847,7 +845,9 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontWeight="bold" fontSize="sm">
           Current group repository:
         </Text>{" "}
-        <Link href={`https://github.com/${groupRepo?.repository}`}>{groupRepo?.repository}</Link>
+        <Link href={`https://github.com/${groupRepo?.repository}`} data-visual-test="blackout">
+          {groupRepo?.repository}
+        </Link>
       </HStack>
       <Text fontWeight="bold">
         Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
@@ -855,7 +855,9 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
       </Text>
       <Text>
         Individual repository (not in use, you are now in a group):{" "}
-        <Link href={`https://github.com/${personalRepo?.repository}`}>{personalRepo?.repository}</Link>
+        <Link href={`https://github.com/${personalRepo?.repository}`} data-visual-test="blackout">
+          {personalRepo?.repository}
+        </Link>
       </Text>
     </VStack>
   );

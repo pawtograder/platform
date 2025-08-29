@@ -20,7 +20,7 @@ export default function CreateNewGroup({
       value: string;
     }>
   >([]);
-  const ungroupedProfiles = useUngroupedStudentProfiles(groups);
+  const ungroupedProfiles = useUngroupedStudentProfiles(groups) || [];
   const { addGroupsToCreate } = useGroupManagement();
   const isGroupInvalid = () => {
     return (

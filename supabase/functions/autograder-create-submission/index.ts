@@ -14,6 +14,8 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   cloneRepository,
+  createCheckRun,
+  getOctoKit,
   getRepoTarballURL,
   GitHubOIDCToken,
   updateCheckRun,
@@ -126,11 +128,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .from("repositories")
     .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
     .eq("repository", repository)
-    .single();
+    .maybeSingle();
   if (repoError) {
     scope?.setTag("db_error", "repository_lookup_failed");
     scope?.setTag("db_error_message", repoError.message);
-    throw new UserVisibleError(`Failed to find repository: ${repoError.message}`);
+    throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
   }
 
   if (repoData) {
@@ -138,6 +140,37 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("class_id", repoData.assignments.class_id?.toString() || "unknown");
     scope?.setTag("profile_id", repoData.profile_id || "none");
     scope?.setTag("assignment_group_id", repoData.assignment_group_id?.toString() || "none");
+  }
+
+  // If repository isn't a student repo, check if it's a handout (template) repo for any assignment(s)
+  if (!repoData) {
+    const { data: handoutAssignments, error: handoutLookupError } = await adminSupabase
+      .from("assignments")
+      .select("id, title, slug, classes(name, term)")
+      .eq("template_repo", repository);
+    if (handoutLookupError) {
+      scope?.setTag("db_error", "handout_lookup_failed");
+      scope?.setTag("db_error_message", handoutLookupError.message);
+      throw new UserVisibleError(`Failed to check handout repository: ${handoutLookupError.message}`);
+    }
+    if (handoutAssignments && handoutAssignments.length > 0) {
+      // Return special handout notice response; autograder action should treat this as terminal
+      return {
+        grader_url: "",
+        grader_sha: "",
+        handout_notice: {
+          message:
+            "Detected this is a handout repository. The grader will not run on handout repos. It will run on the corresponding student repositories for the assignment(s) below.",
+          assignments: handoutAssignments.map((a) => ({
+            id: a.id,
+            title: a.title,
+            slug: a.slug,
+            class_name: a.classes?.name,
+            semester: a.classes?.term
+          }))
+        }
+      };
+    }
   }
 
   // Begin code where we might report an error to the user.
@@ -157,7 +190,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       class_id: repoData.assignments.class_id!,
       submission_id: submission_id ?? null,
       repository_id: repoData.id,
-      name,
+      name: name.length > 500 ? name.slice(0, 500) : name,
       data,
       is_private
     });
@@ -179,22 +212,166 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
       // Fetch check run with retry logic for race conditions
       const fetchCheckRun = async () => {
-        const { data: checkRun, error: checkRunError } = await adminSupabase
+        const { data: initialCheckRun, error: checkRunError } = await adminSupabase
           .from("repository_check_runs")
-          .select("*, user_roles(*), classes(time_zone), commit_message")
+          .select("*, classes(time_zone), commit_message")
           .eq("repository_id", repoData.id)
           .eq("sha", sha)
-          .maybeSingle(); //TODO: Select the MOST RECENT check run, so that when we call Regrade, we know who triggered it
+          .order("created_at", { ascending: false }) // Order by most recent first
+          .limit(1)
+          .maybeSingle();
 
+        //Fetch the role of the user who triggered the check run, so that we can check if they are an instructor or grader
+        let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
+        if (initialCheckRun?.profile_id) {
+          const { data: userRolesData } = await adminSupabase
+            .from("user_roles")
+            .select("*")
+            .eq("private_profile_id", initialCheckRun.profile_id)
+            .eq("class_id", initialCheckRun.class_id)
+            .maybeSingle();
+
+          if (!userRolesData) {
+            scope.setContext("user_roles_data", { user_roles_data: userRolesData });
+            Sentry.captureMessage("User roles data not found", scope);
+            throw new Error("User roles data not found");
+          }
+          userRoles = userRolesData;
+        }
         if (checkRunError) {
           throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
         }
 
-        if (!checkRun) {
-          throw new Error(`Check run not found for ${repoData.id}@${sha} - may be racing with external operation`);
-        }
+        let checkRun = initialCheckRun;
 
-        return checkRun;
+        if (!checkRun) {
+          //We might have lost a webhook. Instead of bailing, we'll fetch the check run info from GitHub.
+          scope?.setTag("check_run_db_found", "false");
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "CheckRun missing in DB; fetching from GitHub",
+            data: { repository, sha }
+          });
+          const octokit = await getOctoKit(repository.split("/")[0], scope);
+          if (!octokit) {
+            throw new Error("No octokit found for organization " + repository.split("/")[0]);
+          }
+          //List check runs for reference from github
+          const fetchedCheckRuns = await octokit.rest.checks.listForRef({
+            owner: repository.split("/")[0],
+            repo: repository.split("/")[1],
+            ref: sha,
+            check_name: "pawtograder"
+          });
+          if (fetchedCheckRuns.status !== 200) {
+            scope?.setTag("check_run_fetch_error", "check_run_not_found");
+            throw new Error(`Check run returned error code ${fetchedCheckRuns.status}`);
+          }
+          scope?.setContext("fetched_check_runs", {
+            check_runs: fetchedCheckRuns.data.check_runs
+          });
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Fetched check runs from GitHub",
+            data: { count: fetchedCheckRuns.data.check_runs.length }
+          });
+          //Take the most recent check run
+          let fetchedCheckRun = fetchedCheckRuns.data.check_runs.sort((a, b) => {
+            if (a.started_at && b.started_at) {
+              return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
+            }
+            return 0;
+          })[0];
+          if (!fetchedCheckRun) {
+            scope?.setTag("check_run_fetch_error", "check_run_not_found");
+            // If there are no check runs for this repo yet, we must have raced with the webhook. Create it here.
+            Sentry.addBreadcrumb({
+              category: "fallback",
+              level: "info",
+              message: "No GitHub check runs; creating check run",
+              data: { repository, sha }
+            });
+            fetchedCheckRun = await createCheckRun(repository, sha, workflow_ref);
+            Sentry.addBreadcrumb({
+              category: "fallback",
+              level: "info",
+              message: "Created GitHub check run",
+              data: { check_run_id: fetchedCheckRun.id }
+            });
+          }
+
+          // Try to insert repository_check_runs row if missing, then retrieve it
+          const owner = repository.split("/")[0];
+          const repoNameOnly = repository.split("/")[1];
+          // Fetch commit message/details for DB record
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Fetching commit metadata",
+            data: { owner, repo: repoNameOnly, sha }
+          });
+          const commitResponse = await (await getOctoKit(owner, scope))!.rest.repos.getCommit({
+            owner,
+            repo: repoNameOnly,
+            ref: sha
+          });
+          const commitMessage = commitResponse.data.commit.message || "";
+          const commitAuthorName =
+            commitResponse.data.commit.author?.name || commitResponse.data.commit.committer?.name || "unknown";
+          const commitDate =
+            commitResponse.data.commit.author?.date ||
+            commitResponse.data.commit.committer?.date ||
+            new Date().toISOString();
+
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Upserting repository_check_runs",
+            data: { repository_id: repoData.id, sha, check_run_id: fetchedCheckRun.id }
+          });
+          const upsertResult = await adminSupabase
+            .from("repository_check_runs")
+            .upsert(
+              {
+                repository_id: repoData.id,
+                check_run_id: fetchedCheckRun.id,
+                class_id: repoData.assignments.class_id!,
+                assignment_group_id: repoData.assignment_group_id,
+                commit_message: commitMessage,
+                sha,
+                profile_id: repoData.profile_id,
+                status: {
+                  created_at: new Date().toISOString(),
+                  commit_author: commitAuthorName,
+                  commit_date: commitDate,
+                  created_by: "autograder-create-submission fallback"
+                } as unknown as Json
+              },
+              { onConflict: "repository_id,check_run_id,sha" }
+            )
+            .select("*, user_roles(*), classes(time_zone), commit_message")
+            .single();
+
+          if (upsertResult.error) {
+            Sentry.captureException(upsertResult.error, scope);
+            throw new Error(
+              `Failed to upsert repository_check_runs for ${repoData.id}@${sha}: ${upsertResult.error.message}`
+            );
+          }
+          Sentry.addBreadcrumb({
+            category: "fallback",
+            level: "info",
+            message: "Upserted repository_check_runs successfully",
+            data: { id: upsertResult.data?.id }
+          });
+          checkRun = upsertResult.data;
+          Sentry.captureMessage(
+            `We made it through the fallback on ${repository}@${sha}, check_run_id=${checkRun.check_run_id}`
+          );
+        }
+        return { ...checkRun, user_roles: userRoles };
       };
 
       const checkRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
@@ -437,10 +614,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
         hash.update(contentsStr);
         const hashStr = hash.digest("hex");
-        if (hashStr !== config.workflow_sha && !isE2ERun) {
-          throw new SecurityError(
-            `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}`
-          );
+
+        // Allow graders and instructors to submit even if the workflow SHA doesn't match, but show a warning.
+        const isGraderOrInstructor =
+          checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
+        scope.setTag("check_run_profile_id", checkRun.profile_id);
+        scope.setTag("check_run_assignment_group_id", checkRun.assignment_group_id);
+        scope.setTag("check_run_user_role", checkRun.user_roles?.role);
+        if (hashStr !== config.workflow_sha && !isE2ERun && !isNotGradedSubmission) {
+          scope.setTag("hash_in_db", config.workflow_sha);
+          scope.setTag("hash_in_student_repo", hashStr);
+          const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
+          Sentry.captureMessage("workflow sha mismatch", scope);
+          if (isGraderOrInstructor) {
+            await recordWorkflowRunError({
+              name: `.github/workflows/grade.yml SHA is different from that in handout!!! You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+              data: {
+                type: "security_error"
+              },
+              is_private: true
+            });
+          } else {
+            throw new SecurityError(errorMessage);
+          }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
         if (!pawtograderConfig) {

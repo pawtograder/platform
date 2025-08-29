@@ -4,9 +4,8 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
 import useTags from "@/hooks/useTags";
-import { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
+import { RubricPart, Tag, Assignment } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -30,6 +29,21 @@ import { FaArrowLeft } from "react-icons/fa";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import type { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
+import * as Sentry from "@sentry/nextjs";
+
+type ReviewAssignmentForRef = {
+  assignee_profile_id: string;
+  submission_id: number;
+  rubric_id?: number;
+  submissions?: {
+    profile_id?: string;
+    assignment_groups?: {
+      assignment_groups_members?: Array<{ profile_id: string }>;
+    };
+  };
+};
 
 // Main Page Component
 export default function ReassignGradingPage() {
@@ -89,12 +103,30 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     }>
   >([]);
   const [originalRubricParts, setOriginalRubricParts] = useState<Map<number, RubricPart[]>>(new Map());
+  const [selectedReferenceAssignment, setSelectedReferenceAssignment] = useState<Assignment>();
+  const [selectedReferenceRubric, setSelectedReferenceRubric] = useState<RubricWithParts>();
+  const [selectedExclusionAssignment, setSelectedExclusionAssignment] = useState<Assignment>();
+  const [selectedExclusionRubric, setSelectedExclusionRubric] = useState<RubricWithParts>();
+  const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
 
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
   const { tags } = useTags();
   const supabase = createClient();
+
+  // Fetch all assignments for reference/exclusion selection
+  const { data: allAssignments } = useList<Assignment>({
+    resource: "assignments",
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    queryOptions: {
+      enabled: !!course_id
+    },
+    pagination: {
+      pageSize: 1000
+    }
+  });
 
   const { data: gradingRubrics } = useList<RubricWithParts>({
     resource: "rubrics",
@@ -144,6 +176,73 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     }
   });
 
+  // Fetch review assignments from reference assignment to understand previous grader assignments
+  const { data: referenceReviewAssignments } = useList<ReviewAssignmentForRef>({
+    resource: "review_assignments",
+    meta: {
+      select:
+        "assignee_profile_id, submission_id, rubric_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id }
+    ],
+    queryOptions: {
+      enabled: !!selectedReferenceAssignment && !!course_id
+    },
+    pagination: {
+      pageSize: 1000
+    }
+  });
+
+  const { data: referenceRubrics } = useList<RubricWithParts>({
+    resource: "rubrics",
+    meta: {
+      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id }
+    ],
+    queryOptions: {
+      enabled: !!selectedReferenceAssignment && !!course_id
+    }
+  });
+
+  const { data: exclusionRubrics } = useList<RubricWithParts>({
+    resource: "rubrics",
+    meta: {
+      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedExclusionAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id }
+    ],
+    queryOptions: {
+      enabled: !!selectedExclusionAssignment && !!course_id
+    }
+  });
+
+  // For exclusions, we also need the review assignments
+  const { data: exclusionReviewAssignments } = useList<ReviewAssignmentForRef>({
+    resource: "review_assignments",
+    meta: {
+      select:
+        "assignee_profile_id, submission_id, rubric_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: selectedExclusionAssignment?.id },
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "rubric_id", operator: "eq", value: selectedExclusionRubric?.id }
+    ],
+    queryOptions: {
+      enabled: !!selectedExclusionAssignment && !!selectedExclusionRubric && !!course_id
+    },
+    pagination: {
+      pageSize: 1000
+    }
+  });
+
   function shuffle<T>(array: T[]): T[] {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -174,7 +273,11 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     assignmentMode,
     selectedRubricPartsForFilter,
     selectedUsers,
-    originalRubricParts
+    originalRubricParts,
+    selectedReferenceAssignment,
+    selectedReferenceRubric,
+    selectedExclusionAssignment,
+    selectedExclusionRubric
   ]);
 
   /**
@@ -216,6 +319,76 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       setOriginalRubricParts(rubricPartsMap);
     }
   }, [selectedUser, activeSubmissions, selectedRubric]);
+
+  /**
+   * Creates a preference map from the reference assignment: student profile ID -> preferred grader profile ID
+   */
+  const buildGraderPreferenceMap = useCallback(() => {
+    const preferenceMap = new Map<string, string>();
+
+    if (!selectedReferenceAssignment || !referenceReviewAssignments?.data) {
+      return preferenceMap;
+    }
+
+    referenceReviewAssignments.data.forEach((reviewAssignment: ReviewAssignmentForRef) => {
+      // Filter by selected rubric if one is chosen
+      if (selectedReferenceRubric && reviewAssignment.rubric_id !== selectedReferenceRubric.id) {
+        return;
+      }
+
+      const submission = reviewAssignment.submissions;
+      if (submission) {
+        // Handle individual submissions
+        if (submission.profile_id) {
+          preferenceMap.set(submission.profile_id, reviewAssignment.assignee_profile_id);
+        }
+
+        // Handle group submissions
+        if (submission.assignment_groups?.assignment_groups_members) {
+          submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
+            preferenceMap.set(member.profile_id, reviewAssignment.assignee_profile_id);
+          });
+        }
+      }
+    });
+
+    return preferenceMap;
+  }, [selectedReferenceAssignment, selectedReferenceRubric, referenceReviewAssignments]);
+
+  const buildGraderExclusionMap = useCallback(() => {
+    const exclusionMap = new Map<string, Set<string>>(); // student -> Set of graders to exclude
+
+    if (!selectedExclusionAssignment || !selectedExclusionRubric || !exclusionReviewAssignments?.data) {
+      return exclusionMap;
+    }
+
+    exclusionReviewAssignments.data.forEach((reviewAssignment: ReviewAssignmentForRef) => {
+      const submission = reviewAssignment.submissions;
+      if (submission) {
+        // Helper function to add exclusion
+        const addExclusion = (studentId: string, graderId: string) => {
+          if (!exclusionMap.has(studentId)) {
+            exclusionMap.set(studentId, new Set<string>());
+          }
+          exclusionMap.get(studentId)!.add(graderId);
+        };
+
+        // Handle individual submissions
+        if (submission.profile_id) {
+          addExclusion(submission.profile_id, reviewAssignment.assignee_profile_id);
+        }
+
+        // Handle group submissions
+        if (submission.assignment_groups?.assignment_groups_members) {
+          submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
+            addExclusion(member.profile_id, reviewAssignment.assignee_profile_id);
+          });
+        }
+      }
+    });
+
+    return exclusionMap;
+  }, [selectedExclusionAssignment, selectedExclusionRubric, exclusionReviewAssignments]);
 
   /**
    * Creates a list of the users who will be assigned submissions to grade based on category.
@@ -314,30 +487,111 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       return;
     }
 
-    const historicalWorkload = new Map<string, number>();
-    if (baseOnAll) {
-      baseOnAllCalculator(historicalWorkload);
-    }
+    setIsGeneratingReviews(true);
+    try {
+      const historicalWorkload = new Map<string, number>();
+      const graderPreferences = buildGraderPreferenceMap();
+      const graderExclusions = buildGraderExclusionMap();
 
-    if (assignmentMode === "by_rubric_part") {
-      const reviewAssignments = generateReviewsByRubricPart(users, submissionsToDo, historicalWorkload);
-      setDraftReviews(reviewAssignments);
-    } else if (assignmentMode === "by_filtered_parts") {
-      const reviewAssignments = generateReviewsByFilteredParts(users, submissionsToDo, historicalWorkload);
-      setDraftReviews(reviewAssignments);
-    } else {
-      // For "by_submission" mode, preserve the original rubric parts that were assigned
-      const reviewAssignments = generateReviewsByRubric(users, submissionsToDo, historicalWorkload);
-      setDraftReviews(reviewAssignments);
+      if (baseOnAll) {
+        baseOnAllCalculator(historicalWorkload);
+      }
+
+      // Show feedback about preferences and exclusions
+      if (graderPreferences.size > 0) {
+        const rubricInfo = selectedReferenceRubric ? ` (${selectedReferenceRubric.name} rubric)` : "";
+        toaster.create({
+          title: "Strict Grader Preferences Enabled",
+          description: `Will enforce exact grader assignments from ${selectedReferenceAssignment?.title}${rubricInfo} for ${graderPreferences.size} students, overriding all load balancing.`,
+          type: "info"
+        });
+      }
+
+      if (graderExclusions.size > 0) {
+        const totalExclusions = Array.from(graderExclusions.values()).reduce((sum, set) => sum + set.size, 0);
+        const rubricInfo = selectedExclusionRubric ? ` (${selectedExclusionRubric.name} rubric)` : "";
+        toaster.create({
+          title: "Grader Exclusions Applied",
+          description: `Excluding ${totalExclusions} grader-student pairs from ${selectedExclusionAssignment?.title}${rubricInfo}.`,
+          type: "info"
+        });
+      }
+
+      // Filter users to create temporary conflicts based on exclusions
+      const usersWithExclusions = users.map((user) => {
+        const conflicts: GradingConflictWithPopulatedProfiles[] = Array.isArray(user.profiles.grading_conflicts)
+          ? [...user.profiles.grading_conflicts]
+          : [];
+
+        // For each student in the exclusion map, check if this grader should be excluded
+        graderExclusions.forEach((excludedGraders, studentId) => {
+          if (excludedGraders.has(user.private_profile_id)) {
+            const tempConflict: GradingConflictWithPopulatedProfiles = {
+              id: -1,
+              grader_profile_id: user.private_profile_id,
+              student_profile_id: studentId,
+              class_id: Number(course_id),
+              created_at: new Date().toISOString(),
+              created_by_profile_id: user.private_profile_id,
+              reason: `Excluded based on ${selectedExclusionAssignment?.title} - ${selectedExclusionRubric?.name}`
+            };
+            conflicts.push(tempConflict);
+          }
+        });
+
+        return {
+          ...user,
+          profiles: {
+            ...user.profiles,
+            grading_conflicts: conflicts
+          }
+        } as UserRoleWithConflictsAndName;
+      });
+
+      if (assignmentMode === "by_rubric_part") {
+        const reviewAssignments = generateReviewsByRubricPart(
+          usersWithExclusions,
+          submissionsToDo,
+          historicalWorkload,
+          graderPreferences
+        );
+        setDraftReviews(reviewAssignments);
+      } else if (assignmentMode === "by_filtered_parts") {
+        const reviewAssignments = generateReviewsByFilteredParts(
+          usersWithExclusions,
+          submissionsToDo,
+          historicalWorkload,
+          graderPreferences
+        );
+        setDraftReviews(reviewAssignments);
+      } else {
+        // For "by_submission" mode, preserve the original rubric parts that were assigned
+        const reviewAssignments = generateReviewsByRubric(
+          usersWithExclusions,
+          submissionsToDo,
+          historicalWorkload,
+          graderPreferences
+        );
+        setDraftReviews(reviewAssignments);
+      }
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.error({
+        title: "Error drafting reviews",
+        description: e instanceof Error ? e.message : String(e)
+      });
+    } finally {
+      setIsGeneratingReviews(false);
     }
   };
 
   const generateReviewsByRubric = (
     users: UserRoleWithConflictsAndName[],
     submissionsToDo: SubmissionWithGrading[],
-    historicalWorkload: Map<string, number>
+    historicalWorkload: Map<string, number>,
+    graderPreferences?: Map<string, string>
   ) => {
-    const result = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload).solve();
+    const result = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload, graderPreferences, 1).solve();
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
@@ -347,7 +601,8 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   const generateReviewsByRubricPart = (
     users: UserRoleWithConflictsAndName[],
     submissionsToDo: SubmissionWithGrading[],
-    historicalWorkload: Map<string, number>
+    historicalWorkload: Map<string, number>,
+    graderPreferences?: Map<string, string>
   ) => {
     if (!selectedRubric?.rubric_parts.length || selectedRubric?.rubric_parts.length === 0) {
       toaster.error({
@@ -359,7 +614,13 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const groups = splitIntoGroups(users, selectedRubric?.rubric_parts.length);
     const returnResult = [];
     for (let x = 0; x < groups.length; x += 1) {
-      const result = new TAAssignmentSolver(groups[x], submissionsToDo, historicalWorkload).solve();
+      const result = new TAAssignmentSolver(
+        groups[x],
+        submissionsToDo,
+        historicalWorkload,
+        graderPreferences,
+        1
+      ).solve();
       if (result.error) {
         toaster.error({ title: "Error drafting reviews", description: result.error });
       }
@@ -373,7 +634,8 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   const generateReviewsByFilteredParts = (
     users: UserRoleWithConflictsAndName[],
     submissionsToDo: SubmissionWithGrading[],
-    historicalWorkload: Map<string, number>
+    historicalWorkload: Map<string, number>,
+    graderPreferences?: Map<string, string>
   ) => {
     if (selectedRubricPartsForFilter.length === 0) {
       toaster.error({
@@ -399,7 +661,13 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const returnResult = [];
 
     for (let x = 0; x < groups.length && x < selectedParts.length; x += 1) {
-      const result = new TAAssignmentSolver(groups[x], submissionsToDo, historicalWorkload).solve();
+      const result = new TAAssignmentSolver(
+        groups[x],
+        submissionsToDo,
+        historicalWorkload,
+        graderPreferences,
+        1
+      ).solve();
       if (result.error) {
         toaster.error({ title: "Error drafting reviews", description: result.error });
       }
@@ -641,7 +909,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
         rubric_id: selectedRubric.id,
         class_id: Number(course_id),
         submission_review_id: submissionReviewId,
-        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+        due_date: new TZDate(dueDate, course.time_zone ?? "America/New_York").toISOString()
       }));
     await supabase.from("review_assignments").insert(assignmentsToCreate);
 
@@ -754,6 +1022,10 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     setSelectedTags([]);
     setSelectedUsers([]);
     setOriginalRubricParts(new Map());
+    setSelectedReferenceAssignment(undefined);
+    setSelectedReferenceRubric(undefined);
+    setSelectedExclusionAssignment(undefined);
+    setSelectedExclusionRubric(undefined);
   }, []);
 
   /**
@@ -934,8 +1206,161 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
               </Field.HelperText>
             </Field.Root>
 
-            <Heading size="sm">Load balancing</Heading>
+            <Separator my={2} />
+
+            {/* Grader Assignment Rules Section */}
+            <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
+              <Fieldset.Legend>
+                <Heading size="md">Grader Assignment Rules</Heading>
+              </Fieldset.Legend>
+              <Fieldset.Content m={0}>
+                <VStack align="flex-start" maxW={"2xl"} gap={3}>
+                  {/* Preferences Subsection */}
+                  <Box w="100%">
+                    <VStack align="flex-start" gap={2}>
+                      <Heading size="sm">Strict Grader Preferences</Heading>
+                      <Text fontSize="sm" color="text.muted" mb={1}>
+                        Force specific student-grader pairings (overrides all load balancing)
+                      </Text>
+
+                      <Field.Root w="100%">
+                        <Field.Label>Copy grader assignments from</Field.Label>
+                        <Select
+                          value={
+                            selectedReferenceAssignment
+                              ? {
+                                  label: selectedReferenceAssignment.title,
+                                  value: selectedReferenceAssignment
+                                }
+                              : undefined
+                          }
+                          onChange={(e) => {
+                            setSelectedReferenceAssignment(e?.value);
+                            setSelectedReferenceRubric(undefined);
+                          }}
+                          options={
+                            allAssignments?.data.map((assign) => ({
+                              label: assign.title,
+                              value: assign
+                            })) || []
+                          }
+                          isClearable
+                          placeholder="Select an assignment to copy from..."
+                        />
+                        <Field.HelperText>
+                          Students will be assigned to the exact same graders from the selected assignment. Choose
+                          current assignment to copy from a different rubric.
+                        </Field.HelperText>
+                      </Field.Root>
+
+                      {selectedReferenceAssignment && (
+                        <Field.Root w="100%">
+                          <Field.Label>Specific rubric to copy from</Field.Label>
+                          <Select
+                            value={
+                              selectedReferenceRubric
+                                ? {
+                                    label: selectedReferenceRubric.name,
+                                    value: selectedReferenceRubric
+                                  }
+                                : undefined
+                            }
+                            onChange={(e) => setSelectedReferenceRubric(e?.value)}
+                            options={
+                              referenceRubrics?.data?.map((rubric) => ({
+                                label: rubric.name,
+                                value: rubric
+                              })) || []
+                            }
+                            isClearable
+                            placeholder="All rubrics (recommended)"
+                          />
+                          <Field.HelperText>
+                            Optional: Narrow down to a specific rubric. Example: Copy from &quot;grading review&quot;
+                            when assigning &quot;code walk review&quot;.
+                          </Field.HelperText>
+                        </Field.Root>
+                      )}
+                    </VStack>
+                  </Box>
+
+                  <Separator w="100%" />
+
+                  {/* Exclusions Subsection */}
+                  <Box w="100%">
+                    <VStack align="flex-start" gap={2}>
+                      <Heading size="sm">Grader Exclusions</Heading>
+                      <Text fontSize="sm" color="text.muted" mb={1}>
+                        Prevent certain student-grader pairings (useful for meta-grading)
+                      </Text>
+
+                      <Field.Root w="100%">
+                        <Field.Label>Exclude grader assignments from</Field.Label>
+                        <Select
+                          value={
+                            selectedExclusionAssignment
+                              ? {
+                                  label: selectedExclusionAssignment.title,
+                                  value: selectedExclusionAssignment
+                                }
+                              : undefined
+                          }
+                          onChange={(e) => {
+                            setSelectedExclusionAssignment(e?.value);
+                            setSelectedExclusionRubric(undefined);
+                          }}
+                          options={
+                            allAssignments?.data.map((assign) => ({
+                              label: assign.title,
+                              value: assign
+                            })) || []
+                          }
+                          isClearable
+                          placeholder="Select an assignment to exclude from..."
+                        />
+                        <Field.HelperText>
+                          Students will NOT be assigned to graders who reviewed their work on the selected assignment.
+                        </Field.HelperText>
+                      </Field.Root>
+
+                      {selectedExclusionAssignment && (
+                        <Field.Root w="100%">
+                          <Field.Label>Specific rubric to exclude from</Field.Label>
+                          <Select
+                            value={
+                              selectedExclusionRubric
+                                ? {
+                                    label: selectedExclusionRubric.name,
+                                    value: selectedExclusionRubric
+                                  }
+                                : undefined
+                            }
+                            onChange={(e) => setSelectedExclusionRubric(e?.value)}
+                            options={
+                              exclusionRubrics?.data?.map((rubric) => ({
+                                label: rubric.name,
+                                value: rubric
+                              })) || []
+                            }
+                            placeholder="Select a rubric..."
+                          />
+                          <Field.HelperText>
+                            Required: Choose which rubric&apos;s assignments to exclude. Example: Exclude &quot;grading
+                            review&quot; graders when assigning &quot;meta-grading review&quot;.
+                          </Field.HelperText>
+                        </Field.Root>
+                      )}
+                    </VStack>
+                  </Box>
+                </VStack>
+              </Fieldset.Content>
+            </Fieldset.Root>
+
+            <Separator my={2} />
+
+            <Heading size="sm">Load Balancing & Due Date</Heading>
             <Field.Root>
+              <Field.Label>Load balancing strategy</Field.Label>
               <Select
                 value={
                   baseOnAll
@@ -955,14 +1380,14 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
             </Field.Root>
 
             <Field.Root>
-              <Field.Label>Review due date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
+              <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
               <Input
                 type="datetime-local"
                 value={
                   dueDate
                     ? new Date(dueDate)
                         .toLocaleString("sv-SE", {
-                          timeZone: course.classes.time_zone ?? "America/New_York"
+                          timeZone: course.time_zone ?? "America/New_York"
                         })
                         .replace(" ", "T")
                     : ""
@@ -984,7 +1409,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                       parseInt(minute),
                       0,
                       0,
-                      course.classes.time_zone ?? "America/New_York"
+                      course.time_zone ?? "America/New_York"
                     );
                     setDueDate(tzDate.toString());
                   } else {
@@ -997,6 +1422,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
               maxWidth={"md"}
               onClick={generateReviews}
               variant="subtle"
+              loading={isGeneratingReviews}
               disabled={
                 !dueDate ||
                 !selectedRubric ||

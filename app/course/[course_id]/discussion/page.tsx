@@ -1,7 +1,7 @@
 "use client";
-import { useDiscussionThreadTeasers } from "@/hooks/useCourseController";
+import { useCourseController, useDiscussionThreadTeasers } from "@/hooks/useCourseController";
 import { Box, Heading } from "@chakra-ui/react";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { DiscussionThreadTeaser } from "./DiscussionThreadList";
 
 export default function DiscussionPage() {
@@ -12,6 +12,10 @@ export default function DiscussionPage() {
   const answered = useMemo(() => {
     return teasers.filter((teaser) => teaser.is_question && teaser.answer);
   }, [teasers]);
+  const courseController = useCourseController();
+  useEffect(() => {
+    document.title = `${courseController.course.name} - Discussion`;
+  }, [courseController.course.name]);
   return (
     <Box>
       <Heading size="md">Unanswered Questions</Heading>

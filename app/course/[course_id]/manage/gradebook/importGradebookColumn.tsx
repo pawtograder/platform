@@ -2,7 +2,8 @@
 
 import { Alert } from "@/components/ui/alert";
 import { Toaster, toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
@@ -280,17 +281,23 @@ export default function ImportGradebookColumns() {
                               let studentPrivateProfileId: string | null = null;
                               if (idType === "email") {
                                 studentPrivateProfileId =
-                                  courseController.getRoster().find((r) => r.users.email === identifier)
-                                    ?.private_profile_id ?? null;
+                                  courseController
+                                    .getRosterWithUserInfo()
+                                    .data.find((r) => r.users.email === identifier)?.private_profile_id ?? null;
                               } else if (idType === "sid") {
-                                const sid = (identifier ?? "").toString();
-                                studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                const trimmedIdentifier = (identifier ?? "").trim();
+                                const sid = parseInt(trimmedIdentifier, 10);
+                                if (isNaN(sid)) {
+                                  studentPrivateProfileId = null;
+                                } else {
+                                  studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                }
                               }
                               let oldValue = null;
                               if (existingCol && studentPrivateProfileId) {
-                                const found = gradebookController.gradebook_column_students.rows.find(
-                                  (s) =>
-                                    s.gradebook_column_id === existingCol.id && s.student_id === studentPrivateProfileId
+                                const found = gradebookController.getGradebookColumnStudent(
+                                  existingCol.id,
+                                  studentPrivateProfileId
                                 );
                                 oldValue = getScore(found) ?? null;
                               }
@@ -321,21 +328,46 @@ export default function ImportGradebookColumns() {
                   <>
                     {/* Error reporting */}
                     {(() => {
+                      // Helper function to normalize identifiers
+                      const normalizeIdentifier = (id: string, isEmail: boolean): string => {
+                        const trimmed = id.trim();
+                        return isEmail && trimmed.includes("@") ? trimmed.toLowerCase() : trimmed;
+                      };
+
                       let importIdentifiers = previewData.previewCols[0]?.students.map((s) => s.identifier) || [];
-                      importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
-                      const rosterIdentifiers = studentRoster
-                        .map((s) => {
-                          if (previewData.idType === "email") {
-                            const rosterEntry = courseController.getRoster().find((r) => r.private_profile_id === s.id);
-                            return rosterEntry?.users.email ?? null;
-                          } else if (previewData.idType === "sid") {
-                            return s.sis_user_id;
-                          }
-                          return null;
-                        })
-                        .filter((id): id is string => !!id);
-                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers.includes(id));
-                      const notInImport = rosterIdentifiers.filter((id) => !importIdentifiers.includes(id));
+                      importIdentifiers = importIdentifiers
+                        .filter((id): id is string => !!id)
+                        .map((id) => normalizeIdentifier(id, previewData.idType === "email"));
+
+                      // Precompute roster data once to avoid repeated lookups
+                      const rosterData = courseController.getRosterWithUserInfo().data;
+                      const rosterMap = new Map(
+                        rosterData.map((rosterEntry) => [rosterEntry.private_profile_id, rosterEntry])
+                      );
+
+                      // Build normalized identifier sets for O(1) membership checks
+                      const rosterIdentifiers = new Set<string>();
+                      const rosterEmailToId = new Map<string, string>();
+                      const rosterSidToId = new Map<string, string>();
+
+                      studentRoster?.forEach((s) => {
+                        const rosterEntry = rosterMap.get(s.id);
+                        if (!rosterEntry) return;
+
+                        if (previewData.idType === "email" && rosterEntry.users.email) {
+                          const normalizedEmail = normalizeIdentifier(String(rosterEntry.users.email), true);
+                          rosterIdentifiers.add(normalizedEmail);
+                          rosterEmailToId.set(normalizedEmail, s.id);
+                        } else if (previewData.idType === "sid" && rosterEntry.users.sis_user_id != null) {
+                          const normalizedSid = normalizeIdentifier(String(rosterEntry.users.sis_user_id), false);
+                          rosterIdentifiers.add(normalizedSid);
+                          rosterSidToId.set(normalizedSid, s.id);
+                        }
+                      });
+
+                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers.has(id));
+                      const notInImport = Array.from(rosterIdentifiers).filter((id) => !importIdentifiers.includes(id));
+
                       return (
                         <VStack mb={2} align="stretch">
                           {notInRoster.length > 0 && (
@@ -344,11 +376,11 @@ export default function ImportGradebookColumns() {
                               students will not be imported. {notInRoster.join(", ")}
                             </Alert>
                           )}
-                          {notInImport.length > 0 && (
+                          {notInImport && notInImport.length > 0 && (
                             <Alert status="info" variant="subtle">
-                              Note: {notInImport.length} student(s) in the roster are not in the import. These students
+                              Note: {notInImport?.length} student(s) in the roster are not in the import. These students
                               will receive a &quot;missing&quot; grade for the imported columns.
-                              {notInImport.join(", ")}
+                              {notInImport?.join(", ")}
                             </Alert>
                           )}
                         </VStack>
@@ -394,76 +426,114 @@ export default function ImportGradebookColumns() {
                             </Table.Row>
                           </Table.Header>
                           <Table.Body>
-                            {studentRoster.map((student, idx) => {
-                              let identifier: string | null = null;
-                              if (previewData.idType === "email") {
-                                const rosterEntry = courseController
-                                  .getRoster()
-                                  .find((r) => r.private_profile_id === student.id);
-                                identifier = rosterEntry?.users.email ?? null;
-                              } else if (previewData.idType === "sid") {
-                                identifier = student.sis_user_id;
-                              }
-                              if (!identifier) return null;
-                              const importIdx = filteredPreviewCols[0]?.students.findIndex(
-                                (s) => s.identifier === identifier
+                            {(() => {
+                              // Precompute roster data once for the entire table
+                              const rosterData = courseController.getRosterWithUserInfo().data;
+                              const rosterMap = new Map(
+                                rosterData.map((rosterEntry) => [rosterEntry.private_profile_id, rosterEntry])
                               );
-                              const inImport = importIdx !== -1 && importIdx !== undefined;
-                              return (
-                                <Table.Row
-                                  key={idx}
-                                  bg={inImport ? (idx % 2 === 1 ? "bg.subtle" : undefined) : undefined}
-                                >
-                                  <Table.Cell>{identifier}</Table.Cell>
-                                  {filteredPreviewCols.map((col, colIdx) => {
-                                    const s = inImport ? col.students[importIdx] : undefined;
-                                    if (!s) return <Table.Cell key={colIdx}>-</Table.Cell>;
-                                    if (
-                                      col.isNew ||
-                                      s.oldValue === null ||
-                                      s.oldValue === undefined ||
-                                      String(s.oldValue).trim() === String(s.newValue).trim()
-                                    ) {
-                                      return (
-                                        <Table.Cell key={colIdx}>
-                                          {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
-                                            ? s.newValue
-                                            : "-"}
-                                        </Table.Cell>
-                                      );
-                                    } else {
-                                      return (
-                                        <Table.Cell key={colIdx}>
-                                          <s>{s.oldValue}</s>{" "}
-                                          <b style={{ color: "green" }}>
+
+                              // Build normalized identifier sets for O(1) membership checks
+                              const rosterIdentifiers = new Set<string>();
+                              const rosterEmailToId = new Map<string, string>();
+                              const rosterSidToId = new Map<string, string>();
+
+                              studentRoster?.forEach((s) => {
+                                const rosterEntry = rosterMap.get(s.id);
+                                if (!rosterEntry) return;
+
+                                if (previewData.idType === "email" && rosterEntry.users.email) {
+                                  const email = String(rosterEntry.users.email).trim();
+                                  rosterIdentifiers.add(email);
+                                  rosterEmailToId.set(email, s.id);
+                                } else if (previewData.idType === "sid" && rosterEntry.users.sis_user_id != null) {
+                                  const sid = String(rosterEntry.users.sis_user_id).trim();
+                                  rosterIdentifiers.add(sid);
+                                  rosterSidToId.set(sid, s.id);
+                                }
+                              });
+
+                              return studentRoster?.map((student, idx) => {
+                                const rosterEntry = rosterMap.get(student.id);
+                                if (!rosterEntry) return null;
+
+                                let identifier: string | null = null;
+                                if (previewData.idType === "email") {
+                                  identifier = rosterEntry.users.email ? String(rosterEntry.users.email).trim() : null;
+                                } else if (previewData.idType === "sid") {
+                                  identifier =
+                                    rosterEntry.users.sis_user_id != null
+                                      ? String(rosterEntry.users.sis_user_id).trim()
+                                      : null;
+                                }
+
+                                if (!identifier) return null;
+
+                                const importIdx = filteredPreviewCols[0]?.students.findIndex(
+                                  (s) => s.identifier === identifier
+                                );
+                                const inImport = importIdx !== -1 && importIdx !== undefined;
+
+                                return (
+                                  <Table.Row
+                                    key={idx}
+                                    bg={inImport ? (idx % 2 === 1 ? "bg.subtle" : undefined) : undefined}
+                                  >
+                                    <Table.Cell>{identifier}</Table.Cell>
+                                    {filteredPreviewCols.map((col, colIdx) => {
+                                      const s = inImport ? col.students[importIdx] : undefined;
+                                      if (!s) return <Table.Cell key={colIdx}>-</Table.Cell>;
+                                      if (
+                                        col.isNew ||
+                                        s.oldValue === null ||
+                                        s.oldValue === undefined ||
+                                        String(s.oldValue).trim() === String(s.newValue).trim()
+                                      ) {
+                                        return (
+                                          <Table.Cell key={colIdx}>
                                             {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
                                               ? s.newValue
                                               : "-"}
-                                          </b>
-                                        </Table.Cell>
-                                      );
-                                    }
-                                  })}
-                                </Table.Row>
-                              );
-                            })}
+                                          </Table.Cell>
+                                        );
+                                      } else {
+                                        return (
+                                          <Table.Cell key={colIdx}>
+                                            <s>{s.oldValue}</s>{" "}
+                                            <b style={{ color: "green" }}>
+                                              {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
+                                                ? s.newValue
+                                                : "-"}
+                                            </b>
+                                          </Table.Cell>
+                                        );
+                                      }
+                                    })}
+                                  </Table.Row>
+                                );
+                              });
+                            })()}
                             {/* Highlight students in the import not in the roster */}
                             {(() => {
                               let importIdentifiers = filteredPreviewCols[0]?.students.map((s) => s.identifier) || [];
                               importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
-                              const rosterIdentifiers = studentRoster
-                                .map((s) => {
-                                  if (previewData.idType === "email") {
-                                    const rosterEntry = courseController
-                                      .getRoster()
-                                      .find((r) => r.private_profile_id === s.id);
-                                    return rosterEntry?.users.email ?? null;
-                                  } else if (previewData.idType === "sid") {
-                                    return s.sis_user_id;
-                                  }
-                                  return null;
-                                })
-                                .filter((id): id is string => !!id);
+                              const rosterIdentifiers =
+                                studentRoster
+                                  ?.map((s) => {
+                                    if (previewData.idType === "email") {
+                                      const rosterEntry = courseController
+                                        .getRosterWithUserInfo()
+                                        .data.find((r) => r.private_profile_id === s.id);
+                                      return rosterEntry?.users.email ?? null;
+                                    } else if (previewData.idType === "sid") {
+                                      const rosterEntry = courseController
+                                        .getRosterWithUserInfo()
+                                        .data.find((r) => r.private_profile_id === s.id);
+                                      return rosterEntry?.users.sis_user_id ?? null;
+                                    }
+                                    return null;
+                                  })
+                                  .filter((id): id is string => !!id) || [];
                               return importIdentifiers
                                 .filter((id) => !rosterIdentifiers.includes(id))
                                 .map((identifier, idx) => (
@@ -607,9 +677,16 @@ export default function ImportGradebookColumns() {
                                 // Only update for students in the roster
                                 const studentsToUpdate = col.students.filter((s) => {
                                   if (previewData.idType === "email") {
-                                    return courseController.getRoster().some((r) => r.users.email === s.identifier);
+                                    return courseController
+                                      .getRosterWithUserInfo()
+                                      .data.some((r) => r.users.email === s.identifier);
                                   } else if (previewData.idType === "sid") {
-                                    return courseController.getProfileBySisId(s.identifier)?.id !== null;
+                                    const trimmedIdentifier = (s.identifier ?? "").trim();
+                                    const sid = parseInt(trimmedIdentifier, 10);
+                                    if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
+                                      return false;
+                                    }
+                                    return courseController.getProfileBySisId(sid)?.id != null;
                                   }
                                   return false;
                                 });
@@ -619,11 +696,17 @@ export default function ImportGradebookColumns() {
                                     let studentPrivateProfileId: string | null = null;
                                     if (previewData.idType === "email") {
                                       studentPrivateProfileId =
-                                        courseController.getRoster().find((r) => r.users.email === s.identifier)
-                                          ?.private_profile_id ?? null;
+                                        courseController
+                                          .getRosterWithUserInfo()
+                                          .data.find((r) => r.users.email === s.identifier)?.private_profile_id ?? null;
                                     } else if (previewData.idType === "sid") {
-                                      const sid = (s.identifier ?? "").toString();
-                                      studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                      const trimmedIdentifier = (s.identifier ?? "").trim();
+                                      const sid = parseInt(trimmedIdentifier, 10);
+                                      if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
+                                        studentPrivateProfileId = null;
+                                      } else {
+                                        studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                      }
                                     }
                                     if (!studentPrivateProfileId) return null;
                                     // Find the gradebook_column_students row for this student/column
@@ -634,8 +717,9 @@ export default function ImportGradebookColumns() {
                                       ? col.newGradebookColumnStudents?.find(
                                           (g) => g.student_id === studentPrivateProfileId && g.is_private
                                         )
-                                      : gradebookController.gradebook_column_students.rows.find(
-                                          (g) => g.student_id === studentPrivateProfileId && g.is_private
+                                      : gradebookController.getGradebookColumnStudent(
+                                          col.existingCol?.id ?? 0,
+                                          studentPrivateProfileId
                                         );
                                     if (!gcs) return null;
                                     let score: number | undefined = undefined;

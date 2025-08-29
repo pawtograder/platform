@@ -72,6 +72,8 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
+import { useActiveRubricId } from "@/hooks/useSubmissionReview";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
@@ -331,7 +333,7 @@ function ArtifactComment({
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
               <Text fontWeight="bold">{authorProfile?.name}</Text>
-              <Text>commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
               {isAuthor || authorProfile?.flair ? (
@@ -371,10 +373,12 @@ function ArtifactComment({
 
 function ArtifactComments({
   artifact,
-  reviewAssignmentId
+  reviewAssignmentId,
+  submissionReviewId
 }: {
   artifact: SubmissionArtifact;
   reviewAssignmentId?: number;
+  submissionReviewId?: number;
 }) {
   const allArtifactComments = useSubmissionArtifactComments({});
   const submission = useSubmission();
@@ -390,7 +394,9 @@ function ArtifactComments({
     });
   }, [allArtifactComments, artifact.id, isGraderOrInstructor, submission.released]);
 
-  const { reviewAssignment } = useReviewAssignment(reviewAssignmentId);
+  // Keep review assignment context only for labeling in child components
+  // Do not use reviewAssignmentId as a submission_review_id
+  useReviewAssignment(reviewAssignmentId);
 
   if (!submission) {
     return null;
@@ -409,7 +415,7 @@ function ArtifactComments({
         submission={submission}
         artifact={artifact}
         defaultValue=""
-        reviewAssignmentId={reviewAssignmentId ?? reviewAssignment?.id}
+        submissionReviewId={submissionReviewId}
       />
     </Box>
   );
@@ -424,12 +430,12 @@ function ArtifactCommentsForm({
   submission,
   artifact,
   defaultValue,
-  reviewAssignmentId
+  submissionReviewId
 }: {
   submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   artifact: SubmissionArtifact;
   defaultValue: string;
-  reviewAssignmentId?: number;
+  submissionReviewId?: number;
 }) {
   if (!submission.grading_review_id) {
     throw new Error("No grading review ID found");
@@ -441,7 +447,7 @@ function ArtifactCommentsForm({
 
   const postComment = useCallback(
     async (message: string, author_id: string) => {
-      const finalReviewAssignmentId = reviewAssignmentId ?? reviewContext?.id;
+      const finalSubmissionReviewId = submissionReviewId ?? reviewContext?.id;
 
       await submissionController.submission_artifact_comments.create({
         submission_id: submission.id,
@@ -449,7 +455,7 @@ function ArtifactCommentsForm({
         class_id: submission.assignments.class_id,
         author: author_id,
         comment: message,
-        submission_review_id: finalReviewAssignmentId ?? null,
+        submission_review_id: finalSubmissionReviewId ?? null,
         released: reviewContext ? reviewContext.released : true,
         eventually_visible: eventuallyVisible,
         rubric_check_id: null,
@@ -457,7 +463,7 @@ function ArtifactCommentsForm({
         regrade_request_id: null
       });
     },
-    [submissionController, submission, artifact, reviewContext, eventuallyVisible, reviewAssignmentId]
+    [submissionController, submission, artifact, reviewContext, eventuallyVisible, submissionReviewId]
   );
 
   return (
@@ -490,10 +496,10 @@ function ArtifactCommentsForm({
  */
 function ArtifactCheckPopover({
   artifact,
-  reviewAssignmentId
+  submissionReviewId
 }: {
   artifact: SubmissionArtifact;
-  reviewAssignmentId?: number;
+  submissionReviewId?: number;
 }) {
   const submission = useSubmission();
   if (!submission.grading_review_id) {
@@ -662,9 +668,9 @@ function ArtifactCheckPopover({
                       commentText = selectedSubOption.comment + (commentText ? "\n" + commentText : "");
                     }
 
-                    const finalReviewAssignmentId = reviewAssignmentId ?? reviewContext?.id;
+                    const finalSubmissionReviewId = submissionReviewId ?? reviewContext?.id;
 
-                    if (!finalReviewAssignmentId && selectedCheckOption.check?.id) {
+                    if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
                       toaster.error({
                         title: "Error saving comment",
                         description: "Submission review ID is missing for rubric annotation on artifact."
@@ -681,7 +687,7 @@ function ArtifactCheckPopover({
                       author: profile_id,
                       released: reviewContext ? reviewContext.released : true,
                       points: points ?? null,
-                      submission_review_id: finalReviewAssignmentId ?? null,
+                      submission_review_id: finalSubmissionReviewId ?? null,
                       eventually_visible: eventuallyVisible,
                       regrade_request_id: null
                     };
@@ -699,10 +705,12 @@ function ArtifactCheckPopover({
 }
 function ArtifactWithComments({
   artifact,
-  reviewAssignmentId
+  reviewAssignmentId,
+  submissionReviewId
 }: {
   artifact: SubmissionArtifact;
   reviewAssignmentId?: number;
+  submissionReviewId?: number;
 }) {
   return (
     <Box key={artifact.id} borderWidth="1px" borderRadius="lg" p={4} w="100%">
@@ -710,10 +718,14 @@ function ArtifactWithComments({
         {artifact.name}
       </Heading>
 
-      <ArtifactCheckPopover artifact={artifact} reviewAssignmentId={reviewAssignmentId} />
+      <ArtifactCheckPopover artifact={artifact} submissionReviewId={submissionReviewId} />
 
       <ArtifactView artifact={artifact} />
-      <ArtifactComments artifact={artifact} reviewAssignmentId={reviewAssignmentId} />
+      <ArtifactComments
+        artifact={artifact}
+        reviewAssignmentId={reviewAssignmentId}
+        submissionReviewId={submissionReviewId}
+      />
     </Box>
   );
 }
@@ -825,23 +837,19 @@ export default function FilesView() {
   const submissionData = useSubmissionMaybe();
   const isLoadingSubmission = submissionData === undefined;
 
-  const reviewAssignmentIdFromQuery = searchParams.get("review_assignment_id");
-  const selectedRubricIdFromQuery = searchParams.get("selected_rubric_id");
-  const writableSubmissionReviews = useWritableSubmissionReviews(
-    selectedRubricIdFromQuery ? Number(selectedRubricIdFromQuery) : undefined
-  );
+  const { activeRubricId } = useActiveRubricId();
+  const writableSubmissionReviews = useWritableSubmissionReviews(activeRubricId);
 
-  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
-    reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined
-  );
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(activeReviewAssignmentId);
 
   const { submissionReview: currentSubmissionReview, isLoading: isLoadingSubmissionReviewList } =
-    useSubmissionReviewByAssignmentId(reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined);
+    useSubmissionReviewByAssignmentId(activeReviewAssignmentId);
 
   const currentSubmissionReviewRecordId = currentSubmissionReview?.id;
 
-  const activeSubmissionReviewIdToUse = reviewAssignmentIdFromQuery
-    ? currentSubmissionReviewRecordId
+  const activeSubmissionReviewIdToUse = activeReviewAssignmentId
+    ? (reviewAssignment?.submission_review_id ?? currentSubmissionReviewRecordId)
     : writableSubmissionReviews?.[0]?.id;
 
   const fileId = searchParams.get("file_id");
@@ -898,7 +906,8 @@ export default function FilesView() {
             selectedArtifact.data !== null ? (
               <ArtifactWithComments
                 artifact={selectedArtifact as SubmissionArtifact}
-                reviewAssignmentId={finalActiveSubmissionReviewId}
+                reviewAssignmentId={activeReviewAssignmentId}
+                submissionReviewId={finalActiveSubmissionReviewId}
               />
             ) : (
               <ArtifactView artifact={selectedArtifact as SubmissionArtifact} />

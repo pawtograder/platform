@@ -25,6 +25,7 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
     .order("due_date", { ascending: false });
 
   if (assignments.error) {
+    console.log("Unable to fetch assignments");
     console.error(assignments.error);
   }
 

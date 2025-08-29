@@ -1,11 +1,13 @@
-import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
+import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
 dotenv.config({ path: ".env.local" });
 
+const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
@@ -19,58 +21,80 @@ export type TestingUser = {
   private_profile_name: string;
   public_profile_name: string;
   email: string;
-  password: string;
   user_id: string;
   private_profile_id: string;
   public_profile_id: string;
   class_id: number;
+  password: string;
 };
 
-export async function createClass() {
-  const className = `E2E Test Class`;
-  const { data: classData, error: classError } = await supabase
-    .from("classes")
-    .insert({
-      name: className,
-      slug: className.toLowerCase().replace(/ /g, "-"),
-      github_org: "pawtograder-playground",
-      start_date: addDays(new Date(), -30).toISOString(),
-      end_date: addDays(new Date(), 180).toISOString(),
-      late_tokens_per_student: 10,
-      time_zone: "America/New_York"
-    })
-    .select("*")
-    .single();
+export async function createClass({
+  name,
+  rateLimitManager
+}: { name?: string; rateLimitManager?: RateLimitManager } = {}) {
+  const className = name ?? `E2E Test Class`;
+  const { data: classDataList, error: classError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("classes", () =>
+    supabase
+      .from("classes")
+      .insert({
+        name: className,
+        slug: className.toLowerCase().replace(/ /g, "-"),
+        github_org: "pawtograder-playground",
+        start_date: addDays(new Date(), -30).toISOString(),
+        end_date: addDays(new Date(), 180).toISOString(),
+        late_tokens_per_student: 10,
+        time_zone: "America/New_York"
+      })
+      .select("*")
+  );
   if (classError) {
     throw new Error(`Failed to create class: ${classError.message}`);
   }
+  const classData = classDataList[0];
   if (!classData) {
     throw new Error("Failed to create class");
   }
   //Update slug to include class_id
-  const { error: classError2 } = await supabase
-    .from("classes")
-    .update({ slug: `${classData.slug}-${classData.id}` })
-    .eq("id", classData.id);
+  const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
+    supabase
+      .from("classes")
+      .update({ slug: `${classData.slug}-${classData.id}` })
+      .eq("id", classData.id)
+      .select("id")
+  );
   if (classError2) {
     throw new Error(`Failed to update class slug: ${classError2.message}`);
   }
   return classData;
 }
 let sectionIdx = 1;
-export async function createClassSection({ class_id }: { class_id: number }) {
-  const { data: sectionData, error: sectionError } = await supabase
-    .from("class_sections")
-    .insert({
-      class_id: class_id,
-      name: `Section #${sectionIdx}Test`
-    })
-    .select("*")
-    .single();
+export async function createClassSection({
+  class_id,
+  rateLimitManager,
+  name
+}: {
+  class_id: number;
+  rateLimitManager?: RateLimitManager;
+  name?: string;
+}) {
+  const { data: sectionDataList, error: sectionError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("class_sections", () =>
+    supabase
+      .from("class_sections")
+      .insert({
+        class_id: class_id,
+        name: name ?? `Section #${sectionIdx}Test`
+      })
+      .select("*")
+  );
   sectionIdx++;
   if (sectionError) {
     throw new Error(`Failed to create class section: ${sectionError.message}`);
   }
+  const sectionData = sectionDataList[0];
   if (!sectionData) {
     throw new Error("Failed to create class section");
   }
@@ -80,27 +104,57 @@ export async function updateClassSettings({
   class_id,
   start_date,
   end_date,
-  late_tokens_per_student
+  late_tokens_per_student,
+  rateLimitManager
 }: {
   class_id: number;
   start_date: string;
   end_date: string;
   late_tokens_per_student?: number;
+  rateLimitManager?: RateLimitManager;
 }) {
-  await supabase
-    .from("classes")
-    .update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student })
-    .eq("id", class_id);
+  await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
+    supabase
+      .from("classes")
+      .update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student })
+      .eq("id", class_id)
+      .select("id")
+  );
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "Sign in email" }).click();
-  await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
-  await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-  await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
-  await page.getByRole("button", { name: "Sign in with email" }).click();
+
+  // Generate magic link on-demand for authentication
+  try {
+    const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
+      email: testingUser.email,
+      type: "magiclink"
+    });
+    if (magicLinkError) {
+      throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
+    }
+
+    const magicLink = `${process.env.BASE_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL || "http://localhost:3000"}/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+
+    // Use magic link for login
+    await page.goto(magicLink);
+    await page.getByRole("button", { name: "Sign in with magic link" }).click();
+  } catch (error) {
+    // Fall back to password-based login if magic link generation fails
+    // eslint-disable-next-line no-console
+    console.warn(`Failed to generate magic link for ${testingUser.email}, falling back to password:`, error);
+
+    await page.getByRole("textbox", { name: "Sign in email" }).click();
+    await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
+    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
+    await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
+    await page.getByRole("button", { name: "Sign in with email" }).click();
+  }
+
   if (course) {
-    await page.getByRole("link", { name: course.name! }).click();
+    await page.waitForLoadState("networkidle");
+    await page.goto(`/course/${course.id}`);
+    await page.waitForLoadState("networkidle");
   }
 }
 
@@ -114,64 +168,157 @@ export async function createUserInClass({
   class_id,
   section_id,
   lab_section_id,
-  randomSuffix
+  randomSuffix,
+  name,
+  email,
+  rateLimitManager,
+  useMagicLink = false
 }: {
   role: "student" | "instructor" | "grader";
   class_id: number;
   section_id?: number;
   lab_section_id?: number;
   randomSuffix?: string;
+  name?: string;
+  email?: string;
+  rateLimitManager?: RateLimitManager;
+  useMagicLink?: boolean;
 }): Promise<TestingUser> {
-  const password = process.env.TEST_PASSWORD || "change-it";
   const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
-  const name = `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
-  const public_profile_name = `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
-  const private_profile_name = `${name}`;
+  const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
+  const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
+  const public_profile_name = name
+    ? `Pseudonym #${userIdx[role]}`
+    : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+  const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
-  console.log(`Creating user ${email}`);
-  const { data: userData, error: userError } = await supabase.auth.admin.createUser({
-    email: email,
-    password: password,
+  // Try to create user, if it fails due to existing email, try to get the existing user
+  let userId: string;
+  const tempPassword = useMagicLink
+    ? Math.random().toString(36).substring(2, 34)
+    : process.env.TEST_PASSWORD || "change-it";
+  const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser({
+    email: resolvedEmail,
+    password: tempPassword,
     email_confirm: true
   });
+
   if (userError) {
-    console.error(userError);
-    throw new Error(`Failed to create user: ${userError.message}`);
+    // Check if error is due to user already existing
+    if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
+      // eslint-disable-next-line no-console
+      console.log(`User with email ${resolvedEmail} already exists, attempting to retrieve...`);
+
+      // Try to get the user by email using getUserByEmail (if available)
+      try {
+        const { data: existingUserData, error: getUserError } = await supabase
+          .from("users")
+          .select("*")
+          .eq("email", resolvedEmail)
+          .single();
+        if (getUserError) {
+          throw new Error(`Failed to get existing user: ${getUserError.message}`);
+        }
+        userId = existingUserData.user_id;
+        // eslint-disable-next-line no-console
+        console.log(`Successfully retrieved existing user: ${resolvedEmail}`);
+      } catch {
+        // If getUserByEmail doesn't work, fall back to listing users
+        const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
+        if (listError) {
+          throw new Error(`Failed to list users and retrieve existing user: ${listError.message}`);
+        }
+        const existingUser = existingUsers.users.find((user) => user.email === resolvedEmail);
+        if (existingUser) {
+          userId = existingUser.id;
+          // eslint-disable-next-line no-console
+          console.log(`Found existing user via list: ${resolvedEmail}`);
+        } else {
+          throw new Error(`User creation failed and couldn't find existing user: ${userError.message}`);
+        }
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.error(userError);
+      throw new Error(`Failed to create user: ${userError.message}`);
+    }
+  } else {
+    // Handle both possible return structures from createUser
+    if (newUserData && "user" in newUserData && newUserData.user) {
+      userId = newUserData.user.id;
+    } else if (newUserData && "id" in newUserData) {
+      userId = (newUserData as unknown as { id: string }).id;
+    } else {
+      throw new Error("Failed to extract user ID from created user data");
+    }
   }
-  if (class_id !== 1) {
-    const { data: publicProfileData, error: publicProfileError } = await supabase
-      .from("profiles")
-      .insert({
-        name: public_profile_name,
-        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
-        class_id: class_id,
-        is_private_profile: false
-      })
-      .select("id")
-      .single();
+  // Check if user already has a role in this class
+  const { data: existingRole, error: roleCheckError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("user_roles", () =>
+    supabase
+      .from("user_roles")
+      .select("private_profile_id, public_profile_id")
+      .eq("user_id", userId)
+      .eq("class_id", class_id)
+  );
+
+  let publicProfileData: { id: string }, privateProfileData: { id: string };
+
+  if (existingRole.length > 0 && !roleCheckError) {
+    // User already enrolled in class, get existing profile data
+    // eslint-disable-next-line no-console
+    console.log(`User already enrolled in class ${class_id}, using existing profiles`);
+    publicProfileData = { id: existingRole[0].public_profile_id };
+    privateProfileData = { id: existingRole[0].private_profile_id };
+  } else if (class_id !== 1) {
+    // User not enrolled or new class, create profiles and enrollment
+    const { data: newPublicProfileDataList, error: publicProfileError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("profiles", () =>
+      supabase
+        .from("profiles")
+        .insert({
+          name: public_profile_name,
+          avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-user"}`,
+          class_id: class_id,
+          is_private_profile: false
+        })
+        .select("id")
+    );
     if (publicProfileError) {
       throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
     }
-    const { data: privateProfileData, error: privateProfileError } = await supabase
-      .from("profiles")
-      .insert({
-        name: private_profile_name,
-        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
-        class_id: class_id,
-        is_private_profile: true
-      })
-      .select("id")
-      .single();
+    const newPublicProfileData = newPublicProfileDataList[0];
+
+    const { data: newPrivateProfileDataList, error: privateProfileError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("profiles", () =>
+      supabase
+        .from("profiles")
+        .insert({
+          name: private_profile_name,
+          avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-private-user"}`,
+          class_id: class_id,
+          is_private_profile: true
+        })
+        .select("id")
+    );
     if (privateProfileError) {
       throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
     }
-    if (!publicProfileData || !privateProfileData) {
+    const newPrivateProfileData = newPrivateProfileDataList[0];
+
+    if (!newPublicProfileData || !newPrivateProfileData) {
       throw new Error("Failed to create public or private profile");
     }
+
+    publicProfileData = newPublicProfileData;
+    privateProfileData = newPrivateProfileData;
+
     await supabase.from("user_roles").insert({
-      user_id: userData.user.id,
+      user_id: userId,
       class_id: class_id,
       private_profile_id: privateProfileData.id,
       public_profile_id: publicProfileData.id,
@@ -180,34 +327,248 @@ export async function createUserInClass({
       lab_section_id: lab_section_id
     });
   } else if (section_id || lab_section_id) {
-    await supabase
-      .from("user_roles")
-      .update({
-        class_section_id: section_id,
-        lab_section_id: lab_section_id
-      })
-      .eq("user_id", userData.user.id)
-      .eq("class_id", class_id);
+    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+      supabase
+        .from("user_roles")
+        .update({
+          class_section_id: section_id,
+          lab_section_id: lab_section_id
+        })
+        .eq("user_id", userId)
+        .eq("class_id", class_id)
+        .select("id")
+    );
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
     .select("private_profile_id, public_profile_id")
-    .eq("user_id", userData.user.id)
+    .eq("user_id", userId)
     .eq("class_id", class_id)
     .single();
   if (!profileData || profileError) {
     throw new Error(`Failed to get profile: ${profileError?.message}`);
   }
+
+  // Always return password, magic links will be generated by loginAsUser when needed
+  const password = process.env.TEST_PASSWORD || "change-it";
+
   return {
     private_profile_name: private_profile_name,
     public_profile_name: public_profile_name,
-    email: email,
-    user_id: userData.user.id,
+    email: resolvedEmail,
+    user_id: userId,
     private_profile_id: profileData.private_profile_id,
     public_profile_id: profileData.public_profile_id,
     password: password,
     class_id: class_id
   };
+}
+
+// New wrapper function for batch user creation with existing user detection
+export async function createUsersInClass(
+  userRequests: Array<{
+    role: "student" | "instructor" | "grader";
+    class_id: number;
+    section_id?: number;
+    lab_section_id?: number;
+    randomSuffix?: string;
+    name?: string;
+    email?: string;
+    rateLimitManager?: RateLimitManager;
+    useMagicLink?: boolean;
+  }>,
+  rateLimitManager?: RateLimitManager
+): Promise<TestingUser[]> {
+  // Resolve all emails first
+  const resolvedRequests = userRequests.map((req) => {
+    const extra_randomness = req.randomSuffix ?? Math.random().toString(36).substring(2, 20);
+    const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
+    const resolvedEmail =
+      req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${userIdx[req.role]}@pawtograder.net`;
+    const resolvedName = req.name
+      ? req.name
+      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${userIdx[req.role]}Test`;
+    userIdx[req.role]++;
+
+    return {
+      ...req,
+      resolvedEmail,
+      resolvedName
+    };
+  });
+
+  // Get all resolved emails
+  const emails = resolvedRequests.map((req) => req.resolvedEmail);
+
+  // Check for existing users in one database query
+  const { data: existingUsers, error: existingUsersError } = await supabase
+    .from("users")
+    .select("user_id, email")
+    .in("email", emails);
+
+  if (existingUsersError) {
+    throw new Error(`Failed to check for existing users: ${existingUsersError.message}`);
+  }
+
+  // Create a map of existing users by email
+  const existingUsersMap = new Map(existingUsers.map((user) => [user.email, user.user_id]));
+
+  // Process each request
+  const results: TestingUser[] = [];
+
+  for (const request of resolvedRequests) {
+    const { role, class_id, section_id, lab_section_id, resolvedEmail, resolvedName, useMagicLink = false } = request;
+
+    const public_profile_name = request.name
+      ? `Pseudonym #${userIdx[role] - 1}`
+      : `Pseudonym #${userIdx[role] - 1} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+    const private_profile_name = resolvedName;
+
+    let userId: string;
+
+    // Check if user already exists
+    if (existingUsersMap.has(resolvedEmail)) {
+      userId = existingUsersMap.get(resolvedEmail)!;
+    } else {
+      // Create new user
+      const tempPassword = useMagicLink
+        ? Math.random().toString(36).substring(2, 34)
+        : process.env.TEST_PASSWORD || "change-it";
+      const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser(
+        {
+          email: resolvedEmail,
+          password: tempPassword,
+          email_confirm: true
+        }
+      );
+
+      if (userError) {
+        throw new Error(`Failed to create user ${resolvedEmail}: ${userError.message}`);
+      }
+
+      // Handle both possible return structures from createUser
+      if (newUserData && "user" in newUserData && newUserData.user) {
+        userId = newUserData.user.id;
+      } else if (newUserData && "id" in newUserData) {
+        userId = (newUserData as unknown as { id: string }).id;
+      } else {
+        throw new Error("Failed to extract user ID from created user data");
+      }
+    }
+
+    // Check if user already has a role in this class
+    const { data: existingRole, error: roleCheckError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("user_roles", () =>
+      supabase
+        .from("user_roles")
+        .select("private_profile_id, public_profile_id")
+        .eq("user_id", userId)
+        .eq("class_id", class_id)
+    );
+
+    let publicProfileData: { id: string }, privateProfileData: { id: string };
+
+    if (existingRole.length > 0 && !roleCheckError) {
+      // User already enrolled in class, get existing profile data
+      // eslint-disable-next-line no-console
+      console.log(`User already enrolled in class ${class_id}, using existing profiles`);
+      publicProfileData = { id: existingRole[0].public_profile_id };
+      privateProfileData = { id: existingRole[0].private_profile_id };
+    } else if (class_id !== 1) {
+      // User not enrolled or new class, create profiles and enrollment
+      const { data: newPublicProfileDataList, error: publicProfileError } = await (
+        rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+      ).trackAndLimit("profiles", () =>
+        supabase
+          .from("profiles")
+          .insert({
+            name: public_profile_name,
+            avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-user"}`,
+            class_id: class_id,
+            is_private_profile: false
+          })
+          .select("id")
+      );
+      if (publicProfileError) {
+        throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
+      }
+      const newPublicProfileData = newPublicProfileDataList[0];
+
+      const { data: newPrivateProfileDataList, error: privateProfileError } = await (
+        rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+      ).trackAndLimit("profiles", () =>
+        supabase
+          .from("profiles")
+          .insert({
+            name: private_profile_name,
+            avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-private-user"}`,
+            class_id: class_id,
+            is_private_profile: true
+          })
+          .select("id")
+      );
+      if (privateProfileError) {
+        throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
+      }
+      const newPrivateProfileData = newPrivateProfileDataList[0];
+
+      if (!newPublicProfileData || !newPrivateProfileData) {
+        throw new Error("Failed to create public or private profile");
+      }
+
+      publicProfileData = newPublicProfileData;
+      privateProfileData = newPrivateProfileData;
+
+      await supabase.from("user_roles").insert({
+        user_id: userId,
+        class_id: class_id,
+        private_profile_id: privateProfileData.id,
+        public_profile_id: publicProfileData.id,
+        role: role,
+        class_section_id: section_id,
+        lab_section_id: lab_section_id
+      });
+    } else if (section_id || lab_section_id) {
+      await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+        supabase
+          .from("user_roles")
+          .update({
+            class_section_id: section_id,
+            lab_section_id: lab_section_id
+          })
+          .eq("user_id", userId)
+          .eq("class_id", class_id)
+          .select("id")
+      );
+    }
+
+    const { data: profileData, error: profileError } = await supabase
+      .from("user_roles")
+      .select("private_profile_id, public_profile_id")
+      .eq("user_id", userId)
+      .eq("class_id", class_id)
+      .single();
+    if (!profileData || profileError) {
+      throw new Error(`Failed to get profile: ${profileError?.message}`);
+    }
+
+    // Always return password, magic links will be generated by loginAsUser when needed
+    const password = process.env.TEST_PASSWORD || "change-it";
+
+    results.push({
+      private_profile_name: private_profile_name,
+      public_profile_name: public_profile_name,
+      email: resolvedEmail,
+      user_id: userId,
+      private_profile_id: profileData.private_profile_id,
+      public_profile_id: profileData.public_profile_id,
+      password: password,
+      class_id: class_id
+    });
+  }
+
+  return results;
 }
 
 let repoCounter = 0;
@@ -216,78 +577,100 @@ export async function insertPreBakedSubmission({
   assignment_group_id,
   assignment_id,
   class_id,
-  repositorySuffix
+  repositorySuffix,
+  rateLimitManager
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
   assignment_id: number;
   class_id: number;
   repositorySuffix?: string;
+  rateLimitManager?: RateLimitManager;
 }): Promise<{
   submission_id: number;
   repository_name: string;
+  grading_review_id: number;
 }> {
   const test_run_prefix = repositorySuffix ?? getTestRunPrefix();
   const repository = `not-actually/repository-${test_run_prefix}-${repoCounter}`;
   repoCounter++;
-  const { data: repositoryData, error: repositoryError } = await supabase
-    .from("repositories")
-    .insert({
-      assignment_id: assignment_id,
-      repository: repository,
-      class_id: class_id,
-      assignment_group_id,
-      profile_id: student_profile_id,
-      synced_handout_sha: "none"
-    })
-    .select("id")
-    .single();
+  const { data: repositoryDataList, error: repositoryError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("repositories", () =>
+    supabase
+      .from("repositories")
+      .insert({
+        assignment_id: assignment_id,
+        repository: repository,
+        class_id: class_id,
+        assignment_group_id,
+        profile_id: student_profile_id,
+        synced_handout_sha: "none"
+      })
+      .select("id")
+  );
   if (repositoryError) {
     throw new Error(`Failed to create repository: ${repositoryError.message}`);
   }
+  const repositoryData = repositoryDataList[0];
   const repository_id = repositoryData?.id;
 
-  const { data: checkRunData, error: checkRunError } = await supabase
-    .from("repository_check_runs")
-    .insert({
-      class_id: class_id,
-      repository_id: repository_id,
-      check_run_id: 1,
-      status: "{}",
-      sha: "none",
-      commit_message: "none"
-    })
-    .select("id")
-    .single();
+  const { data: checkRunDataList, error: checkRunError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("repository_check_runs", () =>
+    supabase
+      .from("repository_check_runs")
+      .insert({
+        class_id: class_id,
+        repository_id: repository_id,
+        check_run_id: 1,
+        status: "{}",
+        sha: "none",
+        commit_message: "none"
+      })
+      .select("id")
+  );
   if (checkRunError) {
+    // eslint-disable-next-line no-console
     console.error(checkRunError);
     throw new Error("Failed to create check run");
   }
+  const checkRunData = checkRunDataList[0];
   const check_run_id = checkRunData?.id;
-  const { data: submissionData, error: submissionError } = await supabase
-    .from("submissions")
-    .insert({
-      assignment_id: assignment_id,
-      profile_id: student_profile_id,
-      assignment_group_id: assignment_group_id,
-      sha: "none",
-      repository: repository,
-      run_attempt: 1,
-      run_number: 1,
-      class_id: class_id,
-      repository_check_run_id: check_run_id,
-      repository_id: repository_id
-    })
-    .select("id")
-    .single();
+  const { data: submissionDataList, error: submissionError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("submissions", () =>
+    supabase
+      .from("submissions")
+      .insert({
+        assignment_id: assignment_id,
+        profile_id: student_profile_id,
+        assignment_group_id: assignment_group_id,
+        sha: "none",
+        repository: repository,
+        run_attempt: 1,
+        run_number: 1,
+        class_id: class_id,
+        repository_check_run_id: check_run_id,
+        repository_id: repository_id
+      })
+      .select("*")
+  );
   if (submissionError) {
+    // eslint-disable-next-line no-console
     console.error(submissionError);
     throw new Error("Failed to create submission");
   }
+  const submissionData = submissionDataList[0];
   const submission_id = submissionData?.id;
-  const { error: submissionFileError } = await supabase.from("submission_files").insert({
-    name: "sample.java",
-    contents: `package com.pawtograder.example.java;
+  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "submission_files",
+    () =>
+      supabase
+        .from("submission_files")
+        .insert({
+          name: "sample.java",
+          contents: `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
@@ -314,69 +697,96 @@ public class Entrypoint {
       return "Hello, World!";
   }
 }`,
-    class_id: class_id,
-    submission_id: submission_id,
-    profile_id: student_profile_id,
-    assignment_group_id: assignment_group_id
-  });
+          class_id: class_id,
+          submission_id: submission_id,
+          profile_id: student_profile_id,
+          assignment_group_id: assignment_group_id
+        })
+        .select("id")
+  );
   if (submissionFileError) {
+    // eslint-disable-next-line no-console
     console.error(submissionFileError);
     throw new Error("Failed to create submission file");
   }
-  const { data: graderResultData, error: graderResultError } = await supabase
-    .from("grader_results")
-    .insert({
-      submission_id: submission_id,
-      score: 5,
-      class_id: class_id,
-      profile_id: student_profile_id,
-      assignment_group_id: assignment_group_id,
-      lint_passed: true,
-      lint_output: "no lint output",
-      lint_output_format: "markdown",
-      max_score: 10
-    })
-    .select("id")
-    .single();
+  const { data: graderResultDataList, error: graderResultError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("grader_results", () =>
+    supabase
+      .from("grader_results")
+      .insert({
+        submission_id: submission_id,
+        score: 5,
+        class_id: class_id,
+        profile_id: student_profile_id,
+        assignment_group_id: assignment_group_id,
+        lint_passed: true,
+        lint_output: "no lint output",
+        lint_output_format: "markdown",
+        max_score: 10
+      })
+      .select("id")
+  );
   if (graderResultError) {
+    // eslint-disable-next-line no-console
     console.error(graderResultError);
     throw new Error("Failed to create grader result");
   }
-  const { error: graderResultTestError } = await supabase.from("grader_result_tests").insert([
-    {
-      score: 5,
-      max_score: 5,
-      name: "test 1",
-      name_format: "text",
-      output: "here is a bunch of output\n**wow**",
-      output_format: "markdown",
-      class_id: class_id,
-      student_id: student_profile_id,
-      assignment_group_id,
-      grader_result_id: graderResultData.id,
-      is_released: true
-    },
-    {
-      score: 5,
-      max_score: 5,
-      name: "test 2",
-      name_format: "text",
-      output: "here is a bunch of output\n**wow**",
-      output_format: "markdown",
-      class_id: class_id,
-      student_id: student_profile_id,
-      assignment_group_id,
-      grader_result_id: graderResultData.id,
-      is_released: true
-    }
-  ]);
+  const graderResultData = graderResultDataList[0];
+  const { error: graderResultTestError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "grader_result_tests",
+    () =>
+      supabase
+        .from("grader_result_tests")
+        .insert([
+          {
+            score: 5,
+            max_score: 5,
+            name: "test 1",
+            name_format: "text",
+            output: "here is a bunch of output\n**wow**",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: student_profile_id,
+            assignment_group_id,
+            grader_result_id: graderResultData.id,
+            is_released: true
+          },
+          {
+            score: 5,
+            max_score: 5,
+            name: "test 2",
+            name_format: "text",
+            output: "here is a bunch of output\n**wow**",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: student_profile_id,
+            assignment_group_id,
+            grader_result_id: graderResultData.id,
+            is_released: true
+          }
+        ])
+        .select("id")
+  );
   if (graderResultTestError) {
+    // eslint-disable-next-line no-console
     console.error(graderResultTestError);
     throw new Error("Failed to create grader result test");
   }
+  //We add review id's in an AFTER trigger :/
+  const { data: submissionWithReviewId, error: submissionWithReviewIdError } = await supabase
+    .from("submissions")
+    .select("grading_review_id")
+    .eq("id", submission_id)
+    .single();
+  if (submissionWithReviewIdError) {
+    console.error(submissionWithReviewIdError);
+    throw new Error("Failed to get submission with review id");
+  }
   return {
     submission_id: submission_id,
-    repository_name: repository
+    repository_name: repository,
+    grading_review_id: submissionWithReviewId?.grading_review_id || 0
   };
 }
 
@@ -387,7 +797,8 @@ export async function createLabSectionWithStudents({
   day_of_week,
   students,
   start_time,
-  end_time
+  end_time,
+  name
 }: {
   class_id?: number;
   lab_leader: TestingUser;
@@ -395,8 +806,9 @@ export async function createLabSectionWithStudents({
   students: TestingUser[];
   start_time?: string;
   end_time?: string;
+  name?: string;
 }) {
-  const lab_section_name = `Lab #${labSectionIdx} (${day_of_week})`;
+  const lab_section_name = name ?? `Lab #${labSectionIdx} (${day_of_week})`;
   labSectionIdx++;
   const { data: labSectionData, error: labSectionError } = await supabase
     .from("lab_sections")
@@ -450,28 +862,37 @@ export async function insertAssignment({
   due_date,
   lab_due_date_offset,
   allow_not_graded_submissions,
-  class_id
+  class_id,
+  rateLimitManager,
+  name
 }: {
   due_date: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
   class_id: number;
-}): Promise<Assignment & { rubricChecks: RubricCheck[] }> {
-  const title = `Assignment #${assignmentIdx.assignment}Test`;
+  rateLimitManager?: RateLimitManager;
+  name?: string;
+}): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
+  const currentAssignmentIdx = assignmentIdx.assignment;
+  const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
   assignmentIdx.assignment++;
-  const { data: selfReviewSettingData, error: selfReviewSettingError } = await supabase
-    .from("assignment_self_review_settings")
-    .insert({
-      class_id: class_id,
-      enabled: true,
-      deadline_offset: 2,
-      allow_early: true
-    })
-    .select("id")
-    .single();
+  const { data: selfReviewSettingDataList, error: selfReviewSettingError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("assignment_self_review_settings", () =>
+    supabase
+      .from("assignment_self_review_settings")
+      .insert({
+        class_id: class_id,
+        enabled: true,
+        deadline_offset: 2,
+        allow_early: true
+      })
+      .select("id")
+  );
   if (selfReviewSettingError) {
     throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
   }
+  const selfReviewSettingData = selfReviewSettingDataList[0];
   const self_review_setting_id = selfReviewSettingData.id;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
@@ -486,7 +907,7 @@ export async function insertAssignment({
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: `assignment-${assignmentIdx.assignment}`,
+      slug: `assignment-${currentAssignmentIdx}`,
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       self_review_setting_id: self_review_setting_id
@@ -496,129 +917,205 @@ export async function insertAssignment({
   if (assignmentError) {
     throw new Error(`Failed to create assignment: ${assignmentError.message}`);
   }
-  const { data: assignmentData } = await supabase
-    .from("assignments")
-    .select("*")
-    .eq("id", insertedAssignmentData.id)
-    .single();
+  const { data: assignmentDataList } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "assignments",
+    () => supabase.from("assignments").select("*").eq("id", insertedAssignmentData.id)
+  );
+  const assignmentData = assignmentDataList[0];
   if (!assignmentData) {
     throw new Error("Failed to get assignment");
   }
-  await supabase
-    .from("autograder")
-    .update({
-      config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
-    })
-    .eq("id", assignmentData.id);
+  await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("autograder", () =>
+    supabase
+      .from("autograder")
+      .update({
+        config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
+      })
+      .eq("id", assignmentData.id)
+      .select("id")
+  );
 
-  const partsData = await supabase
-    .from("rubric_parts")
-    .insert([
-      {
-        class_id: class_id,
-        name: "Self Review",
-        description: "Self review rubric",
-        ordinal: 0,
-        rubric_id: assignmentData.self_review_rubric_id || 0
-      },
-      {
-        class_id: class_id,
-        name: "Grading Review",
-        description: "Grading review rubric",
-        ordinal: 1,
-        rubric_id: assignmentData.grading_rubric_id || 0
-      }
-    ])
-    .select("id");
+  const partsData = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("rubric_parts", () =>
+    supabase
+      .from("rubric_parts")
+      .insert([
+        {
+          class_id: class_id,
+          name: "Self Review",
+          description: "Self review rubric",
+          ordinal: 0,
+          rubric_id: assignmentData.self_review_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Part 1",
+          description: "Grading review rubric, part 1",
+          ordinal: 1,
+          rubric_id: assignmentData.grading_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Part 2",
+          description: "Grading review rubric, part 2",
+          ordinal: 2,
+          rubric_id: assignmentData.grading_rubric_id || 0
+        }
+      ])
+      .select("*")
+  );
   if (partsData.error) {
     throw new Error(`Failed to create rubric parts: ${partsData.error.message}`);
   }
-  const self_review_part_id = partsData.data?.[0]?.id;
-  const grading_review_part_id = partsData.data?.[1]?.id;
-  const criteriaData = await supabase
-    .from("rubric_criteria")
-    .insert([
-      {
-        class_id: class_id,
-        name: "Self Review Criteria",
-        description: "Criteria for self review evaluation",
-        ordinal: 0,
-        total_points: 10,
-        is_additive: true,
-        rubric_part_id: self_review_part_id || 0,
-        rubric_id: assignmentData.self_review_rubric_id || 0
-      },
-      {
-        class_id: class_id,
-        name: "Grading Review Criteria",
-        description: "Criteria for grading review evaluation",
-        ordinal: 0,
-        total_points: 20,
-        is_additive: true,
-        rubric_part_id: grading_review_part_id || 0,
-        rubric_id: assignmentData.grading_rubric_id || 0
-      }
-    ])
-    .select("id");
+  const self_review_part = partsData.data?.find((p) => p.name === "Self Review");
+  const grading_review_part = partsData.data?.find((p) => p.name === "Grading Review Part 1");
+  const grading_review_part_2 = partsData.data?.find((p) => p.name === "Grading Review Part 2");
+
+  if (!self_review_part) {
+    throw new Error("Failed to find 'Self Review' rubric part");
+  }
+  if (!grading_review_part) {
+    throw new Error("Failed to find 'Grading Review Part 1' rubric part");
+  }
+  if (!grading_review_part_2) {
+    throw new Error("Failed to find 'Grading Review Part 2' rubric part");
+  }
+
+  const self_review_part_id = self_review_part.id;
+  const grading_review_part_id = grading_review_part.id;
+  const grading_review_part_2_id = grading_review_part_2.id;
+  const criteriaData = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("rubric_criteria", () =>
+    supabase
+      .from("rubric_criteria")
+      .insert([
+        {
+          class_id: class_id,
+          name: "Self Review Criteria",
+          description: "Criteria for self review evaluation",
+          ordinal: 0,
+          total_points: 10,
+          is_additive: true,
+          rubric_part_id: self_review_part_id || 0,
+          rubric_id: assignmentData.self_review_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Criteria",
+          description: "Criteria for grading review evaluation",
+          ordinal: 0,
+          total_points: 20,
+          is_additive: true,
+          rubric_part_id: grading_review_part_id || 0,
+          rubric_id: assignmentData.grading_rubric_id || 0
+        },
+        {
+          class_id: class_id,
+          name: "Grading Review Criteria 2",
+          description: "Criteria for grading review evaluation, part 2",
+          ordinal: 1,
+          total_points: 20,
+          is_additive: true,
+          rubric_part_id: grading_review_part_2_id || 0,
+          rubric_id: assignmentData.grading_rubric_id || 0
+        }
+      ])
+      .select("id, name")
+  );
   if (criteriaData.error) {
     throw new Error(`Failed to create rubric criteria: ${criteriaData.error.message}`);
   }
-  const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
-  const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
-  const { data: rubricChecksData, error: rubricChecksError } = await supabase
-    .from("rubric_checks")
-    .insert([
-      {
-        rubric_criteria_id: selfReviewCriteriaId || 0,
-        name: "Self Review Check 1",
-        description: "First check for self review",
-        ordinal: 0,
-        points: 5,
-        is_annotation: true,
-        is_comment_required: false,
-        class_id: class_id,
-        is_required: true
-      },
-      {
-        rubric_criteria_id: selfReviewCriteriaId || 0,
-        name: "Self Review Check 2",
-        description: "Second check for self review",
-        ordinal: 1,
-        points: 5,
-        is_annotation: false,
-        is_comment_required: false,
-        class_id: class_id,
-        is_required: true
-      },
-      {
-        rubric_criteria_id: gradingReviewCriteriaId || 0,
-        name: "Grading Review Check 1",
-        description: "First check for grading review",
-        ordinal: 0,
-        points: 10,
-        is_annotation: true,
-        is_comment_required: false,
-        class_id: class_id,
-        is_required: true
-      },
-      {
-        rubric_criteria_id: gradingReviewCriteriaId || 0,
-        name: "Grading Review Check 2",
-        description: "Second check for grading review",
-        ordinal: 1,
-        points: 10,
-        is_annotation: false,
-        is_comment_required: false,
-        class_id: class_id,
-        is_required: true
-      }
-    ])
-    .select("*");
+
+  // Create a lookup map from criterion name to ID for robust, order-independent access
+  const criteriaByName = (criteriaData.data || []).reduce(
+    (acc, criterion) => {
+      acc[criterion.name] = criterion.id;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+
+  const selfReviewCriteriaId = criteriaByName["Self Review Criteria"];
+  const gradingReviewCriteriaId = criteriaByName["Grading Review Criteria"];
+  const gradingReviewCriteriaId2 = criteriaByName["Grading Review Criteria 2"];
+
+  // Validate that all expected criteria were found
+  if (!selfReviewCriteriaId) {
+    throw new Error("Failed to find 'Self Review Criteria' criterion");
+  }
+  if (!gradingReviewCriteriaId) {
+    throw new Error("Failed to find 'Grading Review Criteria' criterion");
+  }
+  if (!gradingReviewCriteriaId2) {
+    throw new Error("Failed to find 'Grading Review Criteria 2' criterion");
+  }
+  const { data: rubricChecksData, error: rubricChecksError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("rubric_checks", () =>
+    supabase
+      .from("rubric_checks")
+      .insert([
+        {
+          rubric_criteria_id: selfReviewCriteriaId || 0,
+          name: "Self Review Check 1",
+          description: "First check for self review",
+          ordinal: 0,
+          points: 5,
+          is_annotation: true,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
+        },
+        {
+          rubric_criteria_id: selfReviewCriteriaId || 0,
+          name: "Self Review Check 2",
+          description: "Second check for self review",
+          ordinal: 1,
+          points: 5,
+          is_annotation: false,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
+        },
+        {
+          rubric_criteria_id: gradingReviewCriteriaId || 0,
+          name: "Grading Review Check 1",
+          description: "First check for grading review",
+          ordinal: 0,
+          points: 10,
+          is_annotation: true,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
+        },
+        {
+          rubric_criteria_id: gradingReviewCriteriaId || 0,
+          name: "Grading Review Check 2",
+          description: "Second check for grading review",
+          ordinal: 1,
+          points: 10,
+          is_annotation: false,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
+        },
+        {
+          rubric_criteria_id: gradingReviewCriteriaId2 || 0,
+          name: "Grading Review Check 3",
+          description: "Third check for grading review",
+          ordinal: 2,
+          points: 10,
+          is_annotation: false,
+          is_comment_required: false,
+          class_id: class_id,
+          is_required: true
+        }
+      ])
+      .select("*")
+  );
   if (rubricChecksError) {
     throw new Error(`Failed to create rubric checks: ${rubricChecksError.message}`);
   }
 
-  return { ...assignmentData, rubricChecks: rubricChecksData };
+  return { ...assignmentData, rubricParts: partsData.data, rubricChecks: rubricChecksData };
 }
 
 export async function insertSubmissionViaAPI({
@@ -629,7 +1126,8 @@ export async function insertSubmissionViaAPI({
   assignment_id = 1,
   class_id,
   repositorySuffix,
-  timestampOverride
+  timestampOverride,
+  rateLimitManager
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
@@ -639,6 +1137,7 @@ export async function insertSubmissionViaAPI({
   class_id: number;
   repositorySuffix?: string;
   timestampOverride?: number;
+  rateLimitManager?: RateLimitManager;
 }): Promise<{
   submission_id: number;
   repository_name: string;
@@ -649,36 +1148,44 @@ export async function insertSubmissionViaAPI({
   const studentId = student_profile_id?.slice(0, 8) || "no-student";
   const assignmentStr = assignment_id || 1;
   const repository = `pawtograder-playground/test-e2e-student-repo-java--${test_run_batch}-${workerIndex}-${assignmentStr}-${studentId}-${timestamp}`;
-  const { data: repositoryData, error: repositoryError } = await supabase
-    .from("repositories")
-    .insert({
-      assignment_id: assignment_id,
-      repository: repository,
-      class_id: class_id,
-      assignment_group_id,
-      profile_id: student_profile_id,
-      synced_handout_sha: "none"
-    })
-    .select("id")
-    .single();
+  const { data: repositoryDataList, error: repositoryError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("repositories", () =>
+    supabase
+      .from("repositories")
+      .insert({
+        assignment_id: assignment_id,
+        repository: repository,
+        class_id: class_id,
+        assignment_group_id,
+        profile_id: student_profile_id,
+        synced_handout_sha: "none"
+      })
+      .select("id")
+  );
   if (repositoryError) {
     throw new Error(`Failed to create repository: ${repositoryError.message}`);
   }
+  const repositoryData = repositoryDataList[0];
   const repository_id = repositoryData?.id;
 
-  const { error: checkRunError } = await supabase
-    .from("repository_check_runs")
-    .insert({
-      class_id: class_id,
-      repository_id: repository_id,
-      check_run_id: 1,
-      status: "{}",
-      sha: sha || "HEAD",
-      commit_message: commit_message || "none"
-    })
-    .select("id")
-    .single();
+  const { error: checkRunError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "repository_check_runs",
+    () =>
+      supabase
+        .from("repository_check_runs")
+        .insert({
+          class_id: class_id,
+          repository_id: repository_id,
+          check_run_id: 1,
+          status: "{}",
+          sha: sha || "HEAD",
+          commit_message: commit_message || "none"
+        })
+        .select("id")
+  );
   if (checkRunError) {
+    // eslint-disable-next-line no-console
     console.error(checkRunError);
     throw new Error("Failed to create check run");
   }
@@ -709,14 +1216,14 @@ export async function insertSubmissionViaAPI({
     throw new Error("Failed to create submission, no data returned");
   }
   if ("error" in data) {
-    if ("details" in data.error) {
-      throw new Error(data.error.details);
+    if (typeof data.error === "object" && data.error && "details" in data.error) {
+      throw new Error(String((data.error as { details: string }).details));
     }
     throw new Error("Failed to create submission");
   }
   return {
     repository_name: repository,
-    submission_id: data.submission_id
+    submission_id: (data as { submission_id: number }).submission_id
   };
 }
 
@@ -832,6 +1339,7 @@ export async function gradeSubmission(
     lineNumberRandomizer?: () => number; // Function to generate line numbers (returns 1-5)
     totalScoreOverride?: number;
     totalAutogradeScoreOverride?: number;
+    rateLimitManager?: RateLimitManager;
   }
 ) {
   // Get the submission review details to find the rubric and submission
@@ -893,31 +1401,43 @@ export async function gradeSubmission(
             const lineRandomValue = options?.lineNumberRandomizer?.() ?? Math.random();
             const lineNumber = Math.floor(lineRandomValue * 5) + 1; // Random line number 1-5
 
-            await supabase.from("submission_file_comments").insert({
-              submission_id: reviewInfo.submission_id,
-              submission_file_id: file_id,
-              author: grader_profile_id,
-              comment: `${check.name}: Grading comment for this check`,
-              points: pointsAwarded,
-              line: lineNumber,
-              class_id: reviewInfo.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: grading_review_id
-            });
+            await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+              "submission_file_comments",
+              () =>
+                supabase
+                  .from("submission_file_comments")
+                  .insert({
+                    submission_id: reviewInfo.submission_id,
+                    submission_file_id: file_id,
+                    author: grader_profile_id,
+                    comment: `${check.name}: Grading comment for this check`,
+                    points: pointsAwarded,
+                    line: lineNumber,
+                    class_id: reviewInfo.class_id,
+                    released: true,
+                    rubric_check_id: check.id,
+                    submission_review_id: grading_review_id
+                  })
+                  .select("id")
+            );
           }
         } else {
           // Create submission comment (general comment)
-          await supabase.from("submission_comments").insert({
-            submission_id: reviewInfo.submission_id,
-            author: grader_profile_id,
-            comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
-            points: pointsAwarded,
-            class_id: reviewInfo.class_id,
-            released: true,
-            rubric_check_id: check.id,
-            submission_review_id: grading_review_id
-          });
+          await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("submission_comments", () =>
+            supabase
+              .from("submission_comments")
+              .insert({
+                submission_id: reviewInfo.submission_id,
+                author: grader_profile_id,
+                comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
+                points: pointsAwarded,
+                class_id: reviewInfo.class_id,
+                released: true,
+                rubric_check_id: check.id,
+                submission_review_id: grading_review_id
+              })
+              .select("id")
+          );
         }
       }
     }
@@ -1015,8 +1535,25 @@ export async function createAssignmentsAndGradebookColumns({
 }> {
   // Import required dependencies
   const { addDays } = await import("date-fns");
-  const { all, ConstantNode, create, FunctionNode } = await import("mathjs");
+  const { all, create } = await import("mathjs");
   const { minimatch } = await import("minimatch");
+
+  // Define interfaces for mathjs node types to avoid using 'any'
+  interface MathJSNode {
+    type: string;
+    traverse: (callback: (node: MathJSNode) => void) => void;
+  }
+
+  interface FunctionNode extends MathJSNode {
+    type: "FunctionNode";
+    fn: { name: string };
+    args: MathJSNode[];
+  }
+
+  interface ConstantNode extends MathJSNode {
+    type: "ConstantNode";
+    value: unknown;
+  }
 
   // Helper function to extract dependencies from score expressions
   function extractDependenciesFromExpression(
@@ -1031,21 +1568,22 @@ export async function createAssignmentsAndGradebookColumns({
     const errors: string[] = [];
 
     try {
-      const exprNode = math.parse(expr);
+      const exprNode = math.parse(expr) as MathJSNode;
       const availableDependencies = {
         assignments: availableAssignments,
         gradebook_columns: availableColumns
       };
 
-      exprNode.traverse((node) => {
+      exprNode.traverse((node: MathJSNode) => {
         if (node.type === "FunctionNode") {
-          const functionNode = node as any;
+          const functionNode = node as FunctionNode;
           const functionName = functionNode.fn.name;
           if (functionName in availableDependencies) {
             const args = functionNode.args;
-            const argType = args[0].type;
-            if (argType === "ConstantNode") {
-              const argName = (args[0] as any).value;
+            const firstArg = args[0];
+            if (firstArg && firstArg.type === "ConstantNode") {
+              const constantNode = firstArg as ConstantNode;
+              const argName = constantNode.value;
               if (typeof argName === "string") {
                 const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                   minimatch(d.slug!, argName)
@@ -1065,6 +1603,7 @@ export async function createAssignmentsAndGradebookColumns({
       });
 
       if (errors.length > 0) {
+        // eslint-disable-next-line no-console
         console.warn(`Dependency extraction warnings for expression "${expr}": ${errors.join(", ")}`);
       }
 
@@ -1079,6 +1618,7 @@ export async function createAssignmentsAndGradebookColumns({
       }
       return flattenedDependencies;
     } catch (error) {
+      // eslint-disable-next-line no-console
       console.warn(`Failed to parse expression "${expr}": ${error}`);
       throw error;
     }
@@ -1094,7 +1634,8 @@ export async function createAssignmentsAndGradebookColumns({
     score_expression,
     dependencies,
     released = false,
-    sort_order
+    sort_order,
+    rateLimitManager
   }: {
     class_id: number;
     name: string;
@@ -1105,6 +1646,7 @@ export async function createAssignmentsAndGradebookColumns({
     dependencies?: { assignments?: number[]; gradebook_columns?: number[] };
     released?: boolean;
     sort_order?: number;
+    rateLimitManager?: RateLimitManager;
   }): Promise<{
     id: number;
     name: string;
@@ -1114,27 +1656,35 @@ export async function createAssignmentsAndGradebookColumns({
     sort_order: number | null;
   }> {
     // Get the gradebook for this class
-    const { data: gradebook, error: gradebookError } = await supabase
-      .from("gradebooks")
-      .select("id")
-      .eq("class_id", class_id)
-      .single();
+    const { data: gradebookList, error: gradebookError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("gradebooks", () => supabase.from("gradebooks").select("id").eq("class_id", class_id));
 
+    const gradebook = gradebookList[0];
     if (gradebookError || !gradebook) {
       throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
     }
 
     // Get available assignments and columns for dependency extraction
-    const { data: assignments } = await supabase.from("assignments").select("id, slug").eq("class_id", class_id);
+    const { data: assignments } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+      "assignments",
+      () => supabase.from("assignments").select("id, slug").eq("class_id", class_id)
+    );
 
-    const { data: existingColumns } = await supabase
-      .from("gradebook_columns")
-      .select("id, slug")
-      .eq("class_id", class_id);
+    const { data: existingColumns } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+      "gradebook_columns",
+      () => supabase.from("gradebook_columns").select("id, slug").eq("class_id", class_id)
+    );
 
     // Filter out items with null slugs and cast to proper types
-    const validAssignments = (assignments || []).filter((a) => a.slug !== null) as Array<{ id: number; slug: string }>;
-    const validColumns = (existingColumns || []).filter((c) => c.slug !== null) as Array<{ id: number; slug: string }>;
+    const validAssignments = (assignments || []).filter((a: { slug: string | null }) => a.slug !== null) as Array<{
+      id: number;
+      slug: string;
+    }>;
+    const validColumns = (existingColumns || []).filter((c: { slug: string | null }) => c.slug !== null) as Array<{
+      id: number;
+      slug: string;
+    }>;
 
     // Extract dependencies from score expression if not provided
     let finalDependencies = dependencies;
@@ -1146,27 +1696,31 @@ export async function createAssignmentsAndGradebookColumns({
     }
 
     // Create the gradebook column
-    const { data: column, error: columnError } = await supabase
-      .from("gradebook_columns")
-      .insert({
-        class_id,
-        gradebook_id: gradebook.id,
-        name,
-        description,
-        slug,
-        max_score,
-        score_expression,
-        dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
-        released,
-        sort_order
-      })
-      .select("id, name, slug, max_score, score_expression, sort_order")
-      .single();
+    const { data: columnList, error: columnError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("gradebook_columns", () =>
+      supabase
+        .from("gradebook_columns")
+        .insert({
+          class_id,
+          gradebook_id: gradebook.id,
+          name,
+          description,
+          slug,
+          max_score,
+          score_expression,
+          dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
+          released,
+          sort_order
+        })
+        .select("id, name, slug, max_score, score_expression, sort_order")
+    );
 
     if (columnError) {
       throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
     }
 
+    const column = columnList[0];
     return column;
   }
 
@@ -1314,12 +1868,14 @@ export async function createAssignmentsAndGradebookColumns({
     assignmentIndex,
     due_date,
     class_id,
-    groupConfig
+    groupConfig,
+    rateLimitManager
   }: {
     assignmentIndex: number;
     due_date: string;
     class_id: number;
     groupConfig: "individual" | "groups" | "both";
+    rateLimitManager?: RateLimitManager;
   }): Promise<{
     id: number;
     title: string;
@@ -1352,50 +1908,57 @@ export async function createAssignmentsAndGradebookColumns({
     const self_review_setting_id = selfReviewSettingData.id;
 
     // Create assignment
-    const { data: insertedAssignmentData, error: assignmentError } = await supabase
-      .from("assignments")
-      .insert({
-        title: title,
-        description: `Test assignment ${assignmentIndex + 1} with rubric`,
-        due_date: due_date,
-        template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
-        autograder_points: 100,
-        total_points: 100,
-        max_late_tokens: 10,
-        release_date: addDays(new Date(), -1).toUTCString(),
-        class_id: class_id,
-        slug: slug,
-        group_config: groupConfig,
-        allow_not_graded_submissions: false,
-        self_review_setting_id: self_review_setting_id,
-        max_group_size: 6,
-        group_formation_deadline: addDays(new Date(), -1).toUTCString()
-      })
-      .select("id")
-      .single();
+    const { data: insertedAssignmentDataList, error: assignmentError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("assignments", () =>
+      supabase
+        .from("assignments")
+        .insert({
+          title: title,
+          description: `Test assignment ${assignmentIndex + 1} with rubric`,
+          due_date: due_date,
+          template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+          autograder_points: 100,
+          total_points: 100,
+          max_late_tokens: 10,
+          release_date: addDays(new Date(), -1).toUTCString(),
+          class_id: class_id,
+          slug: slug,
+          group_config: groupConfig,
+          allow_not_graded_submissions: false,
+          self_review_setting_id: self_review_setting_id,
+          max_group_size: 6,
+          group_formation_deadline: addDays(new Date(), -1).toUTCString()
+        })
+        .select("id")
+    );
 
     if (assignmentError) {
       throw new Error(`Failed to create assignment: ${assignmentError.message}`);
     }
 
+    const insertedAssignmentData = insertedAssignmentDataList[0];
     // Get assignment data
-    const { data: assignmentData } = await supabase
-      .from("assignments")
-      .select("*")
-      .eq("id", insertedAssignmentData.id)
-      .single();
+    const { data: assignmentDataList } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+      "assignments",
+      () => supabase.from("assignments").select("*").eq("id", insertedAssignmentData.id)
+    );
 
+    const assignmentData = assignmentDataList[0];
     if (!assignmentData) {
       throw new Error("Failed to get assignment");
     }
 
     // Update autograder config
-    await supabase
-      .from("autograder")
-      .update({
-        config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
-      })
-      .eq("id", assignmentData.id);
+    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("autograder", () =>
+      supabase
+        .from("autograder")
+        .update({
+          config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
+        })
+        .eq("id", assignmentData.id)
+        .select("id")
+    );
 
     // Generate rubric structure deterministically
     const rubricStructure = generateRubricStructure(assignmentIndex, rubricConfig);
@@ -1444,67 +2007,79 @@ export async function createAssignmentsAndGradebookColumns({
       const isGradingPart = partTemplate.name !== "Self Review";
       const rubricId = isGradingPart ? assignmentData.grading_rubric_id : assignmentData.self_review_rubric_id;
 
-      const { data: partData, error: partError } = await supabase
-        .from("rubric_parts")
-        .insert({
-          class_id: class_id,
-          name: partTemplate.name,
-          description: partTemplate.description,
-          ordinal: partTemplate.ordinal,
-          rubric_id: rubricId || 0
-        })
-        .select("id")
-        .single();
+      const { data: partDataList, error: partError } = await (
+        rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+      ).trackAndLimit("rubric_parts", () =>
+        supabase
+          .from("rubric_parts")
+          .insert({
+            class_id: class_id,
+            name: partTemplate.name,
+            description: partTemplate.description,
+            ordinal: partTemplate.ordinal,
+            rubric_id: rubricId || 0
+          })
+          .select("id")
+      );
 
       if (partError) {
         throw new Error(`Failed to create rubric part: ${partError.message}`);
       }
 
+      const partData = partDataList[0];
       createdParts.push({ ...partTemplate, id: partData.id, rubric_id: rubricId });
 
       // Create criteria for this part
       for (const criteriaTemplate of partTemplate.criteria) {
-        const { data: criteriaData, error: criteriaError } = await supabase
-          .from("rubric_criteria")
-          .insert({
-            class_id: class_id,
-            name: criteriaTemplate.name,
-            description: criteriaTemplate.description,
-            ordinal: criteriaTemplate.ordinal,
-            total_points: criteriaTemplate.total_points,
-            is_additive: true,
-            rubric_part_id: partData.id,
-            rubric_id: rubricId || 0
-          })
-          .select("id")
-          .single();
+        const { data: criteriaDataList, error: criteriaError } = await (
+          rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+        ).trackAndLimit("rubric_criteria", () =>
+          supabase
+            .from("rubric_criteria")
+            .insert({
+              class_id: class_id,
+              name: criteriaTemplate.name,
+              description: criteriaTemplate.description,
+              ordinal: criteriaTemplate.ordinal,
+              total_points: criteriaTemplate.total_points,
+              is_additive: true,
+              rubric_part_id: partData.id,
+              rubric_id: rubricId || 0
+            })
+            .select("id")
+        );
 
         if (criteriaError) {
           throw new Error(`Failed to create rubric criteria: ${criteriaError.message}`);
         }
 
+        const criteriaData = criteriaDataList[0];
         // Create checks for this criteria
         for (const checkTemplate of criteriaTemplate.checks) {
-          const { data: checkData, error: checkError } = await supabase
-            .from("rubric_checks")
-            .insert({
-              rubric_criteria_id: criteriaData.id,
-              name: checkTemplate.name,
-              description: `${checkTemplate.name} evaluation`,
-              ordinal: checkTemplate.ordinal,
-              points: checkTemplate.points,
-              is_annotation: checkTemplate.is_annotation,
-              is_comment_required: checkTemplate.is_comment_required,
-              class_id: class_id,
-              is_required: checkTemplate.is_required
-            })
-            .select("*")
-            .single();
+          const { data: checkDataList, error: checkError } = await (
+            rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+          ).trackAndLimit("rubric_checks", () =>
+            supabase
+              .from("rubric_checks")
+              .insert({
+                rubric_criteria_id: criteriaData.id,
+                name: checkTemplate.name,
+                description: `${checkTemplate.name} evaluation`,
+                ordinal: checkTemplate.ordinal,
+                points: checkTemplate.points,
+                is_annotation: checkTemplate.is_annotation,
+                is_comment_required: checkTemplate.is_comment_required,
+                class_id: class_id,
+                is_required: checkTemplate.is_required
+              })
+              .select("*")
+          );
 
           if (checkError) {
             throw new Error(`Failed to create rubric check: ${checkError.message}`);
           }
 
+          const checkData = checkDataList[0];
           allRubricChecks.push(checkData);
         }
       }
@@ -1534,31 +2109,36 @@ export async function createAssignmentsAndGradebookColumns({
     gradebook_column_id,
     students,
     baseScore,
-    variation = 10
+    variation = 10,
+    rateLimitManager
   }: {
     class_id: number;
     gradebook_column_id: number;
     students: TestingUser[];
     baseScore: number;
     variation?: number;
+    rateLimitManager?: RateLimitManager;
   }): Promise<void> {
     // Get the gradebook_id for this class
-    const { data: gradebook, error: gradebookError } = await supabase
-      .from("gradebooks")
-      .select("id")
-      .eq("class_id", class_id)
-      .single();
+    const { data: gradebookList, error: gradebookError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("gradebooks", () => supabase.from("gradebooks").select("id").eq("class_id", class_id));
 
+    const gradebook = gradebookList[0];
     if (gradebookError || !gradebook) {
       throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
     }
 
     // Get existing gradebook column student records
-    const { data: existingRecords, error: fetchError } = await supabase
-      .from("gradebook_column_students")
-      .select("id, student_id")
-      .eq("gradebook_column_id", gradebook_column_id)
-      .eq("is_private", true);
+    const { data: existingRecords, error: fetchError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("gradebook_column_students", () =>
+      supabase
+        .from("gradebook_column_students")
+        .select("id, student_id")
+        .eq("gradebook_column_id", gradebook_column_id)
+        .eq("is_private", true)
+    );
 
     if (fetchError) {
       throw new Error(`Failed to fetch existing gradebook column students: ${fetchError.message}`);
@@ -1570,8 +2150,11 @@ export async function createAssignmentsAndGradebookColumns({
 
     // Generate deterministic scores for each student
     const updatePromises = students.map(async (student, index) => {
-      const existingRecord = existingRecords.find((record) => record.student_id === student.private_profile_id);
+      const existingRecord = existingRecords.find(
+        (record: { student_id: string }) => record.student_id === student.private_profile_id
+      );
       if (!existingRecord) {
+        // eslint-disable-next-line no-console
         console.warn(`No gradebook column student record found for student ${student.email}`);
         return;
       }
@@ -1579,10 +2162,11 @@ export async function createAssignmentsAndGradebookColumns({
       // Generate deterministic score based on student index and base score
       const score = Math.max(0, Math.min(100, baseScore + (index % variation) - variation / 2));
 
-      const { error: updateError } = await supabase
-        .from("gradebook_column_students")
-        .update({ score: score })
-        .eq("id", existingRecord.id);
+      const { error: updateError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+        "gradebook_column_students",
+        () =>
+          supabase.from("gradebook_column_students").update({ score: score }).eq("id", existingRecord.id).select("id")
+      );
 
       if (updateError) {
         throw new Error(`Failed to update score for student ${student.email}: ${updateError.message}`);
@@ -1605,7 +2189,8 @@ export async function createAssignmentsAndGradebookColumns({
       assignmentIndex: i,
       due_date: assignmentDate.toISOString(),
       class_id,
-      groupConfig
+      groupConfig,
+      rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
     });
 
     assignments.push(assignment);
@@ -1626,7 +2211,8 @@ export async function createAssignmentsAndGradebookColumns({
       description: `Manual grading column ${i}`,
       slug: columnSlug,
       max_score: 100,
-      sort_order: 1000 + i
+      sort_order: 1000 + i,
+      rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
     });
 
     manualGradedColumns.push(manualColumn);
@@ -1640,7 +2226,8 @@ export async function createAssignmentsAndGradebookColumns({
     description: "Overall class participation score",
     slug: "participation",
     max_score: 100,
-    sort_order: 1000
+    sort_order: 1000,
+    rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
   const averageAssignmentsColumn = await createGradebookColumn({
@@ -1650,7 +2237,8 @@ export async function createAssignmentsAndGradebookColumns({
     slug: "average-assignments",
     score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
     max_score: 100,
-    sort_order: 2
+    sort_order: 2,
+    rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
   const averageLabAssignmentsColumn = await createGradebookColumn({
@@ -1660,7 +2248,8 @@ export async function createAssignmentsAndGradebookColumns({
     slug: "average-lab-assignments",
     score_expression: "mean(gradebook_columns('assignment-lab-*'))",
     max_score: 100,
-    sort_order: 3
+    sort_order: 3,
+    rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
   const finalGradeColumn = await createGradebookColumn({
@@ -1671,7 +2260,8 @@ export async function createAssignmentsAndGradebookColumns({
     score_expression:
       "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
     max_score: 100,
-    sort_order: 999
+    sort_order: 999,
+    rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
   gradebookColumns.push(participationColumn, averageAssignmentsColumn, averageLabAssignmentsColumn, finalGradeColumn);
@@ -1708,7 +2298,8 @@ export async function createAssignmentsAndGradebookColumns({
         gradebook_column_id: column.id,
         students: transformedStudents,
         baseScore,
-        variation: 15
+        variation: 15,
+        rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
       });
     }
   }

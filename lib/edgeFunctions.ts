@@ -4,14 +4,29 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
-export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("autograder-create-repos-for-student");
+export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
+  const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
+    body: {
+      assignment_id: assignmentId
+    }
+  });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new Error(error.message + ": " + error.details);
   }
 }
 
+export async function autograderSyncAllPermissionsForStudent(supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
+    body: {
+      sync_all_permissions: true
+    }
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new Error(error.message + ": " + error.details);
+  }
+}
 export async function autograderCreateAssignmentRepos(
   params: FunctionTypes.AssignmentCreateAllReposRequest,
   supabase: SupabaseClient<Database>
@@ -269,6 +284,35 @@ export async function assignmentDelete(
     throw new EdgeFunctionError(error);
   }
   return data as FunctionTypes.AssignmentDeleteResponse;
+}
+
+export async function courseImportSis(params: FunctionTypes.CourseImportRequest, supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("course-import-sis", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.CourseImportResponse;
+}
+
+export async function invitationCreate(
+  params: FunctionTypes.CreateInvitationRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("invitation-create", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.CreateInvitationResponse;
+}
+
+export async function userFetchAzureProfile(params: { accessToken: string }, supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("user-fetch-azure-profile", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
 }
 export class EdgeFunctionError extends Error {
   details: string;

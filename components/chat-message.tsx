@@ -6,7 +6,7 @@ import { Reply, Check, CheckCheck, ChevronDown, ChevronRight } from "lucide-reac
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTagsForProfile } from "@/hooks/useTags";
 import { Tooltip } from "@/components/ui/tooltip";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { ImageIcon, FileText } from "lucide-react";
 
 // Broadcast message type for real-time communication
@@ -519,7 +519,13 @@ export const ChatMessageItem = ({
 
   return (
     <Flex mt={2} justify={isOwnMessage ? "flex-end" : "flex-start"}>
-      <Flex maxW="75%" w="fit-content" direction="column" gap={1} align={isOwnMessage ? "flex-end" : "flex-start"}>
+      <Flex
+        maxW={{ base: "85%", md: "75%" }}
+        w="fit-content"
+        direction="column"
+        gap={1}
+        align={isOwnMessage ? "flex-end" : "flex-start"}
+      >
         {showHeader && (
           <Flex
             align="center"

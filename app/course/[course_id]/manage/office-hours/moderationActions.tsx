@@ -210,13 +210,12 @@ export default function ModerationActions({
               }
               confirmHeader="Permanent Ban"
               confirmText="Are you sure you want to permanently ban this student? This action cannot be undone."
-              onConfirm={() => {
+              onConfirm={async () => {
                 handleModerationAction(
                   "permanent_ban",
                   "Permanent ban due to repeated violations or serious misconduct"
                 );
               }}
-              onCancel={() => {}}
             />
           </Menu.Item>
         </Menu.Content>

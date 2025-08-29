@@ -1,10 +1,10 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { Avatar, Box, HStack, Stack, Text, Badge, Icon, AvatarGroup } from "@chakra-ui/react";
-import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
-import Markdown from "react-markdown";
-import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { getQueueTypeColor } from "@/lib/utils";
+import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import { Avatar, AvatarGroup, Badge, Box, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
+import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
+import Markdown from "@/components/ui/markdown";
 
 interface MessageData {
   user: string;
@@ -45,7 +45,6 @@ export const HelpRequestTeaser = (props: Props) => {
   const student2Profile = useUserProfile(students[1] || "");
   const student3Profile = useUserProfile(students[2] || "");
 
-  // Helper functions that use the profiles we've already loaded
   const renderStudentsDisplay = () => {
     if (students.length === 0) {
       return <Text fontWeight="medium">Unknown Student</Text>;
@@ -85,21 +84,37 @@ export const HelpRequestTeaser = (props: Props) => {
     if (students.length === 1) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={student1Profile?.avatar_url} />
-          <Avatar.Fallback>{student1Profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+          <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Fallback>{(student1Profile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
     }
 
-    const profiles = [student1Profile, student2Profile, student3Profile].filter(Boolean);
     const maxAvatars = Math.min(3, students.length);
+    const avatars = [
+      {
+        id: students[0],
+        name: student1Profile?.name,
+        avatar_url: student1Profile?.avatar_url as string | undefined
+      },
+      {
+        id: students[1],
+        name: student2Profile?.name,
+        avatar_url: student2Profile?.avatar_url as string | undefined
+      },
+      {
+        id: students[2],
+        name: student3Profile?.name,
+        avatar_url: student3Profile?.avatar_url as string | undefined
+      }
+    ].slice(0, maxAvatars);
 
     return (
       <AvatarGroup size="sm">
-        {profiles.slice(0, maxAvatars).map((profile, index) => (
-          <Avatar.Root key={students[index]} size="sm">
-            <Avatar.Image src={profile?.avatar_url} />
-            <Avatar.Fallback>{profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+        {avatars.map((p) => (
+          <Avatar.Root key={p.id} size="sm">
+            <Avatar.Image src={p.avatar_url} />
+            <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}
       </AvatarGroup>

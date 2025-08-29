@@ -2,9 +2,9 @@ import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { Redis } from "https://esm.sh/ioredis?target=deno";
+import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import * as Sentry from "npm:@sentry/deno";
 
 import { Buffer } from "node:buffer";
@@ -12,7 +12,98 @@ import { Database } from "./SupabaseTypes.d.ts";
 
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
-import { UserVisibleError, tagApiCall, tagDatabaseOperation } from "./HandlerUtils.ts";
+import { UserVisibleError } from "./HandlerUtils.ts";
+
+/**
+ * Retry utility with exponential backoff for GitHub API calls
+ */
+async function retryWithBackoff<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000,
+  scope?: Sentry.Scope
+): Promise<T> {
+  let lastError: Error;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await operation();
+
+      // Log successful retry if this wasn't the first attempt
+      if (attempt > 0) {
+        scope?.setContext("retry_success", {
+          attempt,
+          total_attempts: attempt + 1,
+          operation: "github_api_retry"
+        });
+        Sentry.addBreadcrumb({
+          message: `GitHub API retry succeeded on attempt ${attempt + 1}`,
+          level: "info",
+          data: { attempt, total_attempts: attempt + 1 }
+        });
+      }
+
+      return result;
+    } catch (error: unknown) {
+      lastError = error as Error;
+
+      // Check if this is a 404 error that we should retry
+      const is404 = error instanceof RequestError && error.status === 404;
+
+      if (!is404 || attempt === maxRetries) {
+        // Don't retry for non-404 errors or if we've exhausted retries
+        if (attempt > 0) {
+          scope?.setContext("retry_failed", {
+            final_attempt: attempt + 1,
+            total_attempts: attempt + 1,
+            error_status: error instanceof RequestError ? error.status : "unknown",
+            error_message: error instanceof Error ? error.message : String(error),
+            operation: "github_api_retry"
+          });
+          Sentry.captureException(error, {
+            tags: {
+              operation: "github_api_retry_failed",
+              attempts: attempt + 1,
+              error_type: is404 ? "404_not_found" : "other"
+            }
+          });
+        }
+        throw error;
+      }
+
+      // Calculate delay with exponential backoff
+      const delayMs = baseDelayMs * Math.pow(2, attempt);
+
+      scope?.setContext("retry_attempt", {
+        attempt: attempt + 1,
+        next_delay_ms: delayMs,
+        error_status: 404,
+        operation: "github_api_retry"
+      });
+
+      Sentry.addBreadcrumb({
+        message: `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
+        level: "warning",
+        data: {
+          attempt: attempt + 1,
+          delay_ms: delayMs,
+          error_status: 404,
+          error_message: error instanceof Error ? error.message : String(error)
+        }
+      });
+
+      console.log(
+        `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError!;
+}
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
@@ -95,7 +186,7 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
         },
         Redis
       });
-      connection.on("error", (err) => console.error(err));
+      connection.on("error", (err: Error) => console.error(err));
     }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
@@ -113,17 +204,13 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
             connection,
             id: "pawtograder-production",
             Bottleneck,
-            onRateLimit: (_retryAfter, options, _octokit, _retryCount) => {
-              console.warn(
-                `Request quota exhausted for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
-              );
+            onRateLimit: () => {
+              Sentry.captureMessage("Request quota exhausted for request, retrying", scope);
               return true;
             },
-            onSecondaryRateLimit: (_retryAfter, options, _octokit) => {
-              console.warn(
-                `SecondaryRateLimit detected for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
-              );
-              return true;
+            onSecondaryRateLimit: () => {
+              Sentry.captureMessage("SecondaryRateLimit detected for request, not retrying", scope);
+              return false;
             }
           }
         })
@@ -150,6 +237,8 @@ export async function resolveRef(action_repository: string, action_ref: string, 
       return undefined;
     }
     try {
+      scope?.setTag("github_operation", "get_ref_or_undefined");
+      scope?.setTag("ref", ref);
       const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
         owner: action_repository.split("/")[0],
         repo: action_repository.split("/")[1],
@@ -190,6 +279,8 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
   if (sha) {
     resolved_sha = sha;
   } else {
+    scope?.setTag("github_operation", "get_ref_or_undefined");
+    scope?.setTag("ref", "heads/main");
     const head = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
       owner: repo.split("/")[0],
       repo: repo.split("/")[1]
@@ -388,7 +479,9 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
     true,
     ["verify"]
   );
-  const verified = await verify(token, key);
+  const verified = await verify(token, key, {
+    expLeeway: 3600 // 1 hour
+  });
   return verified as GitHubOIDCToken;
 }
 
@@ -430,6 +523,7 @@ export async function createRepo(
   const repo = template_repo.split("/")[1];
 
   try {
+    scope?.setTag("github_operation", "create_repo_request");
     await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
@@ -437,25 +531,56 @@ export async function createRepo(
       name: repoName,
       private: true
     });
+    scope?.setTag("github_operation", "create_repo_request_done");
     //Disable squash merging, make template
-    await octokit.request("PATCH /repos/{owner}/{repo}", {
-      owner: org,
-      repo: repoName,
-      allow_squash_merge: false,
-      is_template: is_template_repo ? true : false
-    });
+    scope?.setTag("github_operation", "patch_repo_settings");
+    await retryWithBackoff(
+      () =>
+        octokit.request("PATCH /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName,
+          allow_squash_merge: false,
+          is_template: is_template_repo ? true : false
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
     //Get the head SHA
-    const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
-      owner: org,
-      repo: repoName
-    });
+    scope?.setTag("github_operation", "get_head_sha");
+    scope?.setTag("ref", "heads/main");
+    const heads = await retryWithBackoff(
+      () =>
+        octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
+          owner: org,
+          repo: repoName
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+    scope?.setTag("head_sha", heads.data.object.sha);
     console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
     console.log(`Heads: ${JSON.stringify(heads.data)}`);
     return heads.data.object.sha as string;
   } catch (e) {
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
-        // continue
+        // Repo already exists, get the head SHA
+        scope?.setTag("github_operation", "get_existing_repo_head_sha");
+        const heads = await retryWithBackoff(
+          () =>
+            octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
+              owner: org,
+              repo: repoName
+            }),
+          3, // maxRetries
+          1000, // baseDelayMs
+          scope
+        );
+        scope?.setTag("head_sha", heads.data.object.sha);
+        console.log(`Repo ${org}/${repoName} already exists with head SHA ${heads.data.object.sha}`);
+        return heads.data.object.sha as string;
       } else {
         throw e;
       }
@@ -991,5 +1116,16 @@ export async function createCheckRun(repo_full_name: string, sha: string, detail
       }
     ]
   });
-  return res.data.id;
+  return res.data;
+}
+export async function getRepo(org: string, repo: string, scope?: Sentry.Scope) {
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+  const repoData = await octokit.request("GET /repos/{owner}/{repo}", {
+    owner: org,
+    repo
+  });
+  return repoData.data;
 }

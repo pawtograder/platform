@@ -1,12 +1,12 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { expect, test } from "@playwright/test";
+import { test, expect } from "../global-setup";
 import { addDays, addHours, previousMonday } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import {
   createClass,
   createLabSectionWithStudents,
-  createUserInClass,
+  createUsersInClass,
   insertAssignment,
   loginAsUser,
   TestingUser
@@ -24,8 +24,22 @@ const labAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"),
 labAssignmentDueDate.setHours(10, 0, 0, 0);
 test.beforeAll(async () => {
   course = await createClass();
-  labLeader = await createUserInClass({ role: "grader", class_id: course.id });
-  student = await createUserInClass({ role: "student", class_id: course.id });
+  [labLeader, student] = await createUsersInClass([
+    {
+      name: "Due Dates Lab Leader",
+      email: "due-dates-lab-leader@pawtograder.net",
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Due Dates Student",
+      email: "due-dates-student@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
   await createLabSectionWithStudents({
     class_id: course.id,
     lab_leader: labLeader,
@@ -36,12 +50,14 @@ test.beforeAll(async () => {
   });
   testAssignment = await insertAssignment({
     due_date: assignmentDueDate.toUTCString(),
-    class_id: course.id
+    class_id: course.id,
+    name: "Due Dates Assignment"
   });
   testLabAssignment = await insertAssignment({
     due_date: labAssignmentDueDate.toUTCString(),
     lab_due_date_offset: 42,
-    class_id: course.id
+    class_id: course.id,
+    name: "Due Dates Lab Assignment"
   });
 });
 const expectedLabAssignmentDueDate =
@@ -68,6 +84,8 @@ test.describe("Assignment due dates", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
+    //Wait for the page to load to avoid race condition
+    await expect(page).toHaveURL(/\/assignments\b/);
     await expect(page.getByText(testAssignment!.title)).toBeVisible();
     const cell = page.getByRole("cell", { name: testAssignment!.title });
     await expect(cell).toBeVisible();
@@ -88,6 +106,8 @@ test.describe("Assignment due dates", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
+    //Wait for the page to load to avoid race condition
+    await expect(page).toHaveURL(/\/assignments\b/);
     await page.getByRole("link", { name: testLabAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();

@@ -9,7 +9,7 @@ type TablesThatHaveAnIDField = {
 }[keyof DatabaseTableTypes];
 
 type BroadcastMessage = {
-  type: "table_change" | "channel_created" | "system";
+  type: "table_change" | "channel_created" | "system" | "staff_data_change";
   operation?: "INSERT" | "UPDATE" | "DELETE";
   table?: TablesThatHaveAnIDField;
   row_id?: number | string;
@@ -92,9 +92,6 @@ export class ClassRealTimeController {
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
 
-    // Set the client on the channel manager
-    this._channelManager.setClient(client);
-
     if (config?.inactiveTabTimeoutSeconds) {
       this._inactiveTabTimeoutSeconds = config.inactiveTabTimeoutSeconds;
     }
@@ -155,6 +152,7 @@ export class ClassRealTimeController {
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CLOSED: {
+        console.debug("Class Client debug info:", this.getDebugInfo());
         console.debug(`Channel closed '${channelName}'`);
         this._notifyStatusChange();
         break;
@@ -215,6 +213,7 @@ export class ClassRealTimeController {
     const topic = `class:${this._classId}:staff`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -230,6 +229,7 @@ export class ClassRealTimeController {
     const topic = `class:${this._classId}:user:${this._profileId}`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -247,6 +247,7 @@ export class ClassRealTimeController {
     const topic = `submission:${submissionId}:graders`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -262,6 +263,7 @@ export class ClassRealTimeController {
     const topic = `submission:${submissionId}:profile_id:${this._profileId}`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -280,16 +282,36 @@ export class ClassRealTimeController {
     return channel.topic;
   }
 
+  private static broadcastCounter = new Map<string, number>();
+
   private _handleBroadcastMessage(message: BroadcastMessage) {
-    // Skip system messages like channel_created
-    if (message.type !== "table_change") {
+    const key = `${message.type}-${message.table || "unknown"}-${message.operation || "none"}`;
+    const current = ClassRealTimeController.broadcastCounter.get(key) || 0;
+    ClassRealTimeController.broadcastCounter.set(key, current + 1);
+
+    // Log summary every 100 broadcasts
+    const total = Array.from(ClassRealTimeController.broadcastCounter.values()).reduce((sum, count) => sum + count, 0);
+
+    if (total % 100 === 0) {
+      console.log("Broadcast Summary:", Object.fromEntries(ClassRealTimeController.broadcastCounter));
+    }
+
+    // Normalize custom payload types from SQL functions to the standard type expected by listeners
+    // SQL may emit type "staff_data_change"; treat it as "table_change" for downstream consumers
+    const normalized: BroadcastMessage =
+      message.type === "staff_data_change"
+        ? ({ ...(message as BroadcastMessage), type: "table_change" } as BroadcastMessage)
+        : message;
+
+    // Skip system and channel lifecycle messages
+    if (normalized.type === "system" || normalized.type === "channel_created") {
       return;
     }
 
     // Notify all relevant subscriptions
     for (const subscription of this._subscriptions.values()) {
-      if (this._messageMatchesFilter(message, subscription.filter)) {
-        subscription.callback(message);
+      if (this._messageMatchesFilter(normalized, subscription.filter)) {
+        subscription.callback(normalized);
       }
     }
   }

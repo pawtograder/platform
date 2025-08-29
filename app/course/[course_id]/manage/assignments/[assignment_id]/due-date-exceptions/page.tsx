@@ -3,9 +3,8 @@ import { Field } from "@/components/ui/field";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { useCourse } from "@/hooks/useAuthState";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate } from "@/hooks/useCourseController";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignmentDueDate, useStudentRoster } from "@/hooks/useCourseController";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -232,12 +231,11 @@ function AdjustDueDateDialog({
                                   <Icon as={FaTrash} />
                                 </Button>
                               }
-                              confirmText="Are you sure you want to delete this extension?"
-                              onConfirm={() =>
-                                deleteException({ id: extension.id, resource: "assignment_due_date_exceptions" })
-                              }
-                              onCancel={() => {}}
                               confirmHeader="Delete extension"
+                              confirmText="Are you sure you want to delete this extension?"
+                              onConfirm={async () => {
+                                await deleteException({ id: extension.id, resource: "assignment_due_date_exceptions" });
+                              }}
                             />
                           }
                         </Table.Cell>
@@ -341,7 +339,8 @@ function StudentRow({
 }
 
 export default function DueDateExceptions() {
-  const course = useCourse();
+  const { role } = useClassProfiles();
+  const course = role.classes;
   const { assignment_id } = useParams();
   const students = useStudentRoster();
   const { data: assignment } = useOne<Assignment>({
@@ -355,7 +354,7 @@ export default function DueDateExceptions() {
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }]
   });
-  const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
+  const { data: dueDateExceptions, isLoading } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     queryOptions: { enabled: !!course },
     liveMode: "auto",
@@ -369,7 +368,7 @@ export default function DueDateExceptions() {
   }
 
   const hasLabScheduling = assignment.data.minutes_due_after_lab !== null;
-  const originalDueDate = new TZDate(assignment.data.due_date, course.classes.time_zone || "America/New_York");
+  const originalDueDate = new TZDate(assignment.data.due_date, course.time_zone || "America/New_York");
 
   return (
     <Box>
@@ -391,8 +390,8 @@ export default function DueDateExceptions() {
         <Text fontSize="sm" color="fg.muted">
           This assignment allows students to use up to {assignment?.data.max_late_tokens} late tokens to extend the due
           date. Each late token extends the due date by 24 hours. Students in the course are given a total of{" "}
-          {course.classes.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each
-          student below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
+          {course.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each student
+          below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
         </Text>
       </Box>
 
@@ -408,18 +407,22 @@ export default function DueDateExceptions() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {students.map((student) => (
-            <StudentRow
-              key={student.id}
-              student={student}
-              assignment={assignment.data}
-              groups={groups.data}
-              dueDateExceptions={dueDateExceptions.data}
-              hasLabScheduling={hasLabScheduling}
-              originalDueDate={originalDueDate}
-              course={course.classes}
-            />
-          ))}
+          {isLoading || !students ? (
+            <Skeleton height="400px" width="100%" />
+          ) : (
+            students.map((student) => (
+              <StudentRow
+                key={student.id}
+                student={student}
+                assignment={assignment.data}
+                groups={groups.data}
+                dueDateExceptions={dueDateExceptions.data}
+                hasLabScheduling={hasLabScheduling}
+                originalDueDate={originalDueDate}
+                course={course}
+              />
+            ))
+          )}
         </Table.Body>
       </Table.Root>
     </Box>

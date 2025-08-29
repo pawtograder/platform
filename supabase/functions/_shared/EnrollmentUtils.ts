@@ -51,7 +51,10 @@ export async function createUserInClass(
 
   if (!userId) {
     console.log("Creating user", user.primary_email);
-    if (user.primary_email.endsWith("@northeastern.edu") && !user.primary_email.includes("+")) {
+    if (
+      (user.primary_email.endsWith("@northeastern.edu") && !user.primary_email.includes("+")) ||
+      user.primary_email.endsWith("@pawtograder.net") //E2E tests use this domain
+    ) {
       const newUser = await supabase.auth.admin.createUser({
         email: user.primary_email,
         email_confirm: true
@@ -85,7 +88,7 @@ export async function createUserInClass(
   // --- Fetch ALL existing roles and their associated profile IDs for this user in this class ---
   const { data: existingUserRoles, error: fetchRolesError } = await supabase
     .from("user_roles")
-    .select("id, role, canvas_id, private_profile_id, public_profile_id")
+    .select("*")
     .eq("user_id", userId!)
     .eq("class_id", courseId);
 
@@ -94,7 +97,7 @@ export async function createUserInClass(
     throw new Error("Could not fetch existing user roles.");
   }
 
-  let highestExistingRoleEntry: (typeof existingUserRoles)[0] | undefined = undefined;
+  let highestExistingRoleEntry: Database["public"]["Tables"]["user_roles"]["Row"] | undefined = undefined;
   let foundPrivateProfileId: string | null = null;
   let foundPublicProfileId: string | null = null;
   const roleHierarchy: ReadonlyArray<Database["public"]["Enums"]["app_role"]> = ["instructor", "grader", "student"];
@@ -212,7 +215,7 @@ export async function createUserInClass(
     } else if (newRolePriority === highestExistingRolePriority) {
       console.log(`User already has role ${newRole}. Updating canvas_id and class_section_id if changed.`);
       const updates: Partial<Database["public"]["Tables"]["user_roles"]["Row"]> = {};
-      if (user.canvas_id !== undefined && user.canvas_id !== highestExistingRoleEntry.canvas_id) {
+      if (user.canvas_id !== undefined) {
         updates.canvas_id = user.canvas_id;
       }
       if (user.class_section_id !== undefined) {

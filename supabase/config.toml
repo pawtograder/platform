@@ -72,10 +72,10 @@ enabled = true
 # Port to use for the email testing server web interface.
 port = 54324
 # Uncomment to expose additional ports for testing user applications that send emails.
-# smtp_port = 54325
+ smtp_port = 54325
 # pop3_port = 54326
-# admin_email = "admin@email.com"
-# sender_name = "Admin"
+ admin_email = "admin@email.com"
+ sender_name = "Admin"
 
 [storage]
 enabled = true
@@ -559,7 +559,7 @@ entrypoint = "./functions/assignment-group-copy-groups-from-assignment/index.ts"
 
 [functions.notification-queue-processor]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/notification-queue-processor/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -673,3 +673,30 @@ entrypoint = "./functions/autograder-reinvite-to-class-org/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/assignment-delete/index.ts"
+
+[functions.course-import-sis]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/course-import-sis/index.ts"
+
+[functions.invitation-create]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/invitation-create/index.ts"
+
+[functions.user-fetch-azure-profile]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/user-fetch-azure-profile/index.ts"
+
+
+[functions.metrics]
+enabled = true
+verify_jwt = false
+import_map = "./functions/metrics/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/metrics/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/metrics/*.html" ]

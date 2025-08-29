@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookCellCalculation } from "./GradebookProcessor.ts";
 import { QueueMessage } from "./index.ts";
-
+import * as Sentry from "npm:@sentry/deno";
 console.log(Deno.env.get("SUPABASE_URL"));
 export async function runHandler() {
   const adminSupabase = createClient<Database>(
@@ -21,6 +21,8 @@ export async function runHandler() {
     console.error(result.error);
   }
   if (result.data) {
+    const scope = new Sentry.Scope();
+    scope.setTag("batch_processor", "gradebook_column_recalculate");
     const studentColumns = (
       result.data as QueueMessage<{
         gradebook_column_id: number;
@@ -44,7 +46,7 @@ export async function runHandler() {
           .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
     }));
-    await processGradebookCellCalculation(studentColumns, adminSupabase);
+    await processGradebookCellCalculation(studentColumns, adminSupabase, scope);
     console.log(`Done ${nDone} of ${studentColumns.length}`);
     await runHandler();
   }

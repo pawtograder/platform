@@ -2,12 +2,12 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 import type {
   Assignment,
   GradebookColumn,
   GradebookColumnStudent,
-  GradebookColumnStudentWithMaxScore,
-  SubmissionWithGradesForAssignment
+  GradebookColumnStudentWithMaxScore
 } from "./types.d.ts";
 
 export type PrivateProfileId = string;
@@ -17,6 +17,7 @@ export type ExpressionContext = {
   is_private_calculation: boolean;
   incomplete_values: IncompleteValuesAdvice | null;
   incomplete_values_policy: "assume_max" | "assume_zero" | "report_only";
+  scope: Sentry.Scope;
 };
 //TODO: Move this to a shared file
 //See also in hooks/useGradebookWhatIf.tsx
@@ -86,12 +87,14 @@ export interface DependencySource {
     function_name,
     context,
     key,
-    class_id
+    class_id,
+    args
   }: {
     function_name: string;
     context: ExpressionContext;
     key: string | string[];
     class_id: number;
+    args?: unknown[];
   }) => unknown;
 }
 /**
@@ -137,6 +140,7 @@ abstract class DependencySourceBase implements DependencySource {
     context: ExpressionContext;
     key: string | string[];
     class_id: number;
+    args?: unknown[];
   }): unknown {
     if (typeof key === "object") {
       if (Array.isArray(key)) {
@@ -190,6 +194,37 @@ class AssignmentsDependencySource extends DependencySourceBase {
   }
   private assignmentMap: Map<number, Assignment> = new Map();
 
+  // Execute with optional review round argument. Defaults to 'grading-review'.
+  override execute({
+    context,
+    key,
+    class_id,
+    args
+  }: {
+    function_name: string;
+    context: ExpressionContext;
+    key: string | string[];
+    class_id: number;
+    args?: unknown[];
+  }): unknown {
+    const requestedRound = (args && typeof args[0] === "string" ? (args[0] as string) : "grading-review") as string;
+    const coerceRoundValue = (val: unknown): number | undefined => {
+      if (val === null || val === undefined) return undefined;
+      if (typeof val === "number") return val;
+      if (typeof val === "object" && val !== null && requestedRound in (val as Record<string, unknown>)) {
+        const v = (val as Record<string, unknown>)[requestedRound];
+        return v === undefined || v === null ? undefined : (v as number);
+      }
+      // Back-compat: if stored as a single number
+      return undefined;
+    };
+    const raw = super.execute({ function_name: "assignments", context, key, class_id });
+    if (Array.isArray(raw)) {
+      return raw.map((v) => coerceRoundValue(v));
+    }
+    return coerceRoundValue(raw);
+  }
+
   async _retrieveValues({
     keys,
     supabase
@@ -197,92 +232,128 @@ class AssignmentsDependencySource extends DependencySourceBase {
     keys: ExprDependencyInstance[];
     supabase: SupabaseClient<Database>;
   }): Promise<ResolvedExprDependencyInstance[]> {
-    // Fetch all assignments with pagination
-    const allAssignments: Assignment[] = [];
+    // Fetch assignments referenced by keys (ids)
+    const assignmentIds = Array.from(new Set(keys.map((key) => Number(key.key))));
+    if (assignmentIds.length === 0) return [];
+
+    const { data: assignments, error: assignmentsFetchError } = await supabase
+      .from("assignments")
+      .select("id, slug, class_id")
+      .in("id", assignmentIds);
+
+    if (assignmentsFetchError) {
+      throw assignmentsFetchError;
+    }
+
+    for (const assignment of assignments ?? []) {
+      this.assignmentMap.set(assignment.id, assignment as unknown as Assignment);
+    }
+
+    // Gather students in this batch
+    const students = new Set<string>(keys.map((key) => key.student_id));
+
+    // Fetch active submissions for these assignments
+    const allSubmissions: { id: number; assignment_id: number; profile_id: string }[] = [];
     let from = 0;
     const pageSize = 1000;
-    const classIds = new Set(keys.map((key) => key.class_id));
-
     while (true) {
       const to = from + pageSize - 1;
-      const { data: assignments, error: assignmentsFetchError } = await supabase
-        .from("assignments")
-        .select("*")
-        .in("class_id", Array.from(classIds))
-        .range(from, to);
-
-      if (assignmentsFetchError) {
-        throw assignmentsFetchError;
-      }
-
-      if (!assignments || assignments.length === 0) {
-        break;
-      }
-
-      allAssignments.push(...assignments);
-
-      if (assignments.length < pageSize) {
-        break;
-      }
-
-      from += pageSize;
-    }
-
-    for (const assignment of allAssignments) {
-      this.assignmentMap.set(assignment.id, assignment);
-    }
-
-    const students = new Set<string>(keys.map((key) => key.student_id));
-    const assignmentIds = keys.map((key) => Number(key.key));
-
-    // Fetch all submissions with pagination
-    const allSubmissions: SubmissionWithGradesForAssignment[] = [];
-    from = 0;
-
-    while (true) {
-      const to = from + pageSize - 1;
-      const { data: submissions, error: submissionsFetchError } = await supabase
-        .from("submissions_with_grades_for_assignment")
-        .select("*")
+      const { data: subs, error: subsError } = await supabase
+        .from("submissions")
+        .select("id, assignment_id, profile_id")
         .in("assignment_id", assignmentIds)
+        .eq("is_active", true)
         .range(from, to);
-
-      if (submissionsFetchError) {
-        throw submissionsFetchError;
+      if (subsError) {
+        throw subsError;
       }
-
-      if (!submissions || submissions.length === 0) {
-        break;
-      }
-
-      allSubmissions.push(...submissions);
-
-      if (submissions.length < pageSize) {
-        break;
-      }
-
+      if (!subs || subs.length === 0) break;
+      allSubmissions.push(...subs);
+      if (subs.length < pageSize) break;
       from += pageSize;
     }
 
-    const private_results = allSubmissions
-      .filter((submission) => students.has(submission.student_id!))
-      .map((submission) => ({
-        key: submission.assignment_slug ?? "",
-        student_id: submission.student_id!,
-        value: submission.total_score,
-        class_id: submission.class_id!,
-        is_private: true
-      }));
-    const public_results = allSubmissions
-      .filter((submission) => students.has(submission.student_id!))
-      .map((submission) => ({
-        key: submission.assignment_slug ?? "",
-        student_id: submission.student_id!,
-        value: submission.released ? submission.total_score : undefined,
-        class_id: submission.class_id!,
-        is_private: false
-      }));
-    return [...private_results, ...public_results];
+    const submissionIds = allSubmissions.map((s) => s.id);
+    if (submissionIds.length === 0) {
+      return [];
+    }
+
+    // Fetch submission reviews joined with rubrics to get review_round
+    const allReviews: Array<{
+      submission_id: number;
+      total_score: number | null;
+      released: boolean | null;
+      review_round: string | null;
+    }> = [];
+    from = 0;
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data: reviews, error: reviewsError } = await supabase
+        .from("submission_reviews")
+        .select("submission_id, total_score, released, rubrics(review_round)")
+        .in("submission_id", submissionIds)
+        .range(from, to);
+      if (reviewsError) {
+        throw reviewsError;
+      }
+      if (!reviews || reviews.length === 0) break;
+      for (const r of reviews) {
+        allReviews.push({
+          submission_id: r.submission_id as number,
+          total_score: (r as unknown as { total_score: number | null }).total_score ?? null,
+          released: (r as unknown as { released: boolean | null }).released ?? null,
+          review_round:
+            (r as unknown as { rubrics: { review_round: string | null } | null }).rubrics?.review_round ?? null
+        });
+      }
+      if (reviews.length < pageSize) break;
+      from += pageSize;
+    }
+
+    // Build maps for quick lookup
+    const submissionByAssignmentAndStudent = new Map<
+      string,
+      { id: number; assignment_id: number; profile_id: string }
+    >();
+    for (const sub of allSubmissions) {
+      submissionByAssignmentAndStudent.set(`${sub.assignment_id}:${sub.profile_id}`, sub);
+    }
+
+    const reviewsBySubmission = new Map<
+      number,
+      Array<{ total_score: number | null; released: boolean | null; review_round: string | null }>
+    >();
+    for (const rev of allReviews) {
+      const arr = reviewsBySubmission.get(rev.submission_id) ?? [];
+      arr.push(rev);
+      reviewsBySubmission.set(rev.submission_id, arr);
+    }
+
+    // Build resolved values per student and assignment
+    const results: ResolvedExprDependencyInstance[] = [];
+    for (const student_id of students) {
+      for (const assignmentId of assignmentIds) {
+        const sub = submissionByAssignmentAndStudent.get(`${assignmentId}:${student_id}`);
+        const assignment = this.assignmentMap.get(assignmentId);
+        if (!assignment || !assignment.slug) continue;
+        const keySlug = assignment.slug;
+        const class_id = assignment.class_id!;
+        const reviews = sub ? (reviewsBySubmission.get(sub.id) ?? []) : [];
+        // Aggregate scores by review_round
+        const privateScoreByRound: Record<string, number | undefined> = {};
+        const publicScoreByRound: Record<string, number | undefined> = {};
+        for (const rv of reviews) {
+          const round = rv.review_round ?? "grading-review";
+          const score = rv.total_score ?? undefined;
+          privateScoreByRound[round] = score;
+          publicScoreByRound[round] = rv.released ? score : undefined;
+        }
+        results.push({ key: keySlug, student_id, value: privateScoreByRound, class_id, is_private: true });
+        results.push({ key: keySlug, student_id, value: publicScoreByRound, class_id, is_private: false });
+      }
+    }
+
+    return results;
   }
 }
 
@@ -319,9 +390,12 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
       if (!context.incomplete_values.missing.gradebook_columns) {
         context.incomplete_values.missing.gradebook_columns = [];
       }
-      context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
+      if (ret) {
+        context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
+      }
     }
     if (
+      ret &&
       ret.incomplete_values !== null &&
       typeof ret.incomplete_values === "object" &&
       "missing" in ret.incomplete_values
@@ -371,6 +445,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .range(from, to);
 
       if (gradebookColumnsFetchError) {
+        console.error(`Error fetching gradebook column students (range ${from}-${to}):`, gradebookColumnsFetchError);
         throw gradebookColumnsFetchError;
       }
 
@@ -400,6 +475,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .range(from, to);
 
       if (gradebookColumnsError) {
+        console.error(`Error fetching gradebook columns (range ${from}-${to}):`, gradebookColumnsError);
         throw gradebookColumnsError;
       }
 
@@ -472,39 +548,124 @@ export async function addDependencySourceFunctions({
   keys: ExprDependencyInstance[];
   supabase: SupabaseClient<Database>;
 }) {
+  // Create fresh dependency source instances for this batch to ensure
+  // they pick up the latest values from the database
+  const batchDependencySourceMap = {
+    assignments: new AssignmentsDependencySource(),
+    gradebook_columns: new GradebookColumnsDependencySource()
+  };
+
   await Promise.all(
-    Object.values(DependencySourceMap).map((dependencySource) => dependencySource.retrieveValues({ keys, supabase }))
+    Object.values(batchDependencySourceMap).map((dependencySource) =>
+      dependencySource.retrieveValues({ keys, supabase })
+    )
   );
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const imports: Record<string, (...args: any[]) => unknown> = {};
-  for (const dependencySourceProvider of Object.values(DependencySourceMap)) {
+  for (const dependencySourceProvider of Object.values(batchDependencySourceMap)) {
     const functionNames = dependencySourceProvider.getFunctionNames();
     for (const functionName of functionNames) {
-      imports[functionName] = (context: ExpressionContext, key: string) => {
+      imports[functionName] = (context: ExpressionContext, ...args: unknown[]) => {
+        const key = args[0] as string | string[];
+        const rest = args.slice(1);
         return dependencySourceProvider.execute({
           function_name: functionName,
           context,
           key,
-          class_id: keys[0].class_id
+          class_id: keys[0].class_id,
+          args: rest
         });
       };
     }
   }
 
-  imports["multiply"] = (a: number, b: number) => {
+  // Return the dependency source map so it can be used for wildcard expansion
+  // during expression compilation
+  (math as unknown as Record<string, unknown>)._batchDependencySourceMap = batchDependencySourceMap;
+
+  imports["divide"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
     if (a === undefined || b === undefined) {
       return undefined;
     }
-    return a * b;
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val / b_val;
   };
-  imports["add"] = (a: number, b: number) => {
+  imports["subtract"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
     if (a === undefined || b === undefined) {
       return undefined;
     }
-    return a + b;
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val - b_val;
   };
-  imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+  imports["multiply"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
+    if (a === undefined || b === undefined) {
+      return undefined;
+    }
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val * b_val;
+  };
+  imports["add"] = (a: number | GradebookColumnStudentWithMaxScore, b: number | GradebookColumnStudentWithMaxScore) => {
+    if (a === undefined || b === undefined) {
+      return undefined;
+    }
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val + b_val;
+  };
+  imports["sum"] = (_context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
     if (Array.isArray(value)) {
       const values = value
         .map((v) => {
@@ -582,7 +743,7 @@ export async function addDependencySourceFunctions({
     return value < threshold ? 1 : 0;
   };
   imports["countif"] = (
-    context: ExpressionContext,
+    _context: ExpressionContext,
     value: GradebookColumnStudentWithMaxScore[],
     condition: (value: GradebookColumnStudentWithMaxScore) => boolean
   ) => {
@@ -601,7 +762,7 @@ export async function addDependencySourceFunctions({
   };
 
   imports["mean"] = (
-    context: ExpressionContext,
+    _context: ExpressionContext,
     value: GradebookColumnStudentWithMaxScore[],
     weighted: boolean = true
   ) => {
@@ -648,7 +809,11 @@ export async function addDependencySourceFunctions({
     console.log("Mean called with non-matrix value", value);
     throw new Error("Mean called with non-matrix value");
   };
-  imports["drop_lowest"] = (context: ExpressionContext, value: GradebookColumnStudentWithMaxScore[], count: number) => {
+  imports["drop_lowest"] = (
+    _context: ExpressionContext,
+    value: GradebookColumnStudentWithMaxScore[],
+    count: number
+  ) => {
     if (Array.isArray(value)) {
       const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
       const ret: GradebookColumnStudentWithMaxScore[] = [];

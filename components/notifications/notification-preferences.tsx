@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Fieldset, Stack, Text, Heading } from "@chakra-ui/react";
+import { Box, Fieldset, Stack, Heading, Text } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { NativeSelect } from "@chakra-ui/react";
@@ -10,14 +10,16 @@ import { useParams } from "next/navigation";
 import useAuthState from "@/hooks/useAuthState";
 import { toaster } from "@/components/ui/toaster";
 import type { NotificationPreferences } from "@/utils/supabase/DatabaseTypes";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 
 /**
  * Component for managing user notification preferences for help requests.
  * Allows users to choose between immediate, digest, or disabled notifications.
  */
-export default function NotificationPreferences() {
+export default function NotificationPreferencesPanel() {
   const { course_id } = useParams();
   const { user } = useAuthState();
+  const classId = Number(course_id);
 
   const [preferences, setPreferences] = useState<NotificationPreferences>({
     /*
@@ -26,12 +28,10 @@ export default function NotificationPreferences() {
      */
     id: 0,
     created_at: new Date().toISOString(),
-    updated_at: null,
     user_id: user?.id || "",
-    class_id: Number(course_id),
-    help_request_notifications: "digest",
-    help_request_message_notifications: "immediate",
-    email_digest_frequency: "daily"
+    class_id: classId,
+    help_request_creation_notification: "all",
+    updated_at: new Date().toISOString()
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -41,9 +41,12 @@ export default function NotificationPreferences() {
     resource: "notification_preferences",
     filters: [
       { field: "user_id", operator: "eq", value: user?.id },
-      { field: "class_id", operator: "eq", value: course_id }
+      { field: "class_id", operator: "eq", value: classId }
     ],
-    pagination: { pageSize: 1 }
+    pagination: { pageSize: 1 },
+    queryOptions: {
+      enabled: Boolean(user?.id) && Number.isFinite(classId)
+    }
   });
 
   const { mutateAsync: createPreferences } = useCreate();
@@ -74,9 +77,7 @@ export default function NotificationPreferences() {
           resource: "notification_preferences",
           id: preferences.id,
           values: {
-            help_request_notifications: preferences.help_request_notifications,
-            help_request_message_notifications: preferences.help_request_message_notifications,
-            email_digest_frequency: preferences.email_digest_frequency,
+            help_request_creation_notification: preferences.help_request_creation_notification,
             updated_at: new Date().toISOString()
           }
         });
@@ -86,10 +87,8 @@ export default function NotificationPreferences() {
           resource: "notification_preferences",
           values: {
             user_id: user.id,
-            class_id: Number(course_id),
-            help_request_notifications: preferences.help_request_notifications,
-            help_request_message_notifications: preferences.help_request_message_notifications,
-            email_digest_frequency: preferences.email_digest_frequency
+            class_id: classId,
+            help_request_creation_notification: preferences.help_request_creation_notification
           }
         });
       }
@@ -108,90 +107,51 @@ export default function NotificationPreferences() {
     }
   };
 
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+
+  // This will probably be refactored in the future.
+  if (!isInstructorOrGrader) {
+    return (
+      <Box>
+        <Text>No specific notification preferences have been implemented for students yet.</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Heading size="md" mb={4}>
         Notification Preferences
       </Heading>
-
       <Fieldset.Root>
         <Fieldset.Content>
           <Stack spaceY={6}>
             <Field
-              label="Help Request Notifications"
+              label="Help Request Creation Notifications"
               helperText="Choose how you want to be notified when new help requests are created in your class"
             >
               <NativeSelect.Root>
                 <NativeSelect.Field
-                  value={preferences.help_request_notifications}
+                  value={preferences.help_request_creation_notification}
                   onChange={(e) =>
                     setPreferences((prev) => ({
                       ...prev,
-                      help_request_notifications: e.target.value as "immediate" | "digest" | "disabled"
+                      help_request_creation_notification: e.target.value as "all" | "only_active_queue" | "none"
                     }))
                   }
                 >
-                  <option value="immediate">Immediate - Get notified right away</option>
-                  <option value="digest">Digest - Get a summary daily/weekly</option>
-                  <option value="disabled">Disabled - No notifications</option>
+                  <option value="all">All: Get notified for all help request creations.</option>
+                  <option value="only_active_queue">
+                    Only active queue: Get notified for help requests in your active queue.
+                  </option>
+                  <option value="none">None: No notifications for help request creations.</option>
                 </NativeSelect.Field>
               </NativeSelect.Root>
             </Field>
-
-            <Field
-              label="Help Request Message Notifications"
-              helperText="Choose how you want to be notified when new messages are posted to help requests"
-            >
-              <NativeSelect.Root>
-                <NativeSelect.Field
-                  value={preferences.help_request_message_notifications}
-                  onChange={(e) =>
-                    setPreferences((prev) => ({
-                      ...prev,
-                      help_request_message_notifications: e.target.value as "immediate" | "digest" | "disabled"
-                    }))
-                  }
-                >
-                  <option value="immediate">Immediate - Get notified right away</option>
-                  <option value="digest">Digest - Get a summary daily/weekly</option>
-                  <option value="disabled">Disabled - No notifications</option>
-                </NativeSelect.Field>
-              </NativeSelect.Root>
-            </Field>
-
-            <Field
-              label="Email Digest Frequency"
-              helperText="How often you want to receive email summaries of help request activity"
-            >
-              <NativeSelect.Root>
-                <NativeSelect.Field
-                  value={preferences.email_digest_frequency}
-                  onChange={(e) =>
-                    setPreferences((prev) => ({
-                      ...prev,
-                      email_digest_frequency: e.target.value as "daily" | "weekly" | "disabled"
-                    }))
-                  }
-                >
-                  <option value="daily">Daily digest</option>
-                  <option value="weekly">Weekly digest</option>
-                  <option value="disabled">No email digests</option>
-                </NativeSelect.Field>
-              </NativeSelect.Root>
-            </Field>
-
-            <Box pt={4}>
-              <Text fontSize="sm" color="fg.muted" mb={4}>
-                <strong>Note:</strong> As a student, you will receive digest notifications for new help requests by
-                default. TAs and instructors who are actively working on queues will receive immediate notifications for
-                all replies in addition to their selected preferences.
-              </Text>
-
-              <Button onClick={handleSave} loading={isLoading} colorPalette="blue">
-                Save Preferences
-              </Button>
-            </Box>
           </Stack>
+          <Button onClick={handleSave} loading={isLoading}>
+            Save Preferences
+          </Button>
         </Fieldset.Content>
       </Fieldset.Root>
     </Box>

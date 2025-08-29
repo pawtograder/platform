@@ -41,6 +41,7 @@ export type AutograderFeedback = {
     part?: string;
     hide_until_released?: boolean;
     extra_data?: Json;
+    hidden_extra_data?: Json;
   }[];
   artifacts?: {
     name: string;
@@ -99,6 +100,10 @@ export type GradeResponse = {
 export type SubmissionResponse = {
   grader_url: string;
   grader_sha: string;
+  handout_notice?: {
+    message: string;
+    assignments: { id: number; title: string; slug?: string; class_name?: string; semester?: string }[];
+  };
 };
 export type RegressionTestRunResponse = {
   regression_test_url: string;
@@ -112,6 +117,7 @@ export type AddEnrollmentRequest = {
   courseId: number;
   canvasId?: number;
   classSectionId?: number;
+  notify?: boolean;
 };
 
 export type LiveMeetingForHelpRequestRequest = {
@@ -127,6 +133,7 @@ export type LiveMeetingEndRequest = {
 export type AssignmentCreateAllReposRequest = {
   courseId: number;
   assignmentId: number;
+  sync_permissions?: boolean;
 };
 export type ListReposRequest = {
   courseId: number;
@@ -255,6 +262,8 @@ export type AssignmentCreateSolutionRepoResponse = {
 export type AutograderCreateReposForStudentRequest = {
   user_id?: string; // Optional: if provided, use this user_id instead of JWT auth
   class_id?: number; // Optional: if provided, only create repos for this specific class
+  assignment_id?: number; // Optional: if provided, only create repos for this specific assignment
+  sync_all_permissions?: boolean; // Optional: if true, sync permissions for all existing repos
 };
 
 export type AssignmentDeleteRequest = {
@@ -264,4 +273,114 @@ export type AssignmentDeleteRequest = {
 
 export type AssignmentDeleteResponse = {
   message: string;
+};
+
+// Course Import SIS Types
+export type CourseImportRequest = {
+  term: string;
+  mainCourseCode: string;
+  labCourseCode?: string;
+  existingClassId?: number; // ID of existing class to sync to instead of creating new one
+};
+
+export type ProcessedSection = {
+  crn: number;
+  sectionType: "class" | "lab";
+  sectionName: string;
+  meetingInfo: string;
+  location: string;
+  // Parsed meeting time fields for lab sections
+  parsedMeetingTimes?: {
+    startTime: string | null;
+    endTime: string | null;
+    dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null;
+  };
+  instructors: Array<{
+    sis_user_id: number;
+    name: string;
+    role: "instructor";
+  }>;
+  tas: Array<{
+    sis_user_id: number;
+    name: string;
+    role: "grader";
+  }>;
+  students: Array<{
+    sis_user_id: number;
+    name: string;
+    role: "student";
+  }>;
+};
+
+export type CourseImportResponse = {
+  success: boolean;
+  courseInfo: {
+    course: string;
+    title: string;
+    startDate: string;
+    endDate: string;
+    campus: string;
+  };
+  sections: ProcessedSection[];
+  totalUsers: {
+    instructors: number;
+    graders: number;
+    students: number;
+  };
+  enrollmentStatus: {
+    instructors: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+    graders: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+    students: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+  };
+  existingClassId?: number | null; // ID of existing class if one was specified
+};
+
+// Invitation Creation Types
+export type InvitationRequestItem = {
+  sis_user_id: number;
+  role: "student" | "grader" | "instructor";
+  email?: string;
+  name?: string;
+  class_section_id?: number;
+  lab_section_id?: number;
+};
+
+export type CreateInvitationRequest = {
+  courseId: number;
+  invitations: InvitationRequestItem[];
+};
+
+export type CreateInvitationResponse = {
+  success: boolean;
+  invitations: Array<{
+    id: number;
+    sis_user_id: number;
+    role: string;
+    email?: string;
+    name?: string;
+    status: string;
+    created_at: string;
+    expires_at: string;
+    class_section_id?: number;
+    lab_section_id?: number;
+  }>;
+  errors?: Array<{
+    sis_user_id: number;
+    error: string;
+  }>;
 };
