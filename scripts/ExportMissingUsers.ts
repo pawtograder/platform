@@ -1,9 +1,9 @@
-import dotenv from "dotenv";
-import Canvas, { CanvasApi } from "@kth/canvas-api";
-import { createClient } from "@supabase/supabase-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Enrollment } from "@/lib/CanvasTypes";
+import { createAdminClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { CanvasApi } from "@kth/canvas-api";
 import { createObjectCsvWriter } from "csv-writer";
+import dotenv from "dotenv";
 dotenv.config({ path: "./supabase/functions/.env" });
 dotenv.config({ path: "./.env.local.prod" });
 
@@ -47,10 +47,7 @@ export async function getEnrollments({
   throw new Error("Either canvas_course_id or canvas_section_id must be provided");
 }
 async function main() {
-  const adminSupabase = createClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const adminSupabase = createAdminClient<Database>();
   const { data: courses } = await adminSupabase
     .from("classes")
     .select("*, class_sections(*)")

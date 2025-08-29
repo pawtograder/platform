@@ -18,8 +18,7 @@ See also: [pawtograder/assignment-action](https://github.com/pawtograder/assignm
 
 ## Quick start for local development
 
-The quickest way to get started with development is to use our staging environment as a backend, and run the frontend locally.
-In order to develop new features that require changing the data model, you will instead need to [set up a local supabase dev instance](https://supabase.com/docs/guides/local-development/cli/getting-started), which requires installing Docker.
+The quickest way to get started with development is to use our staging environment as a backend and run the frontend locally. For features requiring database schema changes or to run end-to-end tests, see [Setting up Supabase locally](#setting-up-supabase-locally) below.
 
 1. Ensure that you have a recent version of Node.js installed (v22 is a good choice). If you need to install NodeJS, we suggest using [nvm](https://github.com/nvm-sh/nvm) to install it, which will also make your life much easier when you need to switch between different versions of NodeJS.
 2. Clone this repository.
@@ -28,6 +27,36 @@ In order to develop new features that require changing the data model, you will 
 5. Run `npm run dev` to start the development server. Follow the instructions in the terminal to view the application. The application will automatically reload if you make changes to the code. The frontend will be available at `https://localhost:3000`. It will set up a self-signed certificate to host the page (HTTPS is required to access camera/microphone for the help queue), so you'll need to click through a browser warning.
 
 In a clean development environment, it is possible to register an account with any email address without confirmation. To get started, simply create a new account. By default, it will be added to the "demo class" as a student. To create a new account in the demo class as an instructor, include the word "instructor" in your email address.
+
+## Setting up Supabase locally
+
+For development work that requires changes to the database schema or backend functionality, you'll need to set up a local Supabase instance. This setup is also required for running Playwright end-to-end tests and requires Docker.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) installed and running
+- Node.js (v22 recommended)
+
+### Setup steps
+
+1. Install dependencies: `npm install`
+2. Start Supabase locally: `npx supabase start` - This will start all Supabase services in Docker containers.
+3. Reset the database: `npx supabase db reset` - This applies all database migrations and seeds the database with initial data.
+4. Update your `.env.local` file: After running `npx supabase start`, you'll see output with local service URLs and keys. Update your `.env.local` file with these values:
+   - `SUPABASE_URL` - Set to the local API URL (typically `http://127.0.0.1:54321`)
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Set to the "anon key" from the output
+   - `SUPABASE_SERVICE_ROLE_KEY` - Set to the "service_role key" (required for e2e tests)
+   - `NEXT_PUBLIC_SUPABASE_URL` - Should match `SUPABASE_URL`
+5. Build the application: `npm run build`
+6. Start Supabase Edge Functions: `npx supabase functions serve`
+7. Start the development server: `npm start`
+8. Run end-to-end tests (optional): `npx playwright test --ui`
+
+### Local development workflow
+
+Once the local Supabase setup is complete, you can develop with the full local stack. The Supabase dashboard will be available at `http://localhost:54323` where you can view and manage your local database, auth users, storage, and more. You can also access the local email interface at `http://localhost:54324` to view captured emails from development (useful for testing authentication flows).
+
+Note that additional configuration may be needed for features like GitHub integration depending on your development needs.
 
 ## Linting
 
