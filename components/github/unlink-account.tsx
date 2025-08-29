@@ -22,7 +22,7 @@ export default function UnlinkAccount() {
         confirmHeader="Unlink GitHub"
         confirmText="Are you sure you want to unlink your GitHub account?"
         onConfirm={async () => {
-          // retrieve all identites linked to a user
+          // retrieve all identities linked to a user
           const identities = await supabase.auth.getUserIdentities();
 
           // find the google identity

@@ -15,3 +15,7 @@ export function encodedRedirect(
 ) {
   return redirect(`${path}?${type}=${encodeURIComponent(message)}&${new URLSearchParams(params).toString()}`);
 }
+
+export function assert(cond: unknown, msg?: string): asserts cond {
+  if (!cond) throw new Error(msg ?? "Assertion failed");
+}

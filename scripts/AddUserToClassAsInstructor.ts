@@ -1,7 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
+import { createAdminClient } from "@/utils/supabase/client";
 import crypto from "crypto";
+import dotenv from "dotenv";
 import fs from "fs";
 dotenv.config({ path: ".env.local" });
 
@@ -62,8 +62,7 @@ if (isCSVMode) {
   }
 }
 
-const supabase = createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-
+const supabase = createAdminClient<Database>();
 interface CsvUser {
   name: string;
   email: string;
