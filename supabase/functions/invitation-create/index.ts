@@ -48,13 +48,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CreateI
     id: enrollment.user_id
   });
 
-  // Use shared utility to create invitations
+  // Use shared utility to create invitations (set sis_managed = false for manual invitations)
   const result = await createInvitationsBulk(
     supabase, //Act as user!
     courseId,
     enrollment.user_id,
     invitations,
-    scope
+    scope,
+    false // sis_managed = false for manually created invitations
   );
 
   return {

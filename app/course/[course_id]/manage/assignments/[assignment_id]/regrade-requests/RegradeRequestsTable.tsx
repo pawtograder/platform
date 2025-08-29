@@ -45,7 +45,7 @@ const statusConfig: Record<
   escalated: {
     colorPalette: "red",
     icon: ArrowUp,
-    label: "Appealed"
+    label: "Escalated"
   },
   closed: {
     colorPalette: "gray",
@@ -184,7 +184,7 @@ export default function RegradeRequestsTable() {
       { label: "Draft", value: "draft" },
       { label: "Pending", value: "opened" },
       { label: "Resolved", value: "resolved" },
-      { label: "Appealed", value: "escalated" },
+      { label: "Escalated", value: "escalated" },
       { label: "Closed", value: "closed" }
     ],
     []
@@ -307,13 +307,13 @@ export default function RegradeRequestsTable() {
       },
       {
         id: "closed_points",
-        header: "Points on Appeal",
+        header: "Points on Escalation",
         accessorKey: "closed_points",
         cell: ({ getValue }) => getValue() ?? ""
       },
       {
         id: "appeal_granted",
-        header: "Appeal Granted",
+        header: "Escalation Granted",
         accessorFn: (row) => {
           if (row.status !== "closed") return "N/A";
           return (
@@ -515,7 +515,7 @@ export default function RegradeRequestsTable() {
 
         <Box>
           <Text fontSize="sm" fontWeight="medium" mb={1}>
-            Appeal Granted:
+            Escalation Granted:
           </Text>
           <Box width="120px">
             <Select

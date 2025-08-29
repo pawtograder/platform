@@ -20,7 +20,7 @@ import { useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
@@ -63,8 +63,8 @@ const statusConfig: Record<
     bgColor: "bg.warning",
     borderColor: "border.warning",
     icon: ArrowUp,
-    label: "Appealed",
-    description: "Student appealed to instructor for final review"
+    label: "Escalated",
+    description: "Student escalated to instructor for final review"
   },
   closed: {
     bgColor: "bg.emphasized",
@@ -264,10 +264,10 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
         <PopoverBody>
           <VStack gap={3} align="start">
             <Text fontWeight="semibold">Resolve Regrade Request</Text>
-            <Text fontSize="sm">The initial score for this regrade request is {initialPoints || 0}.</Text>
+            <Text fontSize="sm">The initial score for this rubric item is {initialPoints || 0}.</Text>
             <Text fontSize="sm">
-              Enter the final score for this comment after reviewing the regrade request. It will overwrite the score
-              for the comment.
+              Enter the final score for this rubric item after reviewing the regrade request. It will overwrite the
+              score for the rubric item.
             </Text>
             <VStack gap={2} align="start" w="100%">
               <Text fontSize="sm" fontWeight="medium">
@@ -346,7 +346,7 @@ function EscalateRequestDialog({
     <DialogRoot open={isOpen} onOpenChange={(e) => onOpenChange(e.open)}>
       <DialogTrigger asChild>
         <Button colorPalette="orange" size="sm" loading={isUpdating}>
-          Appeal to Instructor
+          Escalate to Instructor
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -355,16 +355,18 @@ function EscalateRequestDialog({
         </DialogHeader>
         <DialogBody>
           <VStack gap={4} align="start">
-            <Text>You can appeal this regrade request to an instructor for final review.</Text>
+            <Text>You can escalate this regrade request to an instructor for final review.</Text>
             <Box bg="bg.info" p={3} borderRadius="md" w="100%">
               <Text fontWeight="semibold" mb={2}>
                 ⚠️ Important Guidelines
               </Text>
               <VStack gap={1} align="start">
-                <Text fontSize="sm">• Only appeal if you believe the rubric is not being fairly applied</Text>
-                <Text fontSize="sm">• Don&apos;t appeal simply because you disagree with the grade</Text>
+                <Text fontSize="sm">• Only escalate if you have a substantive concern about the grading decision</Text>
+                <Text fontSize="sm">
+                  • Provide clear reasoning for why you believe the decision should be reconsidered
+                </Text>
                 <Text fontSize="sm">• The instructor&apos;s decision will be final</Text>
-                <Text fontSize="sm">• Frivolous appeals may affect future regrade requests</Text>
+                <Text fontSize="sm">• Frivolous escalations may affect future regrade requests</Text>
               </VStack>
             </Box>
           </VStack>
@@ -449,15 +451,15 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
       <PopoverTrigger asChild>
         <Button colorPalette="orange" variant="solid" size="sm">
-          Decide Appeal
+          Decide Escalation
         </Button>
       </PopoverTrigger>
       <PopoverContent>
         <PopoverArrow />
         <PopoverBody>
           <VStack gap={3} align="start">
-            <Text fontWeight="semibold">Decide Appeal</Text>
-            <Text fontSize="sm">Enter the final decision for this appealed regrade request.</Text>
+            <Text fontWeight="semibold">Decide Escalation</Text>
+            <Text fontSize="sm">Enter the final decision for this escalated regrade request.</Text>
             <Text fontSize="sm">Initial score: {initialPoints}.</Text>
             <Text fontSize="sm">Revised score: {resolvedPoints}.</Text>
             <VStack gap={2} align="start" w="100%">
@@ -511,7 +513,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
               w="100%"
               disabled={closeScore === undefined}
             >
-              Decide Appeal and Close Request
+              Decide Escalation and Close Request
             </Button>
           </VStack>
         </PopoverBody>
@@ -519,6 +521,125 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     </PopoverRoot>
   );
 });
+
+/**
+ * Inline editable points component for instructors
+ */
+function EditablePoints({
+  points,
+  regradeRequestId,
+  type,
+  privateProfileId
+}: {
+  points: number | null;
+  regradeRequestId: number;
+  type: "resolved" | "closed";
+  privateProfileId: string;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState<string>(points?.toString() || "");
+  const [isUpdating, setIsUpdating] = useState(false);
+  const { regradeRequests } = useAssignmentController();
+
+  // Update editValue when points prop changes (e.g., after successful save)
+  useEffect(() => {
+    if (!isEditing) {
+      setEditValue(points?.toString() || "");
+    }
+  }, [points, isEditing]);
+
+  const handleSave = useCallback(async () => {
+    setIsUpdating(true);
+    try {
+      const supabase = createClient();
+
+      // Convert empty string to 0, otherwise parse the number
+      const numericValue = editValue === "" ? 0 : Math.round(parseFloat(editValue) || 0);
+
+      const rpcParams = {
+        regrade_request_id: regradeRequestId,
+        profile_id: privateProfileId,
+        ...(type === "resolved" ? { resolved_points: numericValue } : { closed_points: numericValue })
+      };
+
+      const { error } = await supabase.rpc("update_regrade_request_points", rpcParams);
+
+      if (error) throw error;
+
+      await regradeRequests.invalidate(regradeRequestId);
+      setIsEditing(false);
+      toaster.create({
+        title: "Points Updated",
+        description: `${type === "resolved" ? "Resolved" : "Final"} points have been updated.`,
+        type: "success"
+      });
+    } catch (error) {
+      console.error("Error updating points:", error);
+      toaster.create({
+        title: "Error",
+        description: "Failed to update points. Please try again.",
+        type: "error"
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [editValue, regradeRequestId, privateProfileId, type, regradeRequests]);
+
+  const handleCancel = useCallback(() => {
+    setEditValue(points?.toString() || "");
+    setIsEditing(false);
+  }, [points]);
+
+  if (isEditing) {
+    return (
+      <HStack gap={1} alignItems="center">
+        <Input
+          type="number"
+          value={editValue}
+          onChange={(e) => {
+            const inputValue = e.target.value;
+
+            // Allow empty string or valid number strings (including negative and decimal)
+            if (inputValue === "" || inputValue === "-" || /^-?\d*\.?\d*$/.test(inputValue)) {
+              setEditValue(inputValue);
+            }
+          }}
+          size="xs"
+          width="60px"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              handleSave();
+            } else if (e.key === "Escape") {
+              handleCancel();
+            }
+          }}
+        />
+        <Button size="xs" colorPalette="blue" onClick={handleSave} loading={isUpdating}>
+          Save
+        </Button>
+        <Button size="xs" variant="ghost" onClick={handleCancel} disabled={isUpdating}>
+          Cancel
+        </Button>
+      </HStack>
+    );
+  }
+
+  return (
+    <Text
+      as="button"
+      textDecoration="underline"
+      textDecorationStyle="dotted"
+      cursor="pointer"
+      color="blue.600"
+      _hover={{ color: "blue.800", textDecorationStyle: "solid" }}
+      onClick={() => setIsEditing(true)}
+      title="Click to edit points"
+    >
+      {points === null || points === undefined ? 0 : points}
+    </Text>
+  );
+}
 
 /**
  * Displays and manages a regrade request, including its status, metadata, available actions, and associated comments.
@@ -692,18 +813,36 @@ export default function RegradeRequestWrapper({
                 {regradeRequest.resolved_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
-                    {regradeRequest.resolved_points || 0}
+                    {isInstructor ? (
+                      <EditablePoints
+                        points={regradeRequest.resolved_points}
+                        regradeRequestId={regradeRequest.id}
+                        type="resolved"
+                        privateProfileId={private_profile_id}
+                      />
+                    ) : (
+                      regradeRequest.resolved_points || 0
+                    )}
                   </Text>
                 )}
                 {regradeRequest.escalated_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
-                    Appealed {formatRelative(regradeRequest.escalated_at, new Date())} by {escalator?.name}
+                    Escalated {formatRelative(regradeRequest.escalated_at, new Date())} by {escalator?.name}
                   </Text>
                 )}
                 {regradeRequest.closed_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
-                    {regradeRequest.closed_points || 0}
+                    {isInstructor ? (
+                      <EditablePoints
+                        points={regradeRequest.closed_points}
+                        regradeRequestId={regradeRequest.id}
+                        type="closed"
+                        privateProfileId={private_profile_id}
+                      />
+                    ) : (
+                      regradeRequest.closed_points || 0
+                    )}
                   </Text>
                 )}
               </VStack>

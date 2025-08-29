@@ -3393,6 +3393,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_managed: boolean;
           sis_user_id: number;
           status: string;
           updated_at: string;
@@ -3412,6 +3413,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_managed?: boolean;
           sis_user_id: number;
           status?: string;
           updated_at?: string;
@@ -3431,6 +3433,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          sis_managed?: boolean;
           sis_user_id?: number;
           status?: string;
           updated_at?: string;
@@ -8522,6 +8525,7 @@ export type Database = {
           p_lab_section_id?: number;
           p_name?: string;
           p_role: Database["public"]["Enums"]["app_role"];
+          p_sis_managed?: boolean;
           p_sis_user_id: number;
         };
         Returns: number;
@@ -8823,6 +8827,15 @@ export type Database = {
       update_class_late_tokens_per_student: {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
+      };
+      update_regrade_request_points: {
+        Args: {
+          closed_points?: number;
+          profile_id: string;
+          regrade_request_id: number;
+          resolved_points?: number;
+        };
+        Returns: boolean;
       };
       update_regrade_request_status: {
         Args: {
