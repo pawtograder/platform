@@ -341,6 +341,8 @@ export class CourseController {
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
+  private _assignments?: TableController<"assignments">;
+  private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -369,6 +371,8 @@ export class CourseController {
     // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
     void this.assignmentDueDateExceptions; // Triggers lazy creation
     void this.studentDeadlineExtensions; // Triggers lazy creation
+    void this.assignments; // Triggers lazy creation
+    void this.assignmentGroupsWithMembers; // Triggers lazy creation
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -519,6 +523,39 @@ export class CourseController {
       });
     }
     return this._assignmentDueDateExceptions;
+  }
+
+  get assignments(): TableController<"assignments"> {
+    if (!this._assignments) {
+      this._assignments = new TableController({
+        client: this._client,
+        table: "assignments",
+        query: this._client
+          .from("assignments")
+          .select("*")
+          .eq("class_id", this.courseId)
+          .order("due_date", { ascending: true })
+          .order("id", { ascending: true }),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._assignments;
+  }
+
+  get assignmentGroupsWithMembers(): TableController<"assignment_groups", "*, assignment_groups_members(*)"> {
+    if (!this._assignmentGroupsWithMembers) {
+      this._assignmentGroupsWithMembers = new TableController({
+        client: this._client,
+        table: "assignment_groups",
+        query: this._client
+          .from("assignment_groups")
+          .select("*, assignment_groups_members(*)")
+          .eq("class_id", this.courseId),
+        selectForSingleRow: "*, assignment_groups_members(*)",
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._assignmentGroupsWithMembers;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -906,6 +943,8 @@ export class CourseController {
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
       | TableController<"student_deadline_extensions">
       | TableController<"assignment_due_date_exceptions">
+      | TableController<"assignments">
+      | TableController<"assignment_groups", "*, assignment_groups_members(*)">
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
     if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
@@ -916,6 +955,8 @@ export class CourseController {
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
     if (this._studentDeadlineExtensions) createdControllers.push(this._studentDeadlineExtensions);
     if (this._assignmentDueDateExceptions) createdControllers.push(this._assignmentDueDateExceptions);
+    if (this._assignments) createdControllers.push(this._assignments);
+    if (this._assignmentGroupsWithMembers) createdControllers.push(this._assignmentGroupsWithMembers);
     if (this._classSections) createdControllers.push(this._classSections);
 
     return createdControllers.every((c) => c.ready);
@@ -933,6 +974,8 @@ export class CourseController {
     this._labSectionMeetings?.close();
     this._studentDeadlineExtensions?.close();
     this._assignmentDueDateExceptions?.close();
+    this._assignments?.close();
+    this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
 
     if (this._classRealTimeController) {
@@ -1443,4 +1486,22 @@ export function useStudentDeadlineExtensions() {
   }, [controller]);
 
   return extensions;
+}
+
+/**
+ * Hook to get all assignments for the course
+ */
+export function useAssignments() {
+  const controller = useCourseController();
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.assignments.list((updatedAssignments) => {
+      setAssignments(updatedAssignments as Assignment[]);
+    });
+    setAssignments(data as Assignment[]);
+    return unsubscribe;
+  }, [controller]);
+
+  return assignments;
 }

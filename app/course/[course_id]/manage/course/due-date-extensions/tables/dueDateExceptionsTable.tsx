@@ -2,13 +2,11 @@
 
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useAssignments } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
-import { Assignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, NativeSelect, Text, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaGift, FaPlus } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
@@ -20,14 +18,7 @@ import AssignmentExceptionsTable from "./assignmentExceptionsTable";
  * and actions to add new exceptions or gift tokens.
  */
 export default function DueDateExceptionsTable() {
-  const { course_id } = useParams<{ course_id: string }>();
-
-  const { data: assignmentsResult } = useList<Assignment>({
-    resource: "assignments",
-    pagination: { pageSize: 1000 },
-    filters: [{ field: "class_id", operator: "eq", value: Number(course_id) }],
-    sorters: [{ field: "due_date", order: "asc" }]
-  });
+  const unsortedAssignments = useAssignments();
   const students = useAllStudentProfiles();
 
   // Filters
@@ -36,15 +27,26 @@ export default function DueDateExceptionsTable() {
   const assignmentFilter = useModalManager<number | undefined>();
   const studentFilter = useModalManager<string | undefined>();
   const tokenFilter = useModalManager<"any" | "has" | "none">();
+  const assignments = useMemo(
+    () =>
+      unsortedAssignments?.sort((a, b) => {
+        const aDate = new Date(a.due_date);
+        const bDate = new Date(b.due_date);
+        return aDate.getTime() - bDate.getTime();
+      }),
+    [unsortedAssignments]
+  );
 
   const assignmentOptions = useMemo(
-    () => (assignmentsResult?.data || []).map((a) => ({ value: a.id, label: a.title || `Assignment #${a.id}` })),
-    [assignmentsResult?.data]
+    () => (assignments || []).map((a) => ({ value: a.id, label: a.title || `Assignment #${a.id}` })),
+    [assignments]
   );
   const studentOptions = useMemo(
     () => (students || []).map((s: UserProfile) => ({ value: s.id, label: s.name || s.id })),
     [students]
   );
+
+  console.log("assignments", assignments);
 
   return (
     <VStack align="stretch" gap={4} w="100%">
@@ -104,7 +106,7 @@ export default function DueDateExceptionsTable() {
         </Box>
       </HStack>
 
-      {(assignmentsResult?.data || []).map((assignment) => (
+      {(assignments || []).map((assignment) => (
         <AssignmentExceptionsTable
           key={assignment.id}
           assignment={assignment}

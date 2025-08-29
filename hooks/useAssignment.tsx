@@ -12,7 +12,11 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { useListTableControllerValues } from "@/lib/TableController";
+import TableController, {
+  useFindTableControllerValue,
+  useListTableControllerValues,
+  useTableControllerValueById
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
@@ -51,29 +55,6 @@ export function useAssignmentGroups() {
     return () => unsubscribe();
   }, [controller]);
   return assignmentGroups;
-}
-
-/**
- * Subscribes to assignment group memberships for a specific assignment, including the joined
- * `assignment_groups` row for each membership. This is useful when you need both the group identity
- * (name/id) and the full roster of members to determine who is covered by a group-scoped operation
- * (e.g., due date exceptions) and to display group context (name and member list).
- *
- * The underlying query streams updates (liveMode: "auto") and returns up to 1000 rows.
- *
- * @param assignment_id - The assignment ID to filter group memberships by. When undefined, the hook is disabled.
- * @returns Array of memberships with embedded `assignment_groups` rows. Returns an empty array when disabled or no data.
- */
-export function useAssignmentGroupMemberships(assignment_id: number | undefined) {
-  const { data } = useList<AssignmentGroupMembersWithGroup>({
-    resource: "assignment_groups_members",
-    meta: { select: "*, assignment_groups(*)" },
-    filters: assignment_id ? [{ field: "assignment_id", operator: "eq", value: assignment_id }] : [],
-    pagination: { pageSize: 1000 },
-    queryOptions: { enabled: !!assignment_id },
-    liveMode: "auto"
-  });
-  return data?.data ?? [];
 }
 
 export function useAssignmentGroup(assignment_group_id: number | null | undefined) {

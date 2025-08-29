@@ -5,25 +5,28 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useAllStudentProfiles, useCourse, useCourseController } from "@/hooks/useCourseController";
-import { useAssignmentGroupMemberships } from "@/hooks/useAssignment";
 import useModalManager from "@/hooks/useModalManager";
 import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
-import {
-  Assignment,
-  AssignmentDueDateException,
-  AssignmentGroupMembersWithGroup
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, Table, Text, VStack } from "@chakra-ui/react";
 import { formatInTimeZone } from "date-fns-tz";
 import { useMemo } from "react";
 import { FaPlus, FaTrash } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
+import { useLogIfChanged } from "@/app/course/[course_id]/discussion/discussion_thread";
 
 interface AssignmentExceptionsTableProps {
   assignment: Assignment;
   assignmentFilter?: number;
   studentFilter?: string;
   tokenFilter?: "any" | "has" | "none";
+}
+
+/** LEGACY HOOK, THIS IS A BAD PATTERN, DO NOT CONTINUE TO EXTEND OR USE THIS. FUTURE WORK SHOULD OPTIMIZE THE PERFORMANCE OF THIS PAGE. */
+function useAssignmentGroupsWithMembers(assignment_id: number) {
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const predicate = useMemo(() => (g: AssignmentGroup) => g.assignment_id === assignment_id, [assignment_id]);
+  return useListTableControllerValues(assignmentGroupsWithMembers, predicate);
 }
 
 /**
@@ -35,33 +38,41 @@ export default function AssignmentExceptionsTable({
   studentFilter,
   tokenFilter
 }: AssignmentExceptionsTableProps) {
+  useLogIfChanged("assignment", assignment);
+  useLogIfChanged("assignmentFilter", assignmentFilter);
+  useLogIfChanged("studentFilter", studentFilter);
+  useLogIfChanged("tokenFilter", tokenFilter);
   const course = useCourse();
   const { assignmentDueDateExceptions } = useCourseController();
-  // Load group membership for this assignment so we can show group names/members and filter by student-in-group
-  const groupMemberships: AssignmentGroupMembersWithGroup[] = useAssignmentGroupMemberships(assignment.id);
+  useLogIfChanged("course", course);
+  useLogIfChanged("assignmentDueDateExceptions", assignmentDueDateExceptions);
+  // // Load assignment groups with their members for this assignment
+  const assignmentGroups = useAssignmentGroupsWithMembers(assignment.id);
+  useLogIfChanged("assignmentGroups", assignmentGroups);
   const groupIdToMemberIds = useMemo(() => {
     const map = new Map<number, string[]>();
-    for (const m of groupMemberships) {
-      const arr = map.get(m.assignment_group_id) || [];
-      arr.push(m.profile_id);
-      map.set(m.assignment_group_id, arr);
+    for (const group of assignmentGroups) {
+      const memberIds = group.assignment_groups_members.map((member) => member.profile_id);
+      map.set(group.id, memberIds);
     }
     return map;
-  }, [groupMemberships]);
+  }, [assignmentGroups]);
   const groupIdToName = useMemo(() => {
     const map = new Map<number, string>();
-    for (const m of groupMemberships) {
-      if (m.assignment_groups) map.set(m.assignment_group_id, m.assignment_groups.name);
+    for (const group of assignmentGroups) {
+      map.set(group.id, group.name);
     }
     return map;
-  }, [groupMemberships]);
+  }, [assignmentGroups]);
   const profileIdToGroupId = useMemo(() => {
     const map = new Map<string, number>();
-    for (const m of groupMemberships) {
-      map.set(m.profile_id, m.assignment_group_id);
+    for (const group of assignmentGroups) {
+      for (const member of group.assignment_groups_members) {
+        map.set(member.profile_id, group.id);
+      }
     }
     return map;
-  }, [groupMemberships]);
+  }, [assignmentGroups]);
   const predicate = useMemo(() => {
     return (e: AssignmentDueDateException) => {
       // Must be for this assignment
@@ -91,6 +102,7 @@ export default function AssignmentExceptionsTable({
   const addOpen = useModalManager<AddExtensionDefaults>();
 
   const studentName = (id: string | null | undefined) => students.find((s) => s.id === id)?.name || id;
+  console.log(`Render table for assignment ${assignment.id}`);
 
   return (
     <Box borderWidth="1px" borderRadius="md" p={3}>

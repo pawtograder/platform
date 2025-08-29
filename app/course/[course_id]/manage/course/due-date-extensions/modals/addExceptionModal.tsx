@@ -4,11 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
-import { Assignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { useAllStudentProfiles, useAssignments, useCourseController } from "@/hooks/useCourseController";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Dialog, HStack, Input, Portal, Textarea, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -36,26 +35,16 @@ export default function AddExceptionModal({
   const course_id = role.class_id;
 
   const students = useAllStudentProfiles();
+  const assignments = useAssignments();
   const { assignmentDueDateExceptions } = useCourseController();
-
-  // Load all assignments for this class
-  const { data: assignmentsData } = useList<Assignment>({
-    resource: "assignments",
-    filters: [{ field: "class_id", operator: "eq", value: Number(course_id) }],
-    pagination: { pageSize: 1000 },
-    sorters: [
-      { field: "due_date", order: "asc" },
-      { field: "id", order: "asc" }
-    ]
-  });
 
   const assignmentOptions = useMemo(
     () =>
-      (assignmentsData?.data || []).map((a) => ({
+      (assignments || []).map((a) => ({
         value: a.id,
         label: a.title || `Assignment #${a.id}`
       })),
-    [assignmentsData?.data]
+    [assignments]
   );
 
   const studentOptions = useMemo(
