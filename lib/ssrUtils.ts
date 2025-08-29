@@ -1,6 +1,6 @@
-import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/server";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { toaster } from "@/components/ui/toaster";
 
 type UserRoleData = Pick<
   Database["public"]["Tables"]["user_roles"]["Row"],
@@ -46,7 +46,10 @@ async function getRolesForCourse(course_id: number): Promise<UserRoleData["role"
     .eq("disabled", false);
 
   if (error) {
-    console.error("Failed to fetch user roles from database:", error);
+    toaster.error({
+      title: "Error",
+      description: `Failed to fetch user roles from database: ${error.message}`
+    });
     return [];
   }
 
@@ -71,7 +74,10 @@ export async function getPrivateProfileId(course_id: number) {
     .single();
 
   if (error) {
-    console.error("Failed to fetch private profile ID from database:", error);
+    toaster.error({
+      title: "Error",
+      description: `Failed to fetch private profile ID from database: ${error.message}`
+    });
     return null;
   }
 

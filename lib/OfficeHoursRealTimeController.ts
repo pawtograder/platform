@@ -1,5 +1,5 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
 import type { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 

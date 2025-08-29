@@ -3,12 +3,12 @@
 import { toaster } from "@/components/ui/toaster";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
-  PossiblyTentativeResult,
+  type PossiblyTentativeResult,
   useFindTableControllerValue,
   useListTableControllerValues
 } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   ClassSection,
@@ -25,16 +25,16 @@ import {
   UserRoleWithPrivateProfileAndUser,
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useList, useUpdate } from "@refinedev/core";
-import { SupabaseClient } from "@supabase/supabase-js";
+import { type LiveEvent, useList, useUpdate } from "@refinedev/core";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import type { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
 export function useAllProfilesForClass() {
   const { profiles: controller } = useCourseController();
@@ -625,7 +625,9 @@ export class CourseController {
     } else if (event.type === "deleted") {
       this.genericData[typeName]!.delete(id);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     }
   }
 

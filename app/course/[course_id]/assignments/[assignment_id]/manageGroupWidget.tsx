@@ -835,14 +835,13 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
     );
   }
   if (repositories?.length === 1) {
-    const repo = repositories[0]!;
     return (
       <HStack>
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`} data-visual-test="blackout">
-          {repositories[0].repository}
+        <Link href={`https://github.com/${repositories[0]!.repository}`} data-visual-test="blackout">
+          {repositories[0]!.repository}
         </Link>
       </HStack>
     );

@@ -3,7 +3,7 @@ import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import type { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
 import type { Endpoints } from "@octokit/types";
-import { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
   const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
     body: {

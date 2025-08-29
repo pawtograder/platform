@@ -10,7 +10,7 @@ import {
   assertUserIsInCourse,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 async function handleAssignmentGroupJoin(
   req: Request,

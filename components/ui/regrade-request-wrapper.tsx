@@ -232,10 +232,9 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
         type: "success"
       });
     } catch (error) {
-      console.error("Error resolving request:", error);
-      toaster.create({
+      toaster.error({
         title: "Error",
-        description: "Failed to resolve request. Please try again.",
+        description: `Failed to resolve request: ${error instanceof Error ? error.message : "Unknown error"}`,
         type: "error"
       });
     } finally {
@@ -432,10 +431,9 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
         type: "success"
       });
     } catch (error) {
-      console.error("Error closing request:", error);
-      toaster.create({
+      toaster.error({
         title: "Error",
-        description: "Failed to close request. Please try again.",
+        description: `Failed to close request: ${error instanceof Error ? error.message : "Unknown error"}`,
         type: "error"
       });
     } finally {
@@ -570,10 +568,9 @@ function EditablePoints({
         type: "success"
       });
     } catch (error) {
-      console.error("Error updating points:", error);
       toaster.create({
         title: "Error",
-        description: "Failed to update points. Please try again.",
+        description: `Failed to update points: ${error instanceof Error ? error.message : "Unknown error"}`,
         type: "error"
       });
     } finally {
@@ -717,10 +714,9 @@ export default function RegradeRequestWrapper({
       };
       await submission_regrade_request_comments.create(values);
     } catch (error) {
-      console.error("Error creating comment or updating regrade request:", error);
       toaster.create({
         title: "Error",
-        description: error instanceof Error ? error.message : "Failed to add comment. Please try again.",
+        description: `Failed to add comment: ${error instanceof Error ? error.message : "Unknown error"}`,
         type: "error"
       });
     } finally {

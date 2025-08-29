@@ -2,6 +2,7 @@ import { HStack, Icon, IconButton, Text } from "@chakra-ui/react";
 import { useCallback, useRef, useState } from "react";
 import { BsCheck, BsX } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot, PopoverTrigger } from "./popover";
+import { toaster } from "./toaster";
 
 export const PopConfirm = ({
   triggerLabel,
@@ -47,7 +48,10 @@ export const PopConfirm = ({
         try {
           await onConfirm();
         } catch (error) {
-          console.error("Error in confirm action:", error);
+          toaster.error({
+            title: "Error",
+            description: `Error in confirm action: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
         } finally {
           setIsLoading(false);
           isExecutingRef.current = false;
@@ -84,7 +88,10 @@ export const PopConfirm = ({
             isExecutingRef.current = false;
           }, 50);
         } catch (error) {
-          console.error("Error in cancel action:", error);
+          toaster.error({
+            title: "Error",
+            description: `Error in cancel action: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
           setIsLoading(false);
           isExecutingRef.current = false;
         }

@@ -121,7 +121,7 @@ export default function CourseImportPage() {
       }>
     ) => {
       const BATCH_SIZE = 50;
-      const batches = [];
+      const batches: Array<Array<(typeof allInvitations)[number]>> = [];
 
       // Split invitations into batches
       for (let i = 0; i < allInvitations.length; i += BATCH_SIZE) {
@@ -141,9 +141,7 @@ export default function CourseImportPage() {
       });
 
       // Process each batch
-      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-        const batch = batches[batchIndex];
-
+      for (const [batchIndex, batch] of batches.entries()) {
         try {
           // Update progress
           setInvitationProgress((prev) =>
@@ -226,13 +224,19 @@ export default function CourseImportPage() {
           .order("course_title", { ascending: true });
 
         if (error) {
-          console.error("Error fetching existing classes:", error);
+          toaster.error({
+            title: "Error",
+            description: `Error fetching existing classes: ${error.message}`
+          });
           return [];
         }
 
         return data || [];
       } catch (error) {
-        console.error("Error fetching existing classes:", error);
+        toaster.error({
+          title: "Error",
+          description: `Error fetching existing classes: ${error instanceof Error ? error.message : "Unknown error"}`
+        });
         return [];
       }
     },
@@ -395,11 +399,11 @@ export default function CourseImportPage() {
   );
 
   const formatInstructorName = (fullName: string) => {
-    const parts = fullName.split(" ");
+    const parts = fullName?.split(" ") ?? [];
     if (parts.length > 1) {
-      const lastName = parts[parts.length - 1];
-      const firstInitial = parts[0].charAt(0);
-      return `${lastName}, ${firstInitial}`;
+      const lastName = parts[parts.length - 1] ?? "";
+      const firstInitial = parts[0]?.charAt(0) ?? "";
+      return `${lastName}, ${firstInitial}`.trim();
     }
     return fullName;
   };

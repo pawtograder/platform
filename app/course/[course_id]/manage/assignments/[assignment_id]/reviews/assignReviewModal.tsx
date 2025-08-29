@@ -117,13 +117,6 @@ export default function AssignReviewModal({
   const selectedRubricId = watch("rubric_id");
   const selectedSubmissionId = watch("submission_id");
 
-  const { isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
-    resource: "assignments",
-    id: assignmentId,
-    queryOptions: { enabled: isOpen && !!assignmentId },
-    meta: { select: "id, grading_rubric_id" }
-  });
-
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
     filters: [
@@ -206,15 +199,6 @@ export default function AssignReviewModal({
       }) || []
     );
   }, [submissionsData]);
-
-  const rubricsFilters = useMemo(() => {
-    if (isLoadingAssignment) return undefined;
-    return [
-      { field: "class_id", operator: "eq" as const, value: courseId },
-      { field: "assignment_id", operator: "eq" as const, value: assignmentId },
-      { field: "review_round", operator: "ne" as const, value: "self-review" }
-    ];
-  }, [isLoadingAssignment, courseId, assignmentId]);
 
   const { data: rubricsData, isLoading: isLoadingRubrics } = useList<RubricRow>({
     resource: "rubrics",

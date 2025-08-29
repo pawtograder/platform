@@ -6,7 +6,7 @@ import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useStudentRoster, useGradersAndInstructors } from "@/hooks/useCourseController";
-import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
+import type { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
 import { Dialog, HStack, Portal, Text, Textarea, VStack } from "@chakra-ui/react";
 import { type HttpError, useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";

@@ -56,7 +56,10 @@ function WorkflowRunStats() {
             });
 
             if (rpcError) {
-              console.error(`Error fetching workflow stats for ${period.name}:`, rpcError);
+              toaster.error({
+                title: "Error fetching workflow stats",
+                description: `Error fetching workflow stats for ${period.name}: ${rpcError.message}`
+              });
               return {
                 name: period.name,
                 total: 0,

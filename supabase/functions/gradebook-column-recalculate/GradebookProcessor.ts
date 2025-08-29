@@ -1,4 +1,4 @@
-import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { all, ConstantNode, create, EvalFunction, FunctionNode, MathNode } from "mathjs";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 

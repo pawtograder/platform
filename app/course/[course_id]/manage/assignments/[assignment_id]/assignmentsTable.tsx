@@ -14,7 +14,7 @@ import {
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   ActiveSubmissionsWithGradesForAssignment,
   Assignment,
   GraderResultTest,
@@ -36,8 +36,8 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -481,7 +481,6 @@ export default function AssignmentsTable() {
 
                   toaster.success({ title: "Success", description: "All submission reviews released" });
                 } catch (error) {
-                  console.error("Error releasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
                     description:
@@ -513,7 +512,6 @@ export default function AssignmentsTable() {
                   await tableController.refetchAll();
                   toaster.success({ title: "Success", description: "All submission reviews unreleased" });
                 } catch (error) {
-                  console.error("Error unreleasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
                     description:

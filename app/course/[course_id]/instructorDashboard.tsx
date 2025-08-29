@@ -27,7 +27,6 @@ import type { Database } from "@/utils/supabase/SupabaseTypes";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { getPrivateProfileId } from "@/lib/ssrUtils";
 import LinkAccount from "@/components/github/link-account";
-import { toaster } from "@/components/ui/toaster";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -283,7 +282,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const extractWorkflowStats = (
     rpcResponse: Database["public"]["Functions"]["get_workflow_statistics"]["Returns"] | null
   ) => {
-    if (!rpcResponse) {
+    if (!rpcResponse || rpcResponse.length === 0) {
       return {
         total: 0,
         errorCount: 0,
@@ -294,6 +293,15 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     }
 
     const stats = rpcResponse[0];
+    if (!stats) {
+      return {
+        total: 0,
+        errorCount: 0,
+        avgQueue: 0,
+        avgRun: 0,
+        errorRate: 0
+      };
+    }
     return {
       total: Number(stats.total_runs) || 0,
       errorCount: Number(stats.error_count) || 0,

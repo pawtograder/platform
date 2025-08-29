@@ -1,10 +1,10 @@
 // ============================
 // RATE LIMITING AND PERFORMANCE TRACKING
 // ============================
-import { UnstableGetResult as GetResult, PostgrestTransformBuilder } from "@supabase/postgrest-js";
+import { type UnstableGetResult as GetResult, PostgrestTransformBuilder } from "@supabase/postgrest-js";
 
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { PostgrestError, UserResponse } from "@supabase/supabase-js";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import { PostgrestError, type UserResponse } from "@supabase/supabase-js";
 import Bottleneck from "bottleneck";
 import { supabase } from "../e2e/TestingUtils";
 
@@ -251,7 +251,7 @@ export class RateLimitManager {
     password: string;
     email_confirm: boolean;
   }): Promise<UserResponse> {
-    const limiter = this.rateLimiters.users;
+    const limiter = this.rateLimiters["users"];
     if (!limiter) {
       return await this.globalLimiter.schedule(async () => {
         return await supabase.auth.admin.createUser({

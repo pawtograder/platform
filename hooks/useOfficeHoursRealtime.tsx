@@ -3,9 +3,9 @@
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import {
+import type {
   HelpQueue,
   HelpQueueAssignment,
   HelpRequest,

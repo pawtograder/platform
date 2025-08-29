@@ -1,5 +1,5 @@
 import { ChimeSDKMeetings } from "npm:@aws-sdk/client-chime-sdk-meetings";
-import { Database } from "./SupabaseTypes.d.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
 // import { jwtDecode } from "npm:jwt-decode"; // Currently unused
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";

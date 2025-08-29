@@ -1,10 +1,9 @@
-import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
-import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
+import type { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
+import { all, create, FunctionNode, isArray, type MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
-import TableController from "@/lib/TableController";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { CourseController, useCourseController } from "./useCourseController";
 export type ExpressionContext = {
@@ -388,7 +387,7 @@ class GradebookWhatIfController {
             const whatIfVal = this.getGrade(column.id);
             if (whatIfVal) return whatIfVal;
           }
-          const assignment = this._assignments.find((a) => a.id === matchingAssignments[0].id);
+          const assignment = this._assignments.find((a) => a.id === matchingAssignments[0]!.id);
           if (!assignment || assignment.total_points === null) return null;
           return assignment.total_points;
         };

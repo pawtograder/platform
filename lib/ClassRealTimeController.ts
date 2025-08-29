@@ -152,8 +152,6 @@ export class ClassRealTimeController {
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CLOSED: {
-        console.debug("Class Client debug info:", this.getDebugInfo());
-        console.debug(`Channel closed '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
@@ -289,13 +287,6 @@ export class ClassRealTimeController {
     const key = `${message.type}-${message.table || "unknown"}-${message.operation || "none"}`;
     const current = ClassRealTimeController.broadcastCounter.get(key) || 0;
     ClassRealTimeController.broadcastCounter.set(key, current + 1);
-
-    // Log summary every 100 broadcasts
-    const total = Array.from(ClassRealTimeController.broadcastCounter.values()).reduce((sum, count) => sum + count, 0);
-
-    if (total % 100 === 0) {
-      console.log("Broadcast Summary:", Object.fromEntries(ClassRealTimeController.broadcastCounter));
-    }
 
     // Normalize custom payload types from SQL functions to the standard type expected by listeners
     // SQL may emit type "staff_data_change"; treat it as "table_change" for downstream consumers

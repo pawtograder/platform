@@ -3,7 +3,7 @@ import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { type BroadcastMessage } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
+import type {
   Assignment,
   GradebookColumn,
   GradebookColumnDependencies,
@@ -14,7 +14,7 @@ import { useList } from "@refinedev/core";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { CourseController, useCourseController } from "./useCourseController";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
@@ -358,6 +358,9 @@ class StudentGradebookController {
     for (let i = 0; i < a.length; i++) {
       const aItem = a[i];
       const bItem = b[i];
+      if (aItem === undefined || bItem === undefined) {
+        return false;
+      }
       if (
         aItem.id !== bItem.id ||
         aItem.score !== bItem.score ||

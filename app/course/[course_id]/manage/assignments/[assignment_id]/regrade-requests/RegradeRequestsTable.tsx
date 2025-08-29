@@ -6,7 +6,7 @@ import { useCourseController } from "@/hooks/useCourseController";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";

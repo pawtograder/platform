@@ -1,10 +1,11 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
-import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
-import { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import { type UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
+import { ClassRealTimeController, type ConnectionStatus } from "./ClassRealTimeController";
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
+import { toaster } from "@/components/ui/toaster";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 export type TablesThatHaveAnIDField = {
@@ -306,7 +307,10 @@ export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(con
         if (!cleanedUp) {
           setReady(false);
           // Optionally log the error
-          console.error("TableController readyPromise rejected:", err);
+          toaster.error({
+            title: "Error",
+            description: `TableController readyPromise rejected: ${err.message}`
+          });
         }
       });
 
@@ -533,7 +537,10 @@ export default class TableController<
         }
       }
     } catch (error) {
-      console.error(`Failed to refetch data for table ${this._table}:`, error);
+      toaster.error({
+        title: "Error",
+        description: `Failed to refetch data for table ${this._table}: ${error instanceof Error ? error.message : "Unknown error"}`
+      });
     } finally {
       // Set refetch state to false and notify listeners
       this._isRefetching = false;
@@ -731,9 +738,9 @@ export default class TableController<
       if (existingRowById) {
         // If we have a custom select for single row (joins), refresh the full row to keep joins in sync
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
-          this._fetchRow(data.id as IDType).then((fullRow) => {
+          this._fetchRow(data["id"] as IDType).then((fullRow) => {
             if (fullRow) {
-              this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
+              this._updateRow(data["id"] as IDType, fullRow as ResultOne & { id: IDType }, false);
             }
           });
         }
@@ -750,18 +757,18 @@ export default class TableController<
       if (pendingRow) {
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
-        pendingRowWithId.id = data.id as IDType;
+        pendingRowWithId.id = data["id"] as IDType;
         // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
-          this._fetchRow(data.id as IDType).then((fullRow) => {
+          this._fetchRow(data["id"] as IDType).then((fullRow) => {
             if (fullRow) {
-              this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
+              this._updateRow(data["id"] as IDType, fullRow as ResultOne & { id: IDType }, false);
             } else {
               this._updateRow(
-                data.id as IDType,
+                data["id"] as IDType,
                 {
                   ...(data as ResultOne),
-                  id: data.id
+                  id: data["id"]
                 } as ResultOne & { id: IDType },
                 false
               );
@@ -769,20 +776,20 @@ export default class TableController<
           });
         } else {
           this._updateRow(
-            data.id as IDType,
+            data["id"] as IDType,
             {
               ...data,
-              id: data.id
+              id: data["id"]
             } as ResultOne & { id: IDType },
             false
           );
         }
       } else {
         // Re-check to avoid duplicates if another concurrent event already added this row
-        const isDuplicate = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === (data.id as IDType));
+        const isDuplicate = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === (data["id"] as IDType));
         // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
-          this._fetchRow(data.id as IDType).then((fullRow) => {
+          this._fetchRow(data["id"] as IDType).then((fullRow) => {
             // Re-check to avoid duplicates if another concurrent event already added this row
             if (isDuplicate) {
               return;
@@ -967,14 +974,14 @@ export default class TableController<
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
-      const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+      const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data["id"]);
 
       // Check if the updated row matches our realtime filter
       const matchesFilter = this._matchesRealtimeFilter(data);
 
       if (existingRow && !matchesFilter) {
         // Row was updated but no longer matches our filter - remove it
-        this._removeRow(data.id as IDType);
+        this._removeRow(data["id"] as IDType);
         return;
       } else if (!existingRow && !matchesFilter) {
         // Row doesn't exist and doesn't match filter - ignore
@@ -983,8 +990,8 @@ export default class TableController<
       const applyUpdate = (rowLike: Record<string, unknown>) => {
         if (existingRow) {
           this._updateRow(
-            data.id as IDType,
-            { ...(rowLike as ResultOne), id: data.id } as ResultOne & { id: IDType },
+            data["id"] as IDType,
+            { ...(rowLike as ResultOne), id: data["id"] } as ResultOne & { id: IDType },
             false
           );
         } else {
@@ -996,7 +1003,7 @@ export default class TableController<
       };
 
       if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
-        this._fetchRow(data.id as IDType).then((fullRow) => {
+        this._fetchRow(data["id"] as IDType).then((fullRow) => {
           if (fullRow) {
             applyUpdate(fullRow as unknown as Record<string, unknown>);
           } else {

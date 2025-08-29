@@ -17,7 +17,7 @@
  * Where RECYCLE_USERS_KEY defaults to "demo" but can be set via environment variable.
  * This allows multiple test environments to have separate user pools.
  */
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
@@ -29,8 +29,8 @@ import {
   TEST_HANDOUT_REPO,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { DEFAULT_RATE_LIMITS, RateLimitConfig, RateLimitManager } from "@/tests/generator/GenerationUtils";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { DEFAULT_RATE_LIMITS, type RateLimitConfig, RateLimitManager } from "@/tests/generator/GenerationUtils";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -102,7 +102,7 @@ export interface SeedingConfiguration {
 // USER RECYCLING CONFIGURATION
 // ============================
 
-const RECYCLE_USERS_KEY = process.env.RECYCLE_USERS_KEY || "demo";
+const RECYCLE_USERS_KEY = process.env["RECYCLE_USERS_KEY"] || "demo";
 
 // ============================
 // CONSTANTS FOR DATA GENERATION
@@ -172,7 +172,7 @@ export function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = new Date().toISOString().split("T")[0] + "#" + suffix;
-  const workerIndex = process.env.TEST_WORKER_INDEX || "";
+  const workerIndex = process.env["TEST_WORKER_INDEX"] || "";
   return `e2e-${test_run_batch}-${workerIndex}`;
 }
 
@@ -350,7 +350,7 @@ export async function findExistingPawtograderUsers(): Promise<{
     private_profile_name: userRole.profiles_private?.name || "Unknown",
     public_profile_name: userRole.profiles_public?.name || "Unknown",
     email: user.email || "",
-    password: process.env.TEST_PASSWORD || "change-it",
+    password: process.env["TEST_PASSWORD"] || "change-it",
     user_id: user.user_id,
     private_profile_id: userRole.private_profile_id,
     public_profile_id: userRole.public_profile_id,

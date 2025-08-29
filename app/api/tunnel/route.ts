@@ -6,13 +6,14 @@ import { NextRequest, NextResponse } from "next/server";
  * @returns The response object
  */
 export async function POST(request: NextRequest) {
-  const BUGSINK_HOST = process.env.NEXT_PUBLIC_BUGSINK_HOST;
+  const BUGSINK_HOST = process.env["NEXT_PUBLIC_BUGSINK_HOST"];
   try {
     const envelope = await request.text();
 
     // Parse the envelope to extract the DSN project ID
     const pieces = envelope.split("\n");
     if (pieces.length === 0) {
+      // eslint-disable-next-line no-console
       console.error("Invalid envelope format: empty envelope");
       return new NextResponse("Bad Request: invalid envelope format", { status: 400 });
     }
@@ -20,12 +21,13 @@ export async function POST(request: NextRequest) {
     let header;
     let dsn;
     try {
-      header = JSON.parse(pieces[0]);
+      header = JSON.parse(pieces[0]!);
       if (!header?.dsn || typeof header.dsn !== "string") {
         throw new Error("Missing DSN in envelope header");
       }
       dsn = new URL(header.dsn);
     } catch (parseError) {
+      // eslint-disable-next-line no-console
       console.error("Invalid envelope header:", parseError);
       return new NextResponse(
         `Bad Request: ${parseError instanceof Error ? parseError.message : "Invalid envelope header"}`,
@@ -56,6 +58,7 @@ export async function POST(request: NextRequest) {
       }
     });
   } catch (error) {
+    // eslint-disable-next-line no-console
     console.error("Tunnel error:", error);
     return new NextResponse("Internal Server Error", { status: 500 });
   }

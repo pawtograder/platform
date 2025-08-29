@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import type { AutograderTriggerGradingWorkflowRequest } from "../_shared/FunctionTypes.d.ts";
 import { triggerWorkflow } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInCourse, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 export async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { repository, sha, class_id } = (await req.json()) as AutograderTriggerGradingWorkflowRequest;

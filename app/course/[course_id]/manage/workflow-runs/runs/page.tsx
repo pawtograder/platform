@@ -20,7 +20,7 @@ import {
   type PaginationState
 } from "@tanstack/react-table";
 import { Select, CreatableSelect } from "chakra-react-select";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 
 export default function WorkflowRunsPage() {

@@ -2,7 +2,7 @@
 
 import { Field } from "@/components/ui/field";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Card, Flex, Heading, HStack, Input, Link, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate, useList } from "@refinedev/core";
 import { createClient } from "@/utils/supabase/client";
@@ -87,7 +87,7 @@ export default function DueDateExceptionsManagement() {
       // Call our SECURITY DEFINER PostgreSQL function directly
       const { error } = await supabase.rpc("update_class_late_tokens_per_student", {
         p_class_id: Number.parseInt(course_id as string),
-        p_late_tokens_per_student: data.late_tokens_per_student
+        p_late_tokens_per_student: data["late_tokens_per_student"]
       });
 
       if (error) {
@@ -115,9 +115,6 @@ export default function DueDateExceptionsManagement() {
         description: "Late tokens updated successfully"
       });
     } catch (err) {
-      // Log the full error for debugging
-      console.error("Error updating late tokens:", err);
-
       // Surface error to user with RPC error details
       const errorMessage = err instanceof Error ? err.message : "Failed to update late tokens";
       toaster.error({
@@ -168,8 +165,8 @@ export default function DueDateExceptionsManagement() {
                 <VStack gap={4} align="start">
                   <Field
                     label="Late Tokens Per Student"
-                    errorText={errors.late_tokens_per_student?.message?.toString()}
-                    invalid={!!errors.late_tokens_per_student}
+                    errorText={errors["late_tokens_per_student"]?.message?.toString()}
+                    invalid={!!errors["late_tokens_per_student"]}
                     helperText="Number of late tokens each student receives for the entire class"
                   >
                     <Input

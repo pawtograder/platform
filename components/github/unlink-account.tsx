@@ -5,6 +5,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import { BsGithub } from "react-icons/bs";
 import { PopConfirm } from "../ui/popconfirm";
 import { toaster } from "../ui/toaster";
+
 export default function UnlinkAccount() {
   const supabase = createBrowserClient(
     process.env["NEXT_PUBLIC_SUPABASE_URL"] || "",
@@ -39,7 +40,11 @@ export default function UnlinkAccount() {
           }
         }}
         onCancel={async () => {
-          console.log("Canceled");
+          toaster.create({
+            title: "Canceled",
+            description: "Canceled unlinking GitHub",
+            type: "info"
+          });
         }}
       ></PopConfirm>
     </VStack>

@@ -318,7 +318,10 @@ export class RealtimeChannelManager {
         try {
           subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
         } catch (error) {
-          console.error("Error notifying last subscription of close:", error);
+          toaster.error({
+            title: "Error",
+            description: "Error notifying last subscription of close: " + (error as Error).message
+          });
         }
       }
 
