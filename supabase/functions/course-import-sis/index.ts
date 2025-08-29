@@ -539,7 +539,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         Database["public"]["Tables"]["invitations"]["Row"],
         "invitations",
         Database["public"]["Tables"]["invitations"]["Relationships"],
-        "id, sis_user_id, role, status, class_section_id, lab_section_id"
+        "id, sis_user_id, role, status, class_section_id, lab_section_id, sis_managed"
       >[] = [];
       let currentEnrollments: GetResult<
         Database["public"],
@@ -582,7 +582,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       if (invitationFilters.length > 0) {
         const { data: invitations } = await adminSupabase
           .from("invitations")
-          .select("id, sis_user_id, role, status, class_section_id, lab_section_id")
+          .select("id, sis_user_id, role, status, class_section_id, lab_section_id, sis_managed")
           .eq("class_id", classData.id)
           .or(invitationFilters.join(","))
           .limit(1000);
@@ -1152,17 +1152,24 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const sisUserIds = new Set(allSISUsers.keys());
 
       // 7a. Mark invitations as expired for users no longer in SIS
+      // IMPORTANT: Only expire SIS-managed invitations, never expire manually created ones
       const invitationsToExpire = currentInvitations.filter(
-        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id))
+        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id)) && inv.sis_managed !== false // Only expire SIS-managed invitations
       );
 
       // Debug logging for expiration logic
-      if (invitationsToExpire.length > 0) {
-        console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
-        console.log(`Total current invitations: ${currentInvitations.length}`);
-        console.log(`Total SIS users: ${sisUserIds.size}`);
-        console.log(`Invitations to expire: ${invitationsToExpire.length}`);
+      const manualInvitations = currentInvitations.filter((inv) => inv.sis_managed === false);
+      const sisInvitations = currentInvitations.filter((inv) => inv.sis_managed !== false);
 
+      console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
+      console.log(`Total current invitations: ${currentInvitations.length}`);
+      console.log(`SIS-managed invitations: ${sisInvitations.length}`);
+      console.log(`Manual invitations (protected): ${manualInvitations.length}`);
+      console.log(`Total SIS users: ${sisUserIds.size}`);
+      console.log(`Invitations to expire: ${invitationsToExpire.length}`);
+      console.log("====================================");
+
+      if (invitationsToExpire.length > 0) {
         invitationsToExpire.slice(0, 5).forEach((inv) => {
           console.log(`Expiring invitation:`, {
             id: inv.id,
