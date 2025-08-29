@@ -20,7 +20,7 @@ import { useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
@@ -519,6 +519,138 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
 });
 
 /**
+ * Inline editable points component for instructors
+ */
+function EditablePoints({
+  points,
+  regradeRequestId,
+  type,
+  privateProfileId
+}: {
+  points: number | null;
+  regradeRequestId: number;
+  type: "resolved" | "closed";
+  privateProfileId: string;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState<string>(points?.toString() || "");
+  const [isUpdating, setIsUpdating] = useState(false);
+  const { regradeRequests } = useAssignmentController();
+
+  // Update editValue when points prop changes (e.g., after successful save)
+  useEffect(() => {
+    if (!isEditing) {
+      setEditValue(points?.toString() || "");
+    }
+  }, [points, isEditing]);
+
+  const handleSave = useCallback(async () => {
+    setIsUpdating(true);
+    try {
+      const supabase = createClient();
+      
+      // Convert empty string to 0, otherwise parse the number
+      const numericValue = editValue === "" ? 0 : Math.round(parseFloat(editValue) || 0);
+      
+      const rpcParams = {
+        regrade_request_id: regradeRequestId,
+        profile_id: privateProfileId,
+        ...(type === "resolved" 
+          ? { resolved_points: numericValue }
+          : { closed_points: numericValue }
+        )
+      };
+
+      const { error } = await supabase.rpc("update_regrade_request_points", rpcParams);
+
+      if (error) throw error;
+
+      await regradeRequests.invalidate(regradeRequestId);
+      setIsEditing(false);
+      toaster.create({
+        title: "Points Updated",
+        description: `${type === "resolved" ? "Resolved" : "Final"} points have been updated.`,
+        type: "success"
+      });
+    } catch (error) {
+      console.error("Error updating points:", error);
+      toaster.create({
+        title: "Error",
+        description: "Failed to update points. Please try again.",
+        type: "error"
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [editValue, regradeRequestId, privateProfileId, type, regradeRequests]);
+
+  const handleCancel = useCallback(() => {
+    setEditValue(points?.toString() || "");
+    setIsEditing(false);
+  }, [points]);
+
+  if (isEditing) {
+    return (
+      <HStack gap={1} alignItems="center">
+        <Input
+          type="number"
+          value={editValue}
+          onChange={(e) => {
+            const inputValue = e.target.value;
+            
+            // Allow empty string or valid number strings (including negative and decimal)
+            if (inputValue === "" || inputValue === "-" || /^-?\d*\.?\d*$/.test(inputValue)) {
+              setEditValue(inputValue);
+            }
+          }}
+          size="xs"
+          width="60px"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              handleSave();
+            } else if (e.key === "Escape") {
+              handleCancel();
+            }
+          }}
+        />
+        <Button
+          size="xs"
+          colorPalette="blue"
+          onClick={handleSave}
+          loading={isUpdating}
+        >
+          Save
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={handleCancel}
+          disabled={isUpdating}
+        >
+          Cancel
+        </Button>
+      </HStack>
+    );
+  }
+
+  return (
+    <Text
+      as="button"
+      textDecoration="underline"
+      textDecorationStyle="dotted"
+      cursor="pointer"
+      color="blue.600"
+      _hover={{ color: "blue.800", textDecorationStyle: "solid" }}
+      onClick={() => setIsEditing(true)}
+      title="Click to edit points"
+    >
+      {points === null || points === undefined ? 0 : points}
+    </Text>
+  );
+}
+
+/**
  * Displays and manages a regrade request, including its status, metadata, available actions, and associated comments.
  *
  * Renders the regrade request's current status, assignment and user details, and provides context-sensitive actions such as resolving, escalating, or closing the request based on user role and request state. Includes a comment section for discussion and supports adding new comments unless the request is closed. Children content is rendered within the request panel.
@@ -690,7 +822,16 @@ export default function RegradeRequestWrapper({
                 {regradeRequest.resolved_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
-                    {regradeRequest.resolved_points || 0}
+                    {isInstructor ? (
+                      <EditablePoints
+                        points={regradeRequest.resolved_points}
+                        regradeRequestId={regradeRequest.id}
+                        type="resolved"
+                        privateProfileId={private_profile_id}
+                      />
+                    ) : (
+                      regradeRequest.resolved_points || 0
+                    )}
                   </Text>
                 )}
                 {regradeRequest.escalated_at && (
@@ -701,7 +842,16 @@ export default function RegradeRequestWrapper({
                 {regradeRequest.closed_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
-                    {regradeRequest.closed_points || 0}
+                    {isInstructor ? (
+                      <EditablePoints
+                        points={regradeRequest.closed_points}
+                        regradeRequestId={regradeRequest.id}
+                        type="closed"
+                        privateProfileId={private_profile_id}
+                      />
+                    ) : (
+                      regradeRequest.closed_points || 0
+                    )}
                   </Text>
                 )}
               </VStack>
