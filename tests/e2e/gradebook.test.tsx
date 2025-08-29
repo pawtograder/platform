@@ -381,27 +381,13 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }
   });
 
-  test("Import Column wizard creates and updates columns", async ({ page }, testInfo) => {
-    // Prepare CSV content with email identifiers
-    const csvRows = [
-      ["email", "Participation", "Project Bonus"],
-      [students[0].email, "96", "5"],
-      [students[1].email, "88", "4"],
-      [students[2].email, "77", "3"],
-      [students[3].email, "69", "2"]
-    ];
-    const csv = csvRows.map((r) => r.join(",")).join("\n");
-
+  test("Import Column wizard creates and updates columns", async ({ page }) => {
     // Open Import dialog
     await page.getByRole("button", { name: /import column/i }).click();
 
-    // Step 1: upload in-memory CSV
-    const fileChooser = page.locator('input[type="file"][accept=".csv"]');
-    await fileChooser.setInputFiles({
-      name: `grades-${testInfo.repeatEachIndex}.csv`,
-      mimeType: "text/csv",
-      buffer: Buffer.from(csv)
-    });
+    // Step 1: upload CSV
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles("tests/e2e/test-gradebook-import.csv");
 
     // Step 2 should show mapping UI
     // Ensure identifier column is set to email (it auto-detects, but we enforce)
