@@ -10,8 +10,8 @@
   "type": "module",
   "license": "GPL-3.0-only",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
     "start": "next start",
     "test:e2e": "npx playwright test",
     "test:k6:build": "webpack --config webpack.k6.config.js",
