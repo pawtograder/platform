@@ -48,7 +48,7 @@ For development work that requires changes to the database schema or backend fun
    - `NEXT_PUBLIC_SUPABASE_URL` - Same as `SUPABASE_URL` for client-side SDKs
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - The "anon key" from the output
    - `SUPABASE_SERVICE_ROLE_KEY` - The "service_role key" (server-side only; used by admin scripts/e2e)
-   - (Optional) `ENABLE_SIGNUPS=true` - If you want easily create new users using the UI for local dev
+   - (Optional) `ENABLE_SIGNUPS=true` - If you want to easily create new users using the UI for local dev
 
    > Security: Never expose `SUPABASE_SERVICE_ROLE_KEY` to the browser or commit it. Keep it in server-only code and CI secrets.
 
