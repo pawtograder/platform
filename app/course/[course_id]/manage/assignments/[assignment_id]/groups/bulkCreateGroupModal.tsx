@@ -1,4 +1,4 @@
-import {
+import type {
   Assignment,
   AssignmentGroupWithMembersInvitationsAndJoinRequests,
   Tag,
@@ -18,9 +18,9 @@ import {
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 import { useStudentRoster } from "@/hooks/useCourseController";
-import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
+import { type GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import useTags from "@/hooks/useTags";
 import { useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";
@@ -87,7 +87,9 @@ export default function BulkCreateGroup({
     // shuffle ungrouped profiles
     for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
+      const temp = ungroupedProfiles[i]!;
+      ungroupedProfiles[i] = ungroupedProfiles[j]!;
+      ungroupedProfiles[j] = temp;
     }
     // create as many even groups as possible
     let index = 0;
@@ -104,7 +106,7 @@ export default function BulkCreateGroup({
     // spread extras across created groups
     while (index < ungroupedProfiles.length && newGroups.length > 0) {
       const createdGroup: GroupCreateData = newGroups.pop()!;
-      createdGroup?.member_ids.push(ungroupedProfiles[index].id);
+      createdGroup.member_ids.push(ungroupedProfiles[index]!.id);
       newGroups.push(createdGroup);
       index += 1;
     }
@@ -116,7 +118,8 @@ export default function BulkCreateGroup({
     // shuffle ungrouped profiles
     for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
+      // Swap profiles (indexes are in-bounds, so non-null assertions are safe)
+      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j]!, ungroupedProfiles[i]!];
     }
     const tagMap = new Map<string, string[]>();
     const noTagKey = crypto.randomUUID();
@@ -162,7 +165,8 @@ export default function BulkCreateGroup({
       // divide extra profiles evenly across groups of that category
       while (index < tagGroup.length && newGroups.length > 0) {
         const createdGroup: GroupCreateData = newGroups.pop()!;
-        createdGroup?.member_ids.push(tagGroup[index]);
+        // Index is within bounds => tagGroup[index] is defined
+        createdGroup.member_ids.push(tagGroup[index]!);
         newGroups.push(createdGroup);
         index += 1;
       }

@@ -73,6 +73,25 @@ export interface SupabaseApiResponse<T = unknown> {
 }
 
 /**
+ * Auth user shape returned by Supabase verify/magiclink exchange endpoint.
+ * Only core fields are modeled; additional fields are captured generically.
+ */
+export type SupabaseAuthUser = {
+  id: string;
+  email?: string;
+  [key: string]: unknown;
+};
+
+/**
+ * Response shape for exchanging a magic link token for an access token.
+ */
+export type MagicLinkExchangeResponse = {
+  access_token: string;
+  refresh_token: string;
+  user: SupabaseAuthUser;
+};
+
+/**
  * Safely parse JSON response body, handling empty responses and parse errors
  */
 export function safeJsonParse(body: string | null): unknown {
@@ -93,9 +112,9 @@ export function safeJsonParse(body: string | null): unknown {
  * Get Supabase configuration from environment variables
  */
 export function getSupabaseConfig(): SupabaseConfig {
-  const url = __ENV.SUPABASE_URL;
-  const serviceRoleKey = __ENV.SUPABASE_SERVICE_ROLE_KEY;
-  const anonKey = __ENV.SUPABASE_ANON_KEY;
+  const url = __ENV["SUPABASE_URL"];
+  const serviceRoleKey = __ENV["SUPABASE_SERVICE_ROLE_KEY"];
+  const anonKey = __ENV["SUPABASE_ANON_KEY"];
 
   if (!url || !serviceRoleKey || !anonKey) {
     throw new Error(
@@ -426,7 +445,7 @@ export function createTestStudent(
   const email = `student-${testRunPrefix}-${workerIndex}-${studentNumber}@pawtograder.net`;
   const privateName = `Student #${studentNumber} Test`;
   const publicName = `Pseudonym #${studentNumber}`;
-  const password = __ENV.TEST_PASSWORD || "change-it";
+  const password = __ENV["TEST_PASSWORD"] || "change-it";
 
   console.log(`👤 Creating student: ${email}`);
 
@@ -658,7 +677,7 @@ export function createSubmission(
 export function exchangeMagicLinkForAccessToken(
   hashedToken: string,
   config: SupabaseConfig
-): { access_token: string; refresh_token: string; user: any } {
+): MagicLinkExchangeResponse {
   console.log(`🔄 Exchanging magic link token for access token...`);
 
   const exchangePayload = {
@@ -678,11 +697,7 @@ export function exchangeMagicLinkForAccessToken(
     throw new Error(`Failed to exchange magic link token: ${response.status} - ${response.body}`);
   }
 
-  const responseData = safeJsonParse(response.body as string) as {
-    access_token: string;
-    refresh_token: string;
-    user: any;
-  } | null;
+  const responseData = safeJsonParse(response.body as string) as MagicLinkExchangeResponse | null;
 
   if (!responseData || !responseData.access_token) {
     console.log(`Exchange response data:`, responseData);

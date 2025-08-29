@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useState, useContext, FormEvent } from "react";
+import React, { useState, useContext, type FormEvent } from "react";
 import { Modal, ModalBody, ModalHeader } from "amazon-chime-sdk-component-library-react";
 
 import Card from "../../components/Card";

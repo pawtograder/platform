@@ -1,9 +1,9 @@
 "use client";
-import { useCallback, useState, createContext, useContext, ReactNode } from "react";
+import { useCallback, useState, createContext, useContext, type ReactNode } from "react";
 import { Input, VStack, Text, Dialog, Portal, Box, Icon } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { useForm, SubmitHandler } from "react-hook-form";
+import { useForm, type SubmitHandler } from "react-hook-form";
 import { parse } from "csv-parse/browser/esm/sync";
 import { useParams } from "next/navigation";
 import { useInvalidate } from "@refinedev/core";
@@ -380,7 +380,6 @@ const ImportStudentsCSVModalContent = () => {
                 });
 
                 if (enrollError) {
-                  console.error("RPC Error details:", enrollError);
                   toaster.create({
                     title: "Enrollment Error",
                     description: `Failed to enroll ${user.name} (SIS ID: ${user.sis_id}): ${enrollError.message}`,

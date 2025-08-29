@@ -4,10 +4,10 @@ import { Badge, Box, IconButton, VStack, Text, Button, HStack } from "@chakra-ui
 import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/components/ui/popover";
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { HiOutlineInbox } from "react-icons/hi2";
-import NotificationTeaser, { SystemNotification } from "./notification-teaser";
+import NotificationTeaser, { type SystemNotification } from "./notification-teaser";
 import { useState, useEffect, useMemo } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Notification } from "@/utils/supabase/DatabaseTypes";
+import type { Notification } from "@/utils/supabase/DatabaseTypes";
 import Markdown from "@/components/ui/markdown";
 
 export default function NotificationsBox() {
@@ -201,6 +201,7 @@ export default function NotificationsBox() {
       {modalNotifications.length > 0 &&
         (() => {
           const notification = modalNotifications[0];
+          if (!notification) return null;
           const body = notification.body as SystemNotification;
 
           const handleModalDismiss = () => {

@@ -2,7 +2,7 @@
 
 import { useCourseController } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { LabSection, LabSectionWithLeader } from "@/utils/supabase/DatabaseTypes";
+import type { LabSection, LabSectionWithLeader } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { format } from "date-fns";
 import { Calendar, Clock, User } from "lucide-react";

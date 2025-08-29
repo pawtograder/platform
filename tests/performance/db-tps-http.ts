@@ -59,6 +59,19 @@ export interface InstructorData {
   };
 }
 
+// Minimal row shapes used in this test to avoid explicit `any`
+type ProfileRow = {
+  id: string;
+  name?: string;
+  is_private_profile?: boolean;
+};
+
+type UserRoleRow = {
+  class_id: number;
+  role: string;
+  user_id?: string;
+};
+
 /**
  * Create a test instructor (auth user + profiles + enrollment)
  */
@@ -66,7 +79,7 @@ function createTestInstructor(classId: number, testRunPrefix: string, config: Su
   const email = `instructor-${testRunPrefix}@pawtograder.net`;
   const privateName = `Instructor Test`;
   const publicName = `Professor Test`;
-  const password = __ENV.TEST_PASSWORD || "change-it";
+  const password = __ENV["TEST_PASSWORD"] || "change-it";
 
   console.log(`👩‍🏫 Creating instructor: ${email}`);
 
@@ -221,6 +234,7 @@ export function setup(): TestData {
 /**
  * Main test function - minimal test that just validates setup worked
  */
+// eslint-disable-next-line import/no-anonymous-default-export
 export default function (data: TestData) {
   console.log("🧪 Running minimal validation test...");
 
@@ -287,6 +301,9 @@ export default function (data: TestData) {
 
   console.log("🔐 Testing JWT exchange for student 1...");
   const firstStudent = data.students[0];
+  if (!firstStudent) {
+    throw new Error("No students found in test data. Expected at least one student.");
+  }
   const studentAuth = exchangeMagicLinkForAccessToken(firstStudent.magic_link.hashed_token, data.config);
   const studentHeaders = createUserAuthHeaders(studentAuth.access_token, data.config.anonKey);
 
@@ -313,7 +330,8 @@ export default function (data: TestData) {
     `   Instructor sees ${Array.isArray(instructorAllProfiles.data) ? instructorAllProfiles.data.length : 0} profiles`
   );
   if (Array.isArray(instructorAllProfiles.data)) {
-    instructorAllProfiles.data.forEach((profile: any, index: number) => {
+    const profiles = instructorAllProfiles.data as ProfileRow[];
+    profiles.forEach((profile, index: number) => {
       console.log(
         `   Profile ${index + 1}: ${profile.name} (ID: ${profile.id}, Private: ${profile.is_private_profile})`
       );
@@ -331,7 +349,8 @@ export default function (data: TestData) {
     `   Student sees ${Array.isArray(studentAllProfiles.data) ? studentAllProfiles.data.length : 0} profiles`
   );
   if (Array.isArray(studentAllProfiles.data)) {
-    studentAllProfiles.data.forEach((profile: any, index: number) => {
+    const profiles = studentAllProfiles.data as ProfileRow[];
+    profiles.forEach((profile, index: number) => {
       console.log(
         `   Profile ${index + 1}: ${profile.name} (ID: ${profile.id}, Private: ${profile.is_private_profile})`
       );
@@ -367,7 +386,8 @@ export default function (data: TestData) {
     `   Instructor sees ${Array.isArray(instructorUserRoles.data) ? instructorUserRoles.data.length : 0} user_roles entries`
   );
   if (Array.isArray(instructorUserRoles.data)) {
-    instructorUserRoles.data.forEach((role: any, index: number) => {
+    const roles = instructorUserRoles.data as UserRoleRow[];
+    roles.forEach((role, index: number) => {
       console.log(
         `   Role ${index + 1}: Class ${role.class_id}, Role: ${role.role}, User: ${role.user_id?.substring(0, 8)}...`
       );
@@ -385,7 +405,8 @@ export default function (data: TestData) {
     `   Student sees ${Array.isArray(studentUserRoles.data) ? studentUserRoles.data.length : 0} user_roles entries`
   );
   if (Array.isArray(studentUserRoles.data)) {
-    studentUserRoles.data.forEach((role: any, index: number) => {
+    const roles = studentUserRoles.data as UserRoleRow[];
+    roles.forEach((role, index: number) => {
       console.log(
         `   Role ${index + 1}: Class ${role.class_id}, Role: ${role.role}, User: ${role.user_id?.substring(0, 8)}...`
       );

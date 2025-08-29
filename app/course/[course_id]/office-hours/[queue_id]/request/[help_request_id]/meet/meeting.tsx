@@ -101,6 +101,7 @@ function HelpMeeting() {
     };
     if (!initialized.current) {
       initialized.current = true;
+      // eslint-disable-next-line no-console
       joinMeeting().catch(console.error);
     }
     return () => {

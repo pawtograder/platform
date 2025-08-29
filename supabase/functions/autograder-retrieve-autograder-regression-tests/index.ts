@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-retrieve-autograder-regression-tests");

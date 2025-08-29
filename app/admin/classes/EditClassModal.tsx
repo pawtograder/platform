@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { VStack, HStack, Text, Textarea } from "@chakra-ui/react";
-import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
+import type { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
 import { TermSelector } from "@/components/ui/term-selector";
 
 type Class = AdminGetClassesResponse[0];

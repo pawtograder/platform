@@ -3,7 +3,7 @@ import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { type BroadcastMessage } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
+import type {
   Assignment,
   GradebookColumn,
   GradebookColumnDependencies,
@@ -14,7 +14,7 @@ import { useList } from "@refinedev/core";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { CourseController, useCourseController } from "./useCourseController";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
@@ -358,6 +358,9 @@ class StudentGradebookController {
     for (let i = 0; i < a.length; i++) {
       const aItem = a[i];
       const bItem = b[i];
+      if (aItem === undefined || bItem === undefined) {
+        return false;
+      }
       if (
         aItem.id !== bItem.id ||
         aItem.score !== bItem.score ||
@@ -1132,7 +1135,7 @@ export class GradebookController {
   }
 
   public extractAndValidateDependencies(expr: string, column_id: number) {
-    const math = create(all);
+    const math = create(all!);
     const exprNode = math.parse(expr);
     const dependencies: Record<string, Set<number>> = {};
     const errors: string[] = [];
@@ -1144,10 +1147,9 @@ export class GradebookController {
       if (node.type === "FunctionNode") {
         const functionName = (node as FunctionNode).fn.name;
         if (functionName in availableDependencies) {
-          const args = (node as FunctionNode).args;
-          const argType = args[0].type;
-          if (argType === "ConstantNode") {
-            const argName = (args[0] as ConstantNode).value;
+          const firstArg = (node as FunctionNode).args?.[0];
+          if (firstArg?.type === "ConstantNode") {
+            const argName = (firstArg as ConstantNode).value;
             if (typeof argName === "string") {
               const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                 minimatch(d.slug!, argName)
@@ -1156,7 +1158,7 @@ export class GradebookController {
                 if (!(functionName in dependencies)) {
                   dependencies[functionName] = new Set();
                 }
-                matching.forEach((d) => dependencies[functionName].add(d.id));
+                matching.forEach((d) => dependencies[functionName]!.add(d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }
@@ -1170,7 +1172,7 @@ export class GradebookController {
     for (const [functionName, ids] of Object.entries(dependencies)) {
       flattenedDependencies[functionName] = Array.from(ids);
     }
-    if (flattenedDependencies.gradebook_columns) {
+    if (flattenedDependencies["gradebook_columns"]) {
       //Check for cycles between the columns
       const checkForCycles = (visited_column_id: number) => {
         if (errors.length > 0) return;
@@ -1188,7 +1190,7 @@ export class GradebookController {
           }
         }
       };
-      for (const dependentColumn of flattenedDependencies.gradebook_columns) {
+      for (const dependentColumn of flattenedDependencies["gradebook_columns"]) {
         checkForCycles(dependentColumn);
       }
     }
@@ -1202,7 +1204,7 @@ export class GradebookController {
   }
 
   createRendererForColumn(column: GradebookColumn): (cell: RendererParams) => React.ReactNode {
-    const math = create(all);
+    const math = create(all!);
     //Remove access to security-sensitive functions
     const securityFunctions = ["import", "createUnit", "reviver", "resolve"];
     //eslint-disable-next-line @typescript-eslint/no-explicit-any

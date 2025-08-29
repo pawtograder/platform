@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import NotificationForm, { NotificationFormData } from "@/components/notifications/NotificationForm";
+import NotificationForm, { type NotificationFormData } from "@/components/notifications/NotificationForm";
 
 interface CreateNotificationModalProps {
   children: React.ReactNode;

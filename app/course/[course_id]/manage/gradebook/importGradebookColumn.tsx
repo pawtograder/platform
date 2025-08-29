@@ -7,7 +7,7 @@ import { useStudentRoster } from "@/hooks/useCourseController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import { GradebookColumn, GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumn, GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate } from "@refinedev/core";
 import { parse } from "csv-parse/browser/esm/sync";
@@ -157,7 +157,7 @@ export default function ImportGradebookColumns() {
                           <option value="" disabled>
                             Select column
                           </option>
-                          {importJob.rows[0].map((col, idx) => (
+                          {(importJob?.rows?.[0] ?? []).map((col, idx) => (
                             <option key={idx} value={idx}>
                               {col}
                             </option>
@@ -177,7 +177,7 @@ export default function ImportGradebookColumns() {
                       <Text fontWeight="bold" mt={4}>
                         Map grade columns:
                       </Text>
-                      {importJob.rows[0].map((col, idx) =>
+                      {(importJob?.rows?.[0] ?? []).map((col, idx) =>
                         idx === studentIdentifierCol ? null : (
                           <VStack key={idx} align="stretch" gap={1}>
                             <HStack>
@@ -253,7 +253,7 @@ export default function ImportGradebookColumns() {
                         onClick={() => {
                           // Build preview data
                           if (!importJob || !importJob.rows || importJob.rows.length < 2) return;
-                          const header = importJob.rows[0];
+                          const header = importJob.rows[0]!;
                           const dataRows = importJob.rows.slice(1);
                           // Build a map of identifier -> row
                           const idCol = studentIdentifierCol ?? 0;
@@ -276,8 +276,8 @@ export default function ImportGradebookColumns() {
                             }
                             // For each student, get identifier and new value
                             const students = dataRows.map((row) => {
-                              const identifier = row[idCol];
-                              const newValue = row[col.idx];
+                              const identifier = (row[idCol] ?? "") as string;
+                              const newValue = row[col.idx] ?? "";
                               let studentPrivateProfileId: string | null = null;
                               if (idType === "email") {
                                 studentPrivateProfileId =

@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import { AssignmentGroupJoinRequest } from "../_shared/FunctionTypes.d.ts";
+import type { AssignmentGroupJoinRequest } from "../_shared/FunctionTypes.d.ts";
 import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
@@ -10,7 +10,7 @@ import {
   assertUserIsInCourse,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 async function handleAssignmentGroupJoin(
   req: Request,

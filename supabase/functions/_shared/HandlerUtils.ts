@@ -1,7 +1,7 @@
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
-import { Database } from "./SupabaseTypes.d.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({

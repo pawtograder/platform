@@ -14,13 +14,13 @@ import {
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   ActiveSubmissionsWithGradesForAssignment,
   Assignment,
   GraderResultTest,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
   Button,
@@ -36,8 +36,8 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -176,7 +176,7 @@ export default function AssignmentsTable() {
         id: "assignment_id",
         accessorKey: "assignment_id",
         header: "Assignment",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.assignment_id) === String(filterValue);
         }
       },
@@ -481,7 +481,6 @@ export default function AssignmentsTable() {
 
                   toaster.success({ title: "Success", description: "All submission reviews released" });
                 } catch (error) {
-                  console.error("Error releasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
                     description:
@@ -513,7 +512,6 @@ export default function AssignmentsTable() {
                   await tableController.refetchAll();
                   toaster.success({ title: "Success", description: "All submission reviews unreleased" });
                 } catch (error) {
-                  console.error("Error unreleasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
                     description:
@@ -1242,25 +1240,25 @@ async function exportGrades({
   if (mode === "csv") {
     const preparedRows = exportRows.map((row) => {
       const record: Record<string, unknown> = {};
-      record.student_name = row.student_name;
-      record.canvas_user_id = row.canvas_user_id;
-      record.student_email = row.student_email;
-      record.group_name = row.group_name;
-      record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
+      record["student_name"] = row.student_name;
+      record["canvas_user_id"] = row.canvas_user_id;
+      record["student_email"] = row.student_email;
+      record["group_name"] = row.group_name;
+      record["total_score"] = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
       if (include_repo_metadata) {
-        record.github_username = row.extra.github_username;
-        record.github_link = row.extra.github_link;
-        record.sha = row.extra.sha;
+        record["github_username"] = row.extra.github_username;
+        record["github_link"] = row.extra.github_link;
+        record["sha"] = row.extra.sha;
       }
       if (include_submission_metadata) {
-        record.submission_id = row.extra.submission_id;
-        record.submission_date = row.extra.submission_date;
-        record.grader_name = row.extra.grader_name;
-        record.checker_name = row.extra.checker_name;
+        record["submission_id"] = row.extra.submission_id;
+        record["submission_date"] = row.extra.submission_date;
+        record["grader_name"] = row.extra.grader_name;
+        record["checker_name"] = row.extra.checker_name;
       }
       if (include_score_breakdown) {
-        record.total_score_tweak_amount = row.total_score_tweak;
-        record.autograder_score = row.autograder_score;
+        record["total_score_tweak_amount"] = row.total_score_tweak;
+        record["autograder_score"] = row.autograder_score;
       }
       if (include_autograder_test_results) {
         for (const test of row.autograder_test_results || []) {
@@ -1285,28 +1283,28 @@ async function exportGrades({
   } else if (mode === "json") {
     const jsonData = exportRows.map((row) => {
       const record: Record<string, unknown> = {};
-      record.student_name = row.student_name;
-      record.student_email = row.student_email;
-      record.canvas_user_id = row.canvas_user_id;
-      record.group_name = row.group_name;
-      record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
+      record["student_name"] = row.student_name;
+      record["student_email"] = row.student_email;
+      record["canvas_user_id"] = row.canvas_user_id;
+      record["group_name"] = row.group_name;
+      record["total_score"] = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
       if (include_repo_metadata) {
-        record.github_username = row.extra.github_username;
-        record.github_link = row.extra.github_link;
-        record.sha = row.extra.sha;
+        record["github_username"] = row.extra.github_username;
+        record["github_link"] = row.extra.github_link;
+        record["sha"] = row.extra.sha;
       }
       if (include_submission_metadata) {
-        record.submission_id = row.extra.submission_id;
-        record.submission_date = row.extra.submission_date;
-        record.grader_name = row.extra.grader_name;
-        record.checker_name = row.extra.checker_name;
+        record["submission_id"] = row.extra.submission_id;
+        record["submission_date"] = row.extra.submission_date;
+        record["grader_name"] = row.extra.grader_name;
+        record["checker_name"] = row.extra.checker_name;
       }
       if (include_score_breakdown) {
-        record.total_score_tweak_amount = row.total_score_tweak;
-        record.autograder_score = row.autograder_score;
+        record["total_score_tweak_amount"] = row.total_score_tweak;
+        record["autograder_score"] = row.autograder_score;
       }
       if (include_autograder_test_results) {
-        record.autograder_test_results = row.autograder_test_results?.map((test) => {
+        record["autograder_test_results"] = row.autograder_test_results?.map((test) => {
           return {
             name: test.name,
             score: test.score,
@@ -1316,7 +1314,7 @@ async function exportGrades({
         });
       }
       if (include_rubric_checks) {
-        record.rubric_check_results = allRubricChecks.map((rubricCheck) => {
+        record["rubric_check_results"] = allRubricChecks.map((rubricCheck) => {
           return {
             name: rubricCheck.name,
             score: row.rubricCheckIdToScore?.get(rubricCheck.id) ?? 0

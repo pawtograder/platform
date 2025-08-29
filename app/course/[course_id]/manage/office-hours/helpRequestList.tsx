@@ -4,7 +4,7 @@ import { HelpRequestTeaser } from "@/components/help-queue/help-request-teaser";
 import { SearchInput } from "@/components/help-queue/search-input";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useStudentRoster } from "@/hooks/useCourseController";
-import { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Stack, Text } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { useParams } from "next/navigation";
@@ -42,7 +42,7 @@ export default function HelpRequestList() {
         if (!acc[student.help_request_id]) {
           acc[student.help_request_id] = [];
         }
-        acc[student.help_request_id].push(student.profile_id);
+        acc[student.help_request_id]!.push(student.profile_id);
         return acc;
       },
       {} as Record<number, string[]>

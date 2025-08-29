@@ -11,7 +11,7 @@
  */
 export function isSignupsEnabled(): boolean {
   // Check ENABLE_SIGNUPS first (case-insensitive)
-  const enableSignups = process.env.ENABLE_SIGNUPS?.toLowerCase();
+  const enableSignups = process.env["ENABLE_SIGNUPS"]?.toLowerCase();
   if (enableSignups === "true") {
     return true;
   }
@@ -20,6 +20,6 @@ export function isSignupsEnabled(): boolean {
   }
 
   // Fallback to NEXT_PUBLIC_ENABLE_SIGNUPS (case-insensitive)
-  const publicEnableSignups = process.env.NEXT_PUBLIC_ENABLE_SIGNUPS?.toLowerCase();
+  const publicEnableSignups = process.env["NEXT_PUBLIC_ENABLE_SIGNUPS"]?.toLowerCase();
   return publicEnableSignups === "true";
 }

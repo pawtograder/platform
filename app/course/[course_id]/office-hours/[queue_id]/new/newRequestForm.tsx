@@ -12,7 +12,7 @@ import {
   useHelpQueues,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
-import {
+import type {
   Assignment,
   HelpRequest,
   HelpRequestLocationType,
@@ -30,7 +30,7 @@ import { X } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
-import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
+import type { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -85,7 +85,7 @@ export default function HelpRequestForm() {
         });
 
         // Check if it's an RLS violation
-        if (error && typeof error === "object" && "code" in error && error.code === "42501") {
+        if (error && typeof error === "object" && "code" in error && error["code"] === "42501") {
           toaster.error({
             title: "Permission Error",
             description:
@@ -318,7 +318,7 @@ export default function HelpRequestForm() {
             // Ensure these fields have proper defaults
             status: "open" as const,
             is_video_live: false,
-            is_private: values.is_private || false
+            is_private: values["is_private"] || false
           };
 
           try {
@@ -550,8 +550,8 @@ export default function HelpRequestForm() {
           <Field
             label="Help Queue"
             required={true}
-            errorText={errors.help_queue?.message?.toString()}
-            invalid={!!errors.help_queue}
+            errorText={errors["help_queue"]?.message?.toString()}
+            invalid={!!errors["help_queue"]}
             helperText="Select which help queue to submit your request to"
           >
             <Controller
@@ -645,8 +645,8 @@ export default function HelpRequestForm() {
           <Field
             label="Help Request Description"
             required={true}
-            errorText={errors.request?.message?.toString()}
-            invalid={errors.request ? true : false}
+            errorText={errors["request"]?.message?.toString()}
+            invalid={errors["request"] ? true : false}
           >
             <Controller
               name="request"
@@ -890,8 +890,8 @@ export default function HelpRequestForm() {
           <Field
             label="Location"
             required
-            errorText={errors.location_type?.message?.toString()}
-            invalid={!!errors.location_type}
+            errorText={errors["location_type"]?.message?.toString()}
+            invalid={!!errors["location_type"]}
           >
             <Controller
               name="location_type"

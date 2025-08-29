@@ -1,13 +1,14 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
-import { Notification } from "@/utils/supabase/DatabaseTypes";
+import type { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
-import {
+import type {
   DiscussionThreadNotification,
   HelpRequestNotification,
   HelpRequestMessageNotification
 } from "@/components/notifications/notification-teaser";
+import { toaster } from "@/components/ui/toaster";
 
 export function useNotification(notification_id: number) {
   const controller = useCourseController();
@@ -48,7 +49,10 @@ export function useNotifications(resource?: string, id?: number) {
           }
         });
       } catch (error) {
-        console.error("error setting notification read", error);
+        toaster.error({
+          title: "Error setting notification read",
+          description: error instanceof Error ? error.message : "Unknown error"
+        });
       }
     },
     [update_notification]
@@ -77,7 +81,7 @@ export function useNotifications(resource?: string, id?: number) {
         (notification) => {
           const type =
             notification.body && typeof notification.body === "object"
-              ? (notification.body as Record<string, unknown>).type
+              ? (notification.body as Record<string, unknown>)["type"]
               : undefined;
 
           if (type === "discussion_thread") {

@@ -913,7 +913,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
    * - Student context: go back to help queue page
    */
   const handleBackNavigation = useCallback(() => {
-    const courseId = params.course_id;
+    const courseId = params["course_id"];
 
     // Check if we're in the TA/Instructor context
     if (pathname.includes("/manage/office-hours/request/")) {
@@ -948,11 +948,11 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     if (students.length === 0) {
       return "Help Request"; // Fallback if no students found
     } else if (students.length === 1) {
-      return `${students[0].name}'s Help Request`;
+      return `${students[0]!.name}'s Help Request`;
     } else if (students.length === 2) {
-      return `${students[0].name} & ${students[1].name}'s Help Request`;
+      return `${students[0]!.name} & ${students[1]!.name}'s Help Request`;
     } else {
-      return `${students[0].name} + ${students.length - 1} others' Help Request`;
+      return `${students[0]!.name} + ${students.length - 1} others' Help Request`;
     }
   }, [students]);
 
@@ -1058,7 +1058,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
    * Pop out the chat into a separate window
    */
   const popOutChat = useCallback(() => {
-    const courseId = params.course_id;
+    const courseId = params["course_id"];
     const requestId = request.id;
 
     // Construct the URL for the popped out chat
@@ -1085,7 +1085,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         description: "Please allow pop-ups for this site to use the pop-out feature."
       });
     }
-  }, [params.course_id, request.id, requestTitle]);
+  }, [params, request.id, requestTitle]);
 
   return (
     <Flex

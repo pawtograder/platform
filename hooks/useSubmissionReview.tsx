@@ -164,9 +164,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     // Fallbacks
     const gradingWritable = writableReviews?.find((wr) => wr.id === submission.grading_review_id);
     if (gradingWritable) return gradingWritable.id;
-    return writableReviews && writableReviews.length > 0
-      ? writableReviews[0].id
-      : (submission.grading_review_id ?? undefined);
+    return writableReviews?.[0]?.id ?? submission.grading_review_id ?? undefined;
   }, [
     selectedReviewIdParam,
     activeReviewAssignmentId,

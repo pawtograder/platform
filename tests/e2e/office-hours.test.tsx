@@ -1,4 +1,4 @@
-import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
@@ -10,7 +10,7 @@ import {
   insertOfficeHoursQueue,
   insertPreBakedSubmission,
   loginAsUser,
-  TestingUser
+  type TestingUser
 } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
 
@@ -55,7 +55,7 @@ test.beforeAll(async () => {
   });
 
   const submission_res = await insertPreBakedSubmission({
-    student_profile_id: student.private_profile_id,
+    student_profile_id: student!.private_profile_id,
     assignment_id: assignment!.id,
     class_id: course.id
   });

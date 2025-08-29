@@ -3,12 +3,12 @@
 import { toaster } from "@/components/ui/toaster";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
-  PossiblyTentativeResult,
+  type PossiblyTentativeResult,
   useFindTableControllerValue,
   useListTableControllerValues
 } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   ClassSection,
@@ -25,16 +25,16 @@ import {
   UserRoleWithPrivateProfileAndUser,
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useList, useUpdate } from "@refinedev/core";
-import { SupabaseClient } from "@supabase/supabase-js";
+import { type LiveEvent, useList, useUpdate } from "@refinedev/core";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import type { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
 export function useAllProfilesForClass() {
   const { profiles: controller } = useCourseController();
@@ -520,6 +520,8 @@ export class CourseController {
       this.genericData[typeName] = new Map();
     }
     const idGetter = this.genericDataTypeToId[typeName];
+    if (!idGetter) return;
+
     for (const item of data) {
       const id = idGetter(item);
       this.genericData[typeName].set(id, item);
@@ -527,7 +529,7 @@ export class CourseController {
       itemSubscribers.forEach((cb) => cb(item));
     }
     const listSubscribers = this.genericDataListSubscribers[typeName] || [];
-    listSubscribers.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+    listSubscribers.forEach((cb) => cb(Array.from(this.genericData[typeName]?.values() ?? [])));
   }
   listGenericData<T>(typeName: string, callback?: UpdateCallback<T[]>): { unsubscribe: Unsubscribe; data: T[] } {
     const subscribers = this.genericDataListSubscribers[typeName] || [];
@@ -539,7 +541,8 @@ export class CourseController {
     return {
       unsubscribe: () => {
         this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
+          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== (callback as UpdateCallback<unknown[]>)) ||
+          [];
       },
       data: Array.from(currentData) as T[]
     };
@@ -562,7 +565,7 @@ export class CourseController {
           data: undefined
         };
       } else if (relevantIds.length == 1) {
-        const id = relevantIds[0];
+        const id = relevantIds[0]!;
         const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
         if (callback) {
           this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
@@ -600,19 +603,31 @@ export class CourseController {
   handleGenericDataEvent(typeName: string, event: LiveEvent) {
     const body = event.payload;
     const idGetter = this.genericDataTypeToId[typeName];
+    if (!idGetter) return;
+
     const id = idGetter(body);
+    if (!this.genericData[typeName]) {
+      this.genericData[typeName] = new Map();
+    }
+
     if (event.type === "created") {
-      this.genericData[typeName].set(id, body);
+      this.genericData[typeName]!.set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     } else if (event.type === "updated") {
-      this.genericData[typeName].set(id, body);
+      this.genericData[typeName]!.set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     } else if (event.type === "deleted") {
-      this.genericData[typeName].delete(id);
+      this.genericData[typeName]!.delete(id);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     }
   }
 
@@ -851,7 +866,7 @@ export class CourseController {
     }
 
     // Calculate lab-based due date
-    const mostRecentLabMeeting = relevantMeetings[0];
+    const mostRecentLabMeeting = relevantMeetings[0]!;
     const labMeetingDate = new TZDate(
       mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
       this.course.time_zone ?? "America/New_York"
@@ -932,7 +947,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     ]
   });
   useEffect(() => {
-    controller.registerGenericDataType("notifications", (item: Notification) => item.id);
+    controller.registerGenericDataType("notifications", (item: unknown) => (item as Notification).id);
     if (notifications?.data) {
       controller.setGeneric("notifications", notifications.data);
     }
@@ -962,7 +977,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
   useEffect(() => {
     controller.registerGenericDataType(
       "discussion_thread_watchers",
-      (item: DiscussionThreadWatcher) => item.discussion_thread_root_id
+      (item: unknown) => (item as DiscussionThreadWatcher).discussion_thread_root_id
     );
     if (threadWatches?.data) {
       controller.setGeneric("discussion_thread_watchers", threadWatches.data);
@@ -1014,7 +1029,10 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     }
   });
   useEffect(() => {
-    controller.registerGenericDataType("assignment_due_date_exceptions", (item: AssignmentDueDateException) => item.id);
+    controller.registerGenericDataType(
+      "assignment_due_date_exceptions",
+      (item: unknown) => (item as AssignmentDueDateException).id
+    );
     if (dueDateExceptions?.data) {
       controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
     }
@@ -1193,7 +1211,7 @@ export function useAssignmentDueDate(
 
           if (relevantMeetings.length > 0 && assignment.minutes_due_after_lab !== null) {
             // Calculate lab-based due date
-            const mostRecentLabMeeting = relevantMeetings[0];
+            const mostRecentLabMeeting = relevantMeetings[0]!;
             const nonTZDate = new Date(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time);
 
             const labMeetingDate = new TZDate(

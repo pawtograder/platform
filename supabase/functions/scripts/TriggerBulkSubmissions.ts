@@ -30,7 +30,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { triggerWorkflow } from "../_shared/GitHubWrapper.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 interface Args {
   submissionId: number;

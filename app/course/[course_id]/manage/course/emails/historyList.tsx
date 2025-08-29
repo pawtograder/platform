@@ -1,8 +1,8 @@
-import { Course, EmailBatches, Emails } from "@/utils/supabase/DatabaseTypes";
+import type { Course, EmailBatches, Emails } from "@/utils/supabase/DatabaseTypes";
 import { Button, Card, Collapsible, Flex, Separator, Box, Heading } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { memo, useState } from "react";
-import { UserRoleWithUserDetails } from "./page";
+import type { UserRoleWithUserDetails } from "./page";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
 

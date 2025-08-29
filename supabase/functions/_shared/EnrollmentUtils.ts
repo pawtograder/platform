@@ -1,4 +1,4 @@
-import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";

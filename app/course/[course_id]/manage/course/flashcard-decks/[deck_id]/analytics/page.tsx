@@ -10,7 +10,7 @@ import CardAnalytics from "./cardAnalytics";
  */
 export default function AnalyticsPage() {
   const params = useParams();
-  const deck_id = params.deck_id as string;
+  const deck_id = params["deck_id"] as string;
 
   return (
     <VStack align="stretch" gap={6}>

@@ -24,15 +24,18 @@ export default async function ProtectedPage() {
     .eq("user_id", user.id)
     .eq("disabled", false);
 
-  const sortedRoles = roles.data?.sort((a, b) => {
+  const sortedRoles = (roles.data ?? []).sort((a, b) => {
     if (!a.classes.term || !b.classes.term) {
       return 0;
     }
     return b.classes.term - a.classes.term;
   });
 
-  if (sortedRoles?.length === 1) {
-    return redirect(`/course/${sortedRoles[0].classes.id}`);
+  const firstRole = sortedRoles[0];
+  const firstClassId = firstRole?.classes?.id;
+
+  if (sortedRoles.length === 1 && firstClassId !== undefined) {
+    return redirect(`/course/${firstClassId}`);
   }
   return (
     <VStack>
@@ -46,7 +49,7 @@ export default async function ProtectedPage() {
         <Heading size="xl">Your courses</Heading>
         <Flex>
           <Stack gap="4" direction="row" wrap="wrap">
-            {sortedRoles!.map((role) => (
+            {sortedRoles.map((role) => (
               <Link key={role.classes.id} href={`/course/${role.classes.id}`}>
                 <Card.Root key={role.classes.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
                   <Card.Body>

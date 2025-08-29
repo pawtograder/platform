@@ -1,4 +1,4 @@
-import { Tag, Tag as TagType } from "@/utils/supabase/DatabaseTypes";
+import type { Tag, Tag as TagType } from "@/utils/supabase/DatabaseTypes";
 import { Button, Tag as ChakraTag, Icon } from "@chakra-ui/react";
 import { useDelete } from "@refinedev/core";
 import { FaX } from "react-icons/fa6";

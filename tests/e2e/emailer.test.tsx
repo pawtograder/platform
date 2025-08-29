@@ -1,5 +1,5 @@
-import { EmailNotification } from "@/components/notifications/notification-teaser";
-import { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
+import type { EmailNotification } from "@/components/notifications/notification-teaser";
+import type { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { type Page } from "@playwright/test";
 import {
@@ -9,7 +9,7 @@ import {
   createUsersInClass,
   loginAsUser,
   supabase,
-  TestingUser
+  type TestingUser
 } from "./TestingUtils";
 
 let course: Course;
@@ -78,7 +78,7 @@ test.beforeAll(async () => {
   //Create a new class for this test
   const course_res = await createClass();
   course = course_res;
-  [instructor, lab1Leader, lab2Leader] = await createUsersInClass([
+  [instructor, lab1Leader, lab2Leader] = (await createUsersInClass([
     {
       name: "Emailer Instructor",
       email: "emailer-instructor@pawtograder.net",
@@ -100,7 +100,7 @@ test.beforeAll(async () => {
       class_id: course.id,
       useMagicLink: true
     }
-  ]);
+  ])) as [TestingUser, TestingUser, TestingUser];
 
   //Create a section with 2 students
   const { section: _section1, students: _section1Students } = await createSectionWithStudents(2, 1);

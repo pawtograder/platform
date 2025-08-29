@@ -227,7 +227,7 @@ async function runSeeding(config: SeederConfig) {
   const now = new Date();
 
   // Use class name from environment variable if available, otherwise use config
-  const className = process.env.CLASS_NAME || config.className || "Test Class";
+  const className = process.env["CLASS_NAME"] || config.className || "Test Class";
 
   const seeder = new DatabaseSeeder(config.rateLimitOverrides);
 
@@ -432,8 +432,8 @@ async function main() {
 
     // Support backwards compatibility with SEED_SCENARIO environment variable
     let templateName = argv.template;
-    if (process.env.SEED_SCENARIO && !process.argv.includes("--template") && !process.argv.includes("-t")) {
-      const envScenario = process.env.SEED_SCENARIO.toLowerCase();
+    if (process.env["SEED_SCENARIO"] && !process.argv.includes("--template") && !process.argv.includes("-t")) {
+      const envScenario = process.env["SEED_SCENARIO"]!.toLowerCase();
       if (TEMPLATES[envScenario]) {
         templateName = envScenario;
         console.log(`📄 Using SEED_SCENARIO environment variable: ${envScenario}`);

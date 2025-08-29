@@ -3,7 +3,6 @@
 import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
-import { env } from "process";
 import { isSignupsEnabled } from "@/lib/features";
 
 export const confirmEmailAction = async (formData: FormData) => {
@@ -95,7 +94,7 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
+    redirectTo: `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/reset-password`
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
@@ -122,7 +121,7 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     email,
     password,
     options: {
-      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
+      emailRedirectTo: `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/`
     }
   });
   if (error) {
@@ -142,7 +141,7 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
+  const redirectTo = `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/auth/callback`;
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email User.Read", redirectTo }

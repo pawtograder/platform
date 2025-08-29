@@ -14,23 +14,23 @@ import {
   Table,
   Text
 } from "@chakra-ui/react";
-import { Controller, FieldValues } from "react-hook-form";
+import { Controller, type FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { appendTimezoneOffset } from "@/lib/utils";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
 import { useList } from "@refinedev/core";
-import { UseFormReturnType } from "@refinedev/react-hook-form";
+import type { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import type { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { formatInTimeZone } from "date-fns-tz";
 
@@ -64,6 +64,9 @@ function calculateLabSectionDueDate(
   const mostRecentMeeting = relevantMeetings[0];
 
   // Combine meeting date with lab section end time
+  if (!mostRecentMeeting) {
+    return null;
+  }
   const labMeetingEndTime = new TZDate(
     mostRecentMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
     timezone
@@ -200,8 +203,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
           <Field
             label="Group configuration"
             helperText="If you want to use groups for this assignment, select the group configuration you want to use."
-            errorText={errors.group_config?.message?.toString()}
-            invalid={errors.group_config ? true : false}
+            errorText={errors["group_config"]?.message?.toString()}
+            invalid={errors["group_config"] ? true : false}
             required={true}
           >
             <NativeSelectRoot {...register("group_config", { required: true })}>
@@ -225,8 +228,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               <Field
                 label="Minimum Group Size"
                 helperText="The minimum number of students allowed in a group"
-                errorText={errors.min_group_size?.message?.toString()}
-                invalid={errors.min_group_size ? true : false}
+                errorText={errors["min_group_size"]?.message?.toString()}
+                invalid={errors["min_group_size"] ? true : false}
                 required={withGroups}
               >
                 <Input
@@ -245,8 +248,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               <Field
                 label="Maximum Group Size"
                 helperText="The maximum number of students allowed in a group"
-                errorText={errors.max_group_size?.message?.toString()}
-                invalid={errors.max_group_size ? true : false}
+                errorText={errors["max_group_size"]?.message?.toString()}
+                invalid={errors["max_group_size"] ? true : false}
                 required={withGroups}
               >
                 <Input
@@ -265,8 +268,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               <Field
                 label="Group Formation Method"
                 helperText="Choose whether students can form their own groups or if all groups will be assigned by instructors"
-                errorText={errors.allow_student_formed_groups?.message?.toString()}
-                invalid={errors.allow_student_formed_groups ? true : false}
+                errorText={errors["allow_student_formed_groups"]?.message?.toString()}
+                invalid={errors["allow_student_formed_groups"] ? true : false}
                 required={withGroups}
               >
                 <NativeSelectRoot
@@ -291,7 +294,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                     <option value="">None</option>
                     {otherAssignments?.data?.map((assignment) => (
                       <option key={assignment.id} value={assignment.id}>
-                        {assignment.title}
+                        {assignment["title"]}
                       </option>
                     ))}
                   </NativeSelectField>
@@ -302,8 +305,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               <Field
                 label="Group Formation Deadline"
                 helperText="The deadline by which groups must be formed. If set, students will not be able to change groups after this deadline."
-                errorText={errors.group_formation_deadline?.message?.toString()}
-                invalid={errors.group_formation_deadline ? true : false}
+                errorText={errors["group_formation_deadline"]?.message?.toString()}
+                invalid={errors["group_formation_deadline"] ? true : false}
                 required={withGroups}
               >
                 <Controller
@@ -358,7 +361,7 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   useEffect(() => {
     const subscription = watch((value, { name }) => {
       if (name === "minutes_due_after_lab" || !name) {
-        const minutesDueAfterLab = value.minutes_due_after_lab;
+        const minutesDueAfterLab = value["minutes_due_after_lab"];
         setWithLabDueDate(minutesDueAfterLab !== null && minutesDueAfterLab !== undefined && minutesDueAfterLab !== "");
       }
     });
@@ -399,8 +402,8 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
             <Field
               label="Minutes due after lab meeting"
               helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
-              errorText={errors.minutes_due_after_lab?.message?.toString()}
-              invalid={errors.minutes_due_after_lab ? true : false}
+              errorText={errors["minutes_due_after_lab"]?.message?.toString()}
+              invalid={errors["minutes_due_after_lab"] ? true : false}
               required={withLabDueDate}
             >
               <Input
@@ -439,7 +442,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
   useEffect(() => {
     const subscription = watch((value, { name }) => {
       if (name === "eval_config" || !name) {
-        setWithEval(value.eval_config === "use_eval");
+        setWithEval(value["eval_config"] === "use_eval");
       }
     });
     return () => subscription.unsubscribe();
@@ -448,7 +451,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
   useEffect(() => {
     const subscription = watch((value, { name }) => {
       if (name === "allow_early" || !name) {
-        setAllowEarly(value.allow_early);
+        setAllowEarly(value["allow_early"]);
       }
     });
     return () => subscription.unsubscribe();
@@ -463,8 +466,8 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
         <Fieldset.Content>
           <Field
             label="Assignment setting"
-            errorText={errors.group_config?.message?.toString()}
-            invalid={errors.group_config ? true : false}
+            errorText={errors["group_config"]?.message?.toString()}
+            invalid={errors["group_config"] ? true : false}
             required={true}
           >
             <NativeSelectRoot {...register("eval_config", { required: true })}>
@@ -486,8 +489,8 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
               <Field
                 label="Hours due after programming assignment"
                 helperText="The number of hours between the deadline of the programming assignment and when the self evaluation is due"
-                errorText={errors.min_group_size?.message?.toString()}
-                invalid={errors.min_group_size ? true : false}
+                errorText={errors["min_group_size"]?.message?.toString()}
+                invalid={errors["min_group_size"] ? true : false}
                 required={withEval}
               >
                 <Input
@@ -553,9 +556,9 @@ export default function AssignmentForm({
       // Convert the release and due dates to UTC
       const valuesWithDates = {
         ...values,
-        release_date: appendTimezoneOffset(values.release_date, timezone),
-        due_date: appendTimezoneOffset(values.due_date, timezone),
-        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone)
+        release_date: appendTimezoneOffset(values["release_date"], timezone),
+        due_date: appendTimezoneOffset(values["due_date"], timezone),
+        group_formation_deadline: appendTimezoneOffset(values["group_formation_deadline"], timezone)
       };
       try {
         await onSubmit(valuesWithDates);
@@ -583,8 +586,8 @@ export default function AssignmentForm({
           <Fieldset.Content>
             <Field
               label="Title"
-              errorText={errors.title?.message?.toString()}
-              invalid={errors.title ? true : false}
+              errorText={errors["title"]?.message?.toString()}
+              invalid={errors["title"] ? true : false}
               required={true}
             >
               <Input {...register("title", { required: "This is required" })} />
@@ -598,8 +601,8 @@ export default function AssignmentForm({
                   ? "Slug cannot be changed when editing an assignment"
                   : "A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
               }
-              errorText={errors.slug?.message?.toString()}
-              invalid={errors.slug ? true : false}
+              errorText={errors["slug"]?.message?.toString()}
+              invalid={errors["slug"] ? true : false}
               required={true}
             >
               <Input
@@ -619,8 +622,8 @@ export default function AssignmentForm({
             <Field
               label={`Release Date (${course.time_zone})`}
               helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
-              errorText={errors.release_date?.message?.toString()}
-              invalid={errors.release_date ? true : false}
+              errorText={errors["release_date"]?.message?.toString()}
+              invalid={errors["release_date"] ? true : false}
               required={true}
             >
               <Controller
@@ -671,8 +674,8 @@ export default function AssignmentForm({
             <Field
               label={`Due Date (${course.time_zone})`}
               helperText="No submissions accepted after this time unless late submissions are allowed"
-              errorText={errors.due_date?.message?.toString()}
-              invalid={errors.due_date ? true : false}
+              errorText={errors["due_date"]?.message?.toString()}
+              invalid={errors["due_date"] ? true : false}
               required={true}
             >
               <Controller
@@ -738,8 +741,8 @@ export default function AssignmentForm({
           <Fieldset.Content>
             <Field
               label="Points Possible"
-              errorText={errors.total_points?.message?.toString()}
-              invalid={!!errors.total_points}
+              errorText={errors["total_points"]?.message?.toString()}
+              invalid={!!errors["total_points"]}
               required={true}
             >
               <Input

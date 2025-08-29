@@ -12,12 +12,12 @@ export default async function SubmissionsListing({
     .from("submissions")
     .select("*, assignments(*)")
     .eq("assignment_id", Number.parseInt(assignment_id));
-  if (!submissions) {
+  if (!submissions || submissions.length === 0) {
     return <div>No submissions found</div>;
   }
   return (
     <div>
-      <h1>Submissions for {submissions[0].assignments.title}</h1>
+      <h1>Submissions for {submissions[0]?.assignments?.title}</h1>
       <ul>
         {submissions.map((submission) => (
           <li key={submission.id}>

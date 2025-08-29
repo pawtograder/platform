@@ -6,9 +6,9 @@ import { useCallback, useEffect, useState } from "react";
 import yaml from "yaml";
 
 import { EdgeFunctionError, repositoryGetFile } from "@/lib/edgeFunctions";
-import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "@/utils/PawtograderYml";
+import type { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "@/utils/PawtograderYml";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
@@ -183,12 +183,23 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
       if (!graderRepo) {
         return;
       }
+
+      // Clear any previous errors
+      setError(undefined);
+
       const supabase = createClient();
+      const repoParts = graderRepo.split("/");
+      if (repoParts.length !== 2) {
+        setError("Invalid repository format. Expected format: owner/repository");
+        setAutograderConfig(undefined);
+        return;
+      }
+
       repositoryGetFile(
         {
           courseId: Number(course_id),
-          orgName: graderRepo.split("/")[0],
-          repoName: graderRepo.split("/")[1],
+          orgName: repoParts[0]!,
+          repoName: repoParts[1]!,
           path: "pawtograder.yml"
         },
         supabase
@@ -229,8 +240,9 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
             );
             setAutograderConfig(undefined);
           } else {
-            console.log("Error fetching autograder configuration", err);
-            // throw err;
+            const errorMessage = err instanceof Error ? err.message : "Unknown error occurred";
+            setError(`Error fetching autograder configuration: ${errorMessage}`);
+            setAutograderConfig(undefined);
           }
         });
     }
@@ -333,7 +345,8 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
               <Table.Cell>{part.name}</Table.Cell>
               <Table.Cell>
                 {part.gradedUnits.reduce(
-                  (acc, unit) => acc + (isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward : unit.points),
+                  (acc, unit) =>
+                    acc + (isMutationTestUnit(unit) ? (unit.breakPoints?.[0]?.pointsToAward ?? 0) : (unit.points ?? 0)),
                   0
                 )}
               </Table.Cell>

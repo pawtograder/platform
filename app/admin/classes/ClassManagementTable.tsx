@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
+import type { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Card, Flex, HStack, Table, Text, VStack } from "@chakra-ui/react";
 import { MoreHorizontal, Pencil, Settings, Trash2, Users } from "lucide-react";
 import { useState } from "react";

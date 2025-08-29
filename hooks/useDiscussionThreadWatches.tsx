@@ -1,5 +1,5 @@
 "use client";
-import { DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useFindTableControllerValue } from "@/lib/TableController";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";

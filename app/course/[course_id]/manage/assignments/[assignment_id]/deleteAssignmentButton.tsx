@@ -40,19 +40,15 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
       // Redirect to assignments list
       router.push(`/course/${courseId}/manage/assignments`);
     } catch (error) {
-      console.error("Error deleting assignment:", error);
-
       if (error instanceof EdgeFunctionError) {
-        toaster.create({
+        toaster.error({
           title: "Delete Failed",
-          description: error.details,
-          type: "error"
+          description: error.details
         });
       } else {
-        toaster.create({
+        toaster.error({
           title: "Delete Failed",
-          description: "An unexpected error occurred while deleting the assignment.",
-          type: "error"
+          description: "An unexpected error occurred while deleting the assignment."
         });
       }
     } finally {

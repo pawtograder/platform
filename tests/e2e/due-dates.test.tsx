@@ -1,4 +1,4 @@
-import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { test, expect } from "../global-setup";
 import { addDays, addHours, previousMonday } from "date-fns";
@@ -9,7 +9,7 @@ import {
   createUsersInClass,
   insertAssignment,
   loginAsUser,
-  TestingUser
+  type TestingUser
 } from "./TestingUtils";
 
 let course: Course;
@@ -42,9 +42,9 @@ test.beforeAll(async () => {
   ]);
   await createLabSectionWithStudents({
     class_id: course.id,
-    lab_leader: labLeader,
+    lab_leader: labLeader!,
     day_of_week: "monday",
-    students: [student],
+    students: [student!],
     start_time: "04:00",
     end_time: "05:00"
   });

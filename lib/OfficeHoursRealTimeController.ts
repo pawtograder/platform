@@ -1,7 +1,7 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import type { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
 type MessageFilter = {
   type?: OfficeHoursBroadcastMessage["type"];
@@ -105,8 +105,6 @@ export class OfficeHoursRealTimeController {
     if (this._closed) {
       return;
     }
-
-    // Session refresh is now handled by the channel manager
 
     // Initialize global help_queues channel
     const helpQueuesUnsubscriber = await this._channelManager.subscribe(
@@ -364,13 +362,13 @@ export class OfficeHoursRealTimeController {
         type = "class_staff";
       } else if (topic.startsWith("help_request:") && topic.includes(":staff") && this._isStaff) {
         type = "help_request_staff";
-        help_request_id = parseInt(topic.split(":")[1]);
+        help_request_id = parseInt(topic.split(":")[1]!);
       } else if (topic.startsWith("help_request:") && !topic.includes(":staff")) {
         type = "help_request";
-        help_request_id = parseInt(topic.split(":")[1]);
+        help_request_id = parseInt(topic.split(":")[1]!);
       } else if (topic.startsWith("help_queue:")) {
         type = "help_queue";
-        help_queue_id = parseInt(topic.split(":")[1]);
+        help_queue_id = parseInt(topic.split(":")[1]!);
       } else {
         continue; // Skip channels that don't belong to this controller
       }

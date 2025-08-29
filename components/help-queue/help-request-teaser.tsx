@@ -1,6 +1,6 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { getQueueTypeColor } from "@/lib/utils";
-import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, AvatarGroup, Badge, Box, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";

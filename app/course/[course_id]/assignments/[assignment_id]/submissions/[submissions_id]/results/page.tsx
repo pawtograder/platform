@@ -4,7 +4,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
+import type { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   CardBody,
@@ -316,7 +316,8 @@ export default function GraderResults() {
                   (r.extra_data as GraderResultTestData)?.hide_score !== "true" && (showHiddenOutput || r.is_released)
               )
               .map((result, index) => {
-                const isNewPart = index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
+                const isNewPart =
+                  index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1]?.part;
                 return (
                   <Fragment key={result.id}>
                     {isNewPart && (

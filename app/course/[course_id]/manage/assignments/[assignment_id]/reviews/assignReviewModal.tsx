@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import { Input, Text, VStack } from "@chakra-ui/react";
-import { HttpError, useCreate, useList, useOne, useUpdate } from "@refinedev/core";
+import { type HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect } from "chakra-react-select";
 import { format } from "date-fns";
 import { useEffect, useMemo } from "react";
@@ -20,16 +20,16 @@ import {
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { PopulatedReviewAssignment } from "./ReviewsTable";
+import type { PopulatedReviewAssignment } from "./ReviewsTable";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type SubmissionRow = Database["public"]["Tables"]["submissions"]["Row"];
 type RubricRow = Database["public"]["Tables"]["rubrics"]["Row"];
-type AssignmentRow = Database["public"]["Tables"]["assignments"]["Row"];
+
 type AssignmentGroupRow = Database["public"]["Tables"]["assignment_groups"]["Row"];
 type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"] & {
   profiles?: Pick<ProfileRow, "id" | "name">;
@@ -42,7 +42,6 @@ type PopulatedSubmission = SubmissionRow & {
   assignment_groups?: AssignmentGroupRow & {
     assignment_groups_members?: { profiles: ProfileRow }[];
   };
-  assignments?: AssignmentRow;
   submission_reviews?: SubmissionReviewRow[];
 };
 
@@ -117,13 +116,6 @@ export default function AssignReviewModal({
   const supabaseClient = createClient();
   const selectedRubricId = watch("rubric_id");
   const selectedSubmissionId = watch("submission_id");
-
-  const { isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
-    resource: "assignments",
-    id: assignmentId,
-    queryOptions: { enabled: isOpen && !!assignmentId },
-    meta: { select: "id, grading_rubric_id" }
-  });
 
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
@@ -208,21 +200,12 @@ export default function AssignReviewModal({
     );
   }, [submissionsData]);
 
-  const rubricsFilters = useMemo(() => {
-    if (isLoadingAssignment) return undefined;
-    return [
-      { field: "class_id", operator: "eq" as const, value: courseId },
-      { field: "assignment_id", operator: "eq" as const, value: assignmentId },
-      { field: "review_round", operator: "ne" as const, value: "self-review" }
-    ];
-  }, [isLoadingAssignment, courseId, assignmentId]);
-
   const { data: rubricsData, isLoading: isLoadingRubrics } = useList<RubricRow>({
     resource: "rubrics",
-    filters: rubricsFilters,
+    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
     meta: { select: "id, name, review_round" },
     queryOptions: {
-      enabled: isOpen && !isLoadingAssignment && rubricsFilters !== undefined
+      enabled: isOpen && !!assignmentId
     }
   });
 
@@ -573,12 +556,12 @@ export default function AssignReviewModal({
                       {...field}
                       inputId="rubric_id"
                       options={rubricOptions}
-                      isLoading={isLoadingAssignment || isLoadingRubrics}
+                      isLoading={isLoadingRubrics}
                       placeholder={
-                        isLoadingAssignment
-                          ? "Loading assignment info..."
+                        isLoadingRubrics
+                          ? "Loading rubrics..."
                           : rubricOptions.length === 0
-                            ? "No rubric specified for this assignment"
+                            ? "No rubrics available for this assignment"
                             : "Select Rubric..."
                       }
                       onChange={(option) => field.onChange(option?.value)}

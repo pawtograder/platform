@@ -1,10 +1,9 @@
-import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
-import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
+import type { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
+import { all, create, FunctionNode, isArray, type MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
-import TableController from "@/lib/TableController";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { CourseController, useCourseController } from "./useCourseController";
 export type ExpressionContext = {
@@ -220,7 +219,7 @@ class GradebookWhatIfController {
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
     if (!column) return;
     if (column.score_expression) {
-      const math = create(all, {});
+      const math = create(all!, {});
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
       const imports: Record<string, (...args: any[]) => unknown> = {};
       imports["gradebook_columns"] = (context: ExpressionContext, columnSlug: string | string[]) => {
@@ -357,7 +356,7 @@ class GradebookWhatIfController {
             return ret;
           };
           if (matchingColumns.length === 1 && !slug.includes("*")) {
-            return scoreForColumnID(matchingColumns[0].id);
+            return scoreForColumnID(matchingColumns[0]!.id);
           } else {
             return matchingColumns.map((col) => scoreForColumnID(col.id));
           }
@@ -383,12 +382,12 @@ class GradebookWhatIfController {
           );
           if (!matchingAssignments.length) return null;
           // To find a temporary what-if, find a column that depends on only this assignment
-          const column = allColumns.find((c) => c.dependencies?.assignments?.includes(matchingAssignments[0].id));
+          const column = allColumns.find((c) => c.dependencies?.assignments?.includes(matchingAssignments[0]!.id));
           if (column) {
             const whatIfVal = this.getGrade(column.id);
             if (whatIfVal) return whatIfVal;
           }
-          const assignment = this._assignments.find((a) => a.id === matchingAssignments[0].id);
+          const assignment = this._assignments.find((a) => a.id === matchingAssignments[0]!.id);
           if (!assignment || assignment.total_points === null) return null;
           return assignment.total_points;
         };

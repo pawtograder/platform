@@ -4,7 +4,7 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { rerunGrader } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   ActiveSubmissionsWithRegressionTestResults,
   Assignment,
   Autograder,
@@ -30,8 +30,8 @@ import { TZDate } from "@date-fns/tz";
 import { useList, useOne } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import {
-  CellContext,
-  ColumnDef,
+  type CellContext,
+  type ColumnDef,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
@@ -71,7 +71,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         id: "assignment_id",
         accessorKey: "assignment_id",
         header: "Assignment",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.assignment_id) === String(filterValue);
         }
       },
@@ -80,7 +80,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         accessorKey: "name",
         header: "Student",
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           if (!row.original.name) return false;
           const filterString = String(filterValue).toLowerCase();
           return row.original.name.toLowerCase().includes(filterString);
@@ -108,7 +108,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           }
           return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
         },
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           if (!row.original.created_at) return false;
           const date = new TZDate(row.original.created_at, timeZone);
           const filterString = String(filterValue);
@@ -149,7 +149,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             </Link>
           );
         },
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           if (!row.original.rt_grader_sha) return false;
           const filterString = String(filterValue);
           return (row.original.rt_grader_sha as string).toLowerCase().includes(filterString.toLowerCase());

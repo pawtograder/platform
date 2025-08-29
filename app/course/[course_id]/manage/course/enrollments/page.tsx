@@ -2,9 +2,9 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Accordion, Badge, Box, Collapsible, Container, Flex, Heading, Icon, List, Text } from "@chakra-ui/react";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { AlertCircle, CheckCircle, ChevronDown, ChevronRight, ChevronUp, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";

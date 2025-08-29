@@ -1,5 +1,5 @@
 "use client";
-import {
+import type {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentGroup,
   AssignmentWithRubricsAndReferences,
@@ -11,12 +11,12 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
+import TableController, { useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
-import { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
@@ -83,7 +83,7 @@ export function useRubricCheck(rubric_check_id: number | null | undefined) {
   if (!check) {
     return undefined;
   }
-  const options = check.data instanceof Object && "options" in check.data ? check.data.options : [];
+  const options = check.data instanceof Object && "options" in check.data ? check.data["options"] : [];
   return {
     ...check,
     options,
@@ -404,13 +404,13 @@ export function AssignmentProvider({
   const controller = useRef<AssignmentController | null>(null);
   const courseController = useCourseController();
   const [ready, setReady] = useState(false);
-  const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
+  const assignment_id = initial_assignment_id ?? Number(params["assignment_id"]);
 
   if (controller.current === null) {
     controller.current = new AssignmentController({
       client: createClient(),
-      assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      class_id: Number(params.course_id),
+      assignment_id: initial_assignment_id ?? Number(params["assignment_id"]),
+      class_id: Number(params["course_id"]),
       classRealTimeController: courseController.classRealTimeController
     });
     setReady(false);

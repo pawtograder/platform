@@ -1,5 +1,5 @@
 import { signInOrSignUpWithEmailAction, signInWithMicrosoftAction } from "@/app/actions";
-import { FormMessage, Message } from "@/components/form-message";
+import { FormMessage, type Message } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
 import Logo from "@/components/ui/logo";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";

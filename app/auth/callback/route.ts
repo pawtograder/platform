@@ -25,6 +25,9 @@ export async function GET(request: Request) {
           if (parts.length === 3) {
             try {
               const b64url = parts[1];
+              if (!b64url) {
+                throw new Error("Invalid provider_token JWT: payload segment missing");
+              }
               const b64 = b64url
                 .replace(/-/g, "+")
                 .replace(/_/g, "/")
@@ -35,6 +38,7 @@ export async function GET(request: Request) {
                 isAzure = true;
               }
             } catch (e) {
+              // eslint-disable-next-line no-console
               console.error("Failed to decode provider_token JWT:", e);
             }
           }
@@ -56,12 +60,14 @@ export async function GET(request: Request) {
               }
             }
           } catch (error) {
+            // eslint-disable-next-line no-console
             console.error("Error checking/updating Azure profile:", error);
             Sentry.captureException(error);
             // Continue with login even if profile check fails
           }
         }
       } else {
+        // eslint-disable-next-line no-console
         console.log("No Azure session data returned");
       }
 

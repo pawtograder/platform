@@ -25,7 +25,7 @@ import {
 } from "@/hooks/useGradebook";
 import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   ClassSection,
   GradebookColumn,
   GradebookColumnExternalData,
@@ -60,23 +60,23 @@ import {
 import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
-  Column,
-  ColumnDef,
+  type Column,
+  type ColumnDef,
   filterFns,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getSortedRowModel,
-  Header,
-  RowModel,
+  type Header,
+  type RowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import pluralize from "pluralize";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FieldValues } from "react-hook-form";
+import type { FieldValues } from "react-hook-form";
 import { FaLock } from "react-icons/fa";
 import { FaLockOpen } from "react-icons/fa6";
 import { FiChevronDown, FiDownload, FiFilter, FiPlus } from "react-icons/fi";
@@ -176,16 +176,16 @@ function AddColumnDialog() {
   const onSubmit = async (data: FieldValues) => {
     setIsLoading(true);
     try {
-      const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", -1);
+      const dependencies = gradebookController.extractAndValidateDependencies(data["scoreExpression"] ?? "", -1);
       await createColumn({
         resource: "gradebook_columns",
         values: {
-          name: data.name,
-          description: data.description,
-          max_score: data.maxScore,
-          slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
-          render_expression: data.renderExpression?.length ? data.renderExpression : null,
+          name: data["name"],
+          description: data["description"],
+          max_score: data["maxScore"],
+          slug: data["slug"],
+          score_expression: data["scoreExpression"]?.length ? data["scoreExpression"] : null,
+          render_expression: data["renderExpression"]?.length ? data["renderExpression"] : null,
           dependencies,
           class_id: gradebookController.class_id,
           gradebook_id: gradebookController.gradebook_id,
@@ -244,18 +244,18 @@ function AddColumnDialog() {
                     </Text>
                   </Label>
                   <Input id="name" {...register("name", { required: "Name is required" })} placeholder="Column Name" />
-                  {errors.name && (
+                  {errors["name"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.name.message as string}
+                      {errors["name"].message as string}
                     </Text>
                   )}
                 </Box>
                 <Box>
                   <Label htmlFor="description">Description</Label>
                   <Input id="description" {...register("description")} placeholder="Description" />
-                  {errors.description && (
+                  {errors["description"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.description.message as string}
+                      {errors["description"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -276,9 +276,9 @@ function AddColumnDialog() {
                     })}
                     placeholder="Max Score"
                   />
-                  {errors.maxScore && (
+                  {errors["maxScore"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.maxScore.message as string}
+                      {errors["maxScore"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -290,9 +290,9 @@ function AddColumnDialog() {
                     </Text>
                   </Label>
                   <Input id="slug" {...register("slug", { required: "Slug is required" })} placeholder="Slug" />
-                  {errors.slug && (
+                  {errors["slug"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.slug.message as string}
+                      {errors["slug"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -304,9 +304,9 @@ function AddColumnDialog() {
                     placeholder="Score Expression"
                     rows={4}
                   />
-                  {errors.scoreExpression && (
+                  {errors["scoreExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.scoreExpression.message as string}
+                      {errors["scoreExpression"].message as string}
                     </Text>
                   )}
                   <ScoreExprDocs />
@@ -314,9 +314,9 @@ function AddColumnDialog() {
                 <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
-                  {errors.renderExpression && (
+                  {errors["renderExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.renderExpression.message as string}
+                      {errors["renderExpression"].message as string}
                     </Text>
                   )}
                   <RenderExprDocs />
@@ -403,18 +403,18 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     });
     setIsLoading(true);
     try {
-      const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", columnId);
+      const dependencies = gradebookController.extractAndValidateDependencies(data["scoreExpression"] ?? "", columnId);
       await updateColumn({
         resource: "gradebook_columns",
         id: columnId,
         values: {
-          name: data.name,
-          description: data.description,
-          max_score: data.maxScore,
-          slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
-          render_expression: data.renderExpression?.length ? data.renderExpression : null,
-          show_calculated_ranges: data.showCalculatedRanges ?? false,
+          name: data["name"],
+          description: data["description"],
+          max_score: data["maxScore"],
+          slug: data["slug"],
+          score_expression: data["scoreExpression"]?.length ? data["scoreExpression"] : null,
+          render_expression: data["renderExpression"]?.length ? data["renderExpression"] : null,
+          show_calculated_ranges: data["showCalculatedRanges"] ?? false,
           dependencies
         }
       });
@@ -451,18 +451,18 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     </Text>
                   </Label>
                   <Input id="name" {...register("name", { required: "Name is required" })} placeholder="Column Name" />
-                  {errors.name && (
+                  {errors["name"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.name.message as string}
+                      {errors["name"].message as string}
                     </Text>
                   )}
                 </Box>
                 <Box>
                   <Label htmlFor="description">Description</Label>
                   <Input id="description" {...register("description")} placeholder="Description" />
-                  {errors.description && (
+                  {errors["description"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.description.message as string}
+                      {errors["description"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -483,9 +483,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     })}
                     placeholder="Max Score"
                   />
-                  {errors.maxScore && (
+                  {errors["maxScore"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.maxScore.message as string}
+                      {errors["maxScore"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -502,9 +502,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     placeholder="Slug"
                     disabled
                   />
-                  {errors.slug && (
+                  {errors["slug"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.slug.message as string}
+                      {errors["slug"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -517,9 +517,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     placeholder="Score Expression"
                     rows={4}
                   />
-                  {errors.scoreExpression && (
+                  {errors["scoreExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.scoreExpression.message as string}
+                      {errors["scoreExpression"].message as string}
                     </Text>
                   )}
                   <ScoreExprDocs />
@@ -529,9 +529,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     <Checkbox {...register("showCalculatedRanges")} checked={watch("showCalculatedRanges") ?? false}>
                       Show calculated grade range predictions to students
                     </Checkbox>
-                    {errors.showCalculatedRanges && (
+                    {errors["showCalculatedRanges"] && (
                       <Text color="red.500" fontSize="sm">
-                        {errors.showCalculatedRanges.message as string}
+                        {errors["showCalculatedRanges"].message as string}
                       </Text>
                     )}
                   </Box>
@@ -539,16 +539,16 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                 <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
-                  {errors.renderExpression && (
+                  {errors["renderExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.renderExpression.message as string}
+                      {errors["renderExpression"].message as string}
                     </Text>
                   )}
                   <RenderExprDocs />
                 </Box>
-                {errors.root && (
+                {errors["root"] && (
                   <Text color="red.500" fontSize="sm">
-                    {errors.root.message as string}
+                    {errors["root"].message as string}
                   </Text>
                 )}
                 <HStack justifyContent="flex-end">
@@ -655,7 +655,7 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
         c.dependencies &&
         typeof c.dependencies === "object" &&
         "gradebook_columns" in c.dependencies &&
-        (c.dependencies.gradebook_columns as number[])?.includes(columnId)
+        (c.dependencies["gradebook_columns"] as number[])?.includes(columnId)
     );
   }, [columns, columnId]);
   return (
@@ -1728,7 +1728,7 @@ export default function GradebookTable() {
           displayName = "Other";
         } else if (baseGroupName.startsWith("assignment-")) {
           // For assignment sub-groups, capitalize and format nicely
-          const subType = baseGroupName.split("-")[1];
+          const subType = baseGroupName.split("-")[1] ?? "Assignment";
           displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
         } else {
           displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
@@ -1749,8 +1749,8 @@ export default function GradebookTable() {
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
   useEffect(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const allGroupKeys = Object.keys(groupedColumns).filter((key) => (groupedColumns[key]?.columns.length ?? 0) > 1);
+    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key]!.groupName))];
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -1857,8 +1857,13 @@ export default function GradebookTable() {
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const baseGroupNames = [
+      ...new Set(
+        Object.values(groupedColumns)
+          .filter((g) => g.columns.length > 1)
+          .map((g) => g.groupName)
+      )
+    ];
     setCollapsedGroups(new Set(baseGroupNames));
     forceRecalculation();
   }, [groupedColumns, forceRecalculation]);
@@ -1868,7 +1873,7 @@ export default function GradebookTable() {
     (columns: typeof columnsForGrouping) => {
       // Start from the last column and work backwards
       for (let i = columns.length - 1; i >= 0; i--) {
-        const col = columns[i];
+        const col = columns[i]!;
         let hasNonMissingValues = false;
 
         // Check if this column has any non-missing values
@@ -1889,7 +1894,7 @@ export default function GradebookTable() {
       }
 
       // If no column has non-missing values, return the last column
-      return columns[columns.length - 1];
+      return columns[columns.length - 1]!;
     },
     [students, gradebookController]
   );
@@ -1972,7 +1977,7 @@ export default function GradebookTable() {
     Object.entries(groupedColumns).forEach(([groupKey, group]) => {
       if (group.columns.length === 1) {
         // Single column - no need for group header
-        const col = group.columns[0];
+        const col = group.columns[0]!;
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
@@ -2346,7 +2351,7 @@ export default function GradebookTable() {
               6. Expand/collapse all buttons are positioned discretely above the Student Name header
             */}
             <Table.Row>
-              {headerGroups[0].headers
+              {(headerGroups[0]?.headers ?? [])
                 .filter((header) => {
                   // Filter out headers that should be hidden when collapsed
                   if (header.column.id.startsWith("grade_")) {
@@ -2395,7 +2400,7 @@ export default function GradebookTable() {
                       if (groupEntry && groupEntry[1].columns.length > 1) {
                         // Check if this is the first column in its group
                         const groupColumns = groupEntry[1].columns;
-                        const isFirstInGroup = groupColumns[0].id === columnId;
+                        const isFirstInGroup = groupColumns[0]?.id === columnId;
                         const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
 
                         // When collapsed, check if this is the column that was selected to be shown
@@ -2476,48 +2481,46 @@ export default function GradebookTable() {
                       }}
                     >
                       {/* Add expand/collapse buttons in the space above Student Name */}
-                      {colIdx === 0 &&
-                        Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
-                          0 && (
-                          <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
-                            <WrappedTooltip content="Auto-layout columns">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={autoLayout}
-                                colorPalette="blue"
-                                aria-label="Auto-layout columns"
-                                disabled={isAutoLayouting}
-                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-                              >
-                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
-                              </IconButton>
-                            </WrappedTooltip>
+                      {colIdx === 0 && Object.values(groupedColumns).filter((g) => g.columns.length > 1).length > 0 && (
+                        <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                          <WrappedTooltip content="Auto-layout columns">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={autoLayout}
+                              colorPalette="blue"
+                              aria-label="Auto-layout columns"
+                              disabled={isAutoLayouting}
+                              _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                            >
+                              {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                            </IconButton>
+                          </WrappedTooltip>
 
-                            <WrappedTooltip content="Expand all groups">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={expandAll}
-                                colorPalette="blue"
-                                aria-label="Expand all groups"
-                              >
-                                <Icon as={LuChevronDown} boxSize={3} />
-                              </IconButton>
-                            </WrappedTooltip>
-                            <WrappedTooltip content="Collapse all groups">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={collapseAll}
-                                colorPalette="blue"
-                                aria-label="Collapse all groups"
-                              >
-                                <Icon as={LuChevronRight} boxSize={3} />
-                              </IconButton>
-                            </WrappedTooltip>
-                          </HStack>
-                        )}
+                          <WrappedTooltip content="Expand all groups">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={expandAll}
+                              colorPalette="blue"
+                              aria-label="Expand all groups"
+                            >
+                              <Icon as={LuChevronDown} boxSize={3} />
+                            </IconButton>
+                          </WrappedTooltip>
+                          <WrappedTooltip content="Collapse all groups">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={collapseAll}
+                              colorPalette="blue"
+                              aria-label="Collapse all groups"
+                            >
+                              <Icon as={LuChevronRight} boxSize={3} />
+                            </IconButton>
+                          </WrappedTooltip>
+                        </HStack>
+                      )}
                     </Table.ColumnHeader>
                   );
                 })}

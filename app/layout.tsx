@@ -6,7 +6,7 @@ import "katex/dist/katex.min.css";
 import "@uiw/react-markdown-preview/markdown.css";
 import "@uiw/react-md-editor/markdown-editor.css";
 import { ColorModeWatcher } from "@/components/ui/color-mode";
-const defaultUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
+const defaultUrl = process.env["VERCEL_URL"] ? `https://${process.env["VERCEL_URL"]}` : "http://localhost:3000";
 
 export const metadata = {
   metadataBase: new URL(defaultUrl),

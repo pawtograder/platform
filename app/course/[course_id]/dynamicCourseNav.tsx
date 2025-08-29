@@ -15,7 +15,7 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
+import type { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";

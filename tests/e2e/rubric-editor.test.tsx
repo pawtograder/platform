@@ -1,9 +1,9 @@
-import { Course } from "@/utils/supabase/DatabaseTypes";
+import type { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, insertAssignment, loginAsUser, type TestingUser } from "./TestingUtils";
 import { addDays } from "date-fns";
-import { Assignment, RubricCheck } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 

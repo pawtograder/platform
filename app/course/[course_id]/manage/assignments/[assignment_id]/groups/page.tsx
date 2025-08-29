@@ -2,8 +2,8 @@
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
   Button,
@@ -23,7 +23,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useInvalidate, useList, useShow } from "@refinedev/core";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { FaArrowRight, FaEdit, FaRegTimesCircle } from "react-icons/fa";
@@ -31,9 +31,9 @@ import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
 import {
-  GroupCreateData,
+  type GroupCreateData,
   GroupManagementProvider,
-  StudentMoveData,
+  type StudentMoveData,
   useGroupManagement
 } from "./GroupManagementContext";
 import useTags from "@/hooks/useTags";
@@ -129,7 +129,6 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           );
           toaster.create({ title: "Student moved", description: "", type: "success" });
         } catch (e) {
-          console.error(e);
           toaster.create({
             title: "Error moving student",
             description: e instanceof Error ? e.message : "Unknown error",
@@ -139,7 +138,6 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       });
       toaster.create({ title: "New group created", description: "", type: "success" });
     } catch (e) {
-      console.error(e);
       toaster.create({
         title: "Error creating group",
         description: e instanceof Error ? e.message : "Unknown error",
@@ -165,7 +163,6 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       );
       toaster.create({ title: "Student moved", description: "", type: "success" });
     } catch (e) {
-      console.error(e);
       toaster.create({
         title: "Error moving student",
         description: e instanceof Error ? e.message : "Unknown error",
@@ -630,7 +627,7 @@ function TableByStudents({
           {profiles?.map((profile) => {
             const groupID =
               profile.profiles.assignment_groups_members.length > 0
-                ? profile.profiles.assignment_groups_members[0].assignment_group_id
+                ? profile.profiles.assignment_groups_members[0]?.assignment_group_id
                 : undefined;
             const group = groupsData?.find((group) => group.id === groupID);
             let errorMessage;
@@ -769,7 +766,8 @@ function TableByStudents({
                                             profile_id: profile.private_profile_id,
                                             old_group_id:
                                               profile.profiles.assignment_groups_members.length > 0
-                                                ? profile.profiles.assignment_groups_members[0].assignment_group_id
+                                                ? (profile.profiles.assignment_groups_members[0]?.assignment_group_id ??
+                                                  null)
                                                 : null,
                                             new_group_id: Number(groupId)
                                           }

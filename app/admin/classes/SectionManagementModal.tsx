@@ -11,7 +11,7 @@ import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, HStack, Table, Text, VStack } from "@chakra-ui/react";
 import { MoreHorizontal, Pencil, Plus, Trash2, Users } from "lucide-react";
-import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
+import type { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
 
 type Class = AdminGetClassesResponse[0];
 
@@ -53,10 +53,9 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
       if (error) throw error;
       setSections((data as Section[]) || []);
     } catch (error) {
-      console.error("Error loading sections:", error);
       toaster.create({
         title: "Error",
-        description: "Failed to load sections",
+        description: `Failed to load sections: ${error instanceof Error ? error.message : "Unknown error"}`,
         type: "error"
       });
     } finally {
@@ -103,10 +102,9 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         setIsCreating(null);
         loadSections();
       } catch (error) {
-        console.error("Error creating section:", error);
         toaster.create({
           title: "Error",
-          description: error instanceof Error ? error.message : "Failed to create section",
+          description: `Failed to create section: ${error instanceof Error ? error.message : "Unknown error"}`,
           type: "error"
         });
       }
@@ -148,10 +146,9 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         setEditName("");
         loadSections();
       } catch (error) {
-        console.error("Error updating section:", error);
         toaster.create({
           title: "Error",
-          description: error instanceof Error ? error.message : "Failed to update section",
+          description: `Failed to update section: ${error instanceof Error ? error.message : "Unknown error"}`,
           type: "error"
         });
       }
@@ -189,10 +186,9 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
 
         loadSections();
       } catch (error) {
-        console.error("Error deleting section:", error);
         toaster.create({
           title: "Error",
-          description: error instanceof Error ? error.message : "Failed to delete section",
+          description: `Failed to delete section: ${error instanceof Error ? error.message : "Unknown error"}`,
           type: "error"
         });
       }

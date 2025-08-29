@@ -46,7 +46,7 @@ export default function OfficeHoursPage() {
         if (!acc[student.help_request_id]) {
           acc[student.help_request_id] = [];
         }
-        acc[student.help_request_id].push(student.profile_id);
+        acc[student.help_request_id]!.push(student.profile_id);
         return acc;
       },
       {} as Record<number, string[]>
@@ -141,7 +141,7 @@ export default function OfficeHoursPage() {
   const availableQueues = helpQueues ?? [];
 
   if (availableQueues.length === 1) {
-    redirect(`/course/${course_id}/office-hours/${availableQueues[0].id}`);
+    redirect(`/course/${course_id}/office-hours/${availableQueues[0]!.id}`);
   }
 
   return (

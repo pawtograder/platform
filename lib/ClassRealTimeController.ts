@@ -1,7 +1,8 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
+import { toaster } from "@/components/ui/toaster";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -147,23 +148,22 @@ export class ClassRealTimeController {
 
     switch (status) {
       case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED: {
-        console.debug(`Successfully subscribed to '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CLOSED: {
-        console.debug("Class Client debug info:", this.getDebugInfo());
-        console.debug(`Channel closed '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT: {
-        console.debug(`Channel timed out '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR: {
-        console.warn(`Channel error in '${channelName}': `, err?.message);
+        toaster.error({
+          title: "Error",
+          description: `Channel error in '${channelName}': ` + (err?.message ?? "Unknown error")
+        });
         this._notifyStatusChange();
         break;
       }
@@ -193,7 +193,6 @@ export class ClassRealTimeController {
     if (document.hidden) {
       if (!this._inactiveTabTimer) {
         this._inactiveTabTimer = setTimeout(async () => {
-          console.log(`Tab inactive for ${this._inactiveTabTimeoutSeconds} seconds. Disconnecting from realtime.`);
           this._channelManager.disconnectAllChannels();
         }, this._inactiveTabTimeoutSeconds * 1000);
       }
@@ -288,13 +287,6 @@ export class ClassRealTimeController {
     const key = `${message.type}-${message.table || "unknown"}-${message.operation || "none"}`;
     const current = ClassRealTimeController.broadcastCounter.get(key) || 0;
     ClassRealTimeController.broadcastCounter.set(key, current + 1);
-
-    // Log summary every 100 broadcasts
-    const total = Array.from(ClassRealTimeController.broadcastCounter.values()).reduce((sum, count) => sum + count, 0);
-
-    if (total % 100 === 0) {
-      console.log("Broadcast Summary:", Object.fromEntries(ClassRealTimeController.broadcastCounter));
-    }
 
     // Normalize custom payload types from SQL functions to the standard type expected by listeners
     // SQL may emit type "staff_data_change"; treat it as "table_change" for downstream consumers
@@ -473,10 +465,10 @@ export class ClassRealTimeController {
         type = "user";
       } else if (topic.startsWith("submission:") && topic.includes(":graders") && this._isStaff) {
         type = "submission_graders";
-        submissionId = parseInt(topic.split(":")[1]);
+        submissionId = parseInt(topic.split(":")[1]!);
       } else if (topic.startsWith("submission:") && topic.includes(`:profile_id:${this._profileId}`)) {
         type = "submission_user";
-        submissionId = parseInt(topic.split(":")[1]);
+        submissionId = parseInt(topic.split(":")[1]!);
       } else {
         continue; // Skip channels that don't belong to this controller
       }

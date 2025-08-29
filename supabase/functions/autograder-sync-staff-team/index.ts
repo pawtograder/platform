@@ -1,13 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { syncStaffTeam } from "../_shared/GitHubWrapper.ts";
-import {
-  assertUserIsInstructor,
-  fetchAllPages,
-  UserVisibleError,
-  wrapRequestHandler
-} from "../_shared/HandlerUtils.ts";
+import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 //See also autograder-sync-student-team

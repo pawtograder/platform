@@ -1,7 +1,7 @@
 "use client";
 import { AssignmentProvider, useAssignmentController } from "@/hooks/useAssignment";
 import { useIsInstructor, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import { Select } from "chakra-react-select";

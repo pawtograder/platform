@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as canvas from "../_shared/CanvasWrapper.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 import { assertUserIsInstructor } from "../_shared/HandlerUtils.ts";

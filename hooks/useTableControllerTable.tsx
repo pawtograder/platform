@@ -1,15 +1,15 @@
 import {
-  ColumnDef,
+  type ColumnDef,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
-  TableOptions
+  type TableOptions
 } from "@tanstack/react-table";
 import { useCallback, useEffect, useState } from "react";
-import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import TableController, { type PossiblyTentativeResult } from "@/lib/TableController";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
