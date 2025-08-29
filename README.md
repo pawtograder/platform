@@ -43,7 +43,6 @@ For development work that requires changes to the database schema or backend fun
 2. Start Supabase locally: `npx supabase start` - This will start all Supabase services in Docker containers.
 3. Reset the database: `npx supabase db reset` - This applies all database migrations and seeds the database with initial data.
 4. Update your `.env.local` file: After running `npx supabase start`, you'll see output with local service URLs and keys. Update your `.env.local` file with these values:
-
    - `SUPABASE_URL` - Local API URL (typically `http://127.0.0.1:54321`)
    - `NEXT_PUBLIC_SUPABASE_URL` - Same as `SUPABASE_URL` for client-side SDKs
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - The "anon key" from the output
