@@ -10,6 +10,7 @@ import {
   TestingUser,
   createAssignmentsAndGradebookColumns
 } from "./TestingUtils";
+// removed unused import
 
 dotenv.config({ path: ".env.local" });
 
@@ -46,7 +47,6 @@ async function readCellText(page: Page, rowName: string, columnName: string) {
 
 test.describe("Gradebook Page - Comprehensive", () => {
   test.describe.configure({ mode: "serial" });
-
   test.beforeAll(async () => {
     // Create the class
     course = await createClass({
@@ -236,6 +236,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
   test("Student What If page allows simulating grades", async ({ page }) => {
     // Log in as a student and navigate to the student gradebook
+    // Didn't want to make another test suite with a different beforEach just for a single test
     await loginAsUser(page, students[0], course);
     await page.goto(`/course/${course.id}/gradebook`);
     await page.waitForLoadState("networkidle");
@@ -260,5 +261,174 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Final Grade card should remain visible regardless of whether inputs make it computable
     await expect(finalCard).toBeVisible();
+  });
+
+  test("Manual column release/unrelease controls student visibility (individual)", async ({ page }) => {
+    // We start as instructor due to beforeEach
+    // Open Participation column header menu and Release the column
+    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await expect(tableRegion).toBeVisible();
+    await tableRegion.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await tableRegion.locator('button[aria-label="Column options"]').last().click();
+    const releaseItem = page.getByRole("menuitem", { name: "Release Column", exact: true });
+    await releaseItem.click();
+
+    // Verify student can now see Participation in their gradebook cards
+    await loginAsUser(page, students[0], course);
+    await page.goto(`/course/${course.id}/gradebook`);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
+
+    // Now unrelease the column and verify it's hidden from student
+    await loginAsUser(page, instructor!, course);
+    const navRegion = page.locator("#course-nav");
+    await navRegion
+      .getByRole("link")
+      .filter({ hasText: /^Gradebook$/ })
+      .click();
+    await page.waitForLoadState("networkidle");
+
+    const tableRegion2 = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await expect(tableRegion2).toBeVisible();
+    await tableRegion2.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await tableRegion2.locator('button[aria-label="Column options"]').last().click();
+    const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
+    await unreleaseItem.click();
+
+    // Student should still see the Participation card, but it should show "In Progress"
+    await loginAsUser(page, students[0], course);
+    await page.goto(`/course/${course.id}/gradebook`);
+    await page.waitForLoadState("networkidle");
+    const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
+    await expect(unreleasedCard).toBeVisible();
+    await expect(unreleasedCard).toContainText(/In Progress/i);
+  });
+});
+
+// Separate suite for group assignments
+test.describe("Gradebook Page - Groups & Release States", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let groupCourse: Course;
+  let groupStudents: TestingUser[] = [];
+  let groupInstructor: TestingUser | undefined;
+
+  test.beforeAll(async () => {
+    // Create the class for group assignments
+    groupCourse = await createClass({ name: "Gradebook Group Test Course" });
+
+    // Create roster
+    const users = await createUsersInClass([
+      {
+        name: "Dana Diaz",
+        email: "dana-gradebook@pawtograder.net",
+        role: "student",
+        class_id: groupCourse.id,
+        useMagicLink: true
+      },
+      {
+        name: "Evan Edwards",
+        email: "evan-gradebook@pawtograder.net",
+        role: "student",
+        class_id: groupCourse.id,
+        useMagicLink: true
+      },
+      {
+        name: "Frankie Flores",
+        email: "frankie-gradebook@pawtograder.net",
+        role: "student",
+        class_id: groupCourse.id,
+        useMagicLink: true
+      },
+      {
+        name: "Prof Gomez",
+        email: "prof-gomez-gradebook@pawtograder.net",
+        role: "instructor",
+        class_id: groupCourse.id,
+        useMagicLink: true
+      }
+    ]);
+
+    groupStudents = users.slice(0, 3);
+    groupInstructor = users[3];
+
+    // Create assignments and gradebook columns for groups
+    await createAssignmentsAndGradebookColumns({
+      class_id: groupCourse.id,
+      numAssignments: 2,
+      numManualGradedColumns: 0,
+      manualGradedColumnSlugs: ["participation"],
+      groupConfig: "groups"
+    });
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await loginAsUser(page, groupInstructor!, groupCourse);
+    const navRegion = page.locator("#course-nav");
+    await navRegion
+      .getByRole("link")
+      .filter({ hasText: /^Gradebook$/ })
+      .click();
+    await page.waitForLoadState("networkidle");
+  });
+
+  test("Instructor gradebook loads for group course", async ({ page }) => {
+    await expect(page.getByText("Student Name")).toBeVisible();
+    for (const s of groupStudents) {
+      await expect(
+        page.getByRole("row", { name: new RegExp(`^Student ${escapeRegExp(s.private_profile_name)} grades$`) })
+      ).toBeVisible();
+    }
+    await expect(page.getByText("Average Lab Assignments")).toBeVisible();
+    await expect(page.getByText("Final Grade")).toBeVisible();
+    await expect(page.getByText("Participation")).toBeVisible();
+    await expect(page.getByText(`Showing ${groupStudents.length} students`)).toBeVisible();
+  });
+
+  test("Release/unrelease manual column toggles student visibility (group)", async ({ page }) => {
+    // Release Participation using the same pattern as individual gradebook
+    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await expect(tableRegion).toBeVisible();
+    await tableRegion.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await tableRegion.locator('button[aria-label="Column options"]').last().click();
+    const releaseItem = page.getByRole("menuitem", { name: "Release Column", exact: true });
+    await releaseItem.click();
+
+    // Student sees card
+    await loginAsUser(page, groupStudents[0], groupCourse);
+    await page.goto(`/course/${groupCourse.id}/gradebook`);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
+
+    // Unrelease and verify it's hidden
+    await loginAsUser(page, groupInstructor!, groupCourse);
+    const navRegion = page.locator("#course-nav");
+    await navRegion
+      .getByRole("link")
+      .filter({ hasText: /^Gradebook$/ })
+      .click();
+    await page.waitForLoadState("networkidle");
+
+    const tableRegion2 = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await expect(tableRegion2).toBeVisible();
+    await tableRegion2.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await tableRegion2.locator('button[aria-label="Column options"]').last().click();
+    const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
+    await unreleaseItem.click();
+
+    await loginAsUser(page, groupStudents[0], groupCourse);
+    await page.goto(`/course/${groupCourse.id}/gradebook`);
+    await page.waitForLoadState("networkidle");
+    const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
+    await expect(unreleasedCard).toBeVisible();
+    await expect(unreleasedCard).toContainText(/In Progress/i);
   });
 });
