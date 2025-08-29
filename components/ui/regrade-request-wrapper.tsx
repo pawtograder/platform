@@ -179,11 +179,7 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
 export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId: number }) {
   const comments = useSubmissionRegradeRequestComments({ submission_regrade_request_id: regradeRequestId });
   return (
-    <VStack px={2}>
-      {comments?.map((comment) => (
-        <RegradeRequestComment key={comment.id} comment={comment} />
-      ))}
-    </VStack>
+    <VStack px={2}>{comments?.map((comment) => <RegradeRequestComment key={comment.id} comment={comment} />)}</VStack>
   );
 }
 
