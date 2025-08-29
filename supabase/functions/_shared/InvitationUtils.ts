@@ -20,6 +20,7 @@ export interface InvitationRequest {
   name?: string;
   class_section_id?: number;
   lab_section_id?: number;
+  sis_managed?: boolean; // Optional, defaults to true for SIS invitations, false for manual
 }
 
 export interface InvitationResult {
@@ -61,14 +62,17 @@ export async function createInvitationsBulk(
   courseId: number,
   invitedByUserId: string,
   invitations: InvitationRequest[],
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  sisManaged: boolean = true // Default to SIS-managed for backwards compatibility
 ): Promise<BulkInvitationResult> {
   scope?.setTag("invitationCount", invitations.length.toString());
 
   // Process all invitations concurrently with rate limiting
   const results = await Promise.all(
     invitations.map((invitation) =>
-      invitationLimiter.schedule(() => processInvitation(supabaseClient, courseId, invitedByUserId, invitation, scope))
+      invitationLimiter.schedule(() =>
+        processInvitation(supabaseClient, courseId, invitedByUserId, invitation, scope, sisManaged)
+      )
     )
   );
 
@@ -105,7 +109,8 @@ async function processInvitation(
   courseId: number,
   invitedByUserId: string,
   invitation: InvitationRequest,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  sisManaged: boolean = true
 ): Promise<{ success: true; invitation: InvitationResult } | { success: false; error: InvitationError }> {
   try {
     // Validate required fields
@@ -206,7 +211,8 @@ async function processInvitation(
       p_name: invitation.name || undefined,
       p_invited_by: invitedByUserId,
       p_class_section_id: invitation.class_section_id || undefined,
-      p_lab_section_id: invitation.lab_section_id || undefined
+      p_lab_section_id: invitation.lab_section_id || undefined,
+      p_sis_managed: sisManaged
     });
 
     if (invitationError) {
