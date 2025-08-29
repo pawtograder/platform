@@ -378,7 +378,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
-    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Appeal to Instructor" }).click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
     await argosScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
   });
@@ -403,10 +403,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .click();
     await expect(page.getByLabel("Grading checks on line 4").filter({ hasText: REGRADE_FINAL_COMMENT })).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
-    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Escalation" }).click();
     await page.getByRole("spinbutton").fill("100");
     await expect(page.getByText("This is a significant change")).toBeVisible();
-    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal and Close Request" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Decide Escalation and Close Request" }).click();
     await argosScreenshot(page, "Instructors can close the regrade request");
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });
