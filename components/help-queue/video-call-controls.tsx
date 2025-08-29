@@ -33,6 +33,7 @@ export default function VideoCallControls({
   variant = "full"
 }: VideoCallControlsProps) {
   const [isStartingCall, setIsStartingCall] = useState(false);
+  const [isJoiningCall, setIsJoiningCall] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
   const supabase = createClient();
   const { openMeetingWindow } = useMeetingWindows();
@@ -166,6 +167,7 @@ export default function VideoCallControls({
    * Joins an existing video call
    */
   const joinVideoCall = useCallback(async () => {
+    setIsJoiningCall(true);
     // Use managed window opening
     openMeetingWindow(request.class_id, request.id, request.help_queue);
 
@@ -176,6 +178,7 @@ export default function VideoCallControls({
       title: "Joining video call",
       description: "Opening video meeting window"
     });
+    setIsJoiningCall(false);
   }, [request, openMeetingWindow, logVideoActivity]);
 
   /**
@@ -220,7 +223,13 @@ export default function VideoCallControls({
     if (!request.is_video_live) return null;
 
     return (
-      <Button size={size} colorPalette="green" onClick={joinVideoCall} disabled={isRequestInactive}>
+      <Button
+        size={size}
+        colorPalette="green"
+        onClick={joinVideoCall}
+        disabled={isRequestInactive}
+        loading={isJoiningCall}
+      >
         <Icon as={BsPersonVideo} />
         Join Video Call
       </Button>

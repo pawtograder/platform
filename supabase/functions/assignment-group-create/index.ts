@@ -62,6 +62,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (pendingGroupRequest && pendingGroupRequest.length > 0) {
     throw new IllegalArgumentError("You already have a pending group request for this assignment");
   }
+  scope.setTag("pending_group_request", pendingGroupRequest ? "true" : "false");
 
   //Validate that the user is not in a group for this assignment
   const { data: existingAssignmentGroup } = await adminSupabase
@@ -80,6 +81,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     .eq("assignment_id", assignment_id)
     .eq("name", trimmedName);
   if (existingAssignmentGroupWithSameName && existingAssignmentGroupWithSameName.length > 0) {
+    scope.setTag("existing_group_id", existingAssignmentGroupWithSameName[0].id.toString());
     throw new IllegalArgumentError("A group with this name already exists for this assignment");
   }
 
@@ -89,6 +91,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   }
   const timeZone = profile.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignment.group_formation_deadline;
+  scope.setTag("group_formation_deadline", groupFormationDeadline?.toString() || "unknown");
   if (groupFormationDeadline && new TZDate(groupFormationDeadline, timeZone) < TZDate.tz(timeZone)) {
     throw new SecurityError("Group formation deadline has passed");
   }
@@ -102,8 +105,10 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     })
     .select("id")
     .single();
+  scope.setTag("new_group_id", newGroup?.id?.toString() || "unknown");
   if (newGroupError) {
     console.error(newGroupError);
+    Sentry.captureException(newGroupError, scope);
     throw new UserVisibleError("Failed to create group");
   }
   //Enroll the user in the group
@@ -116,6 +121,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   });
   if (enrollmentError) {
     console.error(enrollmentError);
+    Sentry.captureException(enrollmentError, scope);
     throw new UserVisibleError("Failed to enroll in group");
   }
   //Add the invitees to the group
@@ -129,6 +135,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   );
   if (inviteesError) {
     console.error(inviteesError);
+    Sentry.captureException(inviteesError, scope);
     throw new UserVisibleError("Failed to invite users to group");
   }
   console.log(
@@ -144,24 +151,34 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     .eq("profile_id", profile_id);
   if (deactivateError) {
     console.error(deactivateError);
+    Sentry.captureException(deactivateError, scope);
     throw new UserVisibleError("Failed to deactivate submissions");
   }
 
   //Create the repo for the group
   const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
-  const headSha = await createRepo(profile.classes!.github_org!, repoName, assignment.template_repo!);
-  const { error } = await adminSupabase.from("repositories").insert({
+  const { error: repoError } = await adminSupabase.from("repositories").insert({
     class_id: assignment.class_id!,
     assignment_group_id: newGroup.id,
     assignment_id: assignment.id,
     repository: `${profile.classes!.github_org}/${repoName}`,
-    synced_repo_sha: headSha,
     synced_handout_sha: assignment.latest_template_sha
   });
-  if (error) {
-    console.error(error);
-    throw new UserVisibleError(`Error creating repo: ${error}`);
+  if (repoError) {
+    console.error(repoError);
+    Sentry.captureException(repoError, scope);
+    throw new UserVisibleError(`Error creating repo: ${repoError}`);
   }
+  scope.setTag("repo_name", repoName);
+  scope.setTag("repo_org", profile.classes!.github_org!);
+  const headSha = await createRepo(profile.classes!.github_org!, repoName, assignment.template_repo!);
+  await adminSupabase
+    .from("repositories")
+    .update({
+      synced_repo_sha: headSha
+    })
+    .eq("assignment_group_id", newGroup.id);
+
   if (profile.users.github_username) {
     await syncRepoPermissions(profile.classes!.github_org!, repoName, profile.classes!.slug!, [
       profile.users.github_username!

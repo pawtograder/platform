@@ -5,12 +5,14 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
-import type {
+import {
   DayOfWeek,
-  LabSectionWithLeader,
+  LabSection,
+  LabSectionMeeting,
   UserRoleWithPrivateProfileAndUser
 } from "@/utils/supabase/DatabaseTypes";
 import {
+  Alert,
   Box,
   Container,
   Dialog,
@@ -20,16 +22,19 @@ import {
   Input,
   NativeSelect,
   Portal,
+  Spinner,
   Table,
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useCreate, useDelete, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { useList } from "@refinedev/core";
 import { format } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
-import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
+import { FaCalendar, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
 
 interface CreateLabSectionData {
   name: string;
@@ -37,6 +42,7 @@ interface CreateLabSectionData {
   start_time: string;
   end_time?: string;
   lab_leader_id: string;
+  meeting_location?: string;
   description?: string;
 }
 
@@ -66,6 +72,9 @@ function CreateLabSectionModal({
   initialData?: EditLabSectionData;
 }) {
   const { course_id } = useParams();
+  const controller = useCourseController();
+  const [isLoading, setIsLoading] = useState(false);
+
   const {
     register,
     handleSubmit,
@@ -78,12 +87,10 @@ function CreateLabSectionModal({
       start_time: "10:00",
       end_time: "11:00",
       lab_leader_id: "",
+      meeting_location: "",
       description: ""
     }
   });
-
-  const { mutateAsync: createLabSection, isLoading: isCreating } = useCreate();
-  const { mutateAsync: updateLabSection, isLoading: isUpdating } = useUpdate();
 
   // Get instructors and graders for lab leader selection
   const { data: staffRoles } = useList<UserRoleWithPrivateProfileAndUser>({
@@ -111,6 +118,7 @@ function CreateLabSectionModal({
         start_time: initialData.start_time,
         end_time: initialData.end_time,
         lab_leader_id: initialData.lab_leader_id,
+        meeting_location: initialData.meeting_location,
         description: initialData.description
       });
     } else {
@@ -120,6 +128,7 @@ function CreateLabSectionModal({
         start_time: "10:00",
         end_time: "11:00",
         lab_leader_id: "",
+        meeting_location: "",
         description: ""
       });
     }
@@ -127,27 +136,31 @@ function CreateLabSectionModal({
 
   const onSubmit = useCallback(
     async (data: CreateLabSectionData) => {
+      setIsLoading(true);
       try {
+        const labSectionData = {
+          name: data.name,
+          day_of_week: data.day_of_week,
+          start_time: data.start_time,
+          end_time: data.end_time || null,
+          lab_leader_id: data.lab_leader_id || null,
+          meeting_location: data.meeting_location || null,
+          description: data.description || null,
+          class_id: Number(course_id),
+          campus: null,
+          meeting_times: null,
+          sis_crn: null
+        };
+
         if (initialData) {
-          await updateLabSection({
-            resource: "lab_sections",
-            id: initialData.id,
-            values: {
-              ...data,
-              class_id: Number(course_id)
-            }
-          });
+          await controller.labSections.update(initialData.id, labSectionData);
+          // Refresh lab section meetings after update to show recalculated meetings
+          await controller.labSectionMeetings.refetchAll();
           toaster.success({
             title: "Lab section updated successfully"
           });
         } else {
-          await createLabSection({
-            resource: "lab_sections",
-            values: {
-              ...data,
-              class_id: Number(course_id)
-            }
-          });
+          await controller.labSections.create(labSectionData);
           toaster.success({
             title: "Lab section created successfully"
           });
@@ -159,9 +172,11 @@ function CreateLabSectionModal({
           title: "Error saving lab section",
           description: error instanceof Error ? error.message : "An unknown error occurred"
         });
+      } finally {
+        setIsLoading(false);
       }
     },
-    [initialData, updateLabSection, createLabSection, course_id, onSuccess, onClose]
+    [initialData, controller, course_id, onSuccess, onClose]
   );
 
   return (
@@ -176,6 +191,19 @@ function CreateLabSectionModal({
             <Dialog.Body>
               <form onSubmit={handleSubmit(onSubmit)}>
                 <VStack gap={4}>
+                  {initialData && (
+                    <Alert.Root status="warning">
+                      <Alert.Indicator />
+                      <Alert.Content>
+                        <Alert.Title>Schedule Change Warning</Alert.Title>
+                        <Alert.Description>
+                          Changing the day of week will automatically recalculate all lab section meetings based on the
+                          new schedule. Existing meetings will be removed and new ones generated.
+                        </Alert.Description>
+                      </Alert.Content>
+                    </Alert.Root>
+                  )}
+
                   <Field.Root invalid={!!errors.name}>
                     <Field.Label>Name</Field.Label>
                     <Input placeholder="e.g., Lab Section A" {...register("name", { required: "Name is required" })} />
@@ -205,7 +233,17 @@ function CreateLabSectionModal({
 
                     <Field.Root invalid={!!errors.end_time}>
                       <Field.Label>End Time</Field.Label>
-                      <Input type="time" {...register("end_time")} />
+                      <Input
+                        type="time"
+                        {...register("end_time", {
+                          validate: (value, formValues) => {
+                            if (!value || !formValues.start_time) return true;
+                            const startTime = new Date(`2000-01-01T${formValues.start_time}`);
+                            const endTime = new Date(`2000-01-01T${value}`);
+                            return endTime > startTime || "End time must be after start time";
+                          }
+                        })}
+                      />
                       <Field.ErrorText>{errors.end_time?.message}</Field.ErrorText>
                     </Field.Root>
                   </HStack>
@@ -225,6 +263,12 @@ function CreateLabSectionModal({
                     <Field.ErrorText>{errors.lab_leader_id?.message}</Field.ErrorText>
                   </Field.Root>
 
+                  <Field.Root invalid={!!errors.meeting_location}>
+                    <Field.Label>Room Location (Optional)</Field.Label>
+                    <Input placeholder="e.g., Room 101, Building A" {...register("meeting_location")} />
+                    <Field.ErrorText>{errors.meeting_location?.message}</Field.ErrorText>
+                  </Field.Root>
+
                   <Field.Root invalid={!!errors.description}>
                     <Field.Label>Description (Optional)</Field.Label>
                     <Input placeholder="Optional description" {...register("description")} />
@@ -239,7 +283,7 @@ function CreateLabSectionModal({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button onClick={handleSubmit(onSubmit)} loading={isCreating || isUpdating} colorPalette="blue">
+              <Button onClick={handleSubmit(onSubmit)} loading={isLoading} colorPalette="green">
                 {initialData ? "Update" : "Create"}
               </Button>
             </Dialog.Footer>
@@ -250,10 +294,264 @@ function CreateLabSectionModal({
   );
 }
 
+function ManageMeetingsModal({
+  isOpen,
+  onClose,
+  labSection,
+  onAddMeeting
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  labSection: LabSection | null;
+  onAddMeeting: (labSection: LabSection) => void;
+}) {
+  const controller = useCourseController();
+  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
+  const [isLoading, setIsLoading] = useState(false);
+
+  if (!labSection) return null;
+
+  const sectionMeetings = labSectionMeetings
+    .filter((meeting) => meeting.lab_section_id === labSection.id)
+    .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
+
+  const handleToggleCancelled = async (meeting: LabSectionMeeting) => {
+    setIsLoading(true);
+    try {
+      await controller.labSectionMeetings.update(meeting.id, {
+        cancelled: !meeting.cancelled
+      });
+      toaster.success({
+        title: meeting.cancelled ? "Meeting restored" : "Meeting cancelled"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error updating meeting",
+        description: error instanceof Error ? error.message : "An unknown error occurred"
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Portal>
+      <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && onClose()}>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content maxW="4xl">
+            <Dialog.Header>
+              <Dialog.Title>Manage Meetings - {labSection.name}</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <VStack gap={4}>
+                <HStack justify="space-between" width="100%">
+                  <Text fontSize="lg" fontWeight="medium">
+                    Scheduled Meetings
+                  </Text>
+                  <Button size="sm" onClick={() => onAddMeeting(labSection)}>
+                    <FaPlus /> Add Meeting
+                  </Button>
+                </HStack>
+
+                {sectionMeetings.length === 0 ? (
+                  <Box p={8} textAlign="center" border="1px dashed" borderColor="border.muted" borderRadius="md">
+                    <Text color="fg.muted">No meetings scheduled for this lab section.</Text>
+                  </Box>
+                ) : (
+                  <Table.Root>
+                    <Table.Header>
+                      <Table.Row>
+                        <Table.ColumnHeader>Date</Table.ColumnHeader>
+                        <Table.ColumnHeader>Status</Table.ColumnHeader>
+                        <Table.ColumnHeader>Notes</Table.ColumnHeader>
+                        <Table.ColumnHeader>Actions</Table.ColumnHeader>
+                      </Table.Row>
+                    </Table.Header>
+                    <Table.Body>
+                      {sectionMeetings.map((meeting) => (
+                        <Table.Row key={meeting.id}>
+                          <Table.Cell>
+                            <Text fontWeight="medium">
+                              {format(new Date(meeting.meeting_date), "EEEE, MMM d, yyyy")}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text
+                              fontSize="sm"
+                              color={meeting.cancelled ? "fg.error" : "fg.success"}
+                              fontWeight="medium"
+                            >
+                              {meeting.cancelled ? "Cancelled" : "Scheduled"}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text fontSize="sm" color="fg.muted">
+                              {meeting.notes || "No notes"}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              colorPalette={meeting.cancelled ? "green" : "red"}
+                              onClick={() => handleToggleCancelled(meeting)}
+                              loading={isLoading}
+                            >
+                              {meeting.cancelled ? "Restore" : "Cancel"}
+                            </Button>
+                          </Table.Cell>
+                        </Table.Row>
+                      ))}
+                    </Table.Body>
+                  </Table.Root>
+                )}
+              </VStack>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline" onClick={onClose}>
+                  Close
+                </Button>
+              </Dialog.ActionTrigger>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
+    </Portal>
+  );
+}
+
+interface CreateMeetingData {
+  meeting_date: string;
+  notes?: string;
+}
+
+function CreateMeetingModal({
+  isOpen,
+  onClose,
+  labSection
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  labSection: LabSection | null;
+}) {
+  const controller = useCourseController();
+  const [isLoading, setIsLoading] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    reset
+  } = useForm<CreateMeetingData>({
+    defaultValues: {
+      meeting_date: "",
+      notes: ""
+    }
+  });
+
+  useEffect(() => {
+    if (isOpen && labSection) {
+      reset({
+        meeting_date: "",
+        notes: ""
+      });
+    }
+  }, [isOpen, labSection, reset]);
+
+  const onSubmit = useCallback(
+    async (data: CreateMeetingData) => {
+      if (!labSection) return;
+
+      setIsLoading(true);
+      try {
+        const meetingData = {
+          lab_section_id: labSection.id,
+          class_id: labSection.class_id,
+          meeting_date: data.meeting_date,
+          cancelled: false,
+          notes: data.notes || null
+        };
+
+        await controller.labSectionMeetings.create(meetingData);
+
+        toaster.success({
+          title: "Meeting created successfully"
+        });
+        onClose();
+      } catch (error) {
+        toaster.error({
+          title: "Error creating meeting",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [labSection, controller, onClose]
+  );
+
+  if (!labSection) return null;
+
+  return (
+    <Portal>
+      <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && onClose()}>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content>
+            <Dialog.Header>
+              <Dialog.Title>Add Meeting - {labSection.name}</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <form onSubmit={handleSubmit(onSubmit)}>
+                <VStack gap={4}>
+                  <Field.Root invalid={!!errors.meeting_date}>
+                    <Field.Label>Meeting Date</Field.Label>
+                    <Input type="date" {...register("meeting_date", { required: "Meeting date is required" })} />
+                    <Field.ErrorText>{errors.meeting_date?.message}</Field.ErrorText>
+                    <Field.HelperText>
+                      Meeting will use the lab section&apos;s scheduled time:{" "}
+                      {labSection.start_time
+                        ? format(new Date(`2000-01-01T${labSection.start_time}`), "h:mm a")
+                        : "Not set"}{" "}
+                      -{" "}
+                      {labSection.end_time
+                        ? format(new Date(`2000-01-01T${labSection.end_time}`), "h:mm a")
+                        : "Not set"}
+                    </Field.HelperText>
+                  </Field.Root>
+
+                  <Field.Root invalid={!!errors.notes}>
+                    <Field.Label>Notes (Optional)</Field.Label>
+                    <Input placeholder="Optional notes about this meeting" {...register("notes")} />
+                    <Field.ErrorText>{errors.notes?.message}</Field.ErrorText>
+                  </Field.Root>
+                </VStack>
+              </form>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline" onClick={onClose}>
+                  Cancel
+                </Button>
+              </Dialog.ActionTrigger>
+              <Button onClick={handleSubmit(onSubmit)} loading={isLoading} colorPalette="green">
+                Create Meeting
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
+    </Portal>
+  );
+}
+
 function LabSectionsTable() {
-  const { course_id } = useParams();
-  const invalidate = useInvalidate();
-  const { mutateAsync: deleteLabSection, isLoading: isDeleting } = useDelete();
+  const controller = useCourseController();
+  const sectionsReady = useIsTableControllerReady(controller.labSections);
+  const meetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const {
     isOpen: isCreateModalOpen,
@@ -262,55 +560,67 @@ function LabSectionsTable() {
     closeModal: closeCreateModal
   } = useModalManager<EditLabSectionData | undefined>();
 
-  // Get lab sections with leader info
-  const { data: labSections, isLoading } = useList<LabSectionWithLeader>({
-    resource: "lab_sections",
-    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
-    meta: {
-      select: "*, profiles!lab_sections_lab_leader_id_fkey(*)"
-    },
-    sorters: [
-      { field: "day_of_week", order: "asc" },
-      { field: "start_time", order: "asc" }
-    ]
-  });
+  const {
+    isOpen: isMeetingsModalOpen,
+    modalData: managingLabSection,
+    openModal: openMeetingsModal,
+    closeModal: closeMeetingsModal
+  } = useModalManager<LabSection | undefined>();
+
+  const {
+    isOpen: isCreateMeetingModalOpen,
+    modalData: createMeetingLabSection,
+    openModal: openCreateMeetingModal,
+    closeModal: closeCreateMeetingModal
+  } = useModalManager<LabSection | undefined>();
+
+  // Get lab sections from course controller
+  const unsortedLabSections = useTableControllerTableValues(controller.labSections);
+  const labSections = useMemo(
+    () => unsortedLabSections.sort((a, b) => a.name.localeCompare(b.name)),
+    [unsortedLabSections]
+  );
+
+  // Get lab section meetings from course controller
+  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
+  const profiles = useTableControllerTableValues(controller.profiles);
 
   const handleCreateNew = () => {
     openCreateModal(undefined);
   };
 
-  const handleEdit = (labSection: LabSectionWithLeader) => {
+  const handleEdit = (labSection: LabSection) => {
     openCreateModal({
       id: labSection.id,
       name: labSection.name,
       day_of_week: labSection.day_of_week as DayOfWeek,
-      start_time: labSection.start_time,
+      start_time: labSection.start_time || "",
       end_time: labSection.end_time || undefined,
-      lab_leader_id: labSection.lab_leader_id,
+      lab_leader_id: labSection.lab_leader_id || "",
+      meeting_location: labSection.meeting_location || undefined,
       description: labSection.description || undefined
     });
   };
 
   const handleDelete = async (id: number) => {
+    setIsDeleting(true);
     try {
-      await deleteLabSection({
-        resource: "lab_sections",
-        id
-      });
+      await controller.labSections.delete(id);
       toaster.success({
         title: "Lab section deleted successfully"
       });
-      invalidate({ resource: "lab_sections", invalidates: ["list"] });
     } catch (error) {
       toaster.error({
         title: "Error deleting lab section",
         description: error instanceof Error ? error.message : "An unknown error occurred"
       });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
   const handleModalSuccess = () => {
-    invalidate({ resource: "lab_sections", invalidates: ["list"] });
+    // No need to manually invalidate - table controller handles this automatically
   };
 
   const formatTime = (time: string) => {
@@ -321,13 +631,29 @@ function LabSectionsTable() {
     return DAYS_OF_WEEK.find((d) => d.value === day)?.label || day;
   };
 
-  if (isLoading) {
-    return <Text>Loading lab sections...</Text>;
+  const getLabSectionMeetings = (labSectionId: number) => {
+    return labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSectionId);
+  };
+
+  const getUpcomingMeetings = (labSectionId: number) => {
+    const meetings = getLabSectionMeetings(labSectionId);
+    const now = new Date();
+    return meetings
+      .filter((meeting) => new Date(meeting.meeting_date) >= now && !meeting.cancelled)
+      .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
+  };
+  if (!sectionsReady || !meetingsReady) {
+    return (
+      <VStack gap={4} mt={4}>
+        <Spinner />
+        <Text>Loading lab sections...</Text>
+      </VStack>
+    );
   }
 
   return (
     <>
-      <VStack gap={4}>
+      <VStack gap={4} mt={4}>
         <HStack justify="space-between" width="100%">
           <Heading size="lg">Lab Sections</Heading>
           <Button onClick={handleCreateNew} size="sm">
@@ -335,7 +661,7 @@ function LabSectionsTable() {
           </Button>
         </HStack>
 
-        {labSections?.data?.length === 0 ? (
+        {labSections.length === 0 ? (
           <Box p={8} textAlign="center" border="1px dashed" borderColor="border.muted" borderRadius="md">
             <Text color="fg.muted">No lab sections created yet.</Text>
             <Button mt={2} onClick={handleCreateNew} variant="outline" size="sm">
@@ -348,13 +674,15 @@ function LabSectionsTable() {
               <Table.Row>
                 <Table.ColumnHeader>Name</Table.ColumnHeader>
                 <Table.ColumnHeader>Schedule</Table.ColumnHeader>
+                <Table.ColumnHeader>Room Location</Table.ColumnHeader>
                 <Table.ColumnHeader>Lab Leader</Table.ColumnHeader>
+                <Table.ColumnHeader>Upcoming Meetings</Table.ColumnHeader>
                 <Table.ColumnHeader>Students</Table.ColumnHeader>
                 <Table.ColumnHeader>Actions</Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
-              {labSections?.data?.map((labSection) => (
+              {labSections.map((labSection) => (
                 <Table.Row key={labSection.id}>
                   <Table.Cell>
                     <VStack gap={1} align="start">
@@ -368,15 +696,48 @@ function LabSectionsTable() {
                   </Table.Cell>
                   <Table.Cell>
                     <VStack gap={1} align="start">
-                      <Text>{getDayDisplayName(labSection.day_of_week)}</Text>
+                      <Text>{labSection.day_of_week ? getDayDisplayName(labSection.day_of_week) : "N/A"}</Text>
                       <Text fontSize="sm" color="fg.muted">
-                        {formatTime(labSection.start_time)}
+                        {labSection.start_time ? formatTime(labSection.start_time) : "N/A"}
                         {labSection.end_time && ` - ${formatTime(labSection.end_time)}`}
                       </Text>
                     </VStack>
                   </Table.Cell>
                   <Table.Cell>
-                    <Text>{labSection.profiles?.name}</Text>
+                    <Text>{labSection.meeting_location || "Not specified"}</Text>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Text>
+                      {labSection.lab_leader_id
+                        ? profiles?.find((p) => p.id === labSection.lab_leader_id)?.name || "Unknown"
+                        : "Not assigned"}
+                    </Text>
+                  </Table.Cell>
+                  <Table.Cell>
+                    {(() => {
+                      const upcomingMeetings = getUpcomingMeetings(labSection.id);
+                      if (upcomingMeetings.length === 0) {
+                        return (
+                          <Text fontSize="sm" color="fg.muted">
+                            No upcoming meetings
+                          </Text>
+                        );
+                      }
+                      return (
+                        <VStack gap={1} align="start">
+                          {upcomingMeetings.slice(0, 3).map((meeting) => (
+                            <Text key={meeting.id} fontSize="sm">
+                              {format(new Date(meeting.meeting_date), "MMM d, yyyy")}
+                            </Text>
+                          ))}
+                          {upcomingMeetings.length > 3 && (
+                            <Text fontSize="xs" color="fg.muted">
+                              +{upcomingMeetings.length - 3} more
+                            </Text>
+                          )}
+                        </VStack>
+                      );
+                    })()}
                   </Table.Cell>
                   <Table.Cell>
                     <Text fontSize="sm" color="fg.muted">
@@ -385,6 +746,11 @@ function LabSectionsTable() {
                   </Table.Cell>
                   <Table.Cell>
                     <HStack gap={2}>
+                      <Tooltip content="Manage meetings">
+                        <Button size="sm" variant="ghost" onClick={() => openMeetingsModal(labSection)}>
+                          <FaCalendar />
+                        </Button>
+                      </Tooltip>
                       <Tooltip content="Edit lab section">
                         <Button size="sm" variant="ghost" onClick={() => handleEdit(labSection)}>
                           <FaEdit />
@@ -399,8 +765,7 @@ function LabSectionsTable() {
                         }
                         confirmHeader="Delete Lab Section"
                         confirmText={`Are you sure you want to delete "${labSection.name}"? This action cannot be undone.`}
-                        onConfirm={() => handleDelete(labSection.id)}
-                        onCancel={() => {}}
+                        onConfirm={async () => await handleDelete(labSection.id)}
                       />
                     </HStack>
                   </Table.Cell>
@@ -416,6 +781,19 @@ function LabSectionsTable() {
         onClose={closeCreateModal}
         onSuccess={handleModalSuccess}
         initialData={editingLabSection}
+      />
+
+      <ManageMeetingsModal
+        isOpen={isMeetingsModalOpen}
+        onClose={closeMeetingsModal}
+        labSection={managingLabSection || null}
+        onAddMeeting={openCreateMeetingModal}
+      />
+
+      <CreateMeetingModal
+        isOpen={isCreateMeetingModalOpen}
+        onClose={closeCreateMeetingModal}
+        labSection={createMeetingLabSection || null}
       />
     </>
   );

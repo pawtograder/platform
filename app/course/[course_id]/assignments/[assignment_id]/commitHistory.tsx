@@ -111,7 +111,11 @@ function CommitHistory({
                       href={`/course/${relatedSubmission.class_id}/assignments/${relatedSubmission.assignments.id}/submissions/${relatedSubmission.id}`}
                     >
                       {relatedSubmission.is_active && <ActiveSubmissionIcon />}#{relatedSubmission.ordinal},{" "}
-                      {relatedSubmission.grader_results?.score}/{relatedSubmission.assignments.autograder_points}
+                      {!relatedSubmission.grader_results
+                        ? "In Progress"
+                        : relatedSubmission.grader_results.errors
+                          ? "Error"
+                          : `${relatedSubmission.grader_results.score}/${relatedSubmission.grader_results.max_score ?? relatedSubmission.assignments.autograder_points}`}
                     </Link>
                   ) : (
                     <Box>

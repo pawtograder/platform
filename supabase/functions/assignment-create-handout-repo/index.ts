@@ -43,14 +43,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!handoutRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
   }
-  await createRepo(handoutRepoOrg, handoutRepoName, TEMPLATE_HANDOUT_REPO_NAME, { is_template_repo: true });
-  await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, []);
   await adminSupabase
     .from("assignments")
     .update({
       template_repo: `${handoutRepoOrg}/${handoutRepoName}`
     })
     .eq("id", assignment_id);
+  scope.setTag("handout_repo_name", handoutRepoName);
+  scope.setTag("handout_repo_org", handoutRepoOrg);
+  await createRepo(handoutRepoOrg, handoutRepoName, TEMPLATE_HANDOUT_REPO_NAME, { is_template_repo: true });
+  await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, []);
   await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
 
   return {

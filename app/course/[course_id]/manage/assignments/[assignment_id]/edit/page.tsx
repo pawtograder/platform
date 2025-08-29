@@ -3,8 +3,8 @@
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import type { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, Skeleton } from "@chakra-ui/react";
+import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
+import { Box, Heading } from "@chakra-ui/react";
 import { useOne, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -115,9 +115,6 @@ export default function EditAssignment() {
     [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update]
   );
 
-  if (form.refineCore.query?.isLoading || form.refineCore.formLoading) {
-    return <Skeleton height="100vh" />;
-  }
   if (form.refineCore.query?.error) {
     return <div>Error: {form.refineCore.query.error.message}</div>;
   }

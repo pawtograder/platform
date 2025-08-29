@@ -6,8 +6,8 @@ import { createBrowserClient } from "@supabase/ssr";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/popover";
 import { useIdentity } from "@/hooks/useIdentities";
-import { toaster } from "../ui/toaster";
-
+import { useSearchParams } from "next/navigation";
+import { Alert } from "../ui/alert";
 function HelpDialog() {
   return (
     <PopoverRoot>
@@ -64,6 +64,8 @@ export default function LinkAccount() {
   );
   const course = useCourse();
   const { identities } = useIdentity();
+  const searchParams = useSearchParams();
+  const errorDescription = searchParams.get("error_description");
   const githubIdentity = identities?.find((identity) => identity.provider === "github");
   if (!identities || githubIdentity) {
     return null;
@@ -80,6 +82,11 @@ export default function LinkAccount() {
       bg="bg.success"
       mx="auto"
     >
+      {errorDescription && (
+        <Alert status="error" title="GitHub Connection Error" mb="4">
+          {errorDescription}
+        </Alert>
+      )}
       <HStack alignItems="flex-start">
         <VStack alignItems="flex-start" gap="0">
           <HStack>

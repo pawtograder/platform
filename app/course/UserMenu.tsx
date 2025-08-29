@@ -1,53 +1,51 @@
 "use client";
 
+import NotificationsBox from "@/components/notifications/notifications-box";
+import { ColorModeButton } from "@/components/ui/color-mode";
+import Link from "@/components/ui/link";
+import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
+import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
+import { createClient } from "@/utils/supabase/client";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
+  Avatar,
   Box,
-  Button,
   CloseButton,
   Dialog,
   Drawer,
   Flex,
   HStack,
-  Icon,
   IconButton,
   Menu,
   Portal,
   Text,
   VStack
 } from "@chakra-ui/react";
-import { FaCircleUser } from "react-icons/fa6";
-import { PiSignOut } from "react-icons/pi";
-import { signOutAction } from "../actions";
+import { Button } from "@/components/ui/button";
 import { useInvalidate, useList, useOne } from "@refinedev/core";
-import { ColorModeButton } from "@/components/ui/color-mode";
-import Link from "@/components/ui/link";
-import NotificationsBox from "@/components/notifications/notifications-box";
-import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
-import { Tooltip } from "@/components/ui/tooltip";
-import useAuthState, { useCourse } from "@/hooks/useAuthState";
-import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
-import { createClient } from "@/utils/supabase/client";
-import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { Avatar } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
+import { RiChatSettingsFill } from "react-icons/ri";
+import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
+import { PiSignOut } from "react-icons/pi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
+import { signOutAction } from "../actions";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
-import { IoNotificationsCircle } from "react-icons/io5";
 
 function SupportMenu() {
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <Tooltip content="Support & Documentation" showArrow>
-          <IconButton variant="outline" colorPalette="gray" size="sm">
-            <HiOutlineSupport />
-          </IconButton>
-        </Tooltip>
+        <IconButton variant="outline" colorPalette="blue" size="sm" aria-label="Support & Documentation">
+          <HiOutlineSupport />
+        </IconButton>
       </Menu.Trigger>
       <Portal>
         <Menu.Positioner>
@@ -77,7 +75,7 @@ function SupportMenu() {
             </Menu.Item>
             <Menu.Item value="view-open-bugs">
               <Link
-                href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug"}
+                href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen%20type%3ABug"}
                 target="_blank"
               >
                 View open bugs
@@ -228,7 +226,10 @@ const DropBoxAvatar = ({
                   value="delete"
                   color="fg.error"
                   _hover={{ bg: "bg.error", color: "fg.error" }}
-                  onClick={() => setAvatarLink(`https://api.dicebear.com/9.x/identicon/svg?seed=${profile?.name}`)}
+                  onClick={() => {
+                    const safeSeed = profile?.id || user?.id || "default";
+                    setAvatarLink(`https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(safeSeed)}`);
+                  }}
                 >
                   Remove current picture
                 </Menu.Item>
@@ -251,7 +252,7 @@ const ProfileChangesMenu = () => {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const invalidate = useInvalidate();
-  const { private_profile_id, public_profile_id } = useCourse();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
 
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
@@ -347,8 +348,16 @@ const ProfileChangesMenu = () => {
       <Toaster />
       <Dialog.Root size={"md"} placement={"center"}>
         <Dialog.Trigger asChild>
-          <Button variant="ghost" colorPalette={"gray"} w="100%" justifyContent="flex-start" size="sm" py={0}>
-            <Icon as={FaCircleUser} size="md" />
+          <Button
+            variant="ghost"
+            colorPalette={"gray"}
+            width="100%"
+            justifyContent="flex-start"
+            size="sm"
+            textAlign="left"
+            py={0}
+          >
+            <FaCircleUser />
             Edit Avatar
           </Button>
         </Dialog.Trigger>
@@ -418,8 +427,16 @@ const NotificationPreferencesMenu = () => {
   return (
     <Dialog.Root size={"md"} placement={"center"}>
       <Dialog.Trigger asChild>
-        <Button variant="ghost" colorPalette="gray" w="100%" justifyContent="flex-start" size="sm" py={0}>
-          <IoNotificationsCircle />
+        <Button
+          variant="ghost"
+          colorPalette="gray"
+          width="100%"
+          justifyContent="flex-start"
+          textAlign="left"
+          size="sm"
+          py={0}
+        >
+          <RiChatSettingsFill />
           Notification Settings
         </Button>
       </Dialog.Trigger>
@@ -450,7 +467,7 @@ function UserSettingsMenu() {
   const supabase = createClient();
   const { user } = useAuthState();
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
-  const { private_profile_id } = useCourse();
+  const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
     id: private_profile_id
@@ -536,7 +553,7 @@ function UserSettingsMenu() {
                     </VStack>
                   </HStack>
                   <Drawer.CloseTrigger asChild>
-                    <CloseButton size="sm" />
+                    <CloseButton size="sm" aria-label="Close" />
                   </Drawer.CloseTrigger>
                 </HStack>
 
@@ -544,13 +561,14 @@ function UserSettingsMenu() {
                   <Button
                     onClick={linkGitHub}
                     colorPalette="gray"
-                    w="100%"
+                    width="100%"
+                    textAlign="left"
                     variant="ghost"
                     size="sm"
                     justifyContent="flex-start"
                     py={0}
                   >
-                    <Icon as={FaGithub} size="md" />
+                    <FaGithub />
                     Link GitHub
                   </Button>
                 )}
@@ -563,23 +581,23 @@ function UserSettingsMenu() {
                           variant="ghost"
                           colorPalette="red"
                           size="sm"
-                          w="100%"
+                          textAlign="left"
+                          width="100%"
                           disabled={true}
                           alignItems="center"
                           gap={2}
                           justifyContent="flex-start"
                           py={0}
                         >
-                          <Icon as={FaUnlink} size="md" />
+                          <FaUnlink />
                           Unlink GitHub
                         </Button>
                       }
                       confirmHeader="Unlink GitHub"
                       confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
-                      onConfirm={() => {
-                        unlinkGitHub();
+                      onConfirm={async () => {
+                        await unlinkGitHub();
                       }}
-                      onCancel={() => {}}
                     ></PopConfirm>
                   </>
                 )}
@@ -587,10 +605,10 @@ function UserSettingsMenu() {
                 <NotificationPreferencesMenu />
                 <Button
                   variant="ghost"
-                  pl={0}
                   onClick={signOutAction}
                   width="100%"
                   textAlign="left"
+                  size="sm"
                   justifyContent="flex-start"
                 >
                   <PiSignOut />
@@ -616,7 +634,7 @@ function ObfuscatedGradesModePicker() {
         aria-label="Toggle obfuscated grades mode"
         css={{ _icon: { width: "5", height: "5" } }}
       >
-        <Icon as={isObfuscated ? TbSpyOff : TbSpy} />
+        {isObfuscated ? <TbSpyOff /> : <TbSpy />}
       </IconButton>
     </Tooltip>
   );

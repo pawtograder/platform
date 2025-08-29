@@ -64,7 +64,9 @@ export default function StudentLabSection() {
               <Text fontSize="sm" color="fg.muted">
                 Schedule
               </Text>
-              <Text fontWeight="medium">{getDayDisplayName(studentLabSection.day_of_week)}</Text>
+              <Text fontWeight="medium">
+                {studentLabSection.day_of_week ? getDayDisplayName(studentLabSection.day_of_week) : "N/A"}
+              </Text>
             </VStack>
           </HStack>
 
@@ -75,7 +77,7 @@ export default function StudentLabSection() {
                 Time
               </Text>
               <Text fontWeight="medium">
-                {formatTime(studentLabSection.start_time)}
+                {studentLabSection.start_time ? formatTime(studentLabSection.start_time) : "N/A"}
                 {studentLabSection.end_time && ` - ${formatTime(studentLabSection.end_time)}`}
               </Text>
             </VStack>

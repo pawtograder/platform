@@ -11,7 +11,7 @@ import type {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController from "@/lib/TableController";
+import TableController, { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
@@ -37,6 +37,19 @@ export function useSubmission(submission_id: number | null | undefined) {
     return () => unsubscribe();
   }, [controller, submission_id]);
   return submission;
+}
+
+export function useAssignmentGroups() {
+  const controller = useAssignmentController();
+  const [assignmentGroups, setAssignmentGroups] = useState<AssignmentGroup[]>(controller.assignmentGroups.rows);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.assignmentGroups.list((data) => {
+      setAssignmentGroups(data);
+    });
+    setAssignmentGroups(data);
+    return () => unsubscribe();
+  }, [controller]);
+  return assignmentGroups;
 }
 
 export function useAssignmentGroup(assignment_group_id: number | null | undefined) {
@@ -107,18 +120,11 @@ export function useRubrics() {
 }
 export function useReviewAssignmentRubricParts(review_assignment_id: number | null | undefined) {
   const controller = useAssignmentController();
-  const [reviewAssignmentRubricParts, setReviewAssignmentRubricParts] = useState<ReviewAssignmentParts[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.reviewAssignmentRubricParts.list((data) => {
-      setReviewAssignmentRubricParts(data);
-    });
-    setReviewAssignmentRubricParts(data ?? []);
-    return () => unsubscribe();
-  }, [controller]);
-  const filteredParts = useMemo(() => {
-    return reviewAssignmentRubricParts.filter((part) => part.review_assignment_id === review_assignment_id);
-  }, [reviewAssignmentRubricParts, review_assignment_id]);
-  return filteredParts;
+  const predicate = useMemo(() => {
+    return (row: ReviewAssignmentParts) => row.review_assignment_id === review_assignment_id;
+  }, [review_assignment_id]);
+  const parts = useListTableControllerValues(controller.reviewAssignmentRubricParts, predicate);
+  return parts;
 }
 export function useActiveSubmissions() {
   const controller = useAssignmentController();
@@ -152,6 +158,7 @@ export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
   const [reviewAssignments, setReviewAssignments] = useState<ReviewAssignments[]>(controller.reviewAssignments.rows);
+
   useEffect(() => {
     const { data, unsubscribe } = controller.reviewAssignments.list((data) => {
       setReviewAssignments(data);
@@ -159,6 +166,7 @@ export function useMyReviewAssignments(submission_id?: number) {
     setReviewAssignments(data);
     return () => unsubscribe();
   }, [controller]);
+
   const myReviewAssignments = useMemo(
     () =>
       reviewAssignments.filter(
@@ -469,8 +477,8 @@ function AssignmentControllerCreator({
   useEffect(() => {
     if (assignmentQuery.data?.data) {
       controller.assignment = assignmentQuery.data.data;
+      controller.rubrics = assignmentQuery.data.data.rubrics || [];
     }
-    controller.rubrics = assignmentQuery.data?.data.rubrics || [];
 
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
       setReady(true);

@@ -1,6 +1,6 @@
 import { acceptInvitationAction } from "@/app/actions";
-import { FormMessage, type Message } from "@/components/form-message";
-import { Button } from "@/components/ui/button";
+import { FormMessage, Message } from "@/components/form-message";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 import Logo from "@/components/ui/logo";
 import { createClient } from "@/utils/supabase/server";
@@ -42,9 +42,9 @@ export default async function AcceptInvitation(props: { searchParams: Promise<Se
               <Input name="password" placeholder="new password" type="password" aria-label="Sign in password" />
             </Box>
             <Box mt="4">
-              <Button type="submit" name="action" value="set-new-password" width="100%">
+              <SubmitButton name="action" value="set-new-password" width="100%" pendingText="Accepting…">
                 Accept Invitation
-              </Button>
+              </SubmitButton>
             </Box>
           </form>
         </Stack>

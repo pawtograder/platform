@@ -1,6 +1,6 @@
 import { confirmEmailAction } from "@/app/actions";
-import { FormMessage, type Message } from "@/components/form-message";
-import { Button } from "@/components/ui/button";
+import { FormMessage, Message } from "@/components/form-message";
+import { SubmitButton } from "@/components/ui/submit-button";
 import Logo from "@/components/ui/logo";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Container, HStack, Heading, Separator, Stack, Text, VStack } from "@chakra-ui/react";
@@ -39,16 +39,16 @@ export default async function ConfirmEmail(props: { searchParams: Promise<Search
             <input type="hidden" name="token_hash" value={token_hash} />
             <FormMessage message={message} />
             <Box mt="4">
-              <Button
-                type="submit"
+              <SubmitButton
                 name="action"
                 value="confirm-email"
                 width="100%"
                 colorPalette="green"
                 disabled={!token_hash}
+                pendingText="Confirming…"
               >
                 Confirm email and sign in
-              </Button>
+              </SubmitButton>
             </Box>
           </form>
         </Stack>

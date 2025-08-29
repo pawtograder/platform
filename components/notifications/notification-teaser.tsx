@@ -1,5 +1,5 @@
-import { Avatar, Box, HStack, Skeleton, VStack, IconButton } from "@chakra-ui/react";
-import type { Notification } from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Box, HStack, Skeleton, VStack, IconButton, Text } from "@chakra-ui/react";
+import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
@@ -70,6 +70,75 @@ export type EmailNotification = NotificationEnvelope & {
   reply_to?: string;
 };
 
+export type CourseEnrollmentNotification = NotificationEnvelope & {
+  type: "course_enrollment";
+  action: "create";
+  course_name: string;
+  course_id: number;
+  inviter_name: string;
+  inviter_email: string;
+};
+
+/**
+ * System notification type with extended properties for future development
+ *
+ * Example usage scenarios:
+ *
+ * Welcome message:
+ * { title: "Welcome!", message: "...", display: "modal", severity: "success", icon: "🎉" }
+ *
+ * Maintenance alert:
+ * { title: "Scheduled Maintenance", message: "...", display: "banner", severity: "warning",
+ *   expires_at: "2024-01-01T10:00:00Z", persistent: true }
+ *
+ * Feature announcement with actions:
+ * { title: "New Feature", message: "...", display: "modal", severity: "info",
+ *   actions: [{ label: "Learn More", action: "navigate", target: "/features/new" }] }
+ *
+ * Targeted instructor-only notification:
+ * { title: "Grading Reminder", message: "...", display: "default", severity: "info",
+ *   audience: { roles: ["instructor"] }, campaign_id: "grading-reminders" }
+ */
+export type SystemNotification = NotificationEnvelope & {
+  type: "system";
+  title: string;
+  message: string;
+  display: "default" | "modal" | "banner";
+
+  // Styling and presentation
+  severity?: "info" | "success" | "warning" | "error";
+  icon?: string; // Custom icon name or emoji
+
+  // Behavior
+  persistent?: boolean; // If true, shows again after dismissal until explicitly acknowledged
+  expires_at?: string; // ISO date string - auto-dismiss after this time
+
+  // Actions
+  actions?: {
+    label: string;
+    action: "navigate" | "external_link" | "custom";
+    target?: string; // URL for navigate/external_link, custom identifier for custom actions
+    style?: "primary" | "secondary" | "danger";
+  }[];
+
+  // Targeting and conditions
+  audience?: {
+    roles?: ("student" | "instructor" | "admin")[];
+    course_ids?: number[];
+    user_ids?: string[];
+    feature_flags?: string[]; // Show only if user has these features enabled
+  };
+
+  // Analytics and tracking
+  campaign_id?: string; // For grouping related notifications in analytics
+  track_engagement?: boolean; // Whether to track clicks, dismissals, etc.
+
+  // Advanced display options
+  max_width?: string; // CSS width value for modals/banners
+  position?: "top" | "bottom" | "center"; // For banner positioning
+  backdrop_dismiss?: boolean; // For modals - whether clicking outside dismisses
+};
+
 export type HelpRequestNotification = NotificationEnvelope & {
   type: "help_request";
   action: "created" | "status_changed" | "assigned";
@@ -82,6 +151,8 @@ export type HelpRequestNotification = NotificationEnvelope & {
   assignee_name?: string;
   status?: "open" | "in_progress" | "resolved" | "closed";
   request_preview: string;
+  request_subject?: string;
+  request_body?: string;
   is_private: boolean;
 };
 
@@ -296,14 +367,109 @@ function EmailNotificationTeaser({ notification }: { notification: Notification 
   );
 }
 
+function CourseEnrollmentNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as CourseEnrollmentNotification;
+  return (
+    <HStack align="flex-start" gap="3">
+      <Box flexShrink="0" p="2" bg="green.subtle" borderRadius="md">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+        </svg>
+      </Box>
+      <VStack align="flex-start" gap="1" flex="1">
+        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+          {`Welcome to **${body.course_name}**!`}
+        </Markdown>
+        <Markdown
+          style={{
+            fontSize: "0.75rem",
+            color: "var(--chakra-colors-fg-muted)",
+            lineHeight: "1.3"
+          }}
+        >
+          {`You were added by **${body.inviter_name}** (${body.inviter_email})`}
+        </Markdown>
+      </VStack>
+    </HStack>
+  );
+}
+
+function SystemNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as SystemNotification;
+
+  // Determine colors based on severity
+  const severityConfig = {
+    info: { bg: "blue.subtle", color: "blue.500" },
+    success: { bg: "green.subtle", color: "green.500" },
+    warning: { bg: "orange.subtle", color: "orange.500" },
+    error: { bg: "red.subtle", color: "red.500" }
+  };
+
+  const config = severityConfig[body.severity || "info"];
+
+  // Default icons based on severity
+  const defaultIcons = {
+    info: (
+      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+      </svg>
+    ),
+    success: (
+      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+      </svg>
+    ),
+    warning: (
+      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+      </svg>
+    ),
+    error: (
+      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z" />
+      </svg>
+    )
+  };
+
+  return (
+    <HStack align="flex-start" gap="3">
+      <Box flexShrink="0" p="2" bg={config.bg} borderRadius="md" color={config.color}>
+        {body.icon ? (
+          // Custom icon - could be emoji or lucide icon name
+          <Text fontSize="16px">{body.icon}</Text>
+        ) : (
+          defaultIcons[body.severity || "info"]
+        )}
+      </Box>
+      <VStack align="flex-start" gap="2" flex="1">
+        <Markdown
+          style={{
+            fontSize: "0.875rem",
+            color: "var(--chakra-colors-fg-default)",
+            lineHeight: "1.4",
+            fontWeight: "600"
+          }}
+        >
+          {body.title}
+        </Markdown>
+        <Markdown
+          style={{
+            fontSize: "0.8rem",
+            color: "var(--chakra-colors-fg-default)",
+            lineHeight: "1.4"
+          }}
+        >
+          {body.message}
+        </Markdown>
+      </VStack>
+    </HStack>
+  );
+}
+
 /**
  * Gets the navigation URL for a notification based on its type
  */
-function getNotificationUrl(
-  notification: Notification,
-  course_id: string,
-  rootThread?: { class_id: number }
-): string | undefined {
+function getNotificationUrl(notification: Notification, course_id: string): string | undefined {
   const body = notification.body as NotificationEnvelope;
 
   if (body.type === "help_request" || body.type === "help_request_message") {
@@ -315,8 +481,10 @@ function getNotificationUrl(
   } else if (body.type === "discussion_thread") {
     const discussionBody = body as DiscussionThreadNotification;
     const replyIdx = discussionBody.new_comment_number ? `#post-${discussionBody.new_comment_number}` : "";
-    const threadCourseId = rootThread?.class_id || course_id;
-    return `/course/${threadCourseId}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+    return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+  } else if (body.type === "course_enrollment") {
+    const enrollmentBody = body as CourseEnrollmentNotification;
+    return `/course/${enrollmentBody.course_id}`;
   }
 
   // Email notifications and assignment group member notifications don't have specific URLs
@@ -338,9 +506,7 @@ export default function NotificationTeaser({
   const { course_id } = useParams();
   const router = useRouter();
 
-  // Get thread data for discussion notifications to get the correct course_id
-  const discussionBody = body?.type === "discussion_thread" ? (body as DiscussionThreadNotification) : null;
-  const rootThread = useDiscussionThreadTeaser(discussionBody?.root_thread_id || 0, ["class_id"]);
+  // No cross-course routing: use current course_id for all notification types
 
   if (!notification) {
     return <Skeleton height="60px" width="100%" />;
@@ -402,7 +568,7 @@ export default function NotificationTeaser({
         }
       } else {
         // Navigate to other notification URLs normally
-        const url = getNotificationUrl(notification, course_id as string, rootThread);
+        const url = getNotificationUrl(notification, course_id as string);
         if (url) {
           router.push(url);
         }
@@ -428,10 +594,14 @@ export default function NotificationTeaser({
     teaser = <AssignmentGroupJoinRequestNotificationTeaser notification={notification} />;
   } else if (body.type === "email") {
     teaser = <EmailNotificationTeaser notification={notification} />;
+  } else if (body.type === "course_enrollment") {
+    teaser = <CourseEnrollmentNotificationTeaser notification={notification} />;
   } else if (body.type === "help_request") {
     teaser = <HelpRequestNotificationTeaser notification={notification} />;
   } else if (body.type === "help_request_message") {
     teaser = <HelpRequestMessageNotificationTeaser notification={notification} />;
+  } else if (body.type === "system") {
+    teaser = <SystemNotificationTeaser notification={notification} />;
   } else {
     teaser = <Markdown>{`*Unknown notification type: ${body.type}*`}</Markdown>;
   }

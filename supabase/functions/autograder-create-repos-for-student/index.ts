@@ -18,6 +18,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   let userId: string;
   let githubUsername: string | null;
   let classId: number | undefined;
+  let assignmentId: number | undefined;
+  let syncAllPermissions = false;
 
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
@@ -26,6 +28,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.log("class_id", class_id);
     const user_id = url.searchParams.get("user_id");
     console.log("user_id", user_id);
+    const assignment_id_param = url.searchParams.get("assignment_id");
+    assignmentId = assignment_id_param ? Number.parseInt(assignment_id_param) : undefined;
+    console.log("assignment_id", assignmentId);
+    syncAllPermissions = url.searchParams.get("sync_all_permissions") === "true";
+    console.log("sync_all_permissions", syncAllPermissions);
 
     // Edge function secret authentication - get user_id from request body
     if (!user_id) {
@@ -51,6 +58,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     githubUsername = userData.github_username;
     scope?.setTag("Source", "edge-function-secret");
   } else {
+    // JWT authentication - parse request body for parameters
+    let requestBody: AutograderCreateReposForStudentRequest = {};
+    if (req.method === "POST") {
+      try {
+        requestBody = await req.json();
+      } catch {
+        // If no body or invalid JSON, use default empty object
+        console.log("No request body or invalid JSON, using defaults");
+      }
+    }
+    syncAllPermissions = requestBody.sync_all_permissions || false;
+    classId = requestBody.class_id;
+    assignmentId = requestBody.assignment_id;
+    console.log("sync_all_permissions", syncAllPermissions);
+    console.log("assignment_id", assignmentId);
+
     const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
       global: {
         headers: { Authorization: req.headers.get("Authorization") || "" }
@@ -140,7 +163,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     (a) =>
       a.template_repo?.includes("/") &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
-        a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
+        a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")) &&
+      (assignmentId === undefined || a.id === assignmentId)
   );
 
   const errorMessages: string[] = [];
@@ -151,6 +175,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
         if (!assignment.template_repo?.includes("/")) {
+          return;
+        }
+        // Skip if assignment_id is specified and this assignment doesn't match
+        if (assignmentId !== undefined && assignment.id !== assignmentId) {
           return;
         }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
@@ -292,9 +320,69 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
     });
   await Promise.all(requests);
+
+  // Sync permissions for all existing repos if requested
+  if (syncAllPermissions) {
+    console.log("Syncing permissions for all existing repos...");
+
+    // Sync permissions for existing individual repos
+    const individualRepoSyncPromises = existingIndividualRepos
+      .filter((repo) => repo.repository && repo.repository.includes("/"))
+      .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
+      .map(async (repo) => {
+        try {
+          const [orgName, repoName] = repo.repository.split("/");
+          const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
+          if (classSlug) {
+            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername]);
+            console.log(`Synced permissions for individual repo: ${repo.repository}`);
+          }
+        } catch (e) {
+          console.log(`Error syncing permissions for individual repo: ${repo.repository}`);
+          console.error(e);
+          errorMessages.push(
+            `Error syncing permissions for repo: ${repo.repository}, please ask your instructor to check that this is configured correctly.`
+          );
+        }
+      });
+
+    // Sync permissions for existing group repos
+    const groupRepoSyncPromises = existingGroupRepos
+      .filter((repo) => repo.repository && repo.repository.includes("/"))
+      .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
+      .map(async (repo) => {
+        try {
+          const [orgName, repoName] = repo.repository.split("/");
+          const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
+
+          // Find the assignment group for this repo
+          const groupMembership = classes
+            .flatMap((c) => c!.profiles!.assignment_groups_members!)
+            .find((gm) => gm.assignment_groups.repositories.some((r) => r.id === repo.id));
+
+          if (classSlug && groupMembership) {
+            const groupMemberUsernames = groupMembership.assignment_groups.assignment_groups_members
+              .filter((m) => m.user_roles && m.user_roles.users.github_username)
+              .map((m) => m.user_roles.users.github_username!);
+
+            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames);
+            console.log(`Synced permissions for group repo: ${repo.repository}`);
+          }
+        } catch (e) {
+          console.log(`Error syncing permissions for group repo: ${repo.repository}`);
+          console.error(e);
+          errorMessages.push(
+            `Error syncing permissions for repo: ${repo.repository}, please ask your instructor to check that this is configured correctly.`
+          );
+        }
+      });
+
+    await Promise.all([...individualRepoSyncPromises, ...groupRepoSyncPromises]);
+  }
+
   return {
     is_ok: true,
-    message: `Repositories created for ${assignments!.length} assignments. ${errorMessages.length > 0 ? `\n\n${errorMessages.join("\n")}` : ""}`
+    message: `Repositories created for ${assignments!.length} assignments${assignmentId ? ` (filtered to assignment ${assignmentId})` : ""}.${syncAllPermissions ? ` Synced permissions for all existing repos${assignmentId ? ` for assignment ${assignmentId}` : ""}.` : ""} ${errorMessages.length > 0 ? `\n\n${errorMessages.join("\n")}` : ""}`
   };
 }
 

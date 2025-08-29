@@ -56,9 +56,9 @@ function DraggableItem({ item }: DraggableItemProps) {
       _active={{ cursor: "grabbing" }}
       _hover={{ shadow: "md" }}
       transition="all 0.2s"
-      bg={isDragging ? "gray.50" : "white"}
+      bg={isDragging ? "bg.emphasized" : "bg.default"}
       border={isDragging ? "2px solid" : "1px solid"}
-      borderColor={isDragging ? "blue.300" : "gray.200"}
+      borderColor={isDragging ? "blue.emphasized" : "border.emphasized"}
     >
       <Card.Body p={0} m={2}>
         <VStack gap={2} align="flex-start">
@@ -85,16 +85,16 @@ function DroppableArea({ id, title, items, children, hasConflict }: Omit<Droppab
 
   const getBorderColor = () => {
     if (isOver) {
-      return hasConflict ? "red.400" : "green.400";
+      return hasConflict ? "red.solid" : "green.solid";
     }
-    return "gray.200";
+    return "border.emphasized";
   };
 
   const getBgColor = () => {
     if (isOver) {
-      return hasConflict ? "red.50" : "green.50";
+      return hasConflict ? "red.subtle" : "green.subtle";
     }
-    return "gray.50";
+    return "bg.default";
   };
 
   return (

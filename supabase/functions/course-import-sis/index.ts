@@ -1,0 +1,1821 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { wrapRequestHandler, UserVisibleError } from "../_shared/HandlerUtils.ts";
+
+// Declare EdgeRuntime for type safety
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { createInvitationsBulk, type InvitationRequest } from "../_shared/InvitationUtils.ts";
+import * as Sentry from "npm:@sentry/deno";
+import type { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
+
+// SIS API Types
+interface SISCRNResponse {
+  [courseCode: string]: number[];
+}
+
+interface SISRosterResponse {
+  [crn: string]: {
+    section_meta: {
+      course: string;
+      title: string;
+      start_date: string;
+      end_date: string;
+      meeting_location: string;
+      meeting_times: string;
+      campus: string;
+    };
+    instructors: Array<{
+      nuid: number;
+      first_name: string;
+      last_name: string;
+    }>;
+    tas: Array<{
+      nuid: number;
+      first_name: string;
+      last_name: string;
+    }>;
+    students: Array<{
+      nuid: string;
+      first_name: string;
+      last_name: string;
+    }>;
+  };
+}
+
+// Request/Response Types
+interface CourseImportRequest {
+  term: string;
+  mainCourseCode: string;
+  labCourseCode?: string;
+  existingClassId?: number; // ID of existing class to sync to instead of creating new one
+}
+
+interface ParsedMeetingTime {
+  startTime: string | null; // Time in HH:MM format
+  endTime: string | null; // Time in HH:MM format
+  dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null; // First day found in meeting_times (for day_of_week field)
+}
+
+/**
+ * Parse meeting times from SIS format (e.g., "T/R 2:30pm-3:30pm", "MWF 9:00am-10:00am")
+ * Returns start_time and end_time in HH:MM format, and the first day found for day_of_week
+ */
+function parseMeetingTimes(meetingTimes: string, scope?: Sentry.Scope): ParsedMeetingTime {
+  try {
+    // Debug logging - always log what we're trying to parse
+    scope?.addBreadcrumb({
+      message: `Attempting to parse meeting_times`,
+      category: "debug",
+      data: {
+        meetingTimes,
+        type: typeof meetingTimes,
+        length: meetingTimes?.length || 0,
+        trimmed: meetingTimes?.trim()
+      }
+    });
+
+    if (!meetingTimes?.trim()) {
+      scope?.addBreadcrumb({
+        message: `Empty or null meeting_times`,
+        category: "info",
+        data: { meetingTimes }
+      });
+      return { startTime: null, endTime: null, dayOfWeek: null };
+    }
+
+    // Day mapping
+    const dayMap = {
+      M: "monday",
+      T: "tuesday",
+      W: "wednesday",
+      R: "thursday",
+      F: "friday"
+    } as const satisfies Record<string, Database["public"]["Enums"]["day_of_week"]>;
+
+    // Try multiple time pattern variations
+    const timePatterns = [
+      /(\d{1,2}:\d{2}[ap])\s*-\s*(\d{1,2}:\d{2}[ap])/i, // Your format: 8:00a-9:40a
+      /(\d{1,2}:\d{2}[ap]m)\s*-\s*(\d{1,2}:\d{2}[ap]m)/i, // Standard: 9:00am-10:00am
+      /(\d{1,2}:\d{2}\s*[ap]m)\s*-\s*(\d{1,2}:\d{2}\s*[ap]m)/i, // With spaces: 9:00 am-10:00 pm
+      /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/i, // No am/pm: 09:00-10:00
+      /(\d{1,2}[ap])\s*-\s*(\d{1,2}[ap])/i, // No minutes, single letter: 9a-10a
+      /(\d{1,2}[ap]m)\s*-\s*(\d{1,2}[ap]m)/i // No minutes: 9am-10am
+    ];
+
+    let timeMatch: RegExpMatchArray | null = null;
+    let matchedPattern = -1;
+
+    for (let i = 0; i < timePatterns.length; i++) {
+      timeMatch = meetingTimes.match(timePatterns[i]);
+      if (timeMatch) {
+        matchedPattern = i;
+        break;
+      }
+    }
+
+    if (!timeMatch) {
+      scope?.addBreadcrumb({
+        message: `Could not parse time portion from meeting_times with any pattern`,
+        category: "warning",
+        data: {
+          meetingTimes,
+          patternsAttempted: timePatterns.length,
+          testedPatterns: timePatterns.map((p) => p.toString())
+        }
+      });
+      return { startTime: null, endTime: null, dayOfWeek: null };
+    }
+
+    scope?.addBreadcrumb({
+      message: `Successfully matched time pattern`,
+      category: "info",
+      data: {
+        meetingTimes,
+        matchedPattern,
+        match: timeMatch[0],
+        startMatch: timeMatch[1],
+        endMatch: timeMatch[2]
+      }
+    });
+
+    const [, startTimeStr, endTimeStr] = timeMatch;
+
+    // Convert to 24-hour format - handle multiple formats
+    const convertTo24Hour = (timeStr: string): string => {
+      scope?.addBreadcrumb({
+        message: `Converting time to 24hr format`,
+        category: "debug",
+        data: { timeStr, matchedPattern }
+      });
+
+      // Handle different time formats based on which pattern matched
+      let match: RegExpMatchArray | null = null;
+
+      if (matchedPattern === 0) {
+        // 8:00a format (single letter, your SIS format!)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})([ap])$/i);
+      } else if (matchedPattern === 1) {
+        // 9:00am format (standard)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})([ap])m$/i);
+      } else if (matchedPattern === 2) {
+        // 9:00 am format (with space)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})\s*([ap])m$/i);
+      } else if (matchedPattern === 3) {
+        // 09:00 format (24hr already, just return)
+        match = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+        if (match) {
+          const [, hours, minutes] = match;
+          return `${parseInt(hours).toString().padStart(2, "0")}:${minutes}`;
+        }
+      } else if (matchedPattern === 4) {
+        // 9a format (no minutes, single letter)
+        match = timeStr.match(/^(\d{1,2})([ap])$/i);
+        if (match) {
+          const [, hours, ampm] = match;
+          let hour = parseInt(hours);
+
+          if (ampm.toLowerCase() === "p" && hour !== 12) {
+            hour += 12;
+          } else if (ampm.toLowerCase() === "a" && hour === 12) {
+            hour = 0;
+          }
+
+          return `${hour.toString().padStart(2, "0")}:00`;
+        }
+      } else if (matchedPattern === 5) {
+        // 9am format (no minutes)
+        match = timeStr.match(/^(\d{1,2})([ap])m$/i);
+        if (match) {
+          const [, hours, ampm] = match;
+          let hour = parseInt(hours);
+
+          if (ampm.toLowerCase() === "p" && hour !== 12) {
+            hour += 12;
+          } else if (ampm.toLowerCase() === "a" && hour === 12) {
+            hour = 0;
+          }
+
+          return `${hour.toString().padStart(2, "0")}:00`;
+        }
+      }
+
+      if (!match) {
+        Sentry.captureMessage(`Could not parse time format for conversion`, scope);
+        return timeStr; // Return as-is if we can't parse
+      }
+
+      const [, hours, minutes, ampm] = match;
+      let hour = parseInt(hours);
+
+      if (ampm && ampm.toLowerCase() === "p" && hour !== 12) {
+        hour += 12;
+      } else if (ampm && ampm.toLowerCase() === "a" && hour === 12) {
+        hour = 0;
+      }
+
+      const result = `${hour.toString().padStart(2, "0")}:${minutes || "00"}`;
+
+      scope?.addBreadcrumb({
+        message: `Time conversion successful`,
+        category: "debug",
+        data: { original: timeStr, converted: result }
+      });
+
+      return result;
+    };
+
+    const startTime = convertTo24Hour(startTimeStr);
+    const endTime = convertTo24Hour(endTimeStr);
+
+    // Extract first day for day_of_week field
+    let dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null = null;
+    // Iterate through meetingTimes string in order to find the first day that appears
+    for (let i = 0; i < meetingTimes.length; i++) {
+      const char = meetingTimes[i];
+      if (char in dayMap) {
+        dayOfWeek = dayMap[char as keyof typeof dayMap];
+        break;
+      }
+    }
+
+    scope?.addBreadcrumb({
+      message: `Parsed meeting times successfully`,
+      category: "info",
+      data: {
+        original: meetingTimes,
+        startTime,
+        endTime,
+        dayOfWeek
+      }
+    });
+
+    return { startTime, endTime, dayOfWeek };
+  } catch (error) {
+    scope?.addBreadcrumb({
+      message: `Error parsing meeting times: ${error instanceof Error ? error.message : String(error)}`,
+      category: "error",
+      data: { meetingTimes, error }
+    });
+
+    Sentry.captureException(error, scope);
+    return { startTime: null, endTime: null, dayOfWeek: null };
+  }
+}
+
+interface ProcessedSection {
+  crn: number;
+  sectionType: "class" | "lab";
+  sectionName: string;
+  meetingInfo: string;
+  location: string;
+  // Parsed meeting time fields for lab sections
+  parsedMeetingTimes?: {
+    startTime: string | null;
+    endTime: string | null;
+    dayOfWeek: Database["public"]["Enums"]["day_of_week"] | null;
+  };
+  instructors: Array<{
+    sis_user_id: number;
+    name: string;
+    role: "instructor";
+  }>;
+  tas: Array<{
+    sis_user_id: number;
+    name: string;
+    role: "grader";
+  }>;
+  students: Array<{
+    sis_user_id: number;
+    name: string;
+    role: "student";
+  }>;
+}
+
+interface CourseImportResponse {
+  success: boolean;
+  courseInfo: {
+    course: string;
+    title: string;
+    startDate: string;
+    endDate: string;
+    campus: string;
+  };
+  sections: ProcessedSection[];
+  totalUsers: {
+    instructors: number;
+    graders: number;
+    students: number;
+  };
+  enrollmentStatus: {
+    instructors: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+    graders: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+    students: {
+      inSIS: number;
+      inPawtograder: number;
+      pendingInvitations: number;
+      newInvitations: number;
+    };
+  };
+  existingClassId?: number | null; // ID of existing class if one was specified
+}
+
+/**
+ * Sync existing SIS-linked classes with latest enrollment data
+ */
+async function syncSISClasses(supabase: SupabaseClient<Database>, classId: number | null, scope: Sentry.Scope) {
+  scope?.setTag("function", "sis-sync");
+
+  console.log("Syncing SIS classes");
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  // Get SIS API configuration
+  const SIS_API_URL = Deno.env.get("SIS_API_URL");
+  const SIS_AUTH_TOKEN = Deno.env.get("SIS_AUTH_TOKEN");
+
+  if (!SIS_API_URL || !SIS_AUTH_TOKEN) {
+    throw new UserVisibleError("SIS API configuration missing");
+  }
+
+  // Find classes that have SIS-linked sections
+  const classQuery = adminSupabase
+    .from("classes")
+    .select(
+      `
+      id, name, term,
+      class_sections(id, sis_crn),
+      lab_sections(id, sis_crn)
+    `
+    )
+    .limit(1000);
+
+  if (classId) {
+    classQuery.eq("id", classId);
+  }
+
+  const { data: sisLinkedClasses, error } = await classQuery;
+
+  if (error) {
+    throw new UserVisibleError(`Failed to fetch SIS-linked classes: ${error.message}`);
+  }
+
+  if (!sisLinkedClasses || sisLinkedClasses.length === 0) {
+    scope?.addBreadcrumb({
+      message: "No SIS-linked classes found to sync",
+      category: "info"
+    });
+    return { synced: 0, errors: 0 };
+  }
+
+  console.log("SIS Linked Classes", sisLinkedClasses);
+  scope?.setTag("classes_to_sync", sisLinkedClasses.length.toString());
+
+  let syncedCount = 0;
+  let errorCount = 0;
+
+  // Process each class
+  for (const classData of sisLinkedClasses) {
+    try {
+      // Check if sync is enabled for sections in this class
+      const { data: syncStatus } = await adminSupabase
+        .from("sis_sync_status")
+        .select("sync_enabled, course_section_id, lab_section_id")
+        .eq("course_id", classData.id)
+        .limit(1000);
+
+      console.log("Sync Status", syncStatus);
+      // Get enabled sections only
+      const enabledClassSections = classData.class_sections.filter((s) => {
+        const status = syncStatus?.find((ss) => ss.course_section_id === s.id);
+        return status ? status.sync_enabled : true; // Default to enabled if no status record
+      });
+
+      const enabledLabSections = classData.lab_sections.filter((s) => {
+        const status = syncStatus?.find((ss) => ss.lab_section_id === s.id);
+        return status ? status.sync_enabled : true; // Default to enabled if no status record
+      });
+
+      if (enabledClassSections.length === 0 && enabledLabSections.length === 0) {
+        scope?.addBreadcrumb({
+          message: `All sections disabled for class ${classData.name}`,
+          category: "info",
+          data: { classId: classData.id }
+        });
+        continue;
+      }
+
+      // Get all CRNs for enabled sections only
+      const allCRNs = [
+        ...enabledClassSections.map((s) => s.sis_crn).filter((crn) => crn !== null),
+        ...enabledLabSections.map((s) => s.sis_crn).filter((crn) => crn !== null)
+      ];
+
+      // Fetch current rosters for all CRNs
+      const rosterPromises = allCRNs.map(async (crn) => {
+        const response = await fetch(`${SIS_API_URL}/roster/?semester=${classData.term}&crn=${crn}`, {
+          headers: { Authorization: `Token ${SIS_AUTH_TOKEN}` }
+        });
+
+        if (!response.ok) {
+          scope?.addBreadcrumb({
+            message: `Failed to fetch roster for CRN ${crn}`,
+            category: "error",
+            data: { classId: classData.id, crn, status: response.status }
+          });
+          throw new UserVisibleError(
+            `Failed to fetch roster for CRN ${crn}: ${response.status} ${response.statusText}`
+          );
+        }
+
+        const data = (await response.json()) as SISRosterResponse;
+        return { crn, roster: data[crn.toString()] };
+      });
+
+      const rosterResults = (await Promise.all(rosterPromises)).filter((r) => r !== null);
+
+      if (rosterResults.length === 0) {
+        scope?.addBreadcrumb({
+          message: `No roster data available for class ${classData.name}`,
+          category: "warning",
+          data: { classId: classData.id }
+        });
+        continue;
+      }
+
+      // SYNC LOGIC IMPLEMENTATION
+
+      // Step 1: Process SIS roster data for this class
+      const sisEnrollmentByCRN = new Map<
+        number,
+        {
+          sectionType: "class" | "lab";
+          instructors: Array<{ sis_user_id: number; name: string; role: "instructor" }>;
+          graders: Array<{ sis_user_id: number; name: string; role: "grader" }>;
+          students: Array<{ sis_user_id: number; name: string; role: "student" }>;
+          sectionMeta: {
+            meeting_location: string;
+            meeting_times: string;
+            campus: string;
+          };
+        }
+      >();
+
+      rosterResults.forEach(({ crn, roster }) => {
+        if (!roster) return;
+
+        // Determine section type based on enabled sections
+        const isClassSection = enabledClassSections.some((s) => s.sis_crn === crn);
+        const isLabSection = enabledLabSections.some((s) => s.sis_crn === crn);
+        const sectionType = isClassSection ? "class" : "lab";
+
+        // Debug logging for section type determination
+        scope?.addBreadcrumb({
+          message: `Section type determination for CRN ${crn}`,
+          category: "debug",
+          data: {
+            crn,
+            isClassSection,
+            isLabSection,
+            determinedSectionType: sectionType,
+            enabledClassCRNs: enabledClassSections.map((s) => s.sis_crn),
+            enabledLabCRNs: enabledLabSections.map((s) => s.sis_crn)
+          }
+        });
+
+        // Warning if CRN exists in both or neither
+        if (isClassSection && isLabSection) {
+          scope?.addBreadcrumb({
+            message: `WARNING: CRN ${crn} exists in both class and lab sections - defaulting to class`,
+            category: "warning",
+            data: { crn, classId: classData.id }
+          });
+        } else if (!isClassSection && !isLabSection) {
+          scope?.addBreadcrumb({
+            message: `WARNING: CRN ${crn} not found in any enabled sections - defaulting to lab`,
+            category: "warning",
+            data: { crn, classId: classData.id }
+          });
+        }
+
+        sisEnrollmentByCRN.set(crn, {
+          sectionType,
+          instructors: roster.instructors.map((inst) => ({
+            sis_user_id: inst.nuid,
+            name: `${inst.first_name} ${inst.last_name}`,
+            role: "instructor" as const
+          })),
+          graders: roster.tas.map((ta) => ({
+            sis_user_id: ta.nuid,
+            name: `${ta.first_name} ${ta.last_name}`,
+            role: "grader" as const
+          })),
+          students: roster.students.map((student) => ({
+            sis_user_id: Number(student.nuid),
+            name: `${student.first_name} ${student.last_name}`,
+            role: "student" as const
+          })),
+          sectionMeta: roster.section_meta
+        });
+      });
+
+      // Step 2: Get current invitations and enrollments for this class (only from SIS-enabled sections)
+      let currentInvitations: GetResult<
+        Database["public"],
+        Database["public"]["Tables"]["invitations"]["Row"],
+        "invitations",
+        Database["public"]["Tables"]["invitations"]["Relationships"],
+        "id, sis_user_id, role, status, class_section_id, lab_section_id"
+      >[] = [];
+      let currentEnrollments: GetResult<
+        Database["public"],
+        Database["public"]["Tables"]["user_roles"]["Row"],
+        "user_roles",
+        Database["public"]["Tables"]["user_roles"]["Relationships"],
+        "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
+      >[] = [];
+
+      // Build filters based on which section types have enabled sections
+      const invitationFilters = [];
+      const enrollmentFilters = [];
+
+      // Only include sections that actually have SIS CRNs
+      const enabledClassSectionsWithSIS = enabledClassSections.filter((s) => s.sis_crn !== null);
+      const enabledLabSectionsWithSIS = enabledLabSections.filter((s) => s.sis_crn !== null);
+
+      if (enabledClassSectionsWithSIS.length > 0) {
+        const enabledClassSectionIds = enabledClassSectionsWithSIS.map((s) => s.id);
+        invitationFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
+        enrollmentFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
+      }
+
+      if (enabledLabSectionsWithSIS.length > 0) {
+        const enabledLabSectionIds = enabledLabSectionsWithSIS.map((s) => s.id);
+        invitationFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
+        enrollmentFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
+      }
+
+      // Debug logging for section filtering
+      console.log("=== SECTION FILTERING DEBUG ===");
+      console.log(`Total enabled class sections: ${enabledClassSections.length}`);
+      console.log(`Class sections with SIS CRN: ${enabledClassSectionsWithSIS.length}`);
+      console.log(`Total enabled lab sections: ${enabledLabSections.length}`);
+      console.log(`Lab sections with SIS CRN: ${enabledLabSectionsWithSIS.length}`);
+      console.log(`Invitation filters: ${invitationFilters}`);
+      console.log("==============================");
+
+      // Only fetch if we have any enabled sections
+      if (invitationFilters.length > 0) {
+        const { data: invitations } = await adminSupabase
+          .from("invitations")
+          .select("id, sis_user_id, role, status, class_section_id, lab_section_id")
+          .eq("class_id", classData.id)
+          .or(invitationFilters.join(","))
+          .limit(1000);
+        currentInvitations = invitations || [];
+
+        const { data: enrollments } = await adminSupabase
+          .from("user_roles")
+          .select("id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)")
+          .eq("class_id", classData.id)
+          .not("users.sis_user_id", "is", null)
+          .or(enrollmentFilters.join(","))
+          .limit(1000);
+        currentEnrollments = enrollments || [];
+      }
+
+      // Step 3: Build current state maps
+      const currentInvitationsBySIS = new Map(currentInvitations.map((inv) => [inv.sis_user_id, inv]));
+
+      const currentEnrollmentsBySIS = new Map(currentEnrollments.map((enr) => [enr.users.sis_user_id, enr]));
+
+      // Step 4: Collect all SIS users across all sections for this class
+      const allSISUsers = new Map<
+        number,
+        {
+          name: string;
+          role: "instructor" | "grader" | "student";
+          classCRN: number | null;
+          labCRN: number | null;
+        }
+      >();
+
+      sisEnrollmentByCRN.forEach((sectionData, crn) => {
+        [...sectionData.instructors, ...sectionData.graders, ...sectionData.students].forEach((user) => {
+          const existing = allSISUsers.get(Number(user.sis_user_id));
+          const roleHierarchy = { instructor: 3, grader: 2, student: 1 };
+
+          if (!existing) {
+            // New user - create entry with appropriate section assignment
+            allSISUsers.set(Number(user.sis_user_id), {
+              name: user.name,
+              role: user.role,
+              classCRN: sectionData.sectionType === "class" ? crn : null,
+              labCRN: sectionData.sectionType === "lab" ? crn : null
+            });
+
+            scope?.addBreadcrumb({
+              message: `New user ${user.sis_user_id} added`,
+              category: "debug",
+              data: {
+                userId: user.sis_user_id,
+                userName: user.name,
+                role: user.role,
+                crn,
+                sectionType: sectionData.sectionType
+              }
+            });
+          } else {
+            // Existing user - handle role hierarchy and section assignment
+            const shouldUpdateRole = roleHierarchy[user.role] > roleHierarchy[existing.role];
+
+            if (shouldUpdateRole) {
+              // Update role and preserve existing section assignments
+              existing.role = user.role;
+              existing.name = user.name; // Update name in case it changed
+
+              scope?.addBreadcrumb({
+                message: `User ${user.sis_user_id} role upgraded`,
+                category: "debug",
+                data: {
+                  userId: user.sis_user_id,
+                  userName: user.name,
+                  newRole: user.role,
+                  crn,
+                  sectionType: sectionData.sectionType
+                }
+              });
+            }
+
+            // Always add section assignment (class or lab) regardless of role hierarchy
+            if (sectionData.sectionType === "class") {
+              if (existing.classCRN && existing.classCRN !== crn) {
+                scope?.addBreadcrumb({
+                  message: `WARNING: User ${user.sis_user_id} has multiple class sections`,
+                  category: "warning",
+                  data: {
+                    userId: user.sis_user_id,
+                    existingClassCRN: existing.classCRN,
+                    newClassCRN: crn
+                  }
+                });
+              }
+              existing.classCRN = crn;
+            } else {
+              if (existing.labCRN && existing.labCRN !== crn) {
+                scope?.addBreadcrumb({
+                  message: `WARNING: User ${user.sis_user_id} has multiple lab sections`,
+                  category: "warning",
+                  data: {
+                    userId: user.sis_user_id,
+                    existingLabCRN: existing.labCRN,
+                    newLabCRN: crn
+                  }
+                });
+              }
+              existing.labCRN = crn;
+            }
+
+            scope?.addBreadcrumb({
+              message: `User ${user.sis_user_id} section assignment updated`,
+              category: "debug",
+              data: {
+                userId: user.sis_user_id,
+                userName: user.name,
+                role: existing.role,
+                classCRN: existing.classCRN,
+                labCRN: existing.labCRN,
+                addedSectionType: sectionData.sectionType,
+                addedCRN: crn
+              }
+            });
+          }
+        });
+      });
+
+      // Debug logging: Summary of all SIS users and their assignments
+      const debugSummary = {
+        classId: classData.id,
+        className: classData.name,
+        totalUsers: allSISUsers.size,
+        usersByRole: Array.from(allSISUsers.values()).reduce(
+          (acc, user) => {
+            acc[user.role] = (acc[user.role] || 0) + 1;
+            return acc;
+          },
+          {} as Record<string, number>
+        ),
+        usersWithBothSections: Array.from(allSISUsers.values()).filter((user) => user.classCRN && user.labCRN).length,
+        usersWithOnlyClass: Array.from(allSISUsers.values()).filter((user) => user.classCRN && !user.labCRN).length,
+        usersWithOnlyLab: Array.from(allSISUsers.values()).filter((user) => !user.classCRN && user.labCRN).length,
+        sampleUsers: Array.from(allSISUsers.entries())
+          .slice(0, 5)
+          .map(([id, user]) => ({
+            sisUserId: id,
+            name: user.name,
+            role: user.role,
+            classCRN: user.classCRN,
+            labCRN: user.labCRN
+          }))
+      };
+
+      // Console logging for immediate visibility during testing
+      console.log("=== SIS USERS SUMMARY ===");
+      console.log(`Class: ${debugSummary.className} (ID: ${debugSummary.classId})`);
+      console.log(`Total Users: ${debugSummary.totalUsers}`);
+      console.log(`Users by Role:`, debugSummary.usersByRole);
+      console.log(`Users with BOTH sections: ${debugSummary.usersWithBothSections}`);
+      console.log(`Users with ONLY class: ${debugSummary.usersWithOnlyClass}`);
+      console.log(`Users with ONLY lab: ${debugSummary.usersWithOnlyLab}`);
+      console.log(`Sample Users:`, debugSummary.sampleUsers);
+      console.log("========================");
+
+      scope?.addBreadcrumb({
+        message: `SIS Users Summary for class ${classData.name}`,
+        category: "debug",
+        data: debugSummary
+      });
+
+      let newInvitationsCount = 0;
+      let expiredInvitationsCount = 0;
+      let disabledUsersCount = 0;
+      let reenabledUsersCount = 0;
+      let updatedMetadataCount = 0;
+
+      // Pre-fetch all class and lab sections by CRN for efficient lookup across multiple steps
+      const classSectionsByCRN = new Map<number, number>();
+      const labSectionsByCRN = new Map<number, number>();
+
+      // Fetch all enabled class sections (only those with SIS CRNs)
+      if (enabledClassSectionsWithSIS.length > 0) {
+        const { data: classSections } = await adminSupabase
+          .from("class_sections")
+          .select("id, sis_crn")
+          .eq("class_id", classData.id)
+          .in(
+            "id",
+            enabledClassSectionsWithSIS.map((s) => s.id)
+          )
+          .limit(1000);
+
+        if (classSections) {
+          classSections.forEach((section) => {
+            if (section.sis_crn) {
+              classSectionsByCRN.set(section.sis_crn, section.id);
+            }
+          });
+        }
+
+        scope?.addBreadcrumb({
+          message: `Loaded class sections cache`,
+          category: "debug",
+          data: {
+            classId: classData.id,
+            enabledClassSectionCount: enabledClassSectionsWithSIS.length,
+            fetchedClassSectionCount: classSections?.length || 0,
+            classSectionCRNs: Array.from(classSectionsByCRN.keys())
+          }
+        });
+      }
+
+      // Fetch all enabled lab sections (only those with SIS CRNs)
+      if (enabledLabSectionsWithSIS.length > 0) {
+        const { data: labSections } = await adminSupabase
+          .from("lab_sections")
+          .select("id, sis_crn")
+          .eq("class_id", classData.id)
+          .in(
+            "id",
+            enabledLabSectionsWithSIS.map((s) => s.id)
+          )
+          .limit(1000);
+
+        if (labSections) {
+          labSections.forEach((section) => {
+            if (section.sis_crn) {
+              labSectionsByCRN.set(section.sis_crn, section.id);
+            }
+          });
+        }
+
+        scope?.addBreadcrumb({
+          message: `Loaded lab sections cache`,
+          category: "debug",
+          data: {
+            classId: classData.id,
+            enabledLabSectionCount: enabledLabSectionsWithSIS.length,
+            fetchedLabSectionCount: labSections?.length || 0,
+            labSectionCRNs: Array.from(labSectionsByCRN.keys())
+          }
+        });
+      }
+
+      // Step 5: Create invitations for new SIS users
+      const newInvitations: InvitationRequest[] = [];
+
+      for (const [sisUserId, userData] of allSISUsers) {
+        // Skip if user is already enrolled
+        if (currentEnrollmentsBySIS.has(sisUserId)) {
+          continue;
+        }
+
+        // Skip if user already has a pending invitation with the same role
+        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
+        if (
+          existingInvitation &&
+          existingInvitation.status === "pending" &&
+          existingInvitation.role === userData.role
+        ) {
+          continue;
+        }
+
+        // Get section IDs for both class and lab sections using cached data
+        let classSectionId = null;
+        let labSectionId = null;
+
+        // Get class section ID if user has a class CRN
+        if (userData.classCRN) {
+          classSectionId = classSectionsByCRN.get(userData.classCRN) || null;
+          if (!classSectionId) {
+            scope?.addBreadcrumb({
+              message: `Missing class section for CRN ${userData.classCRN}`,
+              category: "error",
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
+                crn: userData.classCRN,
+                availableClassCRNs: Array.from(classSectionsByCRN.keys())
+              }
+            });
+            Sentry.captureMessage(
+              `SIS Import: Missing class section for CRN ${userData.classCRN} in class ${classData.name}`,
+              scope
+            );
+          }
+        }
+
+        // Get lab section ID if user has a lab CRN
+        if (userData.labCRN) {
+          labSectionId = labSectionsByCRN.get(userData.labCRN) || null;
+          if (!labSectionId) {
+            scope?.addBreadcrumb({
+              message: `Missing lab section for CRN ${userData.labCRN}`,
+              category: "error",
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
+                crn: userData.labCRN,
+                availableLabCRNs: Array.from(labSectionsByCRN.keys())
+              }
+            });
+            Sentry.captureMessage(
+              `SIS Import: Missing lab section for CRN ${userData.labCRN} in class ${classData.name}`,
+              scope
+            );
+          }
+        }
+
+        newInvitations.push({
+          sis_user_id: sisUserId,
+          role: userData.role,
+          name: userData.name,
+          class_section_id: classSectionId || undefined,
+          lab_section_id: labSectionId || undefined
+        });
+      }
+
+      // Create new invitations in bulk using shared utility (no limit on count)
+      if (newInvitations.length > 0) {
+        try {
+          // Find a system user or admin to use as the inviter
+          // For SIS sync operations, we'll use the first admin user in the system
+          const { data: adminUser, error: adminError } = await adminSupabase
+            .from("user_roles")
+            .select("user_id")
+            .eq("role", "admin")
+            .eq("disabled", false)
+            .limit(1)
+            .single();
+
+          if (adminError || !adminUser) {
+            scope?.addBreadcrumb({
+              message: "No admin user found for SIS sync invitations",
+              category: "error",
+              data: { error: adminError?.message }
+            });
+            throw new UserVisibleError("No admin user available to create invitations");
+          }
+
+          scope?.addBreadcrumb({
+            message: `Creating ${newInvitations.length} invitations via shared utility`,
+            category: "info",
+            data: { classId: classData.id, count: newInvitations.length }
+          });
+
+          // Use shared utility to create all invitations at once (no batching needed)
+          const inviteResult = await createInvitationsBulk(
+            supabase, //Act as user!
+            classData.id,
+            adminUser.user_id,
+            newInvitations,
+            scope
+          );
+
+          newInvitationsCount = inviteResult.invitations.length;
+
+          // Log summary of results
+          scope?.addBreadcrumb({
+            message: `Invitation creation complete: ${inviteResult.invitations.length} created, ${inviteResult.errors.length} errors`,
+            category: "info",
+            data: {
+              classId: classData.id,
+              totalProcessed: newInvitations.length,
+              totalCreated: inviteResult.invitations.length,
+              totalErrors: inviteResult.errors.length
+            }
+          });
+
+          // If we have some errors but also some successes, log but don't fail completely
+          if (inviteResult.errors.length > 0) {
+            scope?.addBreadcrumb({
+              message: `SIS Import: ${inviteResult.errors.length} invitation errors encountered`,
+              category: "warning",
+              data: {
+                classId: classData.id,
+                errorCount: inviteResult.errors.length,
+                sampleErrors: inviteResult.errors.slice(0, 5) // Include first 5 errors for context
+              }
+            });
+            Sentry.captureMessage(`SIS Import: ${inviteResult.errors.length} invitation errors encountered`, scope);
+          }
+        } catch (error) {
+          scope?.addBreadcrumb({
+            message: `Error in invitation creation`,
+            category: "error",
+            data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
+          });
+          Sentry.captureMessage(
+            `Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`,
+            scope
+          );
+          throw new UserVisibleError(
+            `Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+
+      // Step 6: Update section assignments for existing users (if they've moved between sections)
+      let updatedSectionAssignmentsCount = 0;
+
+      for (const [sisUserId, userData] of allSISUsers) {
+        // Get the correct section IDs for this user based on their current SIS assignment using cached data
+        let correctClassSectionId = null;
+        let correctLabSectionId = null;
+
+        // Get class section ID if user has a class CRN
+        if (userData.classCRN) {
+          correctClassSectionId = classSectionsByCRN.get(userData.classCRN) || null;
+          if (!correctClassSectionId) {
+            scope?.addBreadcrumb({
+              message: `Missing class section for CRN ${userData.classCRN} during section update`,
+              category: "error",
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
+                crn: userData.classCRN,
+                availableClassCRNs: Array.from(classSectionsByCRN.keys())
+              }
+            });
+            Sentry.captureMessage(
+              `SIS Import: Missing class section for CRN ${userData.classCRN} in class ${classData.name} during section update`,
+              scope
+            );
+          }
+        }
+
+        // Get lab section ID if user has a lab CRN
+        if (userData.labCRN) {
+          correctLabSectionId = labSectionsByCRN.get(userData.labCRN) || null;
+          if (!correctLabSectionId) {
+            scope?.addBreadcrumb({
+              message: `Missing lab section for CRN ${userData.labCRN} during section update`,
+              category: "error",
+              data: {
+                classId: classData.id,
+                userId: sisUserId,
+                crn: userData.labCRN,
+                availableLabCRNs: Array.from(labSectionsByCRN.keys())
+              }
+            });
+            Sentry.captureMessage(
+              `SIS Import: Missing lab section for CRN ${userData.labCRN} in class ${classData.name} during section update`,
+              scope
+            );
+          }
+        }
+
+        // Check if user has an existing invitation that needs section updates
+        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
+        if (existingInvitation && existingInvitation.status === "pending") {
+          const needsUpdate =
+            existingInvitation.class_section_id !== correctClassSectionId ||
+            existingInvitation.lab_section_id !== correctLabSectionId;
+
+          if (needsUpdate) {
+            const { error: updateError } = await adminSupabase
+              .from("invitations")
+              .update({
+                class_section_id: correctClassSectionId,
+                lab_section_id: correctLabSectionId,
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", existingInvitation.id);
+
+            if (updateError) {
+              scope?.addBreadcrumb({
+                message: `Failed to update invitation sections for user ${sisUserId}`,
+                category: "error",
+                data: {
+                  classId: classData.id,
+                  userId: sisUserId,
+                  error: updateError,
+                  oldClassSection: existingInvitation.class_section_id,
+                  newClassSection: correctClassSectionId,
+                  oldLabSection: existingInvitation.lab_section_id,
+                  newLabSection: correctLabSectionId
+                }
+              });
+            } else {
+              updatedSectionAssignmentsCount++;
+            }
+          }
+        }
+
+        // Check if user has an existing enrollment that needs section updates
+        const existingEnrollment = currentEnrollmentsBySIS.get(Number(sisUserId));
+        if (existingEnrollment && !existingEnrollment.disabled) {
+          const needsUpdate =
+            existingEnrollment.class_section_id !== correctClassSectionId ||
+            existingEnrollment.lab_section_id !== correctLabSectionId;
+
+          if (needsUpdate) {
+            const { error: updateError } = await adminSupabase
+              .from("user_roles")
+              .update({
+                class_section_id: correctClassSectionId,
+                lab_section_id: correctLabSectionId,
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", existingEnrollment.id);
+
+            if (updateError) {
+              scope?.addBreadcrumb({
+                message: `Failed to update user role sections for user ${sisUserId}`,
+                category: "error",
+                data: {
+                  classId: classData.id,
+                  userId: sisUserId,
+                  error: updateError,
+                  oldClassSection: existingEnrollment.class_section_id,
+                  newClassSection: correctClassSectionId,
+                  oldLabSection: existingEnrollment.lab_section_id,
+                  newLabSection: correctLabSectionId
+                }
+              });
+            } else {
+              updatedSectionAssignmentsCount++;
+            }
+          }
+        }
+      }
+
+      if (updatedSectionAssignmentsCount > 0) {
+        updatedMetadataCount += updatedSectionAssignmentsCount;
+        scope?.addBreadcrumb({
+          message: `Updated section assignments for ${updatedSectionAssignmentsCount} users`,
+          category: "info",
+          data: { classId: classData.id, count: updatedSectionAssignmentsCount }
+        });
+      }
+
+      // Step 7: Handle users no longer in SIS
+      const sisUserIds = new Set(allSISUsers.keys());
+
+      // 7a. Mark invitations as expired for users no longer in SIS
+      const invitationsToExpire = currentInvitations.filter(
+        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id))
+      );
+
+      // Debug logging for expiration logic
+      if (invitationsToExpire.length > 0) {
+        console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
+        console.log(`Total current invitations: ${currentInvitations.length}`);
+        console.log(`Total SIS users: ${sisUserIds.size}`);
+        console.log(`Invitations to expire: ${invitationsToExpire.length}`);
+
+        invitationsToExpire.slice(0, 5).forEach((inv) => {
+          console.log(`Expiring invitation:`, {
+            id: inv.id,
+            sisUserId: inv.sis_user_id,
+            role: inv.role,
+            status: inv.status,
+            classSectionId: inv.class_section_id,
+            labSectionId: inv.lab_section_id,
+            isInSISUsers: sisUserIds.has(Number(inv.sis_user_id))
+          });
+        });
+        console.log("==================================");
+
+        scope?.addBreadcrumb({
+          message: `About to expire ${invitationsToExpire.length} invitations`,
+          category: "warning",
+          data: {
+            classId: classData.id,
+            totalCurrentInvitations: currentInvitations.length,
+            totalSISUsers: sisUserIds.size,
+            invitationsToExpire: invitationsToExpire.length,
+            sampleExpiring: invitationsToExpire.slice(0, 3).map((inv) => ({
+              sisUserId: inv.sis_user_id,
+              classSectionId: inv.class_section_id,
+              labSectionId: inv.lab_section_id
+            }))
+          }
+        });
+      }
+
+      if (invitationsToExpire.length > 0) {
+        const { error: expireError } = await adminSupabase
+          .from("invitations")
+          .update({
+            status: "expired",
+            updated_at: new Date().toISOString()
+          })
+          .in(
+            "id",
+            invitationsToExpire.map((inv) => inv.id)
+          );
+
+        if (expireError) {
+          scope?.addBreadcrumb({
+            message: `Failed to expire ${invitationsToExpire.length} old invitations`,
+            category: "error",
+            data: { classId: classData.id, error: expireError }
+          });
+        } else {
+          expiredInvitationsCount = invitationsToExpire.length;
+        }
+      }
+
+      // 6b. Disable user_roles for enrolled users no longer in SIS (using canvas_id as nuid tracker)
+      // Only disable users who were originally from SIS (have canvas_id set to their nuid)
+      const enrolledUsersToDisable = currentEnrollments.filter(
+        (enr) =>
+          enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(Number(enr.users.sis_user_id)) && !enr.disabled // Don't re-disable already disabled users
+      );
+
+      if (enrolledUsersToDisable.length > 0) {
+        const { error: disableError, count } = await adminSupabase
+          .from("user_roles")
+          .update({
+            disabled: true,
+            updated_at: new Date().toISOString()
+          })
+          .eq("class_id", classData.id)
+          .in(
+            "canvas_id",
+            enrolledUsersToDisable.map((enr) => enr.canvas_id)
+          )
+          .eq("disabled", false); // Only disable currently active users
+
+        if (disableError) {
+          scope?.addBreadcrumb({
+            message: `Failed to disable ${enrolledUsersToDisable.length} dropped users`,
+            category: "error",
+            data: { classId: classData.id, error: disableError }
+          });
+        } else {
+          disabledUsersCount = count || 0;
+        }
+      }
+
+      // 6c. Re-enable users who are back in SIS (were disabled but now present again)
+      const usersToReenable = currentEnrollments.filter(
+        (enr) => enr.users.sis_user_id && enr.canvas_id && sisUserIds.has(enr.users.sis_user_id) && enr.disabled // Only re-enable currently disabled users
+      );
+
+      if (usersToReenable.length > 0) {
+        const { error: reenableError, count } = await adminSupabase
+          .from("user_roles")
+          .update({
+            disabled: false,
+            updated_at: new Date().toISOString()
+          })
+          .eq("class_id", classData.id)
+          .in(
+            "canvas_id",
+            usersToReenable.map((enr) => enr.canvas_id)
+          )
+          .eq("disabled", true); // Only re-enable currently disabled users
+
+        if (reenableError) {
+          scope?.addBreadcrumb({
+            message: `Failed to re-enable ${usersToReenable.length} returning users`,
+            category: "error",
+            data: { classId: classData.id, error: reenableError }
+          });
+        } else {
+          reenabledUsersCount = count || 0;
+        }
+      }
+
+      // Step 7: Update section metadata if changed
+      for (const [crn, sectionData] of sisEnrollmentByCRN) {
+        const sectionMeta = sectionData.sectionMeta;
+
+        if (sectionData.sectionType === "class") {
+          const { error: updateError } = await adminSupabase
+            .from("class_sections")
+            .update({
+              meeting_location: sectionMeta.meeting_location,
+              meeting_times: sectionMeta.meeting_times,
+              updated_at: new Date().toISOString()
+            })
+            .eq("class_id", classData.id)
+            .eq("sis_crn", crn);
+
+          if (!updateError) updatedMetadataCount++;
+        } else {
+          // Parse meeting times for lab sections to extract start/end times
+          const parsedTimes = parseMeetingTimes(sectionMeta.meeting_times || "", scope);
+
+          const labUpdateData: Database["public"]["Tables"]["lab_sections"]["Update"] = {
+            meeting_location: sectionMeta.meeting_location,
+            meeting_times: sectionMeta.meeting_times
+          };
+          const mt = sectionMeta.meeting_times?.trim() ?? "";
+          if (!mt) {
+            // SIS cleared times; clear derived fields too
+            labUpdateData.start_time = null;
+            labUpdateData.end_time = null;
+            labUpdateData.day_of_week = null;
+          } else if (parsedTimes.startTime && parsedTimes.endTime) {
+            // Only write when we have both ends
+            labUpdateData.start_time = parsedTimes.startTime;
+            labUpdateData.end_time = parsedTimes.endTime;
+            labUpdateData.day_of_week = parsedTimes.dayOfWeek ?? null;
+          }
+
+          const { error: updateError } = await adminSupabase
+            .from("lab_sections")
+            .update(labUpdateData)
+            .eq("class_id", classData.id)
+            .eq("sis_crn", crn);
+
+          if (!updateError) {
+            updatedMetadataCount++;
+            scope?.addBreadcrumb({
+              message: `Updated lab section ${crn} with parsed meeting times`,
+              category: "info",
+              data: {
+                crn,
+                originalMeetingTimes: sectionMeta.meeting_times,
+                parsedTimes,
+                classId: classData.id
+              }
+            });
+          } else {
+            scope?.addBreadcrumb({
+              message: `Failed to update lab section ${crn}`,
+              category: "error",
+              data: { crn, error: updateError, classId: classData.id }
+            });
+          }
+        }
+      }
+
+      // Update sync status for all processed sections
+      const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Expired: ${expiredInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;
+
+      // Update status for class sections
+      for (const section of enabledClassSections) {
+        if (rosterResults.some((r) => r.crn === section.sis_crn)) {
+          try {
+            await adminSupabase.rpc("update_sis_sync_status", {
+              p_course_id: classData.id,
+              p_course_section_id: section.id,
+              p_sync_status: "success",
+              p_sync_message: syncMessage
+            });
+          } catch (statusError) {
+            errorCount++;
+            Sentry.captureException(statusError, scope);
+          }
+        }
+      }
+
+      // Update status for lab sections
+      for (const section of enabledLabSections) {
+        console.log("Examining enabled lab section", section);
+        if (rosterResults.some((r) => r.crn === section.sis_crn)) {
+          console.log("Updating lab section", section);
+          try {
+            await adminSupabase.rpc("update_sis_sync_status", {
+              p_course_id: classData.id,
+              p_lab_section_id: section.id,
+              p_sync_status: "success",
+              p_sync_message: syncMessage
+            });
+          } catch (statusError) {
+            console.log("Error updating lab section", statusError);
+            errorCount++;
+            Sentry.captureException(statusError, scope);
+          }
+        }
+      }
+
+      scope?.addBreadcrumb({
+        message: `Synced class ${classData.name}`,
+        category: "success",
+        data: {
+          classId: classData.id,
+          crnCount: rosterResults.length,
+          newInvitations: newInvitationsCount,
+          expiredInvitations: expiredInvitationsCount,
+          disabledUsers: disabledUsersCount,
+          reenabledUsers: reenabledUsersCount,
+          updatedMetadata: updatedMetadataCount
+        }
+      });
+
+      syncedCount++;
+    } catch (error) {
+      // Update sync status for all sections with error
+      const errorMessage = `Sync failed: ${error instanceof Error ? error.message : String(error)}`;
+
+      // Update status for class sections
+      for (const section of classData.class_sections) {
+        try {
+          await adminSupabase.rpc("update_sis_sync_status", {
+            p_course_id: classData.id,
+            p_course_section_id: section.id,
+            p_sync_status: "error",
+            p_sync_message: errorMessage
+          });
+        } catch (statusError) {
+          scope?.addBreadcrumb({
+            message: `Failed to update error status for class section ${section.id}`,
+            category: "warning",
+            data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
+          });
+          errorCount++;
+        }
+      }
+
+      // Update status for lab sections
+      for (const section of classData.lab_sections) {
+        try {
+          await adminSupabase.rpc("update_sis_sync_status", {
+            p_course_id: classData.id,
+            p_lab_section_id: section.id,
+            p_sync_status: "error",
+            p_sync_message: errorMessage
+          });
+        } catch (statusError) {
+          scope?.addBreadcrumb({
+            message: `Failed to update error status for lab section ${section.id}`,
+            category: "warning",
+            data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
+          });
+          errorCount++;
+        }
+      }
+
+      scope?.addBreadcrumb({
+        message: `Failed to sync class ${classData.name}`,
+        category: "error",
+        data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
+      });
+      errorCount++;
+    }
+  }
+
+  scope?.setContext("sync_summary", {
+    classesProcessed: sisLinkedClasses.length,
+    synced: syncedCount,
+    errors: errorCount
+  });
+
+  return {
+    synced: syncedCount,
+    errors: errorCount,
+    totalClasses: sisLinkedClasses.length,
+    message: `Synced ${syncedCount} classes (${errorCount} errors)`
+  };
+}
+
+// function constructSemesterCode(term: string, year: number): string {
+//   const termMap: { [key: string]: string } = {
+//     Fall: "10",
+//     Spring: "30",
+//     "Summer 1": "40",
+//     "Summer": "50",
+//     "Summer 2": "60"
+//   };
+
+//   const termCode = termMap[term] || "10";
+//   return `${year}${termCode}`;
+// }
+
+/**
+ * Edge function to import course data from SIS API
+ * Supports both direct user calls (JWT) and postgres cron jobs (edge function secret)
+ */
+async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseImportResponse | { message: string }> {
+  scope?.setTag("function", "course-import-sis");
+
+  // Check for edge function secret authentication (for pg_cron)
+  const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
+
+  if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
+    // Called from postgres - sync existing SIS classes
+    const url = new URL(req.url);
+    const classId = url.searchParams.get("classId");
+
+    scope?.setTag("source", "postgres-cron");
+    scope?.setTag("classId", classId || "all");
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    const syncHandler = async () => {
+      try {
+        const result = await syncSISClasses(adminSupabase, classId ? parseInt(classId) : null, scope);
+        scope?.setContext("sync_result", result);
+      } catch (error) {
+        scope?.captureException(error);
+        throw error;
+      }
+    };
+
+    // Run in background for cron jobs
+    EdgeRuntime.waitUntil(syncHandler());
+
+    return {
+      message: "SIS sync started in background"
+    };
+  }
+
+  // Direct user call - import new course
+  scope?.setTag("source", "user-direct");
+
+  const { term, mainCourseCode, labCourseCode, existingClassId } = (await req.json()) as CourseImportRequest;
+
+  // Validate required inputs for new course import
+  if (!term?.trim()) {
+    throw new UserVisibleError("Term code is required");
+  }
+  if (!mainCourseCode?.trim()) {
+    throw new UserVisibleError("Main course code is required");
+  }
+
+  scope?.setTag("term", term);
+  scope?.setTag("mainCourseCode", mainCourseCode);
+  scope?.setTag("labCourseCode", labCourseCode || "none");
+  scope?.setTag("existingClassId", existingClassId || "none");
+
+  // Validate admin authorization for direct user calls
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: { headers: { Authorization: req.headers.get("Authorization")! } }
+  });
+
+  const {
+    data: { user },
+    error: authError
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    throw new UserVisibleError("Authentication required");
+  }
+
+  // Check admin role
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  // If existingClassId is provided, validate that the class exists and belongs to the same term
+  if (existingClassId) {
+    const { data: existingClass, error: classError } = await adminSupabase
+      .from("classes")
+      .select("id, term, course_title")
+      .eq("id", existingClassId)
+      .eq("archived", false)
+      .single();
+
+    if (classError || !existingClass) {
+      throw new UserVisibleError(`Existing class with ID ${existingClassId} not found`);
+    }
+
+    if (existingClass.term !== parseInt(term)) {
+      throw new UserVisibleError(`Existing class term (${existingClass.term}) does not match import term (${term})`);
+    }
+
+    scope?.setTag("existingClassTitle", existingClass.course_title);
+  }
+
+  const { data: isAdmin } = await adminSupabase.rpc("authorize_for_admin", {
+    p_user_id: user.id
+  });
+
+  if (!isAdmin) {
+    throw new UserVisibleError("Admin role required");
+  }
+
+  scope?.setUser({ id: user.id, email: user.email });
+
+  // Get SIS API configuration
+  const SIS_API_URL = Deno.env.get("SIS_API_URL");
+  const SIS_AUTH_TOKEN = Deno.env.get("SIS_AUTH_TOKEN");
+
+  if (!SIS_API_URL || !SIS_AUTH_TOKEN) {
+    throw new UserVisibleError("SIS API configuration missing");
+  }
+
+  try {
+    const courseCodes = [mainCourseCode.trim()];
+    if (labCourseCode?.trim()) {
+      courseCodes.push(labCourseCode.trim());
+    }
+
+    // Step 1: Get CRNs for all courses
+    const crnPromises = courseCodes.map(async (courseCode) => {
+      const crnResponse = await fetch(`${SIS_API_URL}/?semester=${term}&course=${courseCode}`, {
+        headers: {
+          Authorization: `Token ${SIS_AUTH_TOKEN}`
+        }
+      });
+
+      if (!crnResponse.ok) {
+        throw new UserVisibleError(
+          `Failed to fetch CRNs for ${courseCode}: ${crnResponse.status} ${crnResponse.statusText}`
+        );
+      }
+
+      const crnData: SISCRNResponse = await crnResponse.json();
+      return {
+        courseCode,
+        crns: crnData[courseCode] || []
+      };
+    });
+
+    const courseResults = await Promise.all(crnPromises);
+
+    const mainCourseCRNs = courseResults.find((r) => r.courseCode === mainCourseCode)?.crns || [];
+    const labCourseCRNs = courseResults.find((r) => r.courseCode === labCourseCode)?.crns || [];
+
+    if (mainCourseCRNs.length === 0) {
+      throw new UserVisibleError(`No sections found for course ${mainCourseCode} in term ${term}`);
+    }
+
+    scope?.setContext("course_crns", {
+      main: mainCourseCRNs,
+      lab: labCourseCRNs,
+      total: mainCourseCRNs.length + labCourseCRNs.length
+    });
+
+    // Step 2: Get roster data for all CRNs
+    const allCRNs = [...mainCourseCRNs, ...labCourseCRNs];
+    const rosterPromises = allCRNs.map(async (crn) => {
+      const rosterResponse = await fetch(`${SIS_API_URL}/roster/?semester=${term}&crn=${crn}`, {
+        headers: {
+          Authorization: `Token ${SIS_AUTH_TOKEN}`
+        }
+      });
+
+      if (!rosterResponse.ok) {
+        scope?.addBreadcrumb({
+          message: `Failed to fetch roster for CRN ${crn}`,
+          category: "error",
+          data: {
+            crn,
+            status: rosterResponse.status,
+            statusText: rosterResponse.statusText
+          }
+        });
+        throw new UserVisibleError(
+          `Failed to fetch roster for CRN ${crn}: ${rosterResponse.status} ${rosterResponse.statusText}`
+        );
+      }
+
+      const rosterData: SISRosterResponse = await rosterResponse.json();
+      return {
+        crn,
+        data: rosterData[crn.toString()],
+        sectionType: mainCourseCRNs.includes(crn) ? ("class" as const) : ("lab" as const)
+      };
+    });
+
+    const rosterResults = (await Promise.all(rosterPromises)).filter((r) => r !== null);
+
+    if (rosterResults.length === 0) {
+      throw new UserVisibleError("No roster data could be retrieved");
+    }
+
+    // Step 3: Process the data
+    const sections: ProcessedSection[] = rosterResults.map(({ crn, data, sectionType }) => {
+      // Extract section name from course code and meeting info
+      const courseParts = data.section_meta.course.split(" ");
+      const courseNumber = courseParts[1] || "Unknown";
+      const sectionName = `${courseNumber} - ${data.section_meta.meeting_times}`;
+
+      // Parse meeting times for lab sections
+      let parsedMeetingTimes: ParsedMeetingTime | undefined;
+      if (sectionType === "lab") {
+        parsedMeetingTimes = parseMeetingTimes(data.section_meta.meeting_times || "", scope);
+
+        scope?.addBreadcrumb({
+          message: `Parsed meeting times for lab section ${crn}`,
+          category: "info",
+          data: {
+            crn,
+            originalMeetingTimes: data.section_meta.meeting_times,
+            parsedTimes: parsedMeetingTimes
+          }
+        });
+      }
+
+      return {
+        crn,
+        sectionType,
+        sectionName,
+        meetingInfo: data.section_meta.meeting_times,
+        location: data.section_meta.meeting_location,
+        parsedMeetingTimes: sectionType === "lab" ? parsedMeetingTimes : undefined,
+        instructors: data.instructors.map((inst) => ({
+          sis_user_id: inst.nuid,
+          name: `${inst.first_name} ${inst.last_name}`,
+          role: "instructor" as const
+        })),
+        tas: data.tas.map((ta) => ({
+          sis_user_id: ta.nuid,
+          name: `${ta.first_name} ${ta.last_name}`,
+          role: "grader" as const
+        })),
+        students: data.students.map((student) => ({
+          sis_user_id: Number(student.nuid),
+          name: `${student.first_name} ${student.last_name}`,
+          role: "student" as const
+        }))
+      };
+    });
+
+    // Get course info from the first main course section
+    const firstMainSection = rosterResults.find((r) => r.sectionType === "class");
+    if (!firstMainSection) {
+      throw new UserVisibleError("No main course section data found");
+    }
+
+    const courseInfo = {
+      course: firstMainSection.data.section_meta.course,
+      title: firstMainSection.data.section_meta.title,
+      startDate: firstMainSection.data.section_meta.start_date,
+      endDate: firstMainSection.data.section_meta.end_date,
+      campus: firstMainSection.data.section_meta.campus
+    };
+
+    // Calculate totals and check existing enrollment status
+    const allInstructors = new Set(sections.flatMap((s) => s.instructors.map((i) => i.sis_user_id)));
+    const allGraders = new Set(sections.flatMap((s) => s.tas.map((t) => t.sis_user_id)));
+    const allStudents = new Set(sections.flatMap((s) => s.students.map((st) => st.sis_user_id)));
+
+    const totalUsers = {
+      instructors: allInstructors.size,
+      graders: allGraders.size,
+      students: allStudents.size
+    };
+
+    // Check existing users in Pawtograder
+    const allSISUserIds = [...allInstructors, ...allGraders, ...allStudents];
+
+    const { data: existingUsers } = await adminSupabase
+      .from("users")
+      .select("sis_user_id")
+      .in("sis_user_id", allSISUserIds)
+      .not("sis_user_id", "is", null);
+
+    const existingSISIds = new Set(existingUsers?.map((u) => u.sis_user_id) || []);
+
+    // Check pending invitations (we don't know which class they'll be imported to yet, so check globally)
+    const { data: pendingInvitations } = await adminSupabase
+      .from("invitations")
+      .select("sis_user_id, role")
+      .in("sis_user_id", allSISUserIds)
+      .eq("status", "pending");
+
+    const pendingInvitationsByRole = {
+      instructor: new Set(pendingInvitations?.filter((i) => i.role === "instructor").map((i) => i.sis_user_id) || []),
+      grader: new Set(pendingInvitations?.filter((i) => i.role === "grader").map((i) => i.sis_user_id) || []),
+      student: new Set(pendingInvitations?.filter((i) => i.role === "student").map((i) => i.sis_user_id) || [])
+    };
+
+    // Calculate enrollment status for each role
+    const calculateRoleStatus = (sisUsers: Set<number>, role: "instructor" | "grader" | "student") => {
+      const inPawtograder = Array.from(sisUsers).filter((id) => existingSISIds.has(id)).length;
+      const pendingInvitations = Array.from(sisUsers).filter((id) => pendingInvitationsByRole[role].has(id)).length;
+      const newInvitations = sisUsers.size - inPawtograder - pendingInvitations;
+
+      return {
+        inSIS: sisUsers.size,
+        inPawtograder,
+        pendingInvitations,
+        newInvitations
+      };
+    };
+
+    const enrollmentStatus = {
+      instructors: calculateRoleStatus(allInstructors, "instructor"),
+      graders: calculateRoleStatus(allGraders, "grader"),
+      students: calculateRoleStatus(allStudents, "student")
+    };
+
+    scope?.setContext("import_results", {
+      sections: sections.length,
+      totalUsers,
+      enrollmentStatus
+    });
+
+    return {
+      success: true,
+      courseInfo,
+      sections,
+      totalUsers,
+      enrollmentStatus,
+      existingClassId: existingClassId || null
+    };
+  } catch (error) {
+    scope?.captureException(error);
+    throw error instanceof UserVisibleError
+      ? error
+      : new UserVisibleError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// Main handler that routes between import and sync functionality
+async function routeRequest(req: Request, scope: Sentry.Scope) {
+  // Check for edge function secret authentication (for pg_cron)
+  const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
+
+  if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
+    // Called from postgres cron - sync existing classes
+    const url = new URL(req.url);
+    const classId = url.searchParams.get("classId");
+
+    scope?.setTag("source", "postgres-cron");
+    scope?.setTag("classId", classId || "all");
+
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    const syncHandler = async () => {
+      try {
+        const result = await syncSISClasses(adminSupabase, classId ? parseInt(classId) : null, scope);
+        scope?.setContext("sync_result", result);
+      } catch (error) {
+        scope?.captureException(error);
+      }
+    };
+
+    // Run in background for cron jobs
+    EdgeRuntime.waitUntil(syncHandler());
+
+    return {
+      message: "SIS sync started in background",
+      classId: classId || "all"
+    };
+  } else {
+    // Direct user call - import new course
+    scope?.setTag("source", "user-direct");
+    return await handleRequest(req, scope);
+  }
+}
+
+Deno.serve(async (req: Request) => {
+  return await wrapRequestHandler(req, routeRequest);
+});

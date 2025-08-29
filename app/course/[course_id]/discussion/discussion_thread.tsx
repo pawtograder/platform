@@ -1,7 +1,7 @@
+import { DiscussionThreadNotification } from "@/components/notifications/notification-teaser";
 import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
-import type { DiscussionThreadNotification } from "@/components/notifications/notification-teaser";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -31,6 +31,17 @@ export function DiscussionThreadReply({
 }) {
   // const invalidate = useInvalidate();
   const { mutateAsync: mutate } = useCreate({ resource: "discussion_threads" });
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus the textarea when the reply becomes visible
+  useEffect(() => {
+    if (visible && messageInputRef.current) {
+      // Small delay to ensure the component is fully rendered
+      setTimeout(() => {
+        messageInputRef.current?.focus();
+      }, 100);
+    }
+  }, [visible]);
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
@@ -73,6 +84,7 @@ export function DiscussionThreadReply({
         enableGiphyPicker={true}
         enableFilePicker={true}
         sendMessage={sendMessage}
+        textAreaRef={messageInputRef}
       />
       <Button variant="ghost" onClick={() => setVisible(false)}>
         Cancel
@@ -92,7 +104,8 @@ function NotificationAndReadStatusUpdater({
   const { notifications, set_read } = useNotifications("discussion_thread", thread_id);
   const ref = useRef<HTMLDivElement>(null);
   const isVisible = useIntersection(ref, { delay: 1000, rootMargin: "0px" });
-  const threadIsUnread = readStatus !== undefined && !readStatus?.read_at;
+
+  const threadIsUnread = readStatus === null || readStatus?.read_at === null;
   useEffect(() => {
     if (isVisible && threadIsUnread && thread_id && root_thread_id) {
       setUnread(root_thread_id, thread_id, false);
@@ -295,7 +308,7 @@ const DiscussionThreadContent = memo(
                   )}
                 </Box>
                 <HStack fontWeight="semibold" textStyle="xs" ps="2">
-                  <Text textStyle="sm" color="fg.muted" ms="3">
+                  <Text textStyle="sm" color="fg.muted" ms="3" data-visual-test="blackout">
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
                   <Link onClick={showReply} color="fg.muted">

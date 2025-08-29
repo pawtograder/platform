@@ -40,6 +40,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
   }
+  await adminSupabase
+    .from("autograder")
+    .update({
+      grader_repo: `${solutionRepoOrg}/${solutionRepoName}`
+    })
+    .eq("id", assignment_id);
   await createRepo(solutionRepoOrg, solutionRepoName, TEMPLATE_SOLUTION_REPO_NAME);
   await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, []);
   const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");
@@ -47,7 +53,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   await adminSupabase
     .from("autograder")
     .update({
-      grader_repo: `${solutionRepoOrg}/${solutionRepoName}`,
       config: asObj
     })
     .eq("id", assignment_id);

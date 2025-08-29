@@ -1,7 +1,7 @@
 "use client";
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { rerunGrader } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import type {
@@ -43,8 +43,9 @@ import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
 function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string }) {
   const { assignment_id, course_id } = useParams();
-  const course = useCourse();
-  const timeZone = course.classes.time_zone || "America/New_York";
+  const { role } = useClassProfiles();
+  const course = role.classes;
+  const timeZone = course.time_zone || "America/New_York";
   const [pageCount, setPageCount] = useState(0);
   const renderAsLinkToSubmission = useCallback(
     (props: CellContext<ActiveSubmissionsWithRegressionTestResults, unknown>) => {
@@ -418,7 +419,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 await rerunGrader(
                   {
                     submission_ids: selectedRows,
-                    class_id: course.classes.id
+                    class_id: course.id
                   },
                   supabase
                 );

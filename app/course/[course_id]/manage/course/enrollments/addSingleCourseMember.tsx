@@ -1,61 +1,62 @@
 "use client";
 
-import { Icon, Button, Input, Dialog, Field, NativeSelect, Text } from "@chakra-ui/react";
+import { Icon, Button, Input, Dialog, Field, NativeSelect, Text, Spinner } from "@chakra-ui/react";
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
-import { useInvalidate } from "@refinedev/core";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
+import * as Sentry from "@sentry/nextjs";
 
 type FormData = {
   email: string;
   name: string;
   role: "student" | "grader" | "instructor";
+  notify?: boolean;
 };
 
-export default function AddSingleStudent() {
+export default function AddSingleCourseMember() {
+  const [open, setOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { course_id } = useParams();
   const {
     register,
     handleSubmit,
     formState: { errors }
   } = useForm<FormData>();
-  const invalidate = useInvalidate();
   const onSubmit = useCallback(
     async (data: FormData) => {
-      toaster.create({
-        title: "Adding student",
-        description: "Please wait while we add the student to the course",
-        type: "info"
-      });
+      setIsSubmitting(true);
       const supabase = createClient();
       try {
         await enrollmentAdd(
-          { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
+          { courseId: Number(course_id), email: data.email, name: data.name, role: data.role, notify: !!data.notify },
           supabase
         );
+        setOpen(false);
         toaster.create({
-          title: "Student added",
-          description: "Refreshing user_roles",
-          type: "info"
+          title: "Course member added successfully",
+          description: "The new member will appear in the enrollments table automatically",
+          type: "success"
         });
-        invalidate({ resource: "user_roles", invalidates: ["list"] });
       } catch (error) {
+        Sentry.captureException(error);
         toaster.error({
-          title: "Error adding student",
+          title: "Error adding course member",
           description: error instanceof Error ? error.message : "An unexpected error occurred."
         });
+      } finally {
+        setIsSubmitting(false);
       }
     },
-    [course_id, invalidate]
+    [course_id]
   );
   return (
-    <Dialog.Root>
+    <Dialog.Root aria-label="Add Course Member Dialog" lazyMount open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Dialog.Trigger asChild>
-        <Button marginLeft="auto">
+        <Button variant="surface">
           <Icon as={FaPlus} />
           Add Course Member
         </Button>
@@ -95,8 +96,21 @@ export default function AddSingleStudent() {
                 </NativeSelect.Root>
                 <Field.ErrorText>{errors.role?.message}</Field.ErrorText>
               </Field.Root>
-              <Button type="submit" mt={2}>
-                Add Student
+              <Field.Root>
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input type="checkbox" {...register("notify")} />
+                  Notify user they were added to this course
+                </label>
+              </Field.Root>
+              <Button type="submit" mt={2} loading={isSubmitting}>
+                {isSubmitting ? (
+                  <>
+                    <Spinner size="sm" />
+                    Adding...
+                  </>
+                ) : (
+                  "Add"
+                )}
               </Button>
             </form>
           </Dialog.Body>

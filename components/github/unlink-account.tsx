@@ -38,12 +38,8 @@ export default function UnlinkAccount() {
             throw new Error(error.message);
           }
         }}
-        onCancel={() => {
-          toaster.create({
-            title: "Canceled",
-            description: "You did not unlink your GitHub account",
-            type: "info"
-          });
+        onCancel={async () => {
+          console.log("Canceled");
         }}
       ></PopConfirm>
     </VStack>

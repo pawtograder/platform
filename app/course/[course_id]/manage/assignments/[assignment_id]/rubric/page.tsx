@@ -16,17 +16,33 @@ import type {
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
-import Editor, { type Monaco } from "@monaco-editor/react";
+import {
+  Box,
+  Button,
+  Center,
+  Flex,
+  Heading,
+  HStack,
+  Icon,
+  Link,
+  List,
+  Spinner,
+  Tabs,
+  Text,
+  VStack
+} from "@chakra-ui/react";
+import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { FaCheck } from "react-icons/fa6";
 import * as YAML from "yaml";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
   "grading-review",
-  "meta-grading-review"
+  "meta-grading-review",
+  "code-walk"
 ];
 
 function findChanges<T extends { id: number | undefined | null }>(
@@ -344,6 +360,29 @@ function InnerRubricPage() {
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  // Points summary state
+  const gradingRubricFromDb = useRubric("grading-review");
+  const gradingRubricForSummary =
+    activeReviewRound === "grading-review" && rubricForSidebar ? rubricForSidebar : gradingRubricFromDb;
+  const assignmentMaxPoints = assignmentDetails?.total_points ?? 0;
+  const autograderPoints = assignmentDetails?.autograder_points ?? 0;
+  const gradingRubricPoints = (() => {
+    if (!gradingRubricForSummary) return 0;
+    let total = 0;
+    for (const part of gradingRubricForSummary.rubric_parts ?? []) {
+      for (const criteria of part.rubric_criteria ?? []) {
+        const criteriaTotal = criteria.total_points ?? 0;
+        const sumCheckPoints = (criteria.rubric_checks ?? []).reduce((acc, check) => acc + (check.points ?? 0), 0);
+        if (criteria.is_additive) {
+          total += Math.min(sumCheckPoints, criteriaTotal);
+        } else {
+          total += criteriaTotal;
+        }
+      }
+    }
+    return total;
+  })();
+  const addsUp = assignmentMaxPoints === autograderPoints + gradingRubricPoints;
 
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
@@ -1114,10 +1153,18 @@ function InnerRubricPage() {
     <Flex w="100%" minW="0" direction="column">
       <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
         <Toaster />
-        <HStack>
+        <VStack align="start">
           <Heading size="md">
-            {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubric
+            {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubrics
           </Heading>
+          <Text fontSize="sm" color="fg.muted">
+            Configure each rubric using the rich yaml editor. The &quot;Grading Review&quot; rubric is what will be used
+            to grade submissions. We suggest configuring this rubric so that students can see the rubric before they
+            submit. If you choose to assign a self-review round, the students will be assigned to complete that rubric.
+            The &quot;Meta Grading Review&quot; rubric can be used to have an internal review of the grading rubric, and
+            would typically be configured to be hidden from students. Read more about the rubric structure in the{" "}
+            <Link href="https://docs.pawtograder.com/staff/assignments/rubrics">staff documentation</Link>.
+          </Text>
           <Button
             variant="surface"
             size="xs"
@@ -1145,7 +1192,7 @@ function InnerRubricPage() {
           >
             Load Demo Rubric
           </Button>
-        </HStack>
+        </VStack>
       </HStack>
       <Tabs.Root
         value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
@@ -1325,6 +1372,38 @@ function InnerRubricPage() {
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
             {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+
+            {/* Points summary for autograder vs grading rubric vs assignment total */}
+            {rubric?.review_round === "grading-review" && (
+              <Box
+                role="region"
+                border="1px solid"
+                borderColor="border.subtle"
+                aria-label="Grading Rubric Points Summary"
+                mt={2}
+                mb={4}
+                p={3}
+                borderRadius="md"
+                bg={addsUp ? "bg.info" : "bg.warning"}
+              >
+                <Heading size="sm" mb={1}>
+                  Grading Rubric Points Summary
+                </Heading>
+                <Text fontSize="sm" color="fg.muted">
+                  The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently
+                  configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
+                  {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
+                </Text>
+                {!addsUp && (
+                  <Text fontSize="sm" mt={1}>
+                    These do not add up to the assignment max points.{" "}
+                    {gradingRubricPoints < assignmentMaxPoints - autograderPoints
+                      ? `Update the autograder to award +${assignmentMaxPoints - autograderPoints - gradingRubricPoints} points.`
+                      : `Update the grading rubric to remove ${Math.abs(assignmentMaxPoints - autograderPoints - gradingRubricPoints)} points.`}
+                  </Text>
+                )}
+              </Box>
+            )}
 
             {isLoadingCurrentRubric && !rubricForSidebar && (
               <Center h="100%">

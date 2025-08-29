@@ -2,6 +2,9 @@ import { Provider } from "@/components/ui/provider";
 import { Theme, ClientOnly } from "@chakra-ui/react";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import "katex/dist/katex.min.css";
+import "@uiw/react-markdown-preview/markdown.css";
+import "@uiw/react-md-editor/markdown-editor.css";
 import { ColorModeWatcher } from "@/components/ui/color-mode";
 const defaultUrl = process.env["VERCEL_URL"] ? `https://${process.env["VERCEL_URL"]}` : "http://localhost:3000";
 

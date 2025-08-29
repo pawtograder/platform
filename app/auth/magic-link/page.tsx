@@ -1,6 +1,6 @@
 import { signInWithMagicLinkAction } from "@/app/actions";
-import { FormMessage, type Message } from "@/components/form-message";
-import { Button } from "@/components/ui/button";
+import { FormMessage, Message } from "@/components/form-message";
+import { SubmitButton } from "@/components/ui/submit-button";
 import Logo from "@/components/ui/logo";
 import { Box, Container, HStack, Heading, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 
@@ -30,16 +30,16 @@ export default async function ResetPassword(props: { searchParams: Promise<Searc
             <input type="hidden" name="token_hash" value={token_hash} />
             <FormMessage message={message} />
             <Box mt="4">
-              <Button
-                type="submit"
+              <SubmitButton
                 name="action"
                 value="sign-in-with-magic-link"
                 width="100%"
                 colorPalette="green"
                 disabled={!token_hash}
+                pendingText="Signing in…"
               >
                 Sign in with magic link
-              </Button>
+              </SubmitButton>
             </Box>
           </form>
         </Stack>

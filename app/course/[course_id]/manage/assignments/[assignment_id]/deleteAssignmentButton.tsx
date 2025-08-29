@@ -143,7 +143,6 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
                         setIsLoading(false);
                       }
                     }}
-                    onCancel={() => {}}
                   />
                 </HStack>
               </Dialog.Footer>

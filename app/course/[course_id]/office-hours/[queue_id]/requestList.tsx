@@ -118,7 +118,13 @@ export default function HelpRequestHistory({
   }
 
   return (
-    <Stack spaceY={4}>
+    <Stack
+      spaceY={4}
+      maxW={{ base: "md", md: "full" }}
+      w={{ base: "auto", md: "full" }}
+      mx="auto"
+      px={{ base: 2, md: 0 }}
+    >
       <Text fontSize="lg" fontWeight="medium">
         {`Help Requests (${requests.length})`}
       </Text>
@@ -134,6 +140,7 @@ export default function HelpRequestHistory({
             <Card.Root
               key={request.id}
               variant="outline"
+              w="full"
               cursor="pointer"
               role="listitem"
               aria-label={`Help request ${request.id}`}
@@ -141,8 +148,13 @@ export default function HelpRequestHistory({
               onClick={(e) => expandOnly(e, request.id)}
             >
               <Card.Body>
-                <HStack justify="space-between" align="start">
-                  <Box flex="1">
+                <HStack
+                  justify="space-between"
+                  align="start"
+                  gap={{ base: 3, md: 0 }}
+                  flexWrap={{ base: "wrap", md: "nowrap" }}
+                >
+                  <Box flex="1" minW={0}>
                     <Markdown>{request.request}</Markdown>
                     <HStack mt={2} gap={2} wrap="wrap">
                       <Badge
@@ -173,11 +185,11 @@ export default function HelpRequestHistory({
                       )}
                     </HStack>
                   </Box>
-                  <Stack align="end" spaceY={1}>
+                  <Stack align={{ base: "start", md: "end" }} spaceY={1} minW={{ base: "full", md: "auto" }}>
                     <Text fontSize="xs">
                       {formatDistanceToNow(new Date(request.resolved_at || request.created_at), { addSuffix: true })}
                     </Text>
-                    <HStack gap={2}>
+                    <HStack gap={2} wrap="wrap" justify={{ base: "flex-start", md: "flex-end" }}>
                       <Button
                         size="xs"
                         variant="ghost"

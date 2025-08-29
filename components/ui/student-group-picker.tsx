@@ -1,8 +1,8 @@
-import { useMemo } from "react";
-import { Select } from "chakra-react-select";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Field } from "@/components/ui/field";
+import { useAllStudentProfiles } from "@/hooks/useCourseController";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { Select } from "chakra-react-select";
+import { useMemo } from "react";
 import { toaster } from "./toaster";
 
 type StudentOption = {
@@ -56,17 +56,17 @@ export default function StudentGroupPicker({
   minSelections = 0,
   requiredStudents = []
 }: StudentGroupPickerProps) {
-  const classProfiles = useClassProfiles();
+  const students = useAllStudentProfiles();
 
   // Convert available profiles to options for the select component
   const studentOptions: StudentOption[] = useMemo(() => {
-    return classProfiles.profiles
+    return students
       .map((profile: UserProfile) => ({
         label: profile.name || `User ${profile.id}`,
         value: profile.id
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [classProfiles.profiles]);
+  }, [students]);
 
   // Convert selected student IDs to option objects
   const selectedOptions = useMemo(() => {

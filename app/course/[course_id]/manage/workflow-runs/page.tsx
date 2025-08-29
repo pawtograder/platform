@@ -38,72 +38,43 @@ function WorkflowRunStats() {
       try {
         const client = createClient();
 
-        // Get current time for calculations
-        const now = new Date();
-        const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
-        const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
+        // Define time periods with their duration in hours
         const timePeriods = [
-          { name: "Last 30 minutes", start: thirtyMinutesAgo },
-          { name: "Last hour", start: oneHourAgo },
-          { name: "Today", start: todayStart },
-          { name: "This week", start: weekStart },
-          { name: "This month", start: monthStart },
-          { name: "All time", start: new Date(0) }
+          { name: "Last hour", hours: 1 },
+          { name: "Today", hours: 24 },
+          { name: "This week", hours: 24 * 7 },
+          { name: "This month", hours: 24 * 30 },
+          { name: "All time", hours: 24 * 30 * 6 } // 6 months max retention
         ];
 
         const statsData = await Promise.all(
           timePeriods.map(async (period) => {
-            // Fetch workflow run statistics
-            const { data: workflowData, error: workflowError } = await client
-              .from("workflow_events_summary")
-              .select("queue_time_seconds, run_time_seconds")
-              .eq("class_id", Number(course_id))
-              .gte("requested_at", period.start.toISOString());
+            // Call the RPC function to get workflow statistics
+            const { data: rpcData, error: rpcError } = await client.rpc("get_workflow_statistics", {
+              p_class_id: Number(course_id),
+              p_duration_hours: Math.floor(period.hours)
+            });
 
-            // Fetch error count for the same period
-            const { data: errorData, error: errorError } = await client
-              .from("workflow_run_error")
-              .select("id")
-              .eq("class_id", Number(course_id))
-              .gte("created_at", period.start.toISOString());
-
-            if (workflowError) {
-              toaster.error({
-                title: `Error fetching workflow stats for ${period.name}`,
-                description: workflowError.message
-              });
+            if (rpcError) {
+              console.error(`Error fetching workflow stats for ${period.name}:`, rpcError);
+              return {
+                name: period.name,
+                total: 0,
+                avgQueue: 0,
+                avgRun: 0,
+                errorCount: 0
+              };
             }
 
-            if (errorError) {
-              toaster.error({
-                title: `Error fetching error stats for ${period.name}`,
-                description: errorError.message
-              });
-            }
-
-            const runs = workflowData || [];
-            const errors = errorData || [];
-            const total = runs.length;
-            const errorCount = errors.length;
-
-            const queueTimes = runs.map((r) => r.queue_time_seconds).filter((t) => t !== null);
-            const runTimes = runs.map((r) => r.run_time_seconds).filter((t) => t !== null);
-
-            const avgQueue =
-              queueTimes.length > 0 ? queueTimes.reduce((sum, time) => sum + time, 0) / queueTimes.length : 0;
-
-            const avgRun = runTimes.length > 0 ? runTimes.reduce((sum, time) => sum + time, 0) / runTimes.length : 0;
+            // The RPC returns an array with a single row, or empty array if no data
+            const stats = rpcData && rpcData.length > 0 ? rpcData[0] : null;
 
             return {
               name: period.name,
-              total,
-              avgQueue: Math.round(avgQueue),
-              avgRun: Math.round(avgRun),
-              errorCount
+              total: Number(stats?.total_runs || 0),
+              avgQueue: Math.round(Number(stats?.avg_queue_time_seconds || 0)),
+              avgRun: Math.round(Number(stats?.avg_run_time_seconds || 0)),
+              errorCount: Number(stats?.error_count || 0)
             };
           })
         );

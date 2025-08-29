@@ -3,6 +3,8 @@
 import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
+import { env } from "process";
+import { isSignupsEnabled } from "@/lib/features";
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
@@ -111,6 +113,10 @@ export const signInWithEmailAction = async (email: string, password: string) => 
   }
 };
 export const signUpWithEmailAction = async (email: string, password: string) => {
+  if (!isSignupsEnabled()) {
+    return encodedRedirect("error", "/sign-in", "Signups are currently disabled");
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email,
@@ -136,19 +142,18 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/auth/callback`;
-  const { data, error } = await supabase.auth.signInWithOAuth({
+  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
+  const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
-    options: { scopes: "email", redirectTo }
+    options: { scopes: "email User.Read", redirectTo }
   });
 
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
-  if (data.url) {
-    // eslint-disable-next-line no-console
-    console.log(`Redirecting to ${data.url}`);
-    return redirect(data.url);
+
+  if (authData.url) {
+    return redirect(authData.url);
   }
 
   return redirect("/course");
@@ -167,14 +172,6 @@ export const linkGitHubAction = async () => {
   if (!session) {
     return redirect("/sign-in");
   }
-  // eslint-disable-next-line no-console
-  console.log("Linking GitHub");
-  // eslint-disable-next-line no-console
-  console.log(session);
-  const { data, error } = await supabase.auth.linkIdentity({ provider: "github" });
-  // eslint-disable-next-line no-console
-  console.log(data);
-  // eslint-disable-next-line no-console
-  console.log(error);
+  const { data } = await supabase.auth.linkIdentity({ provider: "github" });
   if (data.url) return redirect(data.url);
 };

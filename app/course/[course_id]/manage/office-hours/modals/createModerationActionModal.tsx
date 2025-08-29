@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
@@ -168,7 +169,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                       placeholder="Select a student"
                     >
                       <option value="">Select a student</option>
-                      {students.map((profile: UserProfile) => (
+                      {students?.map((profile: UserProfile) => (
                         <option key={profile.id} value={profile.id}>
                           {profile.name || "Unknown Student"}
                         </option>
@@ -176,7 +177,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.student_profile_id?.message}</Field.ErrorText>
-                  <Field.HelperText>{students.length} students available</Field.HelperText>
+                  <Field.HelperText>{students?.length} students available</Field.HelperText>
                 </Field.Root>
 
                 <Field.Root invalid={!!errors.action_type}>

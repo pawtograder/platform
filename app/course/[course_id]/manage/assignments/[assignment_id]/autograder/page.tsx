@@ -80,6 +80,8 @@ export default function AutograderPage() {
     },
     [refineCore, assignment_id, mutateAssignment]
   );
+  const currentGraderRepo = watch("grader_repo");
+  const currentAssignment = watch("assignments");
 
   if (query?.isLoading || formLoading) {
     return <div>Loading...</div>;
@@ -87,8 +89,6 @@ export default function AutograderPage() {
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
   }
-  const currentGraderRepo = watch("grader_repo");
-  const currentAssignment = watch("assignments");
 
   return (
     <div>
@@ -170,7 +170,7 @@ export default function AutograderPage() {
         </Button>
       </form>
       {currentAssignment && typeof currentGraderRepo === "string" && (
-        <AutograderConfiguration graderRepo={currentGraderRepo} assignment={currentAssignment} />
+        <AutograderConfiguration graderRepo={currentGraderRepo} />
       )}
     </div>
   );

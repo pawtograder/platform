@@ -1,868 +1,560 @@
 "use client";
-import { Button } from "@/components/ui/button";
-import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
-import InlineRemoveTag from "@/components/ui/inline-remove-tag";
-import PersonTags from "@/components/ui/person-tags";
-import { toaster, Toaster } from "@/components/ui/toaster";
-import { Tooltip } from "@/components/ui/tooltip";
-import useAuthState from "@/hooks/useAuthState";
-import useModalManager from "@/hooks/useModalManager";
-import useTags from "@/hooks/useTags";
-import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
+
+import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import type { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
-import {
-  Box,
-  Checkbox,
-  Container,
-  Dialog,
-  Fieldset,
-  Flex,
-  Heading,
-  HStack,
-  Icon,
-  Input,
-  List,
-  NativeSelect,
-  NativeSelectField,
-  Portal,
-  Table,
-  Text,
-  VStack
-} from "@chakra-ui/react";
-import { type ColumnDef, flexRender } from "@tanstack/react-table";
-import { useCustomTable } from "@/hooks/useCustomTable";
-import { Select } from "chakra-react-select";
-import { CheckIcon } from "lucide-react";
-import Link from "next/link";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Accordion, Badge, Box, Collapsible, Container, Flex, Heading, Icon, List, Text } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { AlertCircle, CheckCircle, ChevronDown, ChevronRight, ChevronUp, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
-import { PiArrowBendLeftUpBold } from "react-icons/pi";
-import AddSingleStudent from "./addSingleStudent";
-import EditUserProfileModal from "./editUserProfileModal";
-import EditUserRoleModal from "./editUserRoleModal";
-import ImportStudentsCSVModal from "./importStudentsCSVModal";
-import RemoveStudentModal from "./removeStudentModal";
+import { useCallback, useEffect, useState } from "react";
+import EnrollmentsTable from "./enrollmentsTable";
+type ClassWithSyncStatus = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["classes"]["Row"],
+  "classes",
+  Database["public"]["Tables"]["classes"]["Relationships"],
+  "*, class_sections(*), lab_sections(*), sis_sync_status(*)"
+>;
 
-type EditProfileModalData = string; // userId
-type EditUserRoleModalData = {
-  userRoleId: string;
-  currentRole: UserRoleWithPrivateProfileAndUser["role"];
-  userName: string | null | undefined;
-};
-type RemoveStudentModalData = {
-  userRoleId: string;
-  userName: string | null | undefined;
-  role: UserRoleWithPrivateProfileAndUser["role"];
-};
+type SisSyncStatus = Database["public"]["Tables"]["sis_sync_status"]["Row"];
 
-function EnrollmentsTable() {
-  const { course_id } = useParams();
-  const { user: currentUser } = useAuthState();
-  const [invalidationTrigger, setInvalidationTrigger] = useState(0);
-  const supabase = createClient();
+function SyncStatusIndicator({ syncStatus }: { syncStatus: SisSyncStatus }) {
+  const [isExpanded, setIsExpanded] = useState(false);
 
-  const deleteUserRole = useCallback(
-    async (userRoleId: string) => {
-      const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
-      if (error) throw error;
-      setInvalidationTrigger((prev) => prev + 1);
-    },
-    [supabase, setInvalidationTrigger]
-  );
+  // Check if sync is healthy (enabled, successful, and within 90 minutes)
+  const isHealthy = () => {
+    if (!syncStatus.sync_enabled || !syncStatus.last_sync_time) return false;
 
-  const [isDeletingUserRole, setIsDeletingUserRole] = useState(false);
-  // full list of tags with profiles and courses
-  // unique list of tags with just name + color
-  const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
-    new Set<UserRoleWithPrivateProfileAndUser>()
-  );
+    const lastSyncTime = new Date(syncStatus.last_sync_time);
+    const now = new Date();
+    const minutesAgo = (now.getTime() - lastSyncTime.getTime()) / (1000 * 60);
 
-  const { tags: tagData } = useTags();
+    return syncStatus.last_sync_status === "success" && minutesAgo <= 90;
+  };
 
-  const {
-    isOpen: isEditProfileModalOpen,
-    modalData: editingUserId,
-    openModal: openEditProfileModal,
-    closeModal: closeEditProfileModal
-  } = useModalManager<EditProfileModalData>();
+  const getStatusIcon = () => {
+    if (!syncStatus.sync_enabled) {
+      return (
+        <Icon color="fg.muted">
+          <XCircle size={16} />
+        </Icon>
+      );
+    }
 
-  const {
-    isOpen: isEditUserRoleModalOpen,
-    modalData: editingUserRoleData,
-    openModal: openEditUserRoleModal,
-    closeModal: closeEditUserRoleModal
-  } = useModalManager<EditUserRoleModalData>();
+    if (isHealthy()) {
+      return (
+        <Icon color="green.500">
+          <CheckCircle size={16} />
+        </Icon>
+      );
+    }
 
-  const {
-    isOpen: isRemoveStudentModalOpen,
-    modalData: removingStudentData,
-    openModal: openRemoveStudentModal,
-    closeModal: closeRemoveStudentModal
-  } = useModalManager<RemoveStudentModalData>();
+    if (syncStatus.last_sync_status === "error" || syncStatus.last_sync_status === "failed") {
+      return (
+        <Icon color="red.500">
+          <XCircle size={16} />
+        </Icon>
+      );
+    }
 
-  const {
-    isOpen: isImportCSVModalOpen,
-    openModal: openImportCSVModal,
-    closeModal: closeImportCSVModal
-  } = useModalManager<undefined>();
+    return (
+      <Icon color="yellow.500">
+        <AlertCircle size={16} />
+      </Icon>
+    );
+  };
 
-  const [pageCount, setPageCount] = useState(0);
+  const getStatusBadge = () => {
+    if (!syncStatus.sync_enabled) {
+      return (
+        <Badge variant="subtle" size="sm">
+          Disabled
+        </Badge>
+      );
+    }
 
-  const handleConfirmRemoveStudent = useCallback(
-    async (userRoleIdToRemove: string) => {
-      setIsDeletingUserRole(true);
-      try {
-        await deleteUserRole(userRoleIdToRemove);
-        toaster.create({
-          title: "User Removed",
-          description: `${removingStudentData?.userName || "User"} has been removed from the course.`,
-          type: "success"
-        });
-        closeRemoveStudentModal();
-      } catch (error) {
-        toaster.create({
-          title: "Error Removing User",
-          description: `Failed to remove user: ${error instanceof Error ? error.message : "Unknown error"}`,
-          type: "error"
-        });
-        closeRemoveStudentModal();
-      } finally {
-        setIsDeletingUserRole(false);
-      }
-    },
-    [deleteUserRole, removingStudentData?.userName, closeRemoveStudentModal]
-  );
-  const handleSingleCheckboxChange = useCallback((user: UserRoleWithPrivateProfileAndUser, checked: boolean) => {
-    if (checked === true) {
-      checkedBoxesRef.current.add(user);
+    if (isHealthy()) {
+      return (
+        <Badge colorPalette="green" size="sm">
+          Synced
+        </Badge>
+      );
+    }
+
+    if (syncStatus.last_sync_status === "error" || syncStatus.last_sync_status === "failed") {
+      return (
+        <Badge colorPalette="red" size="sm">
+          Error
+        </Badge>
+      );
+    }
+
+    return (
+      <Badge colorPalette="yellow" size="sm">
+        Pending
+      </Badge>
+    );
+  };
+
+  const formatLastSyncTime = () => {
+    if (!syncStatus.last_sync_time) return "Never";
+
+    const lastSyncTime = new Date(syncStatus.last_sync_time);
+    const now = new Date();
+    const minutesAgo = Math.floor((now.getTime() - lastSyncTime.getTime()) / (1000 * 60));
+
+    if (minutesAgo < 60) {
+      return `${minutesAgo} minutes ago`;
+    } else if (minutesAgo < 1440) {
+      const hoursAgo = Math.floor(minutesAgo / 60);
+      return `${hoursAgo} hour${hoursAgo > 1 ? "s" : ""} ago`;
     } else {
-      checkedBoxesRef.current.delete(user);
+      const daysAgo = Math.floor(minutesAgo / 1440);
+      return `${daysAgo} day${daysAgo > 1 ? "s" : ""} ago`;
     }
-    setCheckedBoxes(new Set(checkedBoxesRef.current));
-  }, []);
-
-  const checkboxClear = () => {
-    checkedBoxesRef.current.clear();
-    setCheckedBoxes(new Set(checkedBoxesRef.current)); // Clear all
-  };
-
-  const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
-
-  const addTag = async (values: Omit<Tag, "id" | "created_at">) => {
-    const { error } = await supabase.from("tags").insert(values);
-    if (error) throw error;
-    setInvalidationTrigger((prev) => prev + 1);
-  };
-
-  useEffect(() => {
-    if (checkedBoxes.size === 0) {
-      setStrategy("none");
-    }
-  }, [checkedBoxes]);
-
-  const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
-    () => [
-      {
-        id: "checkbox",
-        header: "",
-        cell: ({ row }) => {
-          return (
-            <Checkbox.Root
-              checked={
-                Array.from(checkedBoxesRef.current).find((box) => {
-                  return box.private_profile_id === row.original.private_profile_id;
-                }) != undefined
-              }
-              onCheckedChange={(checked) => handleSingleCheckboxChange(row.original, checked.checked.valueOf() == true)}
-            >
-              <Checkbox.HiddenInput />
-              <Checkbox.Control>
-                <CheckIcon></CheckIcon>
-              </Checkbox.Control>
-            </Checkbox.Root>
-          );
-        }
-      },
-      {
-        id: "class_id",
-        accessorKey: "class_id",
-        header: "Class ID",
-        enableColumnFilter: true,
-        enableHiding: true,
-        filterFn: (row, columnId: string, filterValue) => {
-          return String(row.original.class_id) === String(filterValue);
-        }
-      },
-      {
-        id: "profiles.name",
-        accessorKey: "profiles.name",
-        header: "Name",
-        enableColumnFilter: true,
-        cell: ({ row }) => {
-          const profile = row.original.profiles;
-          if (profile && profile.name) {
-            return profile.name;
-          }
-          return "N/A";
-        },
-        filterFn: (row, columnId: string, filterValue) => {
-          const name = row.original.profiles?.name;
-          if (!name) return false;
-          const filterString = String(filterValue).toLowerCase();
-          return name.toLowerCase().includes(filterString);
-        }
-      },
-      {
-        id: "users.email",
-        accessorKey: "users.email",
-        header: "Email",
-        enableColumnFilter: true,
-        filterFn: (row, columnId: string, filterValue) => {
-          const email = row.original.users?.email;
-          if (!email) return false;
-          const filterString = String(filterValue).toLowerCase();
-          return email.toLowerCase().includes(filterString);
-        }
-      },
-      {
-        id: "role",
-        header: "Role",
-        accessorKey: "role",
-        filterFn: (row, columnId: string, filterValue) => {
-          const role = row.original.role;
-          if (!role) return false;
-          const filterString = String(filterValue).toLowerCase();
-          return role.toLowerCase().includes(filterString);
-        }
-      },
-      {
-        id: "github_username",
-        header: "Github Username",
-        accessorKey: "users.github_username",
-        filterFn: (row, columnId: string, filterValue) => {
-          const username = row.original.users?.github_username;
-          if (!username) return false;
-          const filterString = String(filterValue).toLowerCase();
-          return username.toLowerCase().includes(filterString);
-        }
-      },
-      {
-        id: "canvas_id",
-        header: "Canvas Link",
-        accessorKey: "canvas_id",
-        cell: ({ row }) => {
-          if (row.original.canvas_id) {
-            return <Icon aria-label="Linked to Canvas" as={FaLink} />;
-          }
-          return null;
-        }
-      },
-      {
-        id: "tags",
-        header: "Tags",
-        accessorKey: "tags",
-        filterFn: (row, id, filterValue) => {
-          const profileTagNames = tagData
-            .filter((tag) => {
-              return (
-                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
-              );
-            })
-            .map((tag) => {
-              return tag.name;
-            });
-          return profileTagNames.includes(filterValue);
-        },
-        cell: ({ row }) => {
-          return (
-            <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
-              <PersonTags profile_id={row.original.private_profile_id} showRemove />
-              <InlineAddTag profile_id={row.original.private_profile_id} allowExpand={false} />
-            </Flex>
-          );
-        }
-      },
-      {
-        id: "actions",
-        header: "Actions",
-        cell: ({ row }) => {
-          const profile = row.original.profiles;
-          const studentProfileId = profile?.id;
-          const userRoleEntry = row.original;
-          const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
-          const isTargetInstructor = userRoleEntry.role === "instructor";
-
-          const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
-          let editRoleTooltipContent = "Edit user role";
-          if (isCurrentUserRow) {
-            editRoleTooltipContent = "You cannot edit your own role";
-          } else if (isTargetInstructor) {
-            editRoleTooltipContent = "Instructors' roles cannot be changed";
-          }
-
-          const canRemoveThisUser = !isCurrentUserRow && !isTargetInstructor;
-          let removeUserTooltipContent = "Remove user from course";
-          if (isCurrentUserRow) {
-            removeUserTooltipContent = "You cannot remove yourself";
-          } else if (isTargetInstructor) {
-            removeUserTooltipContent = "Instructors cannot be removed this way";
-          }
-
-          return (
-            <HStack gap={2} justifyContent="center">
-              {profile && studentProfileId && (
-                <Tooltip content="Edit student profile">
-                  <Icon
-                    as={FaEdit}
-                    aria-label="Edit student profile"
-                    cursor="pointer"
-                    onClick={() => openEditProfileModal(studentProfileId)}
-                  />
-                </Tooltip>
-              )}
-              {userRoleEntry && userRoleEntry.id && userRoleEntry.role && (
-                <Tooltip content={editRoleTooltipContent}>
-                  <Icon
-                    as={FaUserCog}
-                    aria-label={editRoleTooltipContent}
-                    cursor={canEditThisUserRole ? "pointer" : "not-allowed"}
-                    opacity={canEditThisUserRole ? 1 : 0.5}
-                    onClick={() => {
-                      if (canEditThisUserRole) {
-                        openEditUserRoleModal({
-                          userRoleId: String(userRoleEntry.id),
-                          currentRole: userRoleEntry.role,
-                          userName: profile?.name
-                        });
-                      }
-                    }}
-                  />
-                </Tooltip>
-              )}
-              {userRoleEntry && userRoleEntry.id && (
-                <Tooltip content={removeUserTooltipContent}>
-                  <Icon
-                    as={FaTrash}
-                    aria-label={removeUserTooltipContent}
-                    cursor={canRemoveThisUser ? "pointer" : "not-allowed"}
-                    opacity={canRemoveThisUser ? 1 : 0.5}
-                    color={canRemoveThisUser ? "red.500" : undefined}
-                    onClick={() => {
-                      if (canRemoveThisUser) {
-                        openRemoveStudentModal({
-                          userRoleId: String(userRoleEntry.id),
-                          userName: profile?.name,
-                          role: userRoleEntry.role
-                        });
-                      }
-                    }}
-                  />
-                </Tooltip>
-              )}
-            </HStack>
-          );
-        }
-      }
-    ],
-    [
-      currentUser,
-      openEditProfileModal,
-      openEditUserRoleModal,
-      openRemoveStudentModal,
-      tagData,
-      handleSingleCheckboxChange
-    ]
-  );
-
-  // Memoize server filters to prevent unnecessary API calls
-  const serverFilters = useMemo(
-    () => [
-      {
-        field: "class_id",
-        operator: "eq" as const,
-        value: course_id as string
-      }
-    ],
-    [course_id]
-  );
-
-  // Memoize initial state to prevent table re-initialization
-  const initialState = useMemo(
-    () => ({
-      pagination: {
-        pageIndex: 0,
-        pageSize: 50
-      }
-    }),
-    []
-  );
-
-  //TODO: Refactor so that invalidate works, via TableController
-  const {
-    getHeaderGroups,
-    getRowModel,
-    getRowCount,
-    getState,
-    setPageIndex,
-    getCanPreviousPage,
-    getCanNextPage,
-    nextPage,
-    previousPage,
-    setPageSize,
-    getPrePaginationRowModel,
-    refetch
-  } = useCustomTable<UserRoleWithPrivateProfileAndUser>({
-    columns,
-    resource: "user_roles",
-    serverFilters,
-    select: "*,profiles!private_profile_id(*), users(*)",
-    initialState
-  });
-
-  useEffect(() => {
-    refetch();
-  }, [invalidationTrigger, refetch]);
-
-  const nRows = getRowCount();
-  const pageSize = getState().pagination.pageSize;
-  useEffect(() => {
-    setPageCount(Math.ceil(nRows / pageSize));
-  }, [nRows, pageSize]);
-  const [strategy, setStrategy] = useState<"add" | "remove" | "none">("none");
-
-  const deleteMutation = async (params: { resource: string; id: string }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase as any).from(params.resource).delete().eq("id", params.id);
-    if (error) throw error;
-    setInvalidationTrigger((prev) => prev + 1);
   };
 
   return (
-    <VStack align="start" w="100%">
-      <VStack paddingBottom="55px" align="start" w="100%">
-        <Table.Root>
-          <Table.Header>
-            {getHeaderGroups().map((headerGroup) => (
-              <Table.Row bg="bg.subtle" key={headerGroup.id}>
-                {headerGroup.headers
-                  .filter((h) => h.id !== "class_id")
-                  .map((header) => {
-                    return (
-                      <Table.ColumnHeader key={header.id}>
-                        {header.isPlaceholder ? null : (
-                          <>
-                            <Text
-                              onClick={header.column.getToggleSortingHandler()}
-                              textAlign={header.id === "actions" || header.id === "checkbox" ? "center" : undefined}
-                            >
-                              {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{
-                                asc: " 🔼",
-                                desc: " 🔽"
-                              }[header.column.getIsSorted() as string] ?? null}
-                            </Text>
-                            {header.id === "checkbox" && (
-                              <Checkbox.Root
-                                checked={checkedBoxesRef.current.size === getRowModel().rows.length}
-                                onCheckedChange={(checked) => {
-                                  if (checked.checked.valueOf() === true) {
-                                    getRowModel()
-                                      .rows.map((row) => row.original)
-                                      .forEach((row) => {
-                                        checkedBoxesRef.current.add(row);
-                                      });
-                                    setCheckedBoxes(new Set(checkedBoxesRef.current));
-                                  } else {
-                                    checkboxClear();
-                                  }
-                                }}
-                              >
-                                <Checkbox.HiddenInput />
-                                <Checkbox.Control>
-                                  {" "}
-                                  <CheckIcon></CheckIcon>
-                                </Checkbox.Control>
-                              </Checkbox.Root>
-                            )}
-                            {header.id !== "actions" && header.id !== "checkbox" && header.id !== "tags" && (
-                              <Input
-                                id={header.id}
-                                value={(header.column.getFilterValue() as string) ?? ""}
-                                onChange={(e) => {
-                                  header.column.setFilterValue(e.target.value);
-                                }}
-                              />
-                            )}
-                            {header.id === "tags" && (
-                              <Select
-                                isMulti={false}
-                                id={header.id}
-                                onChange={(e) => {
-                                  if (e) {
-                                    header.column.setFilterValue(e.value?.name);
-                                    checkboxClear();
-                                  }
-                                }}
-                                options={[
-                                  ...Array.from(
-                                    tagData
-                                      .reduce((map, p) => {
-                                        if (!map.has(p.name)) {
-                                          map.set(p.name, p);
-                                        }
-                                        return map;
-                                      }, new Map())
-                                      .values()
-                                  ).map((p) => ({ label: p.name, value: p })),
-                                  { label: "<none>", value: null }
-                                ]}
-                              />
-                            )}
-                          </>
-                        )}
-                      </Table.ColumnHeader>
-                    );
-                  })}
-              </Table.Row>
-            ))}
-          </Table.Header>
-          <Table.Body>
-            {getRowModel().rows.map((row) => (
-              <Table.Row
-                key={row.id}
-                onClick={row.getToggleSelectedHandler()}
-                cursor="pointer"
-                bg={row.getIsSelected() ? "bg.subtle" : undefined}
-              >
-                {row
-                  .getVisibleCells()
-                  .filter((cell) => cell.column.id !== "class_id")
-                  .map((cell) => {
-                    return (
-                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                    );
-                  })}
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-        <Flex marginLeft="15px" flexDir={"row"} alignItems={"center"} fontSize="var(--chakra-font-sizes-sm)">
-          <PiArrowBendLeftUpBold width={"30px"} height={"30px"} />
-          Select people
-          <Button
-            height="fit-content"
-            padding="0"
-            width="fit-content"
-            variant={"ghost"}
-            colorPalette={"blue"}
-            onClick={() => {
-              getRowModel()
-                .rows.map((row) => row.original)
-                .forEach((row) => {
-                  checkedBoxesRef.current.add(row);
-                });
-              setCheckedBoxes(new Set(checkedBoxesRef.current));
-            }}
-          >
-            (or select all {getRowModel().rows.length})
-          </Button>
-          , then
-          <Flex>
-            <Fieldset.Root size="sm" ml="2">
-              <Fieldset.Content display="flex" flexDir={"row"} alignItems={"center"}>
-                <NativeSelect.Root disabled={checkedBoxes.size < 1}>
-                  <NativeSelectField
-                    value={strategy}
-                    onChange={(e) => {
-                      setStrategy(e.target.value as "add" | "remove" | "none");
-                    }}
-                  >
-                    <option value="none">{"<Select>"}</option>
-                    <option value="add">Add tag</option>
-                    <option value="remove">Remove tag</option>
-                  </NativeSelectField>
-                </NativeSelect.Root>
-                {strategy === "add" && (
-                  <TagAddForm
-                    addTag={async (name: string, color?: string) => {
-                      checkedBoxes.forEach(async (profile) => {
-                        await addTag({
-                          name: name.startsWith("~") ? name.slice(1) : name,
-                          color: color || "gray",
-                          visible: !name.startsWith("~"),
-                          profile_id: profile.private_profile_id,
-                          class_id: parseInt(course_id as string),
-                          creator_id: currentUser?.id || ""
-                        });
-                      });
-                      setStrategy("none");
-                    }}
-                    currentTags={tagData.filter((tag) => {
-                      return Array.from(checkedBoxes)
-                        .map((row) => row.private_profile_id)
-                        .includes(tag.profile_id);
-                    })}
-                    allowExpand={true}
-                  />
-                )}
-                {strategy === "remove" && (
-                  <InlineRemoveTag
-                    tagOptions={
-                      checkedBoxes.size === 0
-                        ? []
-                        : Array.from(
-                            tagData
-                              .reduce((map, tag) => {
-                                const key = JSON.stringify({ name: tag.name, color: tag.color, visible: tag.visible });
-                                if (!map.has(key)) {
-                                  map.set(key, tag);
-                                }
-                                return map;
-                              }, new Map())
-                              .values()
-                          ).filter((tag) => {
-                            const checkedProfileIds = Array.from(checkedBoxes).map((box) => box.private_profile_id);
+    <Box ml={2} mt={1}>
+      <Flex
+        align="center"
+        gap={2}
+        cursor="pointer"
+        onClick={() => setIsExpanded(!isExpanded)}
+        _hover={{ bg: "bg.muted" }}
+        p={1}
+        borderRadius="sm"
+      >
+        {getStatusIcon()}
+        {getStatusBadge()}
+        <Text fontSize="xs" color="fg.muted">
+          Last sync: {formatLastSyncTime()}
+        </Text>
+        <Icon color="fg.subtle">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Icon>
+      </Flex>
 
-                            return checkedProfileIds.every((profileId) =>
-                              tagData.some(
-                                (t) =>
-                                  t.profile_id === profileId &&
-                                  t.name === tag.name &&
-                                  t.color === tag.color &&
-                                  t.visible === tag.visible
-                              )
-                            );
-                          })
-                    }
-                    removeTag={(tagName: string, tagColor: string, tagVisibility: boolean) => {
-                      checkedBoxes.forEach(async (profile) => {
-                        const findTag = tagData.find((tag) => {
-                          return (
-                            tag.name === tagName &&
-                            tag.color === tagColor &&
-                            tagVisibility === tag.visible &&
-                            tag.profile_id === profile.private_profile_id
-                          );
-                        });
-                        if (!findTag) {
-                          toaster.error({
-                            title: "Error removing tag",
-                            type: "Tag not found on profile " + profile.profiles.name
-                          });
-                          return;
-                        }
-                        deleteMutation({
-                          resource: "tags",
-                          id: findTag.id
-                        });
-                      });
-                      setStrategy("none");
-                    }}
-                  />
-                )}
-              </Fieldset.Content>
-            </Fieldset.Root>
-          </Flex>
-        </Flex>
-
-        <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
-          <HStack gap={2}>
-            <Button size="sm" onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
-              {"<<"}
-            </Button>
-            <Button size="sm" onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
-              {"<"}
-            </Button>
-            <Button size="sm" onClick={() => nextPage()} disabled={!getCanNextPage()}>
-              {">"}
-            </Button>
-            <Button size="sm" onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
-              {">>"}
-            </Button>
-          </HStack>
-
-          <HStack gap={2} alignItems="center">
-            <Text whiteSpace="nowrap">
-              Page{" "}
-              <strong>
-                {getState().pagination.pageIndex + 1} of {pageCount}
-              </strong>
+      <Collapsible.Root open={isExpanded}>
+        <Collapsible.Content>
+          <Box ml={6} mt={2} p={2} bg="bg.muted" borderRadius="sm" fontSize="xs">
+            <Text>
+              <strong>Status:</strong> {syncStatus.last_sync_status || "Unknown"}
             </Text>
-            <Text whiteSpace="nowrap">| Go to page:</Text>
-            <Input
-              type="number"
-              defaultValue={getState().pagination.pageIndex + 1}
-              min={1}
-              max={pageCount}
-              onChange={(e) => {
-                const page = e.target.value ? Number(e.target.value) - 1 : 0;
-                const newPageIndex = Math.max(0, Math.min(page, pageCount - 1));
-                setPageIndex(newPageIndex);
-              }}
-              width="60px"
-              textAlign="center"
-            />
-          </HStack>
-
-          <NativeSelect.Root title="Select page size" aria-label="Select page size" width="120px">
-            <NativeSelect.Field
-              title="Select page size"
-              aria-label="Select page size"
-              value={getState().pagination.pageSize}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                setPageSize(Number(e.target.value));
-              }}
-            >
-              {[25, 50, 100, 200, 500].map((pageSizeOption) => (
-                <option key={pageSizeOption} value={pageSizeOption}>
-                  Show {pageSizeOption}
-                </option>
-              ))}
-              {/* Add option to show all if current count is not in the default list and is greater than largest default option */}
-              {![25, 50, 100, 200, 500].includes(getPrePaginationRowModel().rows.length) &&
-                getPrePaginationRowModel().rows.length > 500 && (
-                  <option key="all" value={getPrePaginationRowModel().rows.length}>
-                    Show All ({getPrePaginationRowModel().rows.length})
-                  </option>
-                )}
-            </NativeSelect.Field>
-          </NativeSelect.Root>
-        </HStack>
-        <Toaster />
-      </VStack>
-      <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
-        <HStack justifyContent="flex-end">
-          {" "}
-          <Button onClick={() => openImportCSVModal()}>
-            <Icon as={FaFileImport} mr="2" />
-            Import from CSV
-          </Button>
-          <AddSingleStudent />
-        </HStack>
-      </Box>
-      {editingUserId && (
-        <Dialog.Root open={isEditProfileModalOpen} onOpenChange={(details) => !details.open && closeEditProfileModal()}>
-          <Portal>
-            <Dialog.Backdrop />
-            <Dialog.Positioner>
-              <Dialog.Content>
-                <Dialog.Header>
-                  <Dialog.Title>Edit User Profile</Dialog.Title>
-                  <Dialog.CloseTrigger onClick={closeEditProfileModal} />
-                </Dialog.Header>
-                <Dialog.Body>
-                  <EditUserProfileModal userId={editingUserId} onClose={closeEditProfileModal} />
-                </Dialog.Body>
-              </Dialog.Content>
-            </Dialog.Positioner>
-          </Portal>
-        </Dialog.Root>
-      )}
-      {editingUserRoleData && (
-        <Dialog.Root
-          open={isEditUserRoleModalOpen}
-          onOpenChange={(details) => !details.open && closeEditUserRoleModal()}
-        >
-          <Portal>
-            <Dialog.Backdrop />
-            <Dialog.Positioner>
-              <Dialog.Content>
-                <Dialog.Header>
-                  <Dialog.Title>Edit User Role</Dialog.Title>
-                  <Dialog.CloseTrigger onClick={closeEditUserRoleModal} />
-                </Dialog.Header>
-                <Dialog.Body>
-                  <EditUserRoleModal
-                    userRoleId={editingUserRoleData.userRoleId}
-                    currentRole={editingUserRoleData.currentRole}
-                    userName={editingUserRoleData.userName}
-                    onClose={closeEditUserRoleModal}
-                  />
-                </Dialog.Body>
-              </Dialog.Content>
-            </Dialog.Positioner>
-          </Portal>
-        </Dialog.Root>
-      )}
-      {removingStudentData && (
-        <RemoveStudentModal
-          isOpen={isRemoveStudentModalOpen}
-          onClose={closeRemoveStudentModal}
-          studentName={removingStudentData.userName}
-          userRoleId={removingStudentData.userRoleId}
-          onConfirmRemove={handleConfirmRemoveStudent}
-          isLoading={isDeletingUserRole}
-        />
-      )}
-      {isImportCSVModalOpen && <ImportStudentsCSVModal isOpen={isImportCSVModalOpen} onClose={closeImportCSVModal} />}
-    </VStack>
+            <Text>
+              <strong>Enabled:</strong> {syncStatus.sync_enabled ? "Yes" : "No"}
+            </Text>
+            {syncStatus.last_sync_time && (
+              <Text>
+                <strong>Last Sync:</strong> {new Date(syncStatus.last_sync_time).toLocaleString()}
+              </Text>
+            )}
+          </Box>
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Box>
   );
 }
 
-export default function EnrollmentsPage() {
+function LinkedSectionsTab() {
   const { course_id } = useParams();
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [sections, setSections] = useState<ClassSection[]>([]);
-  const supabase = createClient();
-
+  const [classWithSyncStatus, setClassWithSyncStatus] = useState<ClassWithSyncStatus>();
+  const [isAccordionOpen, setIsAccordionOpen] = useState(false);
   useEffect(() => {
+    const supabase = createClient();
     const fetchSections = async () => {
-      const { data } = await supabase
-        .from("class_sections")
-        .select("*")
-        .eq("class_id", parseInt(course_id as string));
-      setSections(data || []);
+      try {
+        const { data, error } = await supabase
+          .from("classes")
+          .select("*, class_sections(*), lab_sections(*), sis_sync_status(*)")
+          .eq("id", parseInt(course_id as string))
+          .single();
+
+        if (error) {
+          // Handle Supabase error
+          const errorDescription = error.message + (error.details ? ` (${error.details})` : "");
+          toaster.create({
+            title: "Error fetching section sync status",
+            description: errorDescription,
+            type: "error"
+          });
+          return;
+        }
+
+        if (data) {
+          setClassWithSyncStatus(data);
+        } else {
+          // No error but no data
+          toaster.create({
+            title: "Error fetching section sync status",
+            description: "No class data found",
+            type: "error"
+          });
+        }
+      } catch (exception) {
+        // Handle any thrown exceptions
+        const errorMessage = exception instanceof Error ? exception.message : String(exception);
+        toaster.create({
+          title: "Error fetching section sync status",
+          description: `Unexpected error: ${errorMessage}`,
+          type: "error"
+        });
+      }
     };
     fetchSections();
-  }, [course_id, supabase]);
+  }, [course_id]);
+
+  const syncStatusForClassSection = useCallback(
+    (section: { id: number }) => {
+      return classWithSyncStatus?.sis_sync_status?.find((status) => status.course_section_id === section.id);
+    },
+    [classWithSyncStatus]
+  );
+
+  const syncStatusForLabSection = useCallback(
+    (section: { id: number }) => {
+      return classWithSyncStatus?.sis_sync_status?.find((status) => status.lab_section_id === section.id);
+    },
+    [classWithSyncStatus]
+  );
+
+  // Calculate overall sync summary
+  const getSyncSummary = useCallback((): {
+    status: string;
+    message: string;
+    totalSections: number;
+    healthySections: number;
+    lastSyncMessage: string | null;
+  } => {
+    if (!classWithSyncStatus)
+      return { status: "loading", message: "Loading...", totalSections: 0, healthySections: 0, lastSyncMessage: null };
+
+    const allSections = [
+      ...(classWithSyncStatus.class_sections || []),
+      ...(classWithSyncStatus.lab_sections || [])
+    ].filter((section) => section.sis_crn); // Only count sections with SIS CRN
+
+    const totalSections = allSections.length;
+
+    if (totalSections === 0) {
+      return {
+        status: "none",
+        message: "No SIS-linked sections",
+        totalSections: 0,
+        healthySections: 0,
+        lastSyncMessage: null
+      };
+    }
+
+    let healthySections = 0;
+    let enabledSections = 0;
+    let errorSections = 0;
+    let lastSyncMessage: string | null = null;
+
+    // Process class sections
+    (classWithSyncStatus.class_sections || []).forEach((section) => {
+      if (!section.sis_crn) return; // Skip sections without SIS CRN
+
+      const syncStatus = syncStatusForClassSection(section);
+
+      if (syncStatus) {
+        // Capture the sync message (they should all be the same, so just take the first one we find)
+        if (!lastSyncMessage && syncStatus.last_sync_message) {
+          lastSyncMessage = syncStatus.last_sync_message;
+        }
+
+        if (syncStatus.sync_enabled) {
+          enabledSections++;
+
+          // Check if healthy (enabled, successful, within 90 minutes)
+          if (syncStatus.last_sync_time && syncStatus.last_sync_status === "success") {
+            const lastSyncTime = new Date(syncStatus.last_sync_time);
+            const now = new Date();
+            const minutesAgo = (now.getTime() - lastSyncTime.getTime()) / (1000 * 60);
+
+            if (minutesAgo <= 90) {
+              healthySections++;
+            }
+          }
+
+          if (syncStatus.last_sync_status === "error" || syncStatus.last_sync_status === "failed") {
+            errorSections++;
+          }
+        }
+      } else {
+        // Section has SIS CRN but no sync status record - treat as enabled but not synced yet
+        enabledSections++;
+      }
+    });
+
+    // Process lab sections
+    (classWithSyncStatus.lab_sections || []).forEach((section) => {
+      if (!section.sis_crn) return; // Skip sections without SIS CRN
+
+      const syncStatus = syncStatusForLabSection(section);
+
+      if (syncStatus) {
+        // Capture the sync message (they should all be the same, so just take the first one we find)
+        if (!lastSyncMessage && syncStatus.last_sync_message) {
+          lastSyncMessage = syncStatus.last_sync_message;
+        }
+
+        if (syncStatus.sync_enabled) {
+          enabledSections++;
+
+          // Check if healthy (enabled, successful, within 90 minutes)
+          if (syncStatus.last_sync_time && syncStatus.last_sync_status === "success") {
+            const lastSyncTime = new Date(syncStatus.last_sync_time);
+            const now = new Date();
+            const minutesAgo = (now.getTime() - lastSyncTime.getTime()) / (1000 * 60);
+
+            if (minutesAgo <= 90) {
+              healthySections++;
+            }
+          }
+
+          if (syncStatus.last_sync_status === "error" || syncStatus.last_sync_status === "failed") {
+            errorSections++;
+          }
+        }
+      } else {
+        // Section has SIS CRN but no sync status record - treat as enabled but not synced yet
+        enabledSections++;
+      }
+    });
+
+    if (healthySections === totalSections) {
+      return {
+        status: "healthy",
+        message: `All ${totalSections} linked sections synced`,
+        totalSections,
+        healthySections,
+        lastSyncMessage
+      };
+    } else if (errorSections > 0) {
+      return {
+        status: "error",
+        message: `${errorSections} linked section${errorSections > 1 ? "s" : ""} with errors`,
+        totalSections,
+        healthySections,
+        lastSyncMessage
+      };
+    } else if (enabledSections === 0) {
+      return {
+        status: "disabled",
+        message: "Sync disabled for all linked sections",
+        totalSections,
+        healthySections,
+        lastSyncMessage
+      };
+    } else {
+      return {
+        status: "partial",
+        message: `${healthySections}/${totalSections} linked sections healthy`,
+        totalSections,
+        healthySections,
+        lastSyncMessage
+      };
+    }
+  }, [classWithSyncStatus, syncStatusForClassSection, syncStatusForLabSection]);
+
+  const syncSummary = getSyncSummary();
+
+  const getSummaryBadge = () => {
+    switch (syncSummary.status) {
+      case "healthy":
+        return (
+          <Badge colorPalette="green" size="sm">
+            All Synced
+          </Badge>
+        );
+      case "error":
+        return (
+          <Badge colorPalette="red" size="sm">
+            Errors
+          </Badge>
+        );
+      case "disabled":
+        return (
+          <Badge variant="subtle" size="sm">
+            Disabled
+          </Badge>
+        );
+      case "partial":
+        return (
+          <Badge colorPalette="yellow" size="sm">
+            Partial
+          </Badge>
+        );
+      case "none":
+        return (
+          <Badge variant="subtle" size="sm">
+            No SIS Links
+          </Badge>
+        );
+      default:
+        return (
+          <Badge variant="subtle" size="sm">
+            Loading...
+          </Badge>
+        );
+    }
+  };
+
+  const getSummaryIcon = () => {
+    switch (syncSummary.status) {
+      case "healthy":
+        return (
+          <Icon color="green.500">
+            <CheckCircle size={16} />
+          </Icon>
+        );
+      case "error":
+        return (
+          <Icon color="red.500">
+            <XCircle size={16} />
+          </Icon>
+        );
+      case "disabled":
+      case "none":
+        return (
+          <Icon color="fg.muted">
+            <XCircle size={16} />
+          </Icon>
+        );
+      case "partial":
+        return (
+          <Icon color="yellow.500">
+            <AlertCircle size={16} />
+          </Icon>
+        );
+      default:
+        return (
+          <Icon color="fg.muted">
+            <AlertCircle size={16} />
+          </Icon>
+        );
+    }
+  };
+  return (
+    <Accordion.Root
+      collapsible
+      value={isAccordionOpen ? ["sis-sync"] : []}
+      onValueChange={(details) => setIsAccordionOpen(details.value.includes("sis-sync"))}
+    >
+      <Accordion.Item value="sis-sync">
+        <Accordion.ItemTrigger
+          _hover={{
+            bg: "bg.muted",
+            "& .expand-hint": {
+              fontWeight: "bold"
+            }
+          }}
+          transition="background-color 0.2s"
+          borderRadius="md"
+          p={3}
+          mx={-3}
+        >
+          <Flex align="center" gap={3} width="100%">
+            {getSummaryIcon()}
+            <Box flex="1" textAlign="left">
+              <Text fontWeight="medium">University Student Information System (SIS) Links</Text>
+              <Text fontSize="sm" color="fg.muted">
+                {syncSummary.message}
+              </Text>
+              {syncSummary.lastSyncMessage && (
+                <Text fontSize="xs" color="fg.subtle" mt={1}>
+                  Last sync result: {syncSummary.lastSyncMessage}
+                </Text>
+              )}
+            </Box>
+            <Flex align="center" gap={2}>
+              {getSummaryBadge()}
+              <Flex align="center" gap={1} color="fg.subtle" fontSize="xs" className="expand-hint">
+                <Icon>{isAccordionOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</Icon>
+                <Text>{isAccordionOpen ? "Click to collapse" : "Click to expand"}</Text>
+              </Flex>
+            </Flex>
+          </Flex>
+        </Accordion.ItemTrigger>
+        <Accordion.ItemContent>
+          <Box pt={4}>
+            <Text fontSize="sm" color="fg.muted" mb={4}>
+              Enrollments in this course are linked to the following SIS sections, and are automatically updated 15
+              minutes past the hour:
+            </Text>
+
+            <Heading size="sm" mb={3}>
+              Linked Class Sections
+            </Heading>
+            <List.Root as="ul" pl="4" mb={3}>
+              {classWithSyncStatus?.class_sections?.map((section) => {
+                const syncStatus = syncStatusForClassSection(section);
+                return (
+                  <List.Item key={section.id} as="li" fontSize="sm">
+                    <Flex align="center" justify="space-between">
+                      <Box>
+                        <Text fontWeight="medium">
+                          {section.name} - CRN: {section.sis_crn}
+                        </Text>
+                        <Text fontSize="xs" color="fg.muted">
+                          {section.meeting_times}, {section.meeting_location}
+                        </Text>
+                      </Box>
+                      {syncStatus ? (
+                        <SyncStatusIndicator syncStatus={syncStatus} />
+                      ) : (
+                        <Badge variant="subtle" size="sm">
+                          No sync configured
+                        </Badge>
+                      )}
+                    </Flex>
+                  </List.Item>
+                );
+              })}
+            </List.Root>
+
+            <Heading size="sm" mb={3}>
+              Linked Lab Sections
+            </Heading>
+            <List.Root as="ul" pl="4" mb={3}>
+              {classWithSyncStatus?.lab_sections?.map((section) => {
+                const syncStatus = syncStatusForLabSection(section);
+                return (
+                  <List.Item key={section.id} as="li" fontSize="sm">
+                    <Flex align="center" justify="space-between">
+                      <Box>
+                        <Text fontWeight="medium">
+                          {section.name} - CRN: {section.sis_crn}
+                        </Text>
+                        {(section.meeting_times || section.meeting_location) && (
+                          <Text fontSize="xs" color="fg.muted">
+                            {[section.meeting_times, section.meeting_location].filter(Boolean).join(", ")}
+                          </Text>
+                        )}
+                      </Box>
+                      {syncStatus ? (
+                        <SyncStatusIndicator syncStatus={syncStatus} />
+                      ) : (
+                        <Badge variant="subtle" size="sm">
+                          No sync configured
+                        </Badge>
+                      )}
+                    </Flex>
+                  </List.Item>
+                );
+              })}
+            </List.Root>
+          </Box>
+        </Accordion.ItemContent>
+      </Accordion.Item>
+    </Accordion.Root>
+  );
+}
+export default function EnrollmentsPage() {
   return (
     <Container>
       <Heading my="4">Enrollments</Heading>
-      <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4">
-        <Heading size="sm" mb={3}>
-          Canvas Links
-        </Heading>
-        <Text fontSize="sm" color="fg.muted" mb={3}>
-          Enrollments in this course are linked to the following Canvas sections:
-        </Text>
-        <List.Root as="ul" pl="4" mb={3}>
-          {sections?.map((section: ClassSection) => (
-            <List.Item key={section.id} as="li" fontSize="sm">
-              <Link href={`https://canvas.instructure.com/courses/${section.canvas_course_id}`}>{section.name}</Link>
-            </List.Item>
-          ))}
-        </List.Root>
-        <Toaster />
-        <Button
-          loading={isSyncing}
-          colorPalette="green"
-          size="sm"
-          variant="surface"
-          onClick={async () => {
-            setIsSyncing(true);
-            const supabase = createClient();
-            try {
-              await enrollmentSyncCanvas({ course_id: Number(course_id) }, supabase);
-              toaster.create({
-                title: "Synced Canvas Enrollments",
-                description: "Canvas enrollments have been synced",
-                type: "success"
-              });
-            } catch (error) {
-              toaster.create({
-                title: "Error syncing Canvas Enrollments",
-                description: error instanceof Error ? error.message : "An unknown error occurred",
-                type: "error"
-              });
-            }
-            setIsSyncing(false);
-          }}
-        >
-          Sync Canvas Enrollments
-        </Button>
-      </Box>
+      <LinkedSectionsTab />
       <EnrollmentsTable />
     </Container>
   );

@@ -1,13 +1,15 @@
 import { signInOrSignUpWithEmailAction, signInWithMicrosoftAction } from "@/app/actions";
-import { FormMessage, type Message } from "@/components/form-message";
-import { Button } from "@/components/ui/button";
+import { FormMessage, Message } from "@/components/form-message";
+import { SubmitButton } from "@/components/ui/submit-button";
 import Logo from "@/components/ui/logo";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 import { BsMicrosoft } from "react-icons/bs";
+import { isSignupsEnabled } from "@/lib/features";
 
 type SearchParams = Message & { email?: string; code?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, ...message } = await props.searchParams;
+  const enableSignup = isSignupsEnabled();
 
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
@@ -19,14 +21,21 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
         </VStack>
 
         <Stack gap="3" colorPalette="gray">
-          <Button
-            variant="outline"
-            onClick={signInWithMicrosoftAction}
-            aria-label="Sign in with Microsoft (Northeastern Login)"
-          >
-            <BsMicrosoft />
-            Continue with Microsoft (Northeastern Login)
-          </Button>
+          <form action={signInWithMicrosoftAction}>
+            <SubmitButton
+              variant="outline"
+              aria-label="Sign in with Microsoft (Northeastern Login)"
+              pendingText={
+                <>
+                  <BsMicrosoft />
+                  Connecting to Microsoft…
+                </>
+              }
+            >
+              <BsMicrosoft />
+              Continue with Microsoft (Northeastern Login)
+            </SubmitButton>
+          </form>
         </Stack>
 
         <HStack gap="6" w="100%">
@@ -45,17 +54,25 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
               <Input name="password" placeholder="password" type="password" aria-label="Sign in password" />
             </Box>
             <Box mt="4">
-              <Button type="submit" name="action" value="signin" width="100%">
+              <SubmitButton name="action" value="signin" width="100%" pendingText="Signing in…">
                 Sign in with email
-              </Button>
+              </SubmitButton>
             </Box>
             <HStack gap="4" w="100%" mt="4">
-              <Button type="submit" variant="outline" name="action" value="signup" flex="1">
-                Sign up
-              </Button>
-              <Button type="submit" variant="outline" name="action" value="reset-password" flex="1">
+              {enableSignup && (
+                <SubmitButton variant="outline" name="action" value="signup" flex="1" pendingText="Creating account…">
+                  Sign up
+                </SubmitButton>
+              )}
+              <SubmitButton
+                variant="outline"
+                name="action"
+                value="reset-password"
+                flex="1"
+                pendingText="Sending reset…"
+              >
                 Forgot password
-              </Button>
+              </SubmitButton>
             </HStack>
           </form>
         </Stack>

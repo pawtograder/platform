@@ -1,8 +1,7 @@
 {
   "version": "5",
   "specifiers": {
-    "npm:@sentry/deno@*": "10.1.0",
-    "npm:@sentry/deno@^10.1.0": "10.1.0"
+    "npm:@sentry/deno@*": "10.1.0"
   },
   "npm": {
     "@sentry/core@10.1.0": {
@@ -422,7 +421,10 @@
   },
   "workspace": {
     "dependencies": [
-      "npm:@sentry/deno@^10.1.0"
+      "jsr:@supabase/functions-js@^2.4.5",
+      "npm:@sentry/deno@^10.1.0",
+      "npm:mathjs@14.5.2",
+      "npm:minimatch@10.0.3"
     ]
   }
 }

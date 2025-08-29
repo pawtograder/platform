@@ -8,7 +8,6 @@ import { format } from "date-fns";
 import { useEffect, useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
-
 import { Button } from "@/components/ui/button";
 import {
   DialogBody,
@@ -118,6 +117,13 @@ export default function AssignReviewModal({
   const selectedRubricId = watch("rubric_id");
   const selectedSubmissionId = watch("submission_id");
 
+  const { isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
+    resource: "assignments",
+    id: assignmentId,
+    queryOptions: { enabled: isOpen && !!assignmentId },
+    meta: { select: "id, grading_rubric_id" }
+  });
+
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
     filters: [
@@ -201,6 +207,15 @@ export default function AssignReviewModal({
     );
   }, [submissionsData]);
 
+  const rubricsFilters = useMemo(() => {
+    if (isLoadingAssignment) return undefined;
+    return [
+      { field: "class_id", operator: "eq" as const, value: courseId },
+      { field: "assignment_id", operator: "eq" as const, value: assignmentId },
+      { field: "review_round", operator: "ne" as const, value: "self-review" }
+    ];
+  }, [isLoadingAssignment, courseId, assignmentId]);
+
   const { data: rubricsData, isLoading: isLoadingRubrics } = useList<RubricRow>({
     resource: "rubrics",
     filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
@@ -232,16 +247,88 @@ export default function AssignReviewModal({
     [rubricPartsData]
   );
 
-  const onSubmitHanlder = async (data: ReviewAssignmentFormData) => {
+  const onSubmitHandler = async (data: ReviewAssignmentFormData) => {
     const { rubric_part_ids, ...restOfData } = data;
     let reviewAssignmentId: number | undefined = undefined;
     let mainOperationSuccessful = false;
     let rubricPartsOperationSuccessful = true; // Assume success unless proven otherwise
 
+    // Validate required fields
+    if (!restOfData.submission_id || !restOfData.rubric_id) {
+      toaster.error({
+        title: "Error",
+        description: "Submission and rubric must be selected."
+      });
+      return;
+    }
+
+    // Resolve submission_review_id for this submission + rubric (required by DB)
+    let submissionReviewId: number | undefined;
+    try {
+      const { data: sr, error: selectError } = await supabaseClient
+        .from("submission_reviews")
+        .select("id")
+        .eq("submission_id", restOfData.submission_id)
+        .eq("rubric_id", restOfData.rubric_id)
+        .single();
+
+      if (sr?.id) {
+        submissionReviewId = Number(sr.id);
+      } else {
+        // Create the submission_review if it's missing
+        const rubricName = rubricsData?.data?.find((r) => r.id === restOfData.rubric_id)?.name || "Review";
+        const { data: created, error: insertError } = await supabaseClient
+          .from("submission_reviews")
+          .insert({
+            class_id: courseId,
+            submission_id: restOfData.submission_id,
+            rubric_id: restOfData.rubric_id,
+            name: rubricName,
+            total_score: 0,
+            total_autograde_score: 0,
+            tweak: 0,
+            released: false
+          })
+          .select("id")
+          .single();
+
+        if (created?.id) {
+          submissionReviewId = Number(created.id);
+        } else {
+          // Handle potential race: if insert failed due to conflict, try fetching again once
+          const { data: sr2 } = await supabaseClient
+            .from("submission_reviews")
+            .select("id")
+            .eq("submission_id", restOfData.submission_id)
+            .eq("rubric_id", restOfData.rubric_id)
+            .single();
+
+          if (sr2?.id) {
+            submissionReviewId = Number(sr2.id);
+          } else {
+            toaster.error({
+              title: "Error creating review assignment",
+              description:
+                insertError?.message ||
+                (selectError?.message ?? "Failed to find or create submission review for this submission and rubric.")
+            });
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      toaster.error({
+        title: "Error creating review assignment",
+        description: e instanceof Error ? e.message : "Unable to look up or create submission review."
+      });
+      return;
+    }
+
     const valuesToSubmit = {
       ...restOfData,
       class_id: courseId,
       assignment_id: assignmentId,
+      submission_review_id: submissionReviewId,
       due_date: restOfData.due_date,
       release_date: restOfData.release_date || undefined,
       max_allowable_late_tokens:
@@ -282,16 +369,14 @@ export default function AssignReviewModal({
         });
         if (!createdReviewAssignment.data?.id) {
           toaster.error({ title: "Error", description: "Failed to get ID of the created review assignment." });
-          // No further operations can proceed without reviewAssignmentId
           rubricPartsOperationSuccessful = false;
-          // mainOperationSuccessful remains false
         } else {
           reviewAssignmentId = createdReviewAssignment.data.id;
-          mainOperationSuccessful = true; // If it doesn't throw and ID is present
+          mainOperationSuccessful = true;
         }
       }
 
-      // Proceed with rubric parts only if main operation was potentially successful and ID is available
+      // Proceed with rubric parts only if main operation was successful and ID is available
       if (mainOperationSuccessful && reviewAssignmentId !== undefined) {
         const newSelectedRubricPartIds = rubric_part_ids || [];
 
@@ -342,7 +427,6 @@ export default function AssignReviewModal({
               }
               if (creationErrorsInLoop) {
                 rubricPartsOperationSuccessful = false;
-                // A general toast for loop errors, specific ones are handled by errorNotification or catch
                 toaster.error({
                   id: "batch-rubric-part-error",
                   title: "Error saving some rubric parts",
@@ -359,17 +443,12 @@ export default function AssignReviewModal({
               "Could not manage specific rubric parts due to a setup issue. Skipping delete/create of parts.",
             type: "warning"
           });
-          rubricPartsOperationSuccessful = false; // Cannot manage parts without client
+          rubricPartsOperationSuccessful = false;
         }
       } else if (reviewAssignmentId === undefined && mainOperationSuccessful) {
-        // This case should ideally be caught by the !createdReviewAssignment.data?.id check earlier
-        // but as a fallback, if mainOp was flagged successful but ID is missing.
         rubricPartsOperationSuccessful = false;
       }
     } catch (error) {
-      // This primarily catches errors from createReviewAssignment/updateReviewAssignment
-      // if they throw an error not handled by their own errorNotification.
-      // mainOperationSuccessful will remain false or be set to false.
       mainOperationSuccessful = false;
       toaster.error({
         title: "Error in review assignment submission process",
@@ -424,7 +503,7 @@ export default function AssignReviewModal({
           </DialogCloseTrigger>
         </DialogHeader>
         <DialogBody>
-          <form onSubmit={handleSubmit(onSubmitHanlder)} id="review-assignment-form">
+          <form onSubmit={handleSubmit(onSubmitHandler)} id="review-assignment-form">
             <VStack gap={4} p={4} align="stretch">
               <Field label="Submission" invalid={!!errors.submission_id}>
                 <Controller
@@ -537,7 +616,7 @@ export default function AssignReviewModal({
                       {...field}
                       inputId="rubric_part_ids"
                       options={rubricPartOptions}
-                      isLoading={isLoadingRubricParts}
+                      isLoading={selectedRubricId !== undefined && isLoadingRubricParts}
                       isDisabled={!selectedRubricId || isLoadingRubricParts}
                       placeholder={!selectedRubricId ? "Select a Rubric first" : "Select specific parts..."}
                       onChange={(options: readonly { label: string; value: number }[] | null) =>
@@ -555,16 +634,16 @@ export default function AssignReviewModal({
                 )}
               </Field>
 
-              <Field label="Release Date (Optional)" invalid={!!errors.release_date}>
+              {/* <Field label="Release Date (Optional)" invalid={!!errors.release_date}>
                 <Input id="release_date" type="datetime-local" {...control.register("release_date")} />
                 {errors.release_date && (
                   <Text color="red.500" fontSize="sm">
                     {errors.release_date.message}
                   </Text>
                 )}
-              </Field>
+              </Field> */}
 
-              <Field label="Max Late Tokens (Optional)" invalid={!!errors.max_allowable_late_tokens}>
+              {/* <Field label="Max Late Tokens (Optional)" invalid={!!errors.max_allowable_late_tokens}>
                 <Input
                   id="max_allowable_late_tokens"
                   type="number"
@@ -575,7 +654,7 @@ export default function AssignReviewModal({
                     {errors.max_allowable_late_tokens.message}
                   </Text>
                 )}
-              </Field>
+              </Field> */}
             </VStack>
           </form>
         </DialogBody>

@@ -38,7 +38,7 @@ import { type CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type ElementType as ReactElementType, useMemo, useRef, useState } from "react";
+import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -49,6 +49,7 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import type { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
+import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -71,7 +72,160 @@ const iconMap: { [key: string]: ReactElementType } = {
   FiSend,
   PiSignOut
 };
+function SubmissionReviewScoreTweak() {
+  const submission = useSubmission();
+  const reviewId = submission.grading_review_id;
+  if (!reviewId) {
+    throw new Error("No grading review ID found");
+  }
+  const review = useSubmissionReviewOrGradingReview(reviewId);
+  const isInstructor = useIsInstructor();
+  const [tweakValue, setTweakValue] = useState<number | undefined>(review?.tweak);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submissionController = useSubmissionController();
 
+  const handleTweakChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val === "") {
+      setTweakValue(undefined);
+    } else {
+      const num = Number(val);
+      if (!isNaN(num)) {
+        setTweakValue(num);
+      }
+    }
+  }, []);
+
+  const handleTweakSave = useCallback(async () => {
+    if (!review) {
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      // Normalize undefined → null and skip if no change
+      const original = review.tweak ?? null;
+      const current = tweakValue ?? null;
+      if (original === current) {
+        setIsEditing(false);
+        return;
+      }
+      await submissionController.submission_reviews.update(review.id, {
+        tweak: current ?? 0
+      });
+      setIsEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save tweak");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [review, tweakValue, submissionController]);
+
+  const handleCancel = useCallback(() => {
+    setTweakValue(review?.tweak);
+    setIsEditing(false);
+    setError(null);
+  }, [review?.tweak]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        handleTweakSave();
+      } else if (e.key === "Escape") {
+        handleCancel();
+      }
+    },
+    [handleTweakSave, handleCancel]
+  );
+
+  if (!review) {
+    return <></>;
+  }
+
+  if (!isInstructor) {
+    if (review.tweak) {
+      return <Text>Includes instructor&apos;s tweak {review.tweak}</Text>;
+    }
+    return <></>;
+  }
+
+  if (isEditing) {
+    return (
+      <Box mt={2} mb={2}>
+        <HStack align="center" gap={2}>
+          <Text fontWeight="bold" fontSize="sm">
+            Tweak:
+          </Text>
+          <input
+            type="number"
+            step="any"
+            value={tweakValue ?? ""}
+            onChange={handleTweakChange}
+            onKeyDown={handleKeyDown}
+            autoFocus
+            style={{
+              width: "80px",
+              padding: "4px 8px",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              fontSize: "14px"
+            }}
+            aria-label="Tweak score"
+          />
+          <Button size="sm" variant="surface" onClick={handleTweakSave} loading={isSaving} disabled={isSaving}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" onClick={handleCancel} disabled={isSaving}>
+            Cancel
+          </Button>
+        </HStack>
+        {error && (
+          <Text color="red.500" fontSize="sm" mt={1}>
+            {error}
+          </Text>
+        )}
+      </Box>
+    );
+  }
+
+  // Display mode - show current tweak or placeholder
+  return (
+    <Box mt={2} mb={2}>
+      <HStack align="center" gap={2}>
+        <Text fontWeight="bold" fontSize="sm">
+          Tweak:
+        </Text>
+        {review.tweak !== null && review.tweak !== undefined ? (
+          <Text
+            as="span"
+            cursor="pointer"
+            color="blue.500"
+            textDecoration="underline"
+            _hover={{ color: "blue.600" }}
+            onClick={() => setIsEditing(true)}
+            aria-label="Click to edit tweak"
+          >
+            {review.tweak}
+          </Text>
+        ) : (
+          <Text
+            as="span"
+            cursor="pointer"
+            color="gray.500"
+            fontStyle="italic"
+            _hover={{ color: "gray.600" }}
+            onClick={() => setIsEditing(true)}
+            aria-label="Click to add tweak"
+          >
+            Click to add tweak
+          </Text>
+        )}
+      </HStack>
+    </Box>
+  );
+}
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
   const pathname = usePathname();
   const invalidate = useInvalidate();
@@ -106,7 +260,10 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
         field: "created_at",
         order: "desc"
       }
-    ]
+    ],
+    pagination: {
+      pageSize: 500
+    }
   });
   useList<Submission>({
     resource: "submissions",
@@ -212,12 +369,11 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                       </Table.Cell>
                       <Table.Cell>
                         <Link href={link}>
-                          {historical_submission.grader_results?.score !== undefined &&
-                          historical_submission.grader_results?.errors === null
-                            ? historical_submission.grader_results?.score +
-                              "/" +
-                              historical_submission.grader_results?.max_score
-                            : "Error"}
+                          {!historical_submission.grader_results
+                            ? "In Progress"
+                            : historical_submission.grader_results && historical_submission.grader_results.errors
+                              ? "Error"
+                              : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
@@ -361,7 +517,7 @@ function ReviewActions() {
   const { private_profile_id } = useClassProfiles();
   const submissionController = useSubmissionController();
   const [updatingReview, setUpdatingReview] = useState(false);
-  const isInstructor = useIsInstructor();
+  const isInstructor = useIsGraderOrInstructor();
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -369,7 +525,7 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      {isInstructor && (
+      {isInstructor && (!review.completed_at || (review.completed_at && !review.checked_at)) && (
         <VStack>
           <Heading size="md">Submission Review Actions</Heading>
           <HStack w="100%" justify="space-between">
@@ -391,37 +547,6 @@ function ReviewActions() {
                 }}
               >
                 Mark as Checked
-              </Button>
-            )}
-            {review.released ? (
-              <Button
-                loading={updatingReview}
-                variant="surface"
-                onClick={async () => {
-                  try {
-                    setUpdatingReview(true);
-                    await submissionController.submission_reviews.update(review.id, { released: false });
-                  } finally {
-                    setUpdatingReview(false);
-                  }
-                }}
-              >
-                Unrelease
-              </Button>
-            ) : (
-              <Button
-                variant="surface"
-                loading={updatingReview}
-                onClick={async () => {
-                  try {
-                    setUpdatingReview(true);
-                    await submissionController.submission_reviews.update(review.id, { released: true });
-                  } finally {
-                    setUpdatingReview(false);
-                  }
-                }}
-              >
-                Release To Student
               </Button>
             )}
           </HStack>
@@ -520,7 +645,7 @@ function RubricView() {
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
             <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
-            <Text fontSize="sm">
+            <Text fontSize="sm" data-visual-test="blackout">
               Due:{" "}
               {reviewAssignment.due_date
                 ? formatDueDateInTimezone(
@@ -544,11 +669,15 @@ function RubricView() {
             )}
           </Box>
         )}
-        {submission.assignments.total_points !== null && (
-          <Heading size="xl">
-            Overall Score ({gradingReview?.total_score}/{submission.assignments.total_points})
-          </Heading>
-        )}
+        {submission.assignments.total_points !== null &&
+          gradingReview &&
+          gradingReview.total_score !== null &&
+          gradingReview.total_score !== undefined && (
+            <Heading size="xl">
+              Overall Score ({gradingReview.total_score}/{submission.assignments.total_points})
+            </Heading>
+          )}
+        <SubmissionReviewScoreTweak />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
@@ -581,6 +710,15 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const assignment = useAssignmentController();
+  useEffect(() => {
+    if (isGraderOrInstructor) {
+      document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
+    } else if (!isGraderOrInstructor) {
+      document.title = `${assignment?.assignment?.title} - Submission #${submission.ordinal} - Pawtograder`;
+    }
+  }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
     <Flex direction="column" minW="0px">
       <SubmissionReviewToolbar />
@@ -658,10 +796,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </NextLink>
       </Box>
       <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={10} pr={4}>
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4}>
           {children}
         </Box>
-        <Box flex={1} minWidth={{ base: "100%", lg: "md" }}>
+        <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>
           <RubricView />
         </Box>
       </Flex>

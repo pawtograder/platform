@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useRubrics } from "@/hooks/useAssignment";
-import { useCourse } from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
@@ -13,14 +13,15 @@ import { createClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { EmptyState, HStack, IconButton, Input, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useDelete } from "@refinedev/core";
-import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { type ColumnDef, flexRender, type Row } from "@tanstack/react-table";
-import { type MultiValue, Select } from "chakra-react-select";
+import { useDelete, useCreate } from "@refinedev/core";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { ColumnDef, flexRender, Row, Table as TanstackTable } from "@tanstack/react-table";
+import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { FaEdit, FaTrash, FaDownload } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
+import { FaCopy } from "react-icons/fa";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -43,17 +44,31 @@ interface SelectOption {
   label: string;
 }
 
+// Helper function to make strings safe for CSV export
+function csvSafe(value: unknown): string {
+  let s = String(value ?? "");
+  // Neutralize potential CSV formula injection
+  if (/^[=+\-@]/.test(s)) {
+    s = "'" + s;
+  }
+  // Escape embedded quotes by doubling them per RFC 4180, wrap in quotes
+  s = s.replace(/"/g, '""');
+  return `"${s}"`;
+}
+
 export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
   const { mutate: deleteReviewAssignment } = useDelete();
-  const course = useCourse();
+  const { role: course } = useClassProfiles();
   const { classRealTimeController } = useCourseController();
   const rubrics = useRubrics();
   const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
   const supabase = createClient();
 
+  const { mutateAsync: createReviewAssignment } = useCreate();
+
   const handleDelete = useCallback(
-    (id: number) => {
-      deleteReviewAssignment(
+    async (id: number) => {
+      await deleteReviewAssignment(
         {
           resource: "review_assignments",
           id: id
@@ -317,16 +332,16 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         headers.join(","),
         ...csvRows.map((row) =>
           [
-            `"${row.assignee}"`,
-            `"${row.assignee_email}"`,
-            `"${row.submission}"`,
-            `"${row.student_names}"`,
-            `"${row.student_emails}"`,
-            `"${row.rubric}"`,
-            `"${row.due_date}"`,
-            `"${row.status}"`,
-            `"${row.rubric_part}"`,
-            `"${row.extensions}"`
+            csvSafe(row.assignee),
+            csvSafe(row.assignee_email),
+            csvSafe(row.submission),
+            csvSafe(row.student_names),
+            csvSafe(row.student_emails),
+            csvSafe(row.rubric),
+            csvSafe(row.due_date),
+            csvSafe(row.status),
+            csvSafe(row.rubric_part),
+            csvSafe(row.extensions)
           ].join(",")
         )
       ].join("\n");
@@ -355,6 +370,113 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       return uniqueValues.map((value) => ({ value, label: value }));
     },
     []
+  );
+
+  const handleDuplicateAsCodeWalk = useCallback(
+    async (row: PopulatedReviewAssignment) => {
+      try {
+        // Find the code walk rubric from the existing rubrics data
+        const codeWalkRubric = rubrics?.find((r) => r.review_round === "code-walk");
+
+        if (!codeWalkRubric) {
+          toaster.error({
+            title: "Error",
+            description: "Code walk rubric not found for this assignment"
+          });
+          return;
+        }
+
+        // First, ensure submission_review exists for the code walk rubric
+        let submissionReviewId: number | undefined;
+
+        // Check if submission_review already exists
+        const { data: existingReview } = await supabase
+          .from("submission_reviews")
+          .select("id")
+          .eq("submission_id", row.submission_id)
+          .eq("rubric_id", codeWalkRubric.id)
+          .eq("grader", row.assignee_profile_id)
+          .maybeSingle();
+
+        if (existingReview?.id) {
+          submissionReviewId = existingReview.id;
+        } else {
+          // Create new submission_review
+          const { data: newReview, error: createError } = await supabase
+            .from("submission_reviews")
+            .insert({
+              class_id: course.classes.id,
+              submission_id: row.submission_id,
+              rubric_id: codeWalkRubric.id,
+              grader: row.assignee_profile_id,
+              name: codeWalkRubric.name || "Code Walk Review",
+              total_score: 0,
+              total_autograde_score: 0,
+              tweak: 0,
+              released: false
+            })
+            .select("id")
+            .single();
+
+          if (createError || !newReview) {
+            toaster.error({
+              title: "Error creating submission review",
+              description: createError?.message || "Failed to create submission review"
+            });
+            return;
+          }
+
+          submissionReviewId = newReview.id;
+        }
+
+        // Double-check we don't already have a code-walk assignment for this submission+assignee
+        const { data: existingCodeWalkRA } = await supabase
+          .from("review_assignments")
+          .select("id")
+          .eq("class_id", course.classes.id)
+          .eq("assignment_id", Number(assignmentId))
+          .eq("assignee_profile_id", row.assignee_profile_id)
+          .eq("submission_id", row.submission_id)
+          .eq("rubric_id", codeWalkRubric.id)
+          .maybeSingle();
+
+        if (existingCodeWalkRA?.id) {
+          toaster.create({
+            title: "Review assignment already exists",
+            description: "A code walk review assignment already exists for this submission and assignee.",
+            type: "info"
+          });
+          return;
+        }
+
+        // Create the new review assignment with code walk rubric
+        await createReviewAssignment({
+          resource: "review_assignments",
+          values: {
+            class_id: course.classes.id,
+            assignment_id: Number(assignmentId),
+            assignee_profile_id: row.assignee_profile_id,
+            submission_id: row.submission_id,
+            submission_review_id: submissionReviewId,
+            rubric_id: codeWalkRubric.id,
+            due_date: row.due_date,
+            release_date: row.release_date,
+            max_allowable_late_tokens: row.max_allowable_late_tokens
+          }
+        });
+
+        toaster.success({
+          title: "Success",
+          description: `Code walk review assignment created for ${row.profiles?.name || row.assignee_profile_id}`
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Error duplicating review assignment",
+          description: error instanceof Error ? error.message : "An unexpected error occurred"
+        });
+      }
+    },
+    [rubrics, supabase, course.classes.id, createReviewAssignment, assignmentId]
   );
 
   const columns = useMemo<ColumnDef<PopulatedReviewAssignment>[]>(
@@ -499,7 +621,36 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorKey: "id",
         enableSorting: false,
         enableColumnFilter: false,
-        cell: function render({ row }) {
+        cell: function render({
+          row,
+          table
+        }: {
+          row: Row<PopulatedReviewAssignment>;
+          table: TanstackTable<PopulatedReviewAssignment>;
+        }) {
+          const currentRubricRound = row.original.rubrics?.review_round;
+          const codeWalkRubric = rubrics?.find((r) => r.review_round === "code-walk");
+
+          let shouldShowDuplicate = false;
+
+          if (
+            currentRubricRound &&
+            currentRubricRound !== "code-walk" &&
+            currentRubricRound !== "self-review" &&
+            codeWalkRubric
+          ) {
+            const existingCodeWalkAssignment = table
+              .getRowModel()
+              .rows.find(
+                (r: Row<PopulatedReviewAssignment>) =>
+                  r.original.submission_id === row.original.submission_id &&
+                  r.original.assignee_profile_id === row.original.assignee_profile_id &&
+                  r.original.rubrics?.review_round === "code-walk"
+              );
+
+            shouldShowDuplicate = !existingCodeWalkAssignment;
+          }
+
           return (
             <HStack gap={1} justifyContent="center">
               <IconButton
@@ -512,12 +663,22 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               >
                 <FaEdit />
               </IconButton>
+              {shouldShowDuplicate && (
+                <IconButton
+                  aria-label="Duplicate review assignment as code walk"
+                  onClick={() => handleDuplicateAsCodeWalk(row.original)}
+                  variant="ghost"
+                  size="sm"
+                  title="Create code walk assignment for this submission and assignee"
+                >
+                  <FaCopy />
+                </IconButton>
+              )}
               <PopConfirm
                 triggerLabel="Delete review assignment"
                 confirmHeader="Delete Review Assignment"
                 confirmText="Are you sure you want to delete this review assignment?"
-                onConfirm={() => handleDelete(row.original.id)}
-                onCancel={() => {}}
+                onConfirm={async () => await handleDelete(row.original.id)}
                 trigger={
                   <IconButton aria-label="Delete review assignment" colorPalette="red" variant="ghost" size="sm">
                     <FaTrash />
@@ -529,26 +690,24 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       }
     ],
-    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
+    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, rubrics, handleDuplicateAsCodeWalk]
   );
   const tableController = useMemo(() => {
+    const joinedSelect =
+      "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
+
     const query = supabase
       .from("review_assignments")
-      .select(
-        "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
-      )
+      .select(joinedSelect)
       .eq("assignment_id", Number(assignmentId))
       .not("rubric_id", "eq", selfReviewRubric?.id || 0);
 
-    return new TableController<
-      "review_assignments",
-      "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))",
-      number
-    >({
+    return new TableController<"review_assignments", typeof joinedSelect, number>({
       query,
       client: supabase,
       table: "review_assignments",
-      classRealTimeController
+      classRealTimeController,
+      selectForSingleRow: joinedSelect
     });
   }, [classRealTimeController, supabase, assignmentId, selfReviewRubric]);
 
@@ -583,6 +742,73 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   } = table;
 
   const isError = !!error;
+
+  // Keep table in sync when related tables change in realtime
+  useEffect(() => {
+    if (!classRealTimeController) return;
+    // When a submission_review changes, invalidate the matching review_assignment row (or refetch all as fallback)
+    const unsubscribeSubmissionReviews = classRealTimeController.subscribeToTable("submission_reviews", (message) => {
+      try {
+        // Attempt targeted invalidation when we have enough data
+        const data = message.data as { submission_id?: number; grader?: string; rubric_id?: number } | undefined;
+        if (data && data.submission_id && data.grader && data.rubric_id) {
+          const current = tableController.list().data as unknown as PopulatedReviewAssignment[];
+          const match = current.find(
+            (ra) =>
+              ra.submission_id === data.submission_id &&
+              ra.assignee_profile_id === data.grader &&
+              ra.rubric_id === data.rubric_id
+          );
+          if (match?.id) {
+            void tableController.invalidate(match.id);
+            return;
+          }
+        }
+        // Fallback to a lightweight full refresh
+        void tableController.refetchAll();
+      } catch {
+        void tableController.refetchAll();
+      }
+    });
+
+    // If rubric parts for a review assignment change, invalidate that review assignment row
+    const unsubscribeReviewAssignmentRubricParts = classRealTimeController.subscribeToTable(
+      "review_assignment_rubric_parts",
+      (message) => {
+        const data = message.data as { review_assignment_id?: number } | undefined;
+        if (data?.review_assignment_id) {
+          void tableController.invalidate(data.review_assignment_id as number);
+        } else {
+          void tableController.refetchAll();
+        }
+      }
+    );
+
+    // Keep in sync with direct changes to review_assignments
+    const unsubscribeReviewAssignments = classRealTimeController.subscribeToTable("review_assignments", (message) => {
+      try {
+        if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "DELETE") {
+          const assignmentIdNum = Number(assignmentId);
+          const mData = message.data as { id?: number; assignment_id?: number } | undefined;
+          if (mData?.assignment_id === assignmentIdNum && typeof mData.id === "number") {
+            void tableController.invalidate(mData.id as number);
+          } else if (typeof message.row_id === "number") {
+            void tableController.invalidate(message.row_id as number);
+          } else {
+            void tableController.refetchAll();
+          }
+        }
+      } catch {
+        void tableController.refetchAll();
+      }
+    });
+
+    return () => {
+      unsubscribeSubmissionReviews();
+      unsubscribeReviewAssignmentRubricParts();
+      unsubscribeReviewAssignments();
+    };
+  }, [classRealTimeController, tableController, assignmentId]);
 
   // Generate filter options from data
   const filterOptions = useMemo(() => {
@@ -629,7 +855,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         <Text fontSize="lg" fontWeight="bold">
           Review Assignments
         </Text>
-        <Button onClick={exportToCSV} size="sm" variant="outline" colorPalette="blue">
+        <Button onClick={exportToCSV} size="sm" variant="outline">
           <FaDownload style={{ marginRight: "8px" }} />
           Export CSV
         </Button>

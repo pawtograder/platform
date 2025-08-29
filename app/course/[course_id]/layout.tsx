@@ -2,9 +2,17 @@ import { Box } from "@chakra-ui/react";
 import React from "react";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
-import DynamicCourseNav from "./dynamicCourseNav";
-import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
+import DynamicCourseNav from "./dynamicCourseNav";
+import { getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
+
+export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
+  const { course_id } = await params;
+  const course = await getCourse(Number(course_id));
+  return {
+    title: `${course?.course_title || course?.name || "Course"} - Pawtograder`
+  };
+}
 
 const ProtectedLayout = async ({
   children,
@@ -14,19 +22,7 @@ const ProtectedLayout = async ({
   params: Promise<{ course_id: string }>;
 }>) => {
   const { course_id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-  if (!user) {
-    redirect("/");
-  }
-  const { data: user_role } = await supabase
-    .from("user_roles")
-    .select("private_profile_id, role")
-    .eq("user_id", user.id)
-    .eq("class_id", Number.parseInt(course_id))
-    .single();
+  const user_role = await getUserRolesForCourse(Number.parseInt(course_id));
   if (!user_role) {
     redirect("/");
   }

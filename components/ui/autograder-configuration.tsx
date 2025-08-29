@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import type { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
+import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -152,13 +153,8 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
   }
 }
 
-export default function AutograderConfiguration({
-  graderRepo,
-  assignment
-}: {
-  graderRepo: string | undefined;
-  assignment: Assignment | undefined;
-}) {
+export default function AutograderConfiguration({ graderRepo }: { graderRepo: string }) {
+  const { assignment } = useAssignmentController();
   const [autograderConfig, setAutograderConfig] = useState<PawtograderConfig>();
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
 
@@ -251,7 +247,11 @@ export default function AutograderConfiguration({
         });
     }
     fetchAutograderConfig();
-  }, [graderRepo, assignment, course_id, updateAssignment]);
+    // Note: updateAssignment is intentionally omitted from deps to avoid re-running
+    // when the function reference changes (which happens on every render)
+    // We should really get rid of refine.dev!!
+  }, [graderRepo, assignment, course_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const saveRegressionTests = useCallback(async () => {
     setSaveLoading(true);
     const additions = selectedRepos.filter((r) => !regressionTestRepos?.data.some((rt) => rt.repository === r));

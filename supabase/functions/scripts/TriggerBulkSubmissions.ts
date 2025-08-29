@@ -25,7 +25,7 @@
  *   GITHUB_PRIVATE_KEY_STRING: GitHub App private key
  *
  * The script fetches the actual repository and SHA from the database
- * and distributes the workflow triggers evenly over the specified time period.
+ * and triggers workflow requests asynchronously with controlled concurrency.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -42,6 +42,104 @@ interface SubmissionData {
   id: number;
   repository: string;
   sha: string;
+}
+
+interface WorkflowResult {
+  index: number;
+  success: boolean;
+  error?: string;
+  timestamp: Date;
+}
+
+// Rate limiter class to control throughput
+class RateLimiter {
+  private tokens: number;
+  private lastRefill: number;
+  private readonly maxTokens: number;
+  private readonly refillRate: number; // tokens per millisecond
+
+  constructor(maxPerMinute: number) {
+    this.maxTokens = maxPerMinute;
+    this.tokens = maxPerMinute;
+    this.lastRefill = Date.now();
+    this.refillRate = maxPerMinute / 60000; // Convert per minute to per millisecond
+  }
+
+  async acquire(): Promise<void> {
+    while (this.tokens < 1) {
+      this.refill();
+      if (this.tokens < 1) {
+        // Wait for next refill cycle
+        const waitTime = Math.ceil((1 - this.tokens) / this.refillRate);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      }
+    }
+    this.tokens--;
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const timePassed = now - this.lastRefill;
+    const tokensToAdd = timePassed * this.refillRate;
+
+    this.tokens = Math.min(this.maxTokens, this.tokens + tokensToAdd);
+    this.lastRefill = now;
+  }
+}
+
+// Concurrency limiter class to control maximum concurrent requests
+class ConcurrencyLimiter {
+  private running = 0;
+  private readonly maxConcurrent: number;
+  private readonly queue: Array<() => Promise<void>> = [];
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running >= this.maxConcurrent) {
+      // Wait for a slot to become available
+      return new Promise((resolve, reject) => {
+        this.queue.push(async () => {
+          try {
+            const result = await fn();
+            resolve(result);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+    }
+
+    this.running++;
+    try {
+      const result = await fn();
+      return result;
+    } finally {
+      this.running--;
+      this.processQueue();
+    }
+  }
+
+  private processQueue(): void {
+    if (this.queue.length > 0 && this.running < this.maxConcurrent) {
+      const next = this.queue.shift();
+      if (next) {
+        this.running++;
+        next().finally(() => {
+          this.running--;
+          this.processQueue();
+        });
+      }
+    }
+  }
+
+  async waitForAll(): Promise<void> {
+    while (this.running > 0 || this.queue.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
 }
 
 function parseArgs(): Args {
@@ -106,48 +204,91 @@ async function getSubmissionData(submissionId: number): Promise<SubmissionData> 
   return data;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function triggerBulkSubmissions(args: Args): Promise<void> {
   console.log(`Starting bulk submission trigger:`);
   console.log(`  Submission ID: ${args.submissionId}`);
-  console.log(`  Max per minute: ${args.maxPerMinute}`);
+  console.log(`  Target throughput: ${args.maxPerMinute} per minute`);
   console.log(`  Total submissions: ${args.totalSubmissions}`);
+  console.log(`  Max concurrent requests: 20`);
 
   // Fetch the actual submission data from the database
   const submissionData = await getSubmissionData(args.submissionId);
   console.log(`  Repository: ${submissionData.repository}`);
   console.log(`  SHA: ${submissionData.sha}`);
 
-  // Calculate the interval between submissions to distribute them evenly over a minute
-  const intervalMs = Math.floor(60000 / args.maxPerMinute); // 60000ms = 1 minute
-  const actualSubmissions = Math.min(args.totalSubmissions, args.maxPerMinute);
+  const startTime = Date.now();
+  const results: WorkflowResult[] = [];
 
-  console.log(`  Interval between submissions: ${intervalMs}ms`);
-  console.log(`  Actual submissions to trigger: ${actualSubmissions}`);
+  // Initialize rate limiter and concurrency limiter
+  const rateLimiter = new RateLimiter(args.maxPerMinute);
+  const concurrencyLimiter = new ConcurrencyLimiter(20);
 
-  for (let i = 0; i < actualSubmissions; i++) {
-    try {
-      console.log(`Triggering submission ${i + 1}/${actualSubmissions}...`);
+  console.log(`\nStarting asynchronous workflow triggers...`);
 
-      // Use the actual repository and SHA from the database
-      await triggerWorkflow(submissionData.repository, submissionData.sha, "grade.yml");
+  // Create all submission tasks
+  const tasks = Array.from({ length: args.totalSubmissions }, (_, index) => {
+    return async (): Promise<void> => {
+      const submissionIndex = index + 1;
+      const taskStartTime = Date.now();
 
-      console.log(`  Successfully triggered submission ${i + 1}`);
+      try {
+        // Wait for rate limiter to allow this request
+        await rateLimiter.acquire();
 
-      // Wait for the specified interval before the next submission
-      if (i < actualSubmissions - 1) {
-        console.log(`  Waiting ${intervalMs}ms before next submission...`);
-        await sleep(intervalMs);
+        console.log(`  [${submissionIndex}/${args.totalSubmissions}] Triggering workflow...`);
+
+        // Use the actual repository and SHA from the database
+        await triggerWorkflow(submissionData.repository, submissionData.sha, "grade.yml");
+
+        const duration = Date.now() - taskStartTime;
+        console.log(`  [${submissionIndex}/${args.totalSubmissions}] ✓ Success (${duration}ms)`);
+
+        results.push({
+          index: submissionIndex,
+          success: true,
+          timestamp: new Date()
+        });
+      } catch (error) {
+        const duration = Date.now() - taskStartTime;
+        console.error(`  [${submissionIndex}/${args.totalSubmissions}] ✗ Failed (${duration}ms):`, error);
+
+        results.push({
+          index: submissionIndex,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date()
+        });
       }
-    } catch (error) {
-      console.error(`  Error triggering submission ${i + 1}:`, error);
-    }
-  }
+    };
+  });
 
-  console.log("Bulk submission trigger completed.");
+  // Execute all tasks with concurrency control
+  const executionPromises = tasks.map((task) => concurrencyLimiter.run(task));
+
+  // Wait for all tasks to complete
+  await Promise.all(executionPromises);
+  await concurrencyLimiter.waitForAll();
+
+  const totalDuration = Date.now() - startTime;
+  const successfulSubmissions = results.filter((r) => r.success).length;
+  const failedSubmissions = results.filter((r) => !r.success).length;
+  const actualThroughput = (successfulSubmissions / totalDuration) * 60000; // per minute
+
+  console.log(`\n=== Bulk submission trigger completed ===`);
+  console.log(`  Total duration: ${totalDuration}ms`);
+  console.log(`  Successful: ${successfulSubmissions}/${args.totalSubmissions}`);
+  console.log(`  Failed: ${failedSubmissions}/${args.totalSubmissions}`);
+  console.log(`  Actual throughput: ${actualThroughput.toFixed(2)} per minute`);
+  console.log(`  Target throughput: ${args.maxPerMinute} per minute`);
+
+  if (failedSubmissions > 0) {
+    console.log(`\nFailed submissions:`);
+    results
+      .filter((r) => !r.success)
+      .forEach((r) => {
+        console.log(`  [${r.index}]: ${r.error}`);
+      });
+  }
 }
 
 async function main(): Promise<void> {

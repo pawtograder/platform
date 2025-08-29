@@ -940,3 +940,5 @@ export type DayOfWeek = "sunday" | "monday" | "tuesday" | "wednesday" | "thursda
 export type RegradeStatus = Database["public"]["Enums"]["regrade_status"];
 export type RegradeRequest = Database["public"]["Tables"]["submission_regrade_requests"]["Row"];
 export type RegradeRequestComment = Database["public"]["Tables"]["submission_regrade_request_comments"]["Row"];
+
+export type AdminGetClassesResponse = Database["public"]["Functions"]["admin_get_classes"]["Returns"];

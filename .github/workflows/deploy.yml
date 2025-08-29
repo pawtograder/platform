@@ -4,12 +4,17 @@ on:
   workflow_dispatch:
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
       - name: Install dependencies
         run: npm ci
       - name: Deploy a branch preview environment
@@ -25,6 +30,7 @@ jobs:
           coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
           coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
           deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
+          bugsink_dsn: ${{ secrets.BUGSINK_DSN }}
         env:
           GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
           GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
@@ -32,9 +38,9 @@ jobs:
           GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
           UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
       - name: Run Playwright tests
@@ -44,8 +50,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ steps.deploy.outputs.supabase_service_role_key }}
           SUPABASE_ANON_KEY: ${{ steps.deploy.outputs.supabase_anon_key }}
           BASE_URL: ${{ steps.deploy.outputs.app_url }}
-          PERCY_TOKEN: ${{ secrets.PERCY_TOKEN }}
-        run: npx percy exec -- playwright test
+
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

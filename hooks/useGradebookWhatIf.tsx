@@ -1,9 +1,12 @@
-import type { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
-import { Spinner } from "@chakra-ui/react";
-import { all, create, FunctionNode, isArray, type MathNode, Matrix } from "mathjs";
+import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
+import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
+import TableController from "@/lib/TableController";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { createClient } from "@/utils/supabase/client";
+import { CourseController, useCourseController } from "./useCourseController";
 export type ExpressionContext = {
   student_id: string;
   is_private_calculation: boolean;
@@ -50,68 +53,67 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "column_slug" in value
   );
 }
-// type UnreleasedGradebookColumnStudent = {
-//   score: undefined;
-//   score_override: undefined;
-//   is_missing: true;
-//   is_excused: true;
-//   is_droppable: true;
-//   is_released: false;
-//   max_score: number;
-// };
-// function isUnreleasedGradebookColumnStudent(value: unknown): value is UnreleasedGradebookColumnStudent {
-//   return (
-//     typeof value === "object" &&
-//     value !== null &&
-//     "is_missing" in value &&
-//     value.is_missing === true &&
-//     "is_excused" in value &&
-//     value.is_excused === true
-//   );
-// }
 
+type AssignmentForStudentDashboard = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};
   private _incompleteValues: GradebookWhatIfIncompleteValuesMap = {};
   private _subscribers: (() => void)[] = [];
   private _gradebookUnsubscribe: (() => void) | null = null;
+  private _assignments: AssignmentForStudentDashboard[] = [];
 
   constructor(
     private gradebookController: GradebookController,
-    private private_profile_id: string
+    private private_profile_id: string,
+    private courseController: CourseController
   ) {
     this.initializeGradebookGrades();
     this.setupGradebookListener();
   }
 
   private initializeGradebookGrades() {
+    //Fetch all assignments for the student with their submissions
+    const client = createClient();
+    client
+      .from("assignments_for_student_dashboard")
+      .select("*")
+      .eq("class_id", this.gradebookController.class_id)
+      .eq("student_user_id", this.courseController.userId)
+      .eq("student_profile_id", this.private_profile_id)
+      .then(({ data }) => {
+        this._assignments = data ?? [];
+      });
     // Initialize with current grades from the gradebook
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
     for (const column of allColumns) {
       const columnStudent = this.gradebookController.getGradebookColumnStudent(column.id, this.private_profile_id);
-      if (columnStudent) {
-        const gradebookScore =
-          columnStudent.score_override !== null ? columnStudent.score_override : (columnStudent.score ?? undefined);
-        this._grades[column.id] = {
-          what_if: undefined,
-          report_only: undefined,
-          assume_max: undefined,
-          assume_zero: undefined,
-          gradebook_score: gradebookScore
-        };
-      }
+      // Initialize grade entry for all columns, even if student doesn't have an existing entry
+      const gradebookScore = columnStudent
+        ? columnStudent.score_override !== null
+          ? columnStudent.score_override
+          : (columnStudent.score ?? undefined)
+        : undefined;
+
+      this._grades[column.id] = {
+        what_if: undefined,
+        report_only: undefined,
+        assume_max: undefined,
+        assume_zero: undefined,
+        gradebook_score: gradebookScore
+      };
     }
     //Recalculate all columns
     this.recalculateDependentColumns();
   }
 
   private setupGradebookListener() {
-    // Subscribe to gradebook column student changes
-    this._gradebookUnsubscribe = this.gradebookController.subscribeColumnStudentList((students) => {
-      let hasChanges = false;
+    // Subscribe to gradebook column student changes for this specific student
+    this._gradebookUnsubscribe = this.gradebookController.subscribeColumnsForStudent(
+      this.private_profile_id,
+      (students) => {
+        let hasChanges = false;
 
-      for (const student of students) {
-        if (student.student_id === this.private_profile_id) {
+        for (const student of students) {
           const gradebookScore =
             student.score_override !== null ? student.score_override : (student.score ?? undefined);
           const existingGrade = this._grades[student.gradebook_column_id];
@@ -131,13 +133,13 @@ class GradebookWhatIfController {
             hasChanges = true;
           }
         }
-      }
 
-      // If there were changes, recalculate any what-if grades that depend on these columns
-      if (hasChanges) {
-        this.recalculateDependentColumns();
+        // If there were changes, recalculate any what-if grades that depend on these columns
+        if (hasChanges) {
+          this.recalculateDependentColumns();
+        }
       }
-    });
+    );
   }
 
   private recalculateDependentColumns() {
@@ -159,7 +161,14 @@ class GradebookWhatIfController {
 
   setWhatIfGrade(columnId: number, value: number | undefined, incompleteValues: IncompleteValuesAdvice | null) {
     if (!this._grades[columnId]) {
-      throw new Error(`Column ${columnId} not found in grades`);
+      // Create grade entry if it doesn't exist (safety net)
+      this._grades[columnId] = {
+        what_if: value,
+        report_only: undefined,
+        assume_max: undefined,
+        assume_zero: undefined,
+        gradebook_score: undefined
+      };
     } else {
       this._grades[columnId] = {
         ...this._grades[columnId],
@@ -379,11 +388,9 @@ class GradebookWhatIfController {
             const whatIfVal = this.getGrade(column.id);
             if (whatIfVal) return whatIfVal;
           }
-          const submission = this.gradebookController.studentSubmissions
-            .get(this.private_profile_id)
-            ?.find((s) => s.assignment_id === matchingAssignments[0]!.id);
-          if (!submission) return null;
-          return submission.total_score;
+          const assignment = this._assignments.find((a) => a.id === matchingAssignments[0].id);
+          if (!assignment || assignment.total_points === null) return null;
+          return assignment.total_points;
         };
         if (Array.isArray(assignmentSlug)) {
           const ret = assignmentSlug.map(findOne);
@@ -692,32 +699,28 @@ export function GradebookWhatIfProvider({
   private_profile_id: string;
 }) {
   const gradebookController = useGradebookController();
+  const courseController = useCourseController();
   const controllerRef = useRef<GradebookWhatIfController>();
 
-  // Cleanup previous controller if private_profile_id changes
+  // Initialize controller synchronously if it doesn't exist
+  if (!controllerRef.current) {
+    controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id, courseController);
+  }
+
+  // Cleanup and reinitialize when private_profile_id changes
   useEffect(() => {
+    // If private_profile_id changed, cleanup and create new controller
     if (controllerRef.current) {
       controllerRef.current.cleanup();
-      controllerRef.current = undefined;
+      controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id, courseController);
     }
-  }, [private_profile_id]);
 
-  // Cleanup on unmount
-  useEffect(() => {
     return () => {
       if (controllerRef.current) {
         controllerRef.current.cleanup();
       }
     };
-  }, []);
-
-  if (!controllerRef.current) {
-    if (gradebookController.isReady) {
-      controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id);
-    } else {
-      return <Spinner />;
-    }
-  }
+  }, [private_profile_id, gradebookController, courseController]);
 
   return <GradebookWhatIfContext.Provider value={controllerRef.current}>{children}</GradebookWhatIfContext.Provider>;
 }

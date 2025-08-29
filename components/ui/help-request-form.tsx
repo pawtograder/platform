@@ -8,6 +8,7 @@ import { Controller } from "react-hook-form";
 import { RadioCardRoot, RadioCardItem } from "@/components/ui/radio-card";
 
 export default function HelpRequestForm() {
+  const { course_id } = useParams();
   const {
     refineCore: { formLoading, query },
     register,
@@ -16,11 +17,8 @@ export default function HelpRequestForm() {
   } = useForm<HelpRequest>({ refineCoreProps: { resource: "help_requests", action: "create" } });
   const { data: queues, error: queuesError } = useList<HelpQueue>({
     resource: "help_queues",
-    meta: { select: "*" }
-    // filters:
-    //     [
-    //         { field: "class", operator: "eq", value: course_id }
-    //     ]
+    meta: { select: "*" },
+    filters: [{ field: "class", operator: "eq", value: course_id }]
   });
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;

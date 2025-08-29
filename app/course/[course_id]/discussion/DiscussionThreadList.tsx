@@ -35,7 +35,8 @@ import { FaPlus, FaHeart } from "react-icons/fa";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
-  useDiscussionThreadTeasers
+  useDiscussionThreadTeasers,
+  useRootDiscussionThreadReadStatuses
 } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
@@ -53,13 +54,17 @@ export const DiscussionThreadTeaser = (props: Props) => {
   const is_answered = thread?.answer != undefined;
 
   const { readStatus } = useDiscussionThreadReadStatus(props.thread_id);
-
+  const childrenReadStatuses = useRootDiscussionThreadReadStatuses(props.thread_id);
+  const numReadDescendants = useMemo(() => {
+    return childrenReadStatuses.filter((status) => status.read_at != null).length;
+  }, [childrenReadStatuses]);
   const userProfile = useUserProfile(thread?.author);
+  const isUnread = readStatus === null || readStatus?.read_at === null;
   return (
     <Box position="relative" width={props.width || "100%"}>
       <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
-          {!readStatus?.read_at && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
+          {isUnread && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
         </Box>
         <HStack
           align="flex-start"
@@ -69,7 +74,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
           _hover={{ bg: "bg.muted" }}
           rounded="md"
           width="100%"
-          bg={!readStatus?.read_at ? "bg.info" : selected ? "bg.muted" : ""}
+          bg={isUnread ? "bg.info" : selected ? "bg.muted" : ""}
         >
           <Box pt="1">
             <Tooltip ids={{ trigger: avatarTriggerId }} openDelay={0} showArrow content={userProfile?.name}>
@@ -129,13 +134,13 @@ export const DiscussionThreadTeaser = (props: Props) => {
                     </Text>
                   </HStack>
                 )}
-                {(readStatus?.numReadDescendants ?? 0) < (readStatus?.current_children_count ?? 0) && (
+                {numReadDescendants < (thread?.children_count ?? 0) && (
                   <Badge colorPalette="blue">
-                    {Math.max(0, (readStatus?.current_children_count ?? 0) - (readStatus?.numReadDescendants ?? 0))} new
+                    {Math.max(0, (thread?.children_count ?? 0) - numReadDescendants)} new
                   </Badge>
                 )}
                 <Spacer />
-                <Text fontSize="xs" color="text.muted">
+                <Text fontSize="xs" color="text.muted" data-visual-test="blackout">
                   {thread?.created_at ? formatRelative(new Date(thread?.created_at), new Date()) : ""}
                 </Text>
               </HStack>
@@ -237,8 +242,8 @@ export default function DiscussionThreadList() {
   }, []);
 
   return (
-    <Flex width={"100%"} height={"100vh"} bottom={0} direction="column" top={0} justify="space-between" align="center">
-      <Box p="4" w="100%">
+    <Flex width={"100%"} maxHeight={"100vh"} direction="column" overflow="hidden">
+      <Box p="4" w="100%" flexShrink={0}>
         <Heading size="md" mb="2">
           Discussion Feed
         </Heading>
@@ -320,7 +325,7 @@ export default function DiscussionThreadList() {
         </VStack>
       </Box>
 
-      <Box width="100%" flex={1} overflowY="auto" pr="4">
+      <Box width="100%" flex={1} overflowY="auto" pr="4" minHeight={0}>
         <Box role="list" aria-busy={list === undefined} aria-live="polite" aria-label="Discussion threads">
           {list === undefined && <Skeleton height="300px" />}
           {processedList.length === 0 && (

@@ -1350,7 +1350,7 @@ export function RubricPart({
   currentRubricId?: number;
 }) {
   return (
-    <Box w="100%">
+    <Box w="100%" role="region" aria-label={`Rubric Part: ${part.name}`}>
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
       <VStack align="start" w="100%" gap={2}>

@@ -1,4 +1,6 @@
-import HelpRequestForm from "../newRequestForm";
+"use client";
+
+import HelpRequestForm from "./newRequestForm";
 
 export default function NewRequestPage() {
   return <HelpRequestForm />;

@@ -7,7 +7,7 @@ import { Select } from "chakra-react-select";
 import { BsStar, BsStarFill, BsPerson, BsClock, BsShield, BsExclamationTriangle } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { useStudentKarmaNotes, useStudentHelpActivity, useHelpRequestModeration } from "@/hooks/useOfficeHoursRealtime";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 
 type StudentActivitySummaryProps = {
   studentProfileId?: string;
@@ -38,7 +38,7 @@ export default function StudentActivitySummary({
   // Prepare options for react-select
   const studentOptions = useMemo(
     () =>
-      studentRoster.map((student) => ({
+      studentRoster?.map((student) => ({
         value: student.id,
         label: student.name || student.sortable_name || "Unknown Student"
       })),
@@ -53,7 +53,7 @@ export default function StudentActivitySummary({
   }, [allKarmaNotes, currentStudentId, courseId]);
 
   const recentActivity = useMemo(() => {
-    const studentIds = studentRoster.map((student) => student.id);
+    const studentIds = studentRoster?.map((student) => student.id) || [];
     const filtered = currentStudentId
       ? allHelpActivity.filter(
           (activity) => activity.student_profile_id === currentStudentId && activity.class_id === courseId
@@ -66,7 +66,7 @@ export default function StudentActivitySummary({
   }, [allHelpActivity, currentStudentId, courseId, studentRoster]);
 
   const recentModeration = useMemo(() => {
-    const studentIds = studentRoster.map((student) => student.id);
+    const studentIds = studentRoster?.map((student) => student.id) || [];
     const filtered = currentStudentId
       ? allModerationActions.filter(
           (action) => action.student_profile_id === currentStudentId && action.class_id === courseId
@@ -204,7 +204,7 @@ export default function StudentActivitySummary({
               <Select
                 placeholder="Select a student"
                 options={studentOptions}
-                value={studentOptions.find((option) => option.value === selectedStudentId) || null}
+                value={studentOptions?.find((option) => option.value === selectedStudentId) || null}
                 onChange={(option) => setSelectedStudentId(option?.value || "")}
                 isClearable
                 size="sm"

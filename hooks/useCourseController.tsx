@@ -1,7 +1,17 @@
 "use client";
-import type {
+
+import { toaster } from "@/components/ui/toaster";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import TableController, {
+  PossiblyTentativeResult,
+  useFindTableControllerValue,
+  useListTableControllerValues
+} from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
+import {
   Assignment,
   AssignmentDueDateException,
+  ClassSection,
   Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
@@ -12,67 +22,147 @@ import type {
   Notification,
   Tag,
   UserProfile,
+  UserRoleWithPrivateProfileAndUser,
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
-
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import { createClient } from "@/utils/supabase/client";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { type LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { LiveEvent, useList, useUpdate } from "@refinedev/core";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import type { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
-import { toaster } from "@/components/ui/toaster";
+import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
+export function useAllProfilesForClass() {
+  const { profiles: controller } = useCourseController();
+  const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      setProfiles(data);
+    });
+    setProfiles(data);
+    return unsubscribe;
+  }, [controller]);
+  return profiles;
+}
+
+/**
+ * Hook to get all student profiles filtered by having the 'student' tag
+ */
+export function useAllStudentProfiles() {
+  const allProfiles = useAllProfilesForClass();
+  const allTags = useTags();
+
+  return useMemo(() => {
+    if (!allProfiles || !allTags) {
+      return [];
+    }
+
+    // Get all staff tags (case-insensitive)
+    const staffTags = allTags.filter(
+      (tag) => tag.name.toLowerCase() === "instructor" || tag.name.toLowerCase() === "grader"
+    );
+    const staffProfileIds = new Set(staffTags.map((tag) => tag.profile_id));
+
+    // Filter profiles to only include those without staff tags
+    return allProfiles.filter((profile) => !staffProfileIds.has(profile.id) && profile.is_private_profile);
+  }, [allProfiles, allTags]);
+}
+export function useGradersAndInstructors() {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const [gradersAndInstructors, setGradersAndInstructors] = useState<UserProfile[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      const gradersAndInstructors = data.filter((r) => r.role === "grader" || r.role === "instructor");
+      setGradersAndInstructors((old) => {
+        if (old && old.length == gradersAndInstructors.length) {
+          if (old.every((r) => gradersAndInstructors.some((s) => s.private_profile_id === r.id))) {
+            return old;
+          }
+        }
+        return gradersAndInstructors.map((r) => r.profiles);
+      });
+    });
+    setGradersAndInstructors(data.filter((r) => r.role === "grader" || r.role === "instructor").map((r) => r.profiles));
+    return unsubscribe;
+  }, [controller]);
+  return gradersAndInstructors;
+}
+
+export function useAllStudentRoles() {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const [roles, setRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      const students = data.filter((r) => r.role === "student");
+      setRoles((old) => {
+        if (old && old.length == students.length) {
+          if (old.every((r) => students.some((s) => s.id === r.id))) {
+            return old;
+          }
+        }
+        return students;
+      });
+    });
+    setRoles(data.filter((r) => r.role === "student"));
+    return unsubscribe;
+  }, [controller]);
+  return roles;
+}
+export function useStudentRoster() {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const studentRoles = useListTableControllerValues(controller, (r) => r.role === "student");
+  const [roster, setRoster] = useState<UserProfile[] | undefined>(undefined);
+  useEffect(() => {
+    setRoster(studentRoles.map((r) => r.profiles));
+  }, [studentRoles]);
+  return roster;
+}
+export function useProfiles() {
+  const { profiles: controller } = useCourseController();
+  const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      setProfiles(data);
+    });
+    setProfiles(data);
+    return unsubscribe;
+  }, [controller]);
+  return profiles;
+}
 export function useUpdateThreadTeaser() {
-  const controller = useCourseController();
   const { mutateAsync: updateThread } = useUpdate<DiscussionThread>({
     resource: "discussion_threads",
     mutationMode: "optimistic"
   });
   return useCallback(
-    async ({
-      id,
-      old,
-      values
-    }: {
-      id: number;
-      old: DiscussionThreadTeaser;
-      values: Partial<DiscussionThreadTeaser>;
-    }) => {
-      const copy = { ...old, ...values };
-      controller.handleDiscussionThreadTeaserEvent({
-        type: "updated",
-        payload: copy,
-        channel: "discussion_threads",
-        date: new Date()
-      });
+    async ({ id, values }: { id: number; old: DiscussionThreadTeaser; values: Partial<DiscussionThreadTeaser> }) => {
       try {
         await updateThread({
           id,
           values
         });
-      } catch (error) {
+      } catch {
         toaster.error({
           title: "Error updating thread",
-          description:
-            "An error occurred while updating the thread. Please try again, and reach out to your instructor if the problem persists. More details: " +
-            (error instanceof Error ? error.message : "Unknown error")
-        });
-        controller.handleDiscussionThreadTeaserEvent({
-          type: "updated",
-          payload: old,
-          channel: "discussion_threads",
-          date: new Date()
+          description: "Please try again later."
         });
       }
     },
-    [updateThread, controller]
+    [updateThread]
   );
+}
+export function useRootDiscussionThreadReadStatuses(threadId: number) {
+  const controller = useCourseController();
+  const rootPredicate = useMemo(
+    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_root_id === threadId,
+    [threadId]
+  );
+  const readStatuses = useListTableControllerValues(controller.discussionThreadReadStatus, rootPredicate);
+  return readStatuses;
 }
 /**
  * Returns a hook that returns the read status of a thread.
@@ -84,64 +174,50 @@ export function useUpdateThreadTeaser() {
 export function useDiscussionThreadReadStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
-  const [readStatus, setReadStatus] = useState<DiscussionThreadReadWithAllDescendants | null | undefined>(undefined);
-  useEffect(() => {
-    const { unsubscribe, data } = controller.getDiscussionThreadReadStatus(threadId, (data) => {
-      setReadStatus(data);
-    });
-    setReadStatus(data);
-    return unsubscribe;
-  }, [controller, threadId]);
-  const createdThreadReadStatuses = useRef<Set<number>>(new Set<number>());
-  const { mutateAsync: createThreadReadStatus } = useCreate<DiscussionThreadReadStatus>({
-    resource: "discussion_thread_read_status"
-  });
-  const { mutateAsync: updateThreadReadStatus } = useUpdate<DiscussionThreadReadStatus>({
-    resource: "discussion_thread_read_status",
-    mutationMode: "optimistic"
-  });
+  const predicate = useMemo(
+    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) =>
+      data.discussion_thread_id === threadId && data.user_id === user?.id,
+    [threadId, user?.id]
+  );
+  const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
 
   const setUnread = useCallback(
-    (root_threadId: number, threadId: number, isUnread: boolean) => {
-      if (!controller.isLoaded) {
+    async (root_threadId: number, threadId: number, isUnread: boolean) => {
+      if (!controller.discussionThreadReadStatus.ready || readStatus === undefined) {
         return;
       }
-      const { data: threadReadStatus } = controller.getDiscussionThreadReadStatus(threadId);
-      if (threadReadStatus) {
-        if (isUnread && threadReadStatus.read_at) {
-          updateThreadReadStatus({
-            id: threadReadStatus.id,
-            values: { read_at: null }
+      if (readStatus) {
+        if (isUnread && readStatus.read_at) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
+            read_at: null
           });
-        } else if (!isUnread && !threadReadStatus.read_at) {
-          updateThreadReadStatus({
-            id: threadReadStatus.id,
-            values: { read_at: new Date() }
+        } else if (!isUnread && !readStatus.read_at) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
+            read_at: new Date().toISOString()
           });
         }
       } else {
-        if (createdThreadReadStatuses.current.has(threadId)) {
-          return;
-        }
-        createdThreadReadStatuses.current.add(threadId);
-        createThreadReadStatus({
-          values: {
-            discussion_thread_id: threadId,
-            user_id: user?.id,
-            discussion_thread_root_id: root_threadId,
-            read_at: isUnread ? null : new Date()
+        // There is a Postgres trigger that creates a read status for every user for every thread. So, if we don't have one, we just haven't fetched it yet!
+        const readStatus = await controller.discussionThreadReadStatus.getOneByFilters([
+          {
+            column: "discussion_thread_id",
+            operator: "eq",
+            value: threadId
+          },
+          {
+            column: "user_id",
+            operator: "eq",
+            value: user?.id || ""
           }
-        }).catch((error) => {
-          toaster.error({
-            title: "Error creating thread read status",
-            description:
-              "An error occurred while creating the thread read status. Please try again, and reach out to your instructor if the problem persists. More details: " +
-              (error instanceof Error ? error.message : "Unknown error")
+        ]);
+        if (readStatus) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
+            read_at: isUnread ? null : new Date().toISOString()
           });
-        });
+        }
       }
     },
-    [user?.id, createdThreadReadStatuses, controller, createThreadReadStatus, updateThreadReadStatus]
+    [user?.id, controller, readStatus]
   );
   return { readStatus, setUnread };
 }
@@ -167,36 +243,42 @@ export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
   const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
   useEffect(() => {
-    const { data, unsubscribe } = controller.listDiscussionThreadTeasers((data) => {
-      setTeasers(data);
+    const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
+      setTeasers(data as DiscussionThreadTeaser[]);
     });
-    setTeasers(data);
+    setTeasers(data as DiscussionThreadTeaser[]);
     return unsubscribe;
   }, [controller]);
   return teasers;
 }
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
-export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionThreadFields[]) {
+export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
   const controller = useCourseController();
   const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(undefined);
   useEffect(() => {
-    const { unsubscribe, data } = controller.getDiscussionThreadTeaser(id, (data) => {
+    if (id === undefined) {
+      setTeaser(undefined);
+      return;
+    }
+    const { unsubscribe, data } = controller.discussionThreadTeasers.getById(id, (data) => {
       if (watchFields) {
         setTeaser((oldTeaser) => {
           if (!oldTeaser) {
-            return data;
+            return data as DiscussionThreadTeaser;
           }
-          const hasAnyChanges = watchFields.some((field) => oldTeaser[field] !== data[field]);
+          const hasAnyChanges = watchFields.some(
+            (field) => oldTeaser[field] !== (data as DiscussionThreadTeaser)?.[field]
+          );
           if (hasAnyChanges) {
-            return data;
+            return data as DiscussionThreadTeaser;
           }
           return oldTeaser;
         });
       } else {
-        setTeaser(data);
+        setTeaser(data as DiscussionThreadTeaser);
       }
     });
-    setTeaser(data);
+    setTeaser(data as DiscussionThreadTeaser);
     return unsubscribe;
   }, [controller, id, watchFields]);
   return teaser;
@@ -206,7 +288,7 @@ export function useLabSections() {
   const controller = useCourseController();
   const [labSections, setLabSections] = useState<LabSection[]>([]);
   useEffect(() => {
-    const { data, unsubscribe } = controller.listLabSections((data) => {
+    const { data, unsubscribe } = controller.labSections.list((data) => {
       setLabSections(data);
     });
     setLabSections(data);
@@ -215,66 +297,203 @@ export function useLabSections() {
   return labSections;
 }
 
+export function useClassSections() {
+  const controller = useCourseController();
+  const [classSections, setClassSections] = useState<ClassSection[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.classSections.list((data) => {
+      setClassSections(data);
+    });
+    setClassSections(data);
+    return unsubscribe;
+  }, [controller]);
+  return classSections;
+}
+
 export type UpdateCallback<T> = (data: T) => void;
 export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {
   private_profile?: UserProfile;
 };
 
+/**
+ * This class is responsible for managing realtime course data.
+ */
 export class CourseController {
-  private _isLoaded = false;
   private _isObfuscatedGrades: boolean = false;
   private _onlyShowGradesFor: string = "";
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
+  private _client: SupabaseClient<Database>;
+  private _userId: string;
 
-  constructor(public courseId: number) {}
+  // Lazily created TableController instances to avoid realtime subscription bursts
+  private _discussionThreadTeasers?: TableController<"discussion_threads">;
+  private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
+  private _discussionThreadWatchers?: TableController<"discussion_thread_watchers">;
+  private _tags?: TableController<"tags">;
+  private _labSections?: TableController<"lab_sections">;
+  private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _classSections?: TableController<"class_sections">;
+  private _profiles?: TableController<"profiles">;
+  private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
-  initializeRealTimeController(profileId: string, isStaff: boolean) {
-    this._classRealTimeController = new ClassRealTimeController({
-      client: createClient(),
-      classId: this.courseId,
-      profileId,
-      isStaff
-    });
+  constructor(
+    public role: Database["public"]["Enums"]["app_role"],
+    public courseId: number,
+    client: SupabaseClient<Database>,
+    classRealTimeController: ClassRealTimeController,
+    userId: string
+  ) {
+    this._classRealTimeController = classRealTimeController;
+    this._client = client as SupabaseClient<Database>;
+    this._userId = userId;
+  }
+
+  get userId() {
+    return this._userId;
+  }
+  /**
+   * Initialize critical TableControllers immediately after construction
+   * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
+   */
+  initializeEagerControllers() {
+    // Create profiles and userRolesWithProfiles immediately
+    // These are accessed frequently and should be ready
+    void this.profiles; // Triggers lazy creation
+    void this.userRolesWithProfiles; // Triggers lazy creation
   }
 
   get classRealTimeController(): ClassRealTimeController {
     if (!this._classRealTimeController) {
-      throw new Error("ClassRealTimeController not initialized. Call initializeRealTimeController first.");
+      throw new Error("ClassRealTimeController not initialized.");
     }
     return this._classRealTimeController;
   }
-  private discussionThreadReadStatusesSubscribers: Map<
-    number,
-    UpdateCallback<DiscussionThreadReadWithAllDescendants>[]
-  > = new Map();
-  private discussionThreadReadStatuses: Map<number, DiscussionThreadReadWithAllDescendants> = new Map();
-  private userProfiles: Map<string, UserProfileWithPrivateProfile> = new Map();
-  private userRoles: Map<string, UserRoleWithUser> = new Map(); //From uid to role
-  private userRolesByPrivateProfileId: Map<string, UserRoleWithUser> = new Map(); //From private profile id to role
 
-  private userProfileSubscribers: Map<string, UpdateCallback<UserProfileWithPrivateProfile>[]> = new Map();
+  // Lazy getters
+  get profiles(): TableController<"profiles"> {
+    if (!this._profiles) {
+      this._profiles = new TableController({
+        client: this._client,
+        table: "profiles",
+        query: this._client.from("profiles").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._profiles;
+  }
 
-  private discussionThreadTeasers: DiscussionThreadTeaser[] = [];
-  private discussionThreadTeaserListSubscribers: UpdateCallback<DiscussionThreadTeaser[]>[] = [];
-  private discussionThreadTeaserSubscribers: Map<number, UpdateCallback<DiscussionThreadTeaser>[]> = new Map();
+  get discussionThreadTeasers(): TableController<"discussion_threads"> {
+    if (!this._discussionThreadTeasers) {
+      this._discussionThreadTeasers = new TableController({
+        client: this._client,
+        table: "discussion_threads",
+        query: this._client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { root_class_id: this.courseId }
+      });
+    }
+    return this._discussionThreadTeasers;
+  }
 
-  private tags: Tag[] = [];
-  private tagListSubscribers: UpdateCallback<Tag[]>[] = [];
-  private profileTagSubscribers: Map<string, UpdateCallback<Tag[]>[]> = new Map();
+  get discussionThreadReadStatus(): TableController<"discussion_thread_read_status"> {
+    if (!this._discussionThreadReadStatus) {
+      this._discussionThreadReadStatus = new TableController({
+        client: this._client,
+        table: "discussion_thread_read_status",
+        query: this._client.from("discussion_thread_read_status").select("*").eq("user_id", this._userId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreadReadStatus;
+  }
 
-  // Lab sections data
-  private labSections: LabSection[] = [];
-  private labSectionMeetings: LabSectionMeeting[] = [];
-  private labSectionListSubscribers: UpdateCallback<LabSection[]>[] = [];
-  private labSectionMeetingListSubscribers: UpdateCallback<LabSectionMeeting[]>[] = [];
+  get discussionThreadWatchers(): TableController<"discussion_thread_watchers"> {
+    if (!this._discussionThreadWatchers) {
+      this._discussionThreadWatchers = new TableController({
+        client: this._client,
+        table: "discussion_thread_watchers",
+        query: this._client
+          .from("discussion_thread_watchers")
+          .select("*")
+          .eq("user_id", this._userId)
+          .eq("class_id", this.courseId),
+        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreadWatchers;
+  }
+
+  get tags(): TableController<"tags"> {
+    if (!this._tags) {
+      this._tags = new TableController({
+        client: this._client,
+        table: "tags",
+        query: this._client.from("tags").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._tags;
+  }
+
+  get labSections(): TableController<"lab_sections"> {
+    if (!this._labSections) {
+      this._labSections = new TableController({
+        client: this._client,
+        table: "lab_sections",
+        query: this._client.from("lab_sections").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._labSections;
+  }
+
+  get labSectionMeetings(): TableController<"lab_section_meetings"> {
+    if (!this._labSectionMeetings) {
+      this._labSectionMeetings = new TableController({
+        client: this._client,
+        table: "lab_section_meetings",
+        query: this._client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._labSectionMeetings;
+  }
+
+  get classSections(): TableController<"class_sections"> {
+    if (!this._classSections) {
+      this._classSections = new TableController({
+        client: this._client,
+        table: "class_sections",
+        query: this._client.from("class_sections").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._classSections;
+  }
+
+  get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
+    if (!this._userRolesWithProfiles) {
+      this._userRolesWithProfiles = new TableController({
+        client: this._client,
+        table: "user_roles",
+        query: this._client
+          .from("user_roles")
+          .select("*, profiles!private_profile_id(*), users(*)")
+          .eq("class_id", this.courseId),
+        selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._userRolesWithProfiles;
+  }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
   private genericData: { [key in string]: Map<number, unknown> } = {};
   private genericDataListSubscribers: { [key in string]: UpdateCallback<unknown>[] } = {};
-
   private genericDataTypeToId: { [key in string]: (item: unknown) => number } = {};
   private _course: Course | undefined;
 
@@ -406,341 +625,144 @@ export class CourseController {
     } else if (event.type === "deleted") {
       this.genericData[typeName]!.delete(id);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName]?.values() ?? []))
-      );
+      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
     }
   }
 
-  handleDiscussionThreadTeaserEvent(event: LiveEvent) {
-    if (event.type === "created") {
-      const body = event.payload as DiscussionThreadTeaser;
-      this.discussionThreadTeasers.push(body);
-      this.discussionThreadTeaserListSubscribers.forEach((cb) => cb(this.discussionThreadTeasers));
-    } else if (event.type === "updated") {
-      const body = event.payload as DiscussionThreadTeaser;
-      const existing = this.discussionThreadTeasers.find((teaser) => teaser.id === body.id);
-      //Only propagate an update if there is a change that we care about
-      if (
-        existing &&
-        existing.children_count === body.children_count &&
-        existing.likes_count === body.likes_count &&
-        existing.subject === body.subject &&
-        existing.created_at === body.created_at &&
-        existing.author === body.author &&
-        existing.topic_id === body.topic_id &&
-        existing.is_question === body.is_question &&
-        existing.instructors_only === body.instructors_only &&
-        existing.body === body.body &&
-        existing.answer === body.answer &&
-        existing.draft === body.draft
-      ) {
-        return;
-      }
-      this.discussionThreadTeasers = this.discussionThreadTeasers.map((teaser) =>
-        teaser.id === body.id ? body : teaser
-      );
-      const subscribers = this.discussionThreadTeaserSubscribers.get(body.id) || [];
-      subscribers.forEach((cb) => cb(body));
-    }
-  }
-  setDiscussionThreadTeasers(data: DiscussionThreadTeaser[]) {
-    if (this.discussionThreadTeasers.length == 0) {
-      this.discussionThreadTeasers = data;
-      for (const subscriber of this.discussionThreadTeaserListSubscribers) {
-        subscriber(data);
-      }
-    }
-  }
   getDiscussionThreadTeaser(
     id: number,
     callback?: UpdateCallback<DiscussionThreadTeaser>
   ): { unsubscribe: Unsubscribe; data: DiscussionThreadTeaser | undefined } {
-    const subscribers = this.discussionThreadTeaserSubscribers.get(id) || [];
     if (callback) {
-      this.discussionThreadTeaserSubscribers.set(id, [...subscribers, callback]);
+      return this.discussionThreadTeasers.getById(id, (data) => {
+        if (data) callback(data as DiscussionThreadTeaser);
+      });
     }
-    return {
-      unsubscribe: () => {
-        this.discussionThreadTeaserSubscribers.set(
-          id,
-          subscribers.filter((cb) => cb !== callback)
-        );
-      },
-      data: this.discussionThreadTeasers.find((teaser) => teaser.id === id)
-    };
+    return this.discussionThreadTeasers.getById(id);
   }
+
   listDiscussionThreadTeasers(callback?: UpdateCallback<DiscussionThreadTeaser[]>): {
     unsubscribe: Unsubscribe;
     data: DiscussionThreadTeaser[];
   } {
     if (callback) {
-      this.discussionThreadTeaserListSubscribers.push(callback);
+      return this.discussionThreadTeasers.list((data) => {
+        callback(data as DiscussionThreadTeaser[]);
+      });
     }
+    const result = this.discussionThreadTeasers.list();
     return {
-      unsubscribe: () => {
-        this.discussionThreadTeaserListSubscribers = this.discussionThreadTeaserListSubscribers.filter(
-          (cb) => cb !== callback
-        );
-      },
-      data: this.discussionThreadTeasers
+      unsubscribe: result.unsubscribe,
+      data: result.data as DiscussionThreadTeaser[]
     };
   }
 
-  handleReadStatusEvent(event: LiveEvent) {
-    const processUpdatedStatus = (updatedStatus: DiscussionThreadReadStatus) => {
-      const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
-      const existingStatuses = Array.from(this.discussionThreadReadStatuses.values());
-
-      // Fetch current children_count from the teaser cache
-      const getChildrenCount = (threadId: number): number => {
-        return this.discussionThreadTeasers.find((t) => t.id === threadId)?.children_count ?? 0;
-      };
-
-      if (isRoot) {
-        let numReadDescendants = 0;
-        const readDescendants = existingStatuses.filter(
-          (status) =>
-            status.discussion_thread_id != status.discussion_thread_root_id &&
-            status.discussion_thread_root_id === updatedStatus.discussion_thread_id &&
-            status.read_at
-        );
-        for (const status of readDescendants) {
-          numReadDescendants += status.read_at ? 1 : 0;
-        }
-
-        const childrenCount = getChildrenCount(updatedStatus.discussion_thread_id);
-        const newVal = {
-          ...updatedStatus,
-          numReadDescendants: numReadDescendants,
-          current_children_count: childrenCount
-        };
-        this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_id, newVal);
-        this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_id, newVal);
-      } else {
-        const childrenCount = getChildrenCount(updatedStatus.discussion_thread_id);
-        const newVal = {
-          ...updatedStatus,
-          numReadDescendants: 0, // Non-root threads don't have descendants in this context
-          current_children_count: childrenCount
-        };
-        this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_id, newVal);
-        this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_id, newVal);
-
-        const root = this.discussionThreadReadStatuses.get(updatedStatus.discussion_thread_root_id);
-        if (root) {
-          const readDescendants = existingStatuses.filter(
-            (status) =>
-              status.discussion_thread_id != status.discussion_thread_root_id &&
-              status.discussion_thread_root_id === updatedStatus.discussion_thread_root_id &&
-              status.read_at
-          );
-          let numReadDescendants = 0;
-          for (const status of readDescendants) {
-            numReadDescendants += status.read_at ? 1 : 0;
-          }
-
-          const rootChildrenCount = getChildrenCount(updatedStatus.discussion_thread_root_id);
-          const newRootVal = {
-            ...root,
-            numReadDescendants: numReadDescendants,
-            current_children_count: rootChildrenCount
-          };
-          this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_root_id, newRootVal);
-          this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_root_id, newRootVal);
-        }
-      }
-    };
-    if (event.type === "created") {
-      const body = event.payload as DiscussionThreadReadStatus;
-      processUpdatedStatus(body);
-    } else if (event.type === "updated") {
-      const body = event.payload as DiscussionThreadReadStatus;
-      processUpdatedStatus(body);
-    }
-  }
-  get isLoaded() {
-    return this._isLoaded;
-  }
   getDiscussionThreadReadStatus(
     threadId: number,
     callback?: UpdateCallback<DiscussionThreadReadWithAllDescendants>
   ): { unsubscribe: Unsubscribe; data: DiscussionThreadReadWithAllDescendants | undefined | null } {
-    const subscribers = this.discussionThreadReadStatusesSubscribers.get(threadId) || [];
+    // For now, return simple read status - complex computation can be added later if needed
     if (callback) {
-      this.discussionThreadReadStatusesSubscribers.set(threadId, [...subscribers, callback]);
+      const result = this.discussionThreadReadStatus.getById(threadId, (data) => {
+        if (data) {
+          const converted = {
+            ...data,
+            numReadDescendants: 0,
+            current_children_count: 0
+          } as DiscussionThreadReadWithAllDescendants;
+          callback(converted);
+        } else {
+          // Handle the case where data is undefined - the callback is optional so we can skip it
+          return;
+        }
+      });
+      return {
+        unsubscribe: result.unsubscribe,
+        data: result.data
+          ? ({
+              ...result.data,
+              numReadDescendants: 0,
+              current_children_count: 0
+            } as DiscussionThreadReadWithAllDescendants)
+          : null
+      };
     }
+    const result = this.discussionThreadReadStatus.getById(threadId);
+    const convertedData = result.data
+      ? ({ ...result.data, numReadDescendants: 0, current_children_count: 0 } as DiscussionThreadReadWithAllDescendants)
+      : null;
     return {
-      unsubscribe: () => {
-        this.discussionThreadReadStatusesSubscribers.set(
-          threadId,
-          subscribers.filter((cb) => cb !== callback)
-        );
-      },
-      data: this.isLoaded ? this.discussionThreadReadStatuses.get(threadId) || null : undefined
+      unsubscribe: result.unsubscribe,
+      data: convertedData
     };
   }
-  setDiscussionThreadReadStatuses(data: DiscussionThreadReadStatus[]) {
-    if (!this._isLoaded) {
-      this._isLoaded = true;
-      // Ensure teasers are potentially loaded first or available
-      const currentTeasers = this.discussionThreadTeasers;
-      for (const thread of data) {
-        // Find the corresponding teaser to get the children_count
-        const correspondingTeaser = currentTeasers.find((t) => t.id === thread.discussion_thread_id);
-        const childrenCount = correspondingTeaser?.children_count ?? 0;
 
-        this.discussionThreadReadStatuses.set(thread.discussion_thread_id, {
-          ...thread,
-          numReadDescendants: data.filter(
-            (t) =>
-              t.discussion_thread_id != t.discussion_thread_root_id &&
-              t.discussion_thread_root_id === thread.discussion_thread_id &&
-              t.read_at
-          ).length,
-          current_children_count: childrenCount
-        });
-        this.notifyDiscussionThreadReadStatusSubscribers(
-          thread.discussion_thread_id,
-          this.discussionThreadReadStatuses.get(thread.discussion_thread_id)!
-        );
-      }
-    }
+  get isStaff() {
+    return this.role === "instructor" || this.role === "grader";
   }
-  setUserProfiles(profiles: UserProfile[], roles: UserRoleWithUser[]) {
-    for (const profile of profiles) {
-      this.userProfiles.set(profile.id, { ...profile });
-    }
-    for (const role of roles) {
-      this.userRoles.set(role.user_id, role);
-      this.userRolesByPrivateProfileId.set(role.private_profile_id, role);
-      const privateProfile = this.userProfiles.get(role.private_profile_id);
-      const publicProfile = this.userProfiles.get(role.public_profile_id);
-      if (privateProfile && publicProfile) {
-        publicProfile.private_profile = privateProfile;
-      }
-    }
-    //Fire all callbacks
-    for (const id of this.userProfileSubscribers.keys()) {
-      const callbacks = this.userProfileSubscribers.get(id);
-      if (callbacks) {
-        callbacks.forEach((cb) => cb(this.userProfiles.get(id)!));
-      }
-    }
-  }
+
   getUserRole(user_id: string) {
-    return this.userRoles.get(user_id);
-  }
-  getUserRoleByPrivateProfileId(private_profile_id: string) {
-    return this.userRolesByPrivateProfileId.get(private_profile_id);
-  }
-  getUserProfile(id: string, callback?: UpdateCallback<UserProfileWithPrivateProfile>) {
-    const profile = this.userProfiles.get(id);
-    if (callback) {
-      this.userProfileSubscribers.set(id, [...(this.userProfileSubscribers.get(id) || []), callback]);
-    }
-    return {
-      unsubscribe: () => {
-        this.userProfileSubscribers.set(
-          id,
-          this.userProfileSubscribers.get(id)!.filter((cb) => cb !== callback)
-        );
-      },
-      data: profile
-    };
-  }
-  private notifyDiscussionThreadReadStatusSubscribers(threadId: number, data: DiscussionThreadReadWithAllDescendants) {
-    const subscribers = this.discussionThreadReadStatusesSubscribers.get(threadId);
-    if (subscribers && subscribers.length > 0) {
-      subscribers.forEach((cb) => cb(data));
-    }
+    const result = this.userRolesWithProfiles.list();
+    return result.data.find((role) => role.user_id === user_id);
   }
 
-  setTags(data: Tag[]) {
-    this.tags = data;
-    this.tagListSubscribers.forEach((callback) => callback(data));
-    this.profileTagSubscribers.forEach((subscribers, profile_id) => {
-      subscribers.forEach((callback) => callback(data.filter((t) => t.profile_id === profile_id)));
-    });
+  getUserRoleByPrivateProfileId(private_profile_id: string) {
+    const result = this.userRolesWithProfiles.list();
+    return result.data.find((role) => role.private_profile_id === private_profile_id);
   }
 
   getTagsForProfile(
     profile_id: string,
     callback?: UpdateCallback<Tag[]>
   ): { unsubscribe: Unsubscribe; data: Tag[] | undefined } {
-    if (callback) {
-      if (!this.profileTagSubscribers.has(profile_id)) {
-        this.profileTagSubscribers.set(profile_id, []);
-      }
-      this.profileTagSubscribers.get(profile_id)!.push(callback);
-      const tag = this.tags.filter((t) => t.profile_id === profile_id);
-      if (tag) {
-        callback(tag);
-      }
-    }
-
+    const result = this.tags.list((data) => {
+      const filtered = data.filter((t) => t.profile_id === profile_id);
+      if (callback) callback(filtered);
+    });
     return {
-      unsubscribe: () => {
-        if (callback) {
-          const subscribers = this.profileTagSubscribers.get(profile_id);
-          if (subscribers) {
-            const index = subscribers.indexOf(callback);
-            if (index !== -1) {
-              subscribers.splice(index, 1);
-            }
-          }
-        }
-      },
-      data: this.tags.filter((t) => t.profile_id === profile_id)
+      unsubscribe: result.unsubscribe,
+      data: result.data.filter((t) => t.profile_id === profile_id)
     };
   }
 
   listTags(callback?: UpdateCallback<Tag[]>): { unsubscribe: Unsubscribe; data: Tag[] } {
+    return this.tags.list(callback);
+  }
+  getRoster() {
+    const result = this.userRolesWithProfiles.list();
+    return result.data.filter((role) => role.role === "student");
+  }
+
+  getRosterWithUserInfo(callback?: UpdateCallback<UserRoleWithUser[]>): {
+    unsubscribe: Unsubscribe;
+    data: UserRoleWithUser[];
+  } {
+    const mapToStudentUserRoles = (data: unknown[]): UserRoleWithUser[] =>
+      (data as UserRoleWithPrivateProfileAndUser[])
+        .filter((role) => role.role === "student")
+        .map((role) => role as unknown as UserRoleWithUser);
+
     if (callback) {
-      this.tagListSubscribers.push(callback);
-      callback(this.tags);
+      const result = this.userRolesWithProfiles.list((data) => {
+        callback(mapToStudentUserRoles(data as unknown[]));
+      });
+      return {
+        unsubscribe: result.unsubscribe,
+        data: mapToStudentUserRoles(result.data as unknown[])
+      };
     }
 
+    const result = this.userRolesWithProfiles.list();
     return {
-      unsubscribe: () => {
-        if (callback) {
-          const index = this.tagListSubscribers.indexOf(callback);
-          if (index !== -1) {
-            this.tagListSubscribers.splice(index, 1);
-          }
-        }
-      },
-      data: this.tags
+      unsubscribe: result.unsubscribe,
+      data: mapToStudentUserRoles(result.data as unknown[])
     };
   }
 
-  handleTagEvent(event: LiveEvent) {
-    if (event.type === "created" || event.type === "updated") {
-      const tag = event.payload as Tag;
-      const existingIndex = this.tags.findIndex((t) => t.id === tag.id);
-      if (existingIndex !== -1) {
-        this.tags[existingIndex] = tag;
-      } else {
-        this.tags.push(tag);
-      }
-      this.tagListSubscribers.forEach((callback) => callback(this.tags));
-      this.profileTagSubscribers
-        .get(tag.profile_id)
-        ?.forEach((callback) => callback(this.tags.filter((t) => t.profile_id === tag.profile_id)));
-    } else if (event.type === "deleted") {
-      const tag = event.payload as Tag;
-      this.tags = this.tags.filter((t) => t.id !== tag.id);
-      this.tagListSubscribers.forEach((callback) => callback(this.tags));
-      this.profileTagSubscribers
-        .get(tag.profile_id)
-        ?.forEach((callback) => callback(this.tags.filter((t) => t.profile_id === tag.profile_id)));
-    }
-  }
-  getRoster(): UserRoleWithUser[] {
-    return Array.from(this.userRoles.values()).filter((role) => role.role === "student");
-  }
-  getProfileBySisId(sis_id: string) {
-    return Array.from(this.userProfiles.values()).find((profile) => profile.sis_user_id === sis_id);
+  getProfileBySisId(sis_id: number) {
+    const userRoles = this.userRolesWithProfiles.list();
+    const role = userRoles.data.find((role) => role.users.sis_user_id === sis_id);
+    return role?.profiles;
   }
   setObfuscatedGradesMode(val: boolean) {
     this._isObfuscatedGrades = val;
@@ -770,34 +792,10 @@ export class CourseController {
   }
 
   /**
-   * Sets lab sections data
-   */
-  setLabSections(data: LabSection[]) {
-    this.labSections = data;
-    this.labSectionListSubscribers.forEach((cb) => cb(data));
-  }
-
-  /**
-   * Sets lab section meetings data
-   */
-  setLabSectionMeetings(data: LabSectionMeeting[]) {
-    this.labSectionMeetings = data;
-    this.labSectionMeetingListSubscribers.forEach((cb) => cb(data));
-  }
-
-  /**
    * Gets lab sections with optional callback for updates
    */
   listLabSections(callback?: UpdateCallback<LabSection[]>): { unsubscribe: Unsubscribe; data: LabSection[] } {
-    if (callback) {
-      this.labSectionListSubscribers.push(callback);
-    }
-    return {
-      unsubscribe: () => {
-        this.labSectionListSubscribers = this.labSectionListSubscribers.filter((cb) => cb !== callback);
-      },
-      data: this.labSections
-    };
+    return this.labSections.list(callback);
   }
 
   /**
@@ -807,22 +805,15 @@ export class CourseController {
     unsubscribe: Unsubscribe;
     data: LabSectionMeeting[];
   } {
-    if (callback) {
-      this.labSectionMeetingListSubscribers.push(callback);
-    }
-    return {
-      unsubscribe: () => {
-        this.labSectionMeetingListSubscribers = this.labSectionMeetingListSubscribers.filter((cb) => cb !== callback);
-      },
-      data: this.labSectionMeetings
-    };
+    return this.labSectionMeetings.list(callback);
   }
 
   /**
    * Gets the lab section ID for a given student profile ID
    */
   getStudentLabSectionId(studentPrivateProfileId: string): number | null {
-    const userRole = this.userRolesByPrivateProfileId.get(studentPrivateProfileId);
+    const result = this.userRolesWithProfiles.list();
+    const userRole = result.data.find((role) => role.private_profile_id === studentPrivateProfileId);
     // lab_section_id should be available on UserRoleWithUser after database types regeneration
     return userRole?.lab_section_id || null;
   }
@@ -838,7 +829,6 @@ export class CourseController {
       labSectionId: labSectionIdOverride
     }: { studentPrivateProfileId: string; labSectionId?: number }
   ): Date {
-    // If assignment doesn't use lab-based scheduling, return original due date
     if (!studentPrivateProfileId && !labSectionIdOverride) {
       throw new Error("No student private profile ID or lab section ID override provided");
     }
@@ -846,20 +836,21 @@ export class CourseController {
       return new Date(assignment.due_date);
     }
 
-    // Get student's lab section
     const labSectionId = labSectionIdOverride || this.getStudentLabSectionId(studentPrivateProfileId);
     if (!labSectionId) {
-      // Student not in a lab section, fall back to original due date
+      // Student not in a lab section, falling back to original due date
       return new Date(assignment.due_date);
     }
-    const labSection = this.labSections.find((section) => section.id === labSectionId);
+    const labSectionResult = this.labSections.list();
+    const labSection = labSectionResult.data.find((section) => section.id === labSectionId);
     if (!labSection) {
       throw new Error("Lab section not found");
     }
 
     // Find the most recent lab section meeting before the assignment's original due date
     const assignmentDueDate = new Date(assignment.due_date);
-    const relevantMeetings = this.labSectionMeetings
+    const labMeetingResult = this.labSectionMeetings.list();
+    const relevantMeetings = labMeetingResult.data
       .filter(
         (meeting) =>
           meeting.lab_section_id === labSectionId &&
@@ -869,7 +860,6 @@ export class CourseController {
       .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
 
     if (relevantMeetings.length === 0) {
-      // No lab meeting found before due date, fall back to original due date
       return new Date(assignment.due_date);
     }
 
@@ -880,152 +870,60 @@ export class CourseController {
       this.course.time_zone ?? "America/New_York"
     );
 
-    // Add the minutes offset to the lab meeting date
     const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
 
     return effectiveDueDate;
+  }
+
+  // All data loading is handled by TableController instances
+  get isDataLoaded() {
+    // Consider only instantiated controllers to avoid triggering lazy creation
+    const createdControllers: Array<
+      | TableController<"profiles">
+      | TableController<"discussion_threads">
+      | TableController<"discussion_thread_read_status">
+      | TableController<"tags">
+      | TableController<"lab_sections">
+      | TableController<"class_sections">
+      | TableController<"lab_section_meetings">
+      | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
+    > = [];
+    if (this._profiles) createdControllers.push(this._profiles);
+    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
+    if (this._discussionThreadTeasers) createdControllers.push(this._discussionThreadTeasers);
+    if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
+    if (this._tags) createdControllers.push(this._tags);
+    if (this._labSections) createdControllers.push(this._labSections);
+    if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
+    if (this._classSections) createdControllers.push(this._classSections);
+    return createdControllers.every((c) => c.ready);
+  }
+
+  // Close method to clean up TableController instances
+  close(): void {
+    this._profiles?.close();
+    this._userRolesWithProfiles?.close();
+    this._discussionThreadTeasers?.close();
+    this._discussionThreadReadStatus?.close();
+    this._discussionThreadWatchers?.close();
+    this._tags?.close();
+    this._labSections?.close();
+    this._labSectionMeetings?.close();
+    this._classSections?.close();
+
+    if (this._classRealTimeController) {
+      this._classRealTimeController.close();
+    }
   }
 }
 
 function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
   const { user } = useAuthState();
   const course = useCourse();
+
   useEffect(() => {
     controller.course = course;
   }, [course, controller]);
-  const threadReadStatuses = useList<DiscussionThreadReadStatus>({
-    resource: "discussion_thread_read_status",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "user_id", operator: "eq", value: user?.id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto",
-    onLiveEvent: (event) => {
-      controller.handleReadStatusEvent(event);
-    }
-  });
-  useEffect(() => {
-    if (threadReadStatuses.data) {
-      controller.setDiscussionThreadReadStatuses(threadReadStatuses.data.data);
-    }
-  }, [controller, threadReadStatuses.data]);
-
-  // Replace useList with direct Supabase API calls for profiles and roles
-  const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
-  const [roles, setRoles] = useState<UserRoleWithUser[]>([]);
-  const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
-  const [isLoadingRoles, setIsLoadingRoles] = useState(true);
-
-  // Function to fetch all profiles with pagination
-  const fetchAllProfiles = useCallback(async () => {
-    const supabase = createClient();
-    let allProfiles: UserProfile[] = [];
-    let from = 0;
-    const pageSize = 1000;
-    let hasMore = true;
-
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("class_id", course_id)
-        .range(from, from + pageSize - 1);
-
-      if (error) {
-        toaster.error({
-          title: "Error fetching profiles",
-          description: error.message
-        });
-        break;
-      }
-
-      if (data && data.length > 0) {
-        allProfiles = [...allProfiles, ...data];
-        from += pageSize;
-        hasMore = data.length === pageSize;
-      } else {
-        hasMore = false;
-      }
-    }
-
-    setUserProfiles(allProfiles);
-    setIsLoadingProfiles(false);
-  }, [course_id]);
-
-  // Function to fetch all roles with pagination
-  const fetchAllRoles = useCallback(async () => {
-    const supabase = createClient();
-    let allRoles: UserRoleWithUser[] = [];
-    let from = 0;
-    const pageSize = 1000;
-    let hasMore = true;
-
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("*, users(*)")
-        .eq("class_id", course_id)
-        .range(from, from + pageSize - 1);
-
-      if (error) {
-        toaster.error({
-          title: "Error fetching roles",
-          description: error.message
-        });
-        break;
-      }
-
-      if (data && data.length > 0) {
-        allRoles = [...allRoles, ...data];
-        from += pageSize;
-        hasMore = data.length === pageSize;
-      } else {
-        hasMore = false;
-      }
-    }
-
-    setRoles(allRoles);
-    setIsLoadingRoles(false);
-  }, [course_id]);
-
-  // Fetch profiles and roles on mount
-  useEffect(() => {
-    fetchAllProfiles();
-    fetchAllRoles();
-  }, [fetchAllProfiles, fetchAllRoles]);
-
-  // Update controller when both profiles and roles are loaded
-  useEffect(() => {
-    if (!isLoadingProfiles && !isLoadingRoles && userProfiles.length > 0 && roles.length > 0) {
-      controller.setUserProfiles(userProfiles, roles);
-    }
-  }, [controller, userProfiles, roles, isLoadingProfiles, isLoadingRoles]);
-
-  const query = useList<DiscussionThread>({
-    resource: "discussion_threads",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "root_class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleDiscussionThreadTeaserEvent(event);
-    }
-  });
-  const { data: rootDiscusisonThreads } = query;
-  useEffect(() => {
-    if (rootDiscusisonThreads?.data) {
-      controller.setDiscussionThreadTeasers(rootDiscusisonThreads.data);
-    }
-  }, [controller, rootDiscusisonThreads?.data]);
 
   const { data: notifications } = useList<Notification>({
     resource: "notifications",
@@ -1137,77 +1035,11 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
     }
   }, [controller, dueDateExceptions?.data]);
-  const { data: tags } = useList<Tag>({
-    resource: "tags",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      {
-        operator: "or",
-        value: [
-          { field: "visible", operator: "eq", value: true },
-          { field: "creator_id", operator: "eq", value: user?.id }
-        ]
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto",
-    onLiveEvent: (event) => {
-      controller.handleTagEvent(event);
-    }
-  });
-  useEffect(() => {
-    if (tags?.data) {
-      controller.setTags(tags.data);
-    }
-  }, [controller, tags?.data]);
-
-  // Fetch lab sections
-  const { data: labSections } = useList<LabSection>({
-    resource: "lab_sections",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto"
-  });
-  useEffect(() => {
-    if (labSections?.data) {
-      controller.setLabSections(labSections.data);
-    }
-  }, [controller, labSections?.data]);
-
-  // Fetch lab section meetings
-  const { data: labSectionMeetings } = useList<LabSectionMeeting>({
-    resource: "lab_section_meetings",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto"
-  });
-  useEffect(() => {
-    if (labSectionMeetings?.data) {
-      controller.setLabSectionMeetings(labSectionMeetings.data);
-    }
-  }, [controller, labSectionMeetings?.data]);
 
   return <></>;
 }
 const CourseControllerContext = createContext<CourseController | null>(null);
+
 export function CourseControllerProvider({
   course_id,
   profile_id,
@@ -1219,27 +1051,66 @@ export function CourseControllerProvider({
   course_id: number;
   children: React.ReactNode;
 }) {
-  const controller = useRef<CourseController>(new CourseController(course_id));
-  const [isInitialized, setIsInitialized] = useState(false);
-  const currentController = controller.current;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
+  const [courseController, setCourseController] = useState<CourseController | null>(null);
+  const { user } = useAuthState();
+  const userId = user?.id;
+  // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
-    console.log("Initializing realtime controller", profile_id, role);
-    currentController.initializeRealTimeController(profile_id, role === "instructor" || role === "grader");
-    setIsInitialized(true);
-    return () => {
-      currentController.classRealTimeController.close();
-    };
-  }, [currentController, profile_id, role]);
-  if (!isInitialized) {
+    if (userId) {
+      let cancelled = false;
+      const client = createClient();
+      const realTimeController = new ClassRealTimeController({
+        client,
+        classId: course_id,
+        profileId: profile_id,
+        isStaff: role === "instructor" || role === "grader"
+      });
+      const _courseController = new CourseController(role, course_id, client, realTimeController, userId);
+      setCourseController(_courseController);
+      const start = async () => {
+        try {
+          await realTimeController.start();
+
+          if (cancelled) {
+            _courseController?.close();
+            await realTimeController.close();
+            return;
+          }
+
+          // Initialize the critical controllers now that everything is stable
+          _courseController.initializeEagerControllers();
+
+          setClassRealTimeController(realTimeController);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to start ClassRealTimeController:", e);
+          _courseController?.close();
+          await realTimeController.close();
+        }
+      };
+      start();
+
+      return () => {
+        cancelled = true;
+        _courseController?.close();
+        realTimeController.close();
+      };
+    }
+  }, [course_id, profile_id, role, userId]);
+
+  if (!courseController) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
       </Box>
     );
   }
+
   return (
-    <CourseControllerContext.Provider value={controller.current}>
-      <CourseControllerProviderImpl controller={controller.current} course_id={course_id} />
+    <CourseControllerContext.Provider value={courseController}>
+      <CourseControllerProviderImpl controller={courseController} course_id={course_id} />
       {children}
     </CourseControllerContext.Provider>
   );
@@ -1266,7 +1137,6 @@ export function useAssignmentDueDate(
   const [labSections, setLabSections] = useState<LabSection[]>();
   const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
 
-  // Get due date exceptions
   useEffect(() => {
     if (assignment.due_date) {
       const { data: dueDateExceptions, unsubscribe } = controller.listGenericData<AssignmentDueDateException>(
@@ -1278,7 +1148,6 @@ export function useAssignmentDueDate(
     }
   }, [assignment, controller]);
 
-  // Get lab sections and meetings
   useEffect(() => {
     const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>
       setLabSections(data)
@@ -1313,7 +1182,6 @@ export function useAssignmentDueDate(
     const originalDueDate = new TZDate(assignment.due_date, time_zone);
     const hasLabScheduling = assignment.minutes_due_after_lab !== null;
 
-    // Calculate effective due date (lab-based or original)
     let effectiveDueDate = originalDueDate;
     let labSectionId: number | null = null;
 
@@ -1450,4 +1318,108 @@ export function useCanShowGradeFor(userId: string): boolean {
   }, [controller]);
   if (!isObfuscated) return true;
   return onlyShowFor === userId;
+}
+
+/**
+ * Hook to get student roster with user information including email
+ */
+export function useRosterWithUserInfo() {
+  const controller = useCourseController();
+  const [roster, setRoster] = useState<UserRoleWithUser[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.getRosterWithUserInfo((updatedRoster) => setRoster(updatedRoster));
+    setRoster(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return roster;
+}
+
+/**
+ * Hook to get user roles with full profile and user information for enrollments management
+ */
+export function useUserRolesWithProfiles() {
+  const controller = useCourseController();
+  const [userRoles, setUserRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.userRolesWithProfiles.list((updatedUserRoles) => {
+      setUserRoles(updatedUserRoles as UserRoleWithPrivateProfileAndUser[]);
+    });
+    setUserRoles(data as UserRoleWithPrivateProfileAndUser[]);
+    return unsubscribe;
+  }, [controller]);
+
+  return userRoles;
+}
+
+/**
+ * Hook to get all tags for the course
+ */
+export function useTags() {
+  const controller = useCourseController();
+  const [tags, setTags] = useState<Tag[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listTags((updatedTags) => {
+      setTags(updatedTags);
+    });
+    setTags(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return tags;
+}
+
+/**
+ * Hook to get tags for a specific profile
+ */
+export function useProfileTags(profileId: string | undefined) {
+  const controller = useCourseController();
+  const [tags, setTags] = useState<Tag[]>([]);
+
+  useEffect(() => {
+    if (!profileId) {
+      setTags([]);
+      return;
+    }
+
+    const { data, unsubscribe } = controller.getTagsForProfile(profileId, (updatedTags) => {
+      setTags(updatedTags);
+    });
+    setTags(data || []);
+    return unsubscribe;
+  }, [controller, profileId]);
+
+  return tags;
+}
+
+/**
+ * Hook to determine role based on tags for a given profile id
+ * Returns 'student', 'grader', or 'instructor' based on the presence of that tag on the profile
+ */
+export function useProfileRole(profileId: string | undefined): "student" | "grader" | "instructor" | undefined {
+  const tags = useProfileTags(profileId);
+
+  return useMemo(() => {
+    if (!tags || tags.length === 0) {
+      return undefined;
+    }
+
+    // Look for role tags (case-insensitive)
+    const roleTag = tags.find((tag) => {
+      const tagName = tag.name.toLowerCase();
+      return tagName === "instructor" || tagName === "grader" || tagName === "student";
+    });
+
+    if (roleTag) {
+      const roleName = roleTag.name.toLowerCase();
+      if (roleName === "instructor") return "instructor";
+      if (roleName === "grader") return "grader";
+      if (roleName === "student") return "student";
+    }
+
+    return undefined;
+  }, [tags]);
 }
