@@ -5,9 +5,14 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useAllStudentProfiles, useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentGroupMemberships } from "@/hooks/useAssignment";
 import useModalManager from "@/hooks/useModalManager";
 import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
-import { Assignment, AssignmentDueDateException } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  AssignmentDueDateException,
+  AssignmentGroupMembersWithGroup
+} from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, Table, Text, VStack } from "@chakra-ui/react";
 import { formatInTimeZone } from "date-fns-tz";
 import { useMemo } from "react";
@@ -32,6 +37,31 @@ export default function AssignmentExceptionsTable({
 }: AssignmentExceptionsTableProps) {
   const course = useCourse();
   const { assignmentDueDateExceptions } = useCourseController();
+  // Load group membership for this assignment so we can show group names/members and filter by student-in-group
+  const groupMemberships: AssignmentGroupMembersWithGroup[] = useAssignmentGroupMemberships(assignment.id);
+  const groupIdToMemberIds = useMemo(() => {
+    const map = new Map<number, string[]>();
+    for (const m of groupMemberships) {
+      const arr = map.get(m.assignment_group_id) || [];
+      arr.push(m.profile_id);
+      map.set(m.assignment_group_id, arr);
+    }
+    return map;
+  }, [groupMemberships]);
+  const groupIdToName = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const m of groupMemberships) {
+      if (m.assignment_groups) map.set(m.assignment_group_id, m.assignment_groups.name);
+    }
+    return map;
+  }, [groupMemberships]);
+  const profileIdToGroupId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of groupMemberships) {
+      map.set(m.profile_id, m.assignment_group_id);
+    }
+    return map;
+  }, [groupMemberships]);
   const predicate = useMemo(() => {
     return (e: AssignmentDueDateException) => {
       // Must be for this assignment
@@ -39,12 +69,21 @@ export default function AssignmentExceptionsTable({
 
       // Apply filters
       const aPass = assignmentFilter ? e.assignment_id === assignmentFilter : true;
-      const sPass = studentFilter ? e.student_id === studentFilter : true;
+      const sPass = studentFilter
+        ? (() => {
+            if (e.student_id) return e.student_id === studentFilter;
+            if (e.assignment_group_id) {
+              const members = groupIdToMemberIds.get(e.assignment_group_id) || [];
+              return members.includes(studentFilter);
+            }
+            return false;
+          })()
+        : true;
       const tPass =
         tokenFilter === "has" ? e.tokens_consumed > 0 : tokenFilter === "none" ? e.tokens_consumed === 0 : true;
       return aPass && sPass && tPass;
     };
-  }, [assignment.id, assignmentFilter, studentFilter, tokenFilter]);
+  }, [assignment.id, assignmentFilter, studentFilter, tokenFilter, groupIdToMemberIds]);
   const exceptions = useListTableControllerValues(assignmentDueDateExceptions, predicate);
   const isReady = useIsTableControllerReady(assignmentDueDateExceptions);
   const students = useAllStudentProfiles();
@@ -52,7 +91,6 @@ export default function AssignmentExceptionsTable({
   const addOpen = useModalManager<AddExtensionDefaults>();
 
   const studentName = (id: string | null | undefined) => students.find((s) => s.id === id)?.name || id;
-  console.log("exceptions", exceptions);
 
   return (
     <Box borderWidth="1px" borderRadius="md" p={3}>
@@ -81,7 +119,7 @@ export default function AssignmentExceptionsTable({
       <Table.Root>
         <Table.Header>
           <Table.Row>
-            <Table.ColumnHeader>Student</Table.ColumnHeader>
+            <Table.ColumnHeader>Student / Group</Table.ColumnHeader>
             <Table.ColumnHeader>Hours</Table.ColumnHeader>
             <Table.ColumnHeader>Minutes</Table.ColumnHeader>
             <Table.ColumnHeader>Tokens</Table.ColumnHeader>
@@ -101,7 +139,40 @@ export default function AssignmentExceptionsTable({
           ) : exceptions.length > 0 ? (
             exceptions.map((r) => (
               <Table.Row key={r.id}>
-                <Table.Cell>{studentName(r.student_id) ?? "Missing Student"}</Table.Cell>
+                <Table.Cell>
+                  <VStack align="flex-start" gap={0}>
+                    {r.assignment_group_id ? (
+                      <>
+                        <Text>
+                          Group: {groupIdToName.get(r.assignment_group_id) || `Group #${r.assignment_group_id}`}
+                        </Text>
+                        <Text fontSize="xs" color="fg.muted">
+                          {(groupIdToMemberIds.get(r.assignment_group_id) || [])
+                            .map((pid) => studentName(pid))
+                            .join(", ")}
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text>{studentName(r.student_id) ?? "Missing Student"}</Text>
+                        {r.student_id && profileIdToGroupId.get(r.student_id) ? (
+                          <Text fontSize="xs" color="fg.muted">
+                            {(() => {
+                              const gid = profileIdToGroupId.get(r.student_id!);
+                              const members = (gid ? groupIdToMemberIds.get(gid) : []) || [];
+                              const otherMembers = members.filter((m) => m !== r.student_id);
+                              const gname = gid ? groupIdToName.get(gid) : undefined;
+                              if (!gid || members.length === 0) return null;
+                              return `Group: ${gname || `Group #${gid}`}; Other members: ${otherMembers
+                                .map((pid) => studentName(pid))
+                                .join(", ")}`;
+                            })()}
+                          </Text>
+                        ) : null}
+                      </>
+                    )}
+                  </VStack>
+                </Table.Cell>
                 <Table.Cell>{r.hours}</Table.Cell>
                 <Table.Cell>{r.minutes || 0}</Table.Cell>
                 <Table.Cell>{r.tokens_consumed}</Table.Cell>

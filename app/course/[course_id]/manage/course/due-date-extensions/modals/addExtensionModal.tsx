@@ -123,6 +123,10 @@ export default function AddExtensionModal({
             </Dialog.Header>
             <Dialog.Body>
               <VStack gap={4} align="stretch">
+                <Dialog.Description>
+                  This extension will only be applied to all individual assignments in the course. Group assignments
+                  will not be affected.
+                </Dialog.Description>
                 <Field label="Student" required>
                   <Select
                     options={studentOptions}

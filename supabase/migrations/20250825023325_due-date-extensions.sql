@@ -525,6 +525,9 @@ CREATE TRIGGER broadcast_student_deadline_extensions_realtime AFTER INSERT OR DE
 
 CREATE TRIGGER on_student_deadline_extension_created AFTER INSERT ON public.student_deadline_extensions FOR EACH ROW EXECUTE FUNCTION create_assignment_exceptions_from_extension();
 
+ALTER FUNCTION public.create_assignment_exceptions_from_extension()  
+  SET search_path = public, pg_temp;
+
 CREATE TRIGGER broadcast_assignment_due_date_exceptions_realtime 
 AFTER INSERT OR DELETE OR UPDATE ON public.assignment_due_date_exceptions 
 FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();

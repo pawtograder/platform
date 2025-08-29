@@ -406,7 +406,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
       .nth(1);
     await expect(
       dueDatesGroupAssignment.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
+        name: `${student2!.private_profile_name} Group: Test Group 1; Other members: ${student!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
       })
     ).toBeVisible();
 
@@ -431,5 +431,45 @@ test.describe("Due Date Exceptions & Extensions", () => {
         })
         .first()
     ).toBeVisible();
+  });
+
+  test("Group-level exception displays group name and members", async ({ page }) => {
+    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+
+    // Insert a group-level exception for the group assignment
+    const hours = 12;
+    const note = "Group-level exception for test";
+    const { error: insertError } = await supabase.from("assignment_due_date_exceptions").insert({
+      class_id: course.id,
+      assignment_id: testGroupAssignment!.id,
+      assignment_group_id: assignmentGroup!.id,
+      creator_id: instructor!.private_profile_id,
+      hours: hours,
+      minutes: 0,
+      tokens_consumed: 0,
+      note
+    });
+    if (insertError) {
+      throw new Error(`Failed to insert group-level exception: ${insertError.message}`);
+    }
+
+    // Locate the group assignment exceptions table
+    const dueDatesGroupAssignment = page
+      .getByLabel("Assignment Exceptions")
+      .locator("div")
+      .filter({ hasText: "Due Dates Group Assignment" })
+      .nth(1);
+
+    // Wait for the new group-level exception row to appear and verify content
+    const groupRow = dueDatesGroupAssignment.getByRole("row", { name: /Group-level exception for test/ });
+    await expect(groupRow).toBeVisible();
+    await expect(groupRow.getByText("Group: Test Group 1")).toBeVisible();
+    await expect(groupRow.getByText(student!.private_profile_name)).toBeVisible();
+    await expect(groupRow.getByText(student2!.private_profile_name)).toBeVisible();
+
+    // Clean up by deleting the inserted group-level exception via UI
+    await groupRow.getByLabel("Delete").click();
+    await page.getByRole("button", { name: "Confirm action" }).click();
+    await expect(groupRow).not.toBeVisible();
   });
 });
