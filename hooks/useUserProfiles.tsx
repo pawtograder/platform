@@ -1,15 +1,7 @@
-<<<<<<< HEAD
-import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { useCourseController, type UserProfileWithPrivateProfile } from "./useCourseController";
-=======
 import { useFindTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
 import { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { useCallback, useMemo } from "react";
 import { useCourseController } from "./useCourseController";
->>>>>>> staging
 
 export function getUserProfile(
   allProfiles: UserProfile[],
