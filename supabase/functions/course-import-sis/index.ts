@@ -539,7 +539,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         Database["public"]["Tables"]["invitations"]["Row"],
         "invitations",
         Database["public"]["Tables"]["invitations"]["Relationships"],
-        "id, sis_user_id, role, status, class_section_id, lab_section_id"
+        "id, sis_user_id, role, status, class_section_id, lab_section_id, sis_managed"
       >[] = [];
       let currentEnrollments: GetResult<
         Database["public"],
@@ -582,7 +582,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       if (invitationFilters.length > 0) {
         const { data: invitations } = await adminSupabase
           .from("invitations")
-          .select("id, sis_user_id, role, status, class_section_id, lab_section_id")
+          .select("id, sis_user_id, role, status, class_section_id, lab_section_id, sis_managed")
           .eq("class_id", classData.id)
           .or(invitationFilters.join(","))
           .limit(1000);
@@ -602,6 +602,26 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const currentInvitationsBySIS = new Map(currentInvitations.map((inv) => [inv.sis_user_id, inv]));
 
       const currentEnrollmentsBySIS = new Map(currentEnrollments.map((enr) => [enr.users.sis_user_id, enr]));
+
+      // CRITICAL: Also check for ANY existing user roles in this class (regardless of sections)
+      // This catches instructors/users who might not have specific section assignments
+      const { data: allExistingUserRoles } = await adminSupabase
+        .from("user_roles")
+        .select("users!inner(sis_user_id)")
+        .eq("class_id", classData.id)
+        .not("users.sis_user_id", "is", null)
+        .eq("disabled", false)
+        .limit(1000);
+
+      const allExistingUsersBySIS = new Set(
+        (allExistingUserRoles || []).map((enr) => enr.users.sis_user_id).filter((id) => id !== null)
+      );
+
+      console.log("=== EXISTING USERS DEBUG ===");
+      console.log(`Existing users from SIS-enabled sections: ${currentEnrollmentsBySIS.size}`);
+      console.log(`ALL existing users in class: ${allExistingUsersBySIS.size}`);
+      console.log(`Difference: ${allExistingUsersBySIS.size - currentEnrollmentsBySIS.size}`);
+      console.log("============================");
 
       // Step 4: Collect all SIS users across all sections for this class
       const allSISUsers = new Map<
@@ -827,9 +847,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // Step 5: Create invitations for new SIS users
       const newInvitations: InvitationRequest[] = [];
 
+      console.log("=== INVITATION CREATION DEBUG ===");
+      console.log(`Total SIS users to process: ${allSISUsers.size}`);
+
       for (const [sisUserId, userData] of allSISUsers) {
-        // Skip if user is already enrolled
-        if (currentEnrollmentsBySIS.has(sisUserId)) {
+        // Skip if user is already enrolled (check ALL user roles, not just section-specific ones)
+        if (allExistingUsersBySIS.has(sisUserId)) {
+          console.log(`Skipping invitation for user ${sisUserId} - already has user role in class`);
           continue;
         }
 
@@ -897,6 +921,17 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           lab_section_id: labSectionId || undefined
         });
       }
+
+      console.log(`=== INVITATION SUMMARY ===`);
+      console.log(`Total SIS users: ${allSISUsers.size}`);
+      console.log(`New invitations to create: ${newInvitations.length}`);
+      console.log(
+        `Users skipped (already enrolled): ${Array.from(allSISUsers.keys()).filter((id) => allExistingUsersBySIS.has(id)).length}`
+      );
+      console.log(
+        `Users with pending invitations: ${Array.from(allSISUsers.keys()).filter((id) => currentInvitationsBySIS.has(id) && currentInvitationsBySIS.get(id)?.status === "pending").length}`
+      );
+      console.log(`==========================`);
 
       // Create new invitations in bulk using shared utility (no limit on count)
       if (newInvitations.length > 0) {
@@ -1066,6 +1101,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         }
 
         // Check if user has an existing enrollment that needs section updates
+        // Only update if they're in the section-filtered enrollments (they have specific section assignments)
         const existingEnrollment = currentEnrollmentsBySIS.get(Number(sisUserId));
         if (existingEnrollment && !existingEnrollment.disabled) {
           const needsUpdate =
@@ -1116,17 +1152,24 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const sisUserIds = new Set(allSISUsers.keys());
 
       // 7a. Mark invitations as expired for users no longer in SIS
+      // IMPORTANT: Only expire SIS-managed invitations, never expire manually created ones
       const invitationsToExpire = currentInvitations.filter(
-        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id))
+        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id)) && inv.sis_managed !== false // Only expire SIS-managed invitations
       );
 
       // Debug logging for expiration logic
-      if (invitationsToExpire.length > 0) {
-        console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
-        console.log(`Total current invitations: ${currentInvitations.length}`);
-        console.log(`Total SIS users: ${sisUserIds.size}`);
-        console.log(`Invitations to expire: ${invitationsToExpire.length}`);
+      const manualInvitations = currentInvitations.filter((inv) => inv.sis_managed === false);
+      const sisInvitations = currentInvitations.filter((inv) => inv.sis_managed !== false);
 
+      console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
+      console.log(`Total current invitations: ${currentInvitations.length}`);
+      console.log(`SIS-managed invitations: ${sisInvitations.length}`);
+      console.log(`Manual invitations (protected): ${manualInvitations.length}`);
+      console.log(`Total SIS users: ${sisUserIds.size}`);
+      console.log(`Invitations to expire: ${invitationsToExpire.length}`);
+      console.log("====================================");
+
+      if (invitationsToExpire.length > 0) {
         invitationsToExpire.slice(0, 5).forEach((inv) => {
           console.log(`Expiring invitation:`, {
             id: inv.id,
@@ -1409,6 +1452,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         category: "error",
         data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
       });
+      Sentry.captureException(error, scope);
       errorCount++;
     }
   }
