@@ -635,15 +635,18 @@ const ImportStudentsCSVModalContent = () => {
                           <strong>CSV Format Options:</strong>
                         </Text>
                         <Box pl={4}>
-                          <Text fontSize="sm" color="fg.subtle">
-                            <strong>Option 1 - Email Import:</strong> Include columns &apos;email&apos;,
-                            &apos;name&apos;, and optionally &apos;role&apos;. Users will be directly enrolled in the
-                            course.
-                          </Text>
                           <Text fontSize="sm" color="fg.subtle" mt={1}>
-                            <strong>Option 2 - SIS ID Import (Recommended):</strong> Include columns &apos;sis_id&apos;,
+                            <strong>Option 1 - SIS ID Import (Recommended):</strong> Include columns &apos;sis_id&apos;,
                             &apos;name&apos;, and optionally &apos;role&apos;. Users will receive invitations to join
-                            the course via their institutional accounts.
+                            the course via their institutional accounts. If they later get added via Banner, the records
+                            will automatically be merged.
+                          </Text>
+                          <Text fontSize="sm" color="fg.subtle">
+                            <strong>Option 2 - Email Import:</strong> Include columns &apos;email&apos;,
+                            &apos;name&apos;, and optionally &apos;role&apos;. Users will be directly enrolled in the
+                            course. For Northeastern users, this ONLY works if you use the user&apos;s initial email
+                            address. This is needlessley complicated: many users have multiple @northeastern.edu
+                            addresses, and you will need to guess the right one.
                           </Text>
                           <Text fontSize="sm" color="orange.600" mt={1} fontWeight="medium">
                             ⚠️ Do not include both &apos;email&apos; and &apos;sis_id&apos; columns in the same CSV.
@@ -662,11 +665,11 @@ const ImportStudentsCSVModalContent = () => {
                     </Text>
                     <Box pl={4}>
                       <Text fontSize="sm" color="gray.500">
-                        • <strong>Email Import:</strong> Users are immediately enrolled. Existing users are ignored.
-                      </Text>
-                      <Text fontSize="sm" color="gray.500">
                         • <strong>SIS ID Import:</strong> Users already in the system are enrolled directly. New users
                         receive invitations. Users already enrolled in this class are ignored.
+                      </Text>
+                      <Text fontSize="sm" color="gray.500">
+                        • <strong>Email Import:</strong> Users are immediately enrolled. Existing users are ignored.
                       </Text>
                     </Box>
                   </VStack>
