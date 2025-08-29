@@ -472,4 +472,43 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByRole("button", { name: "Confirm action" }).click();
     await expect(groupRow).not.toBeVisible();
   });
+
+  test("Roster Tokens displays per-student token usage including group exceptions", async ({ page }) => {
+    // Insert exceptions that use up tokens using the UI
+    const globalAddExceptionButton = page.getByRole("button", { name: "Add Exception" }).first();
+    await globalAddExceptionButton.click();
+    const addExceptionModal = page.getByRole("dialog");
+    await addExceptionModal
+      .locator("div")
+      .filter({ hasText: /^Select assignment$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: testAssignment!.title }).click();
+    await addExceptionModal
+      .locator("div")
+      .filter({ hasText: /^Select student$/ })
+      .first()
+      .click();
+    await page.getByRole("option", { name: student2!.private_profile_name }).click();
+    const hours = 24;
+    const tokensConsumed = 2;
+    await addExceptionModal.locator('input[name="hours"]').fill(hours.toString());
+    await addExceptionModal.locator('input[name="tokens_consumed"]').fill(tokensConsumed.toString());
+    const note = "This is a test exception";
+    await addExceptionModal.getByPlaceholder("Optional note").fill(note);
+    await addExceptionModal.getByRole("button", { name: "Add Exception" }).click();
+    // Navigate to the Roster Tokens tab
+    await page.getByRole("tab", { name: "Roster Tokens" }).click();
+    await expect(page.getByRole("heading", { name: "Roster Tokens" })).toBeVisible();
+
+    const student1Row = page.getByRole("row").filter({ has: page.getByText(student!.email) });
+    await expect(student1Row).toBeVisible();
+    await expect(student1Row.getByRole("cell").nth(1)).toHaveText("3");
+    await expect(student1Row.getByRole("cell").nth(2)).toHaveText("9");
+
+    const student2Row = page.getByRole("row").filter({ has: page.getByText(student2!.email) });
+    await expect(student2Row).toBeVisible();
+    await expect(student2Row.getByRole("cell").nth(1)).toHaveText("3");
+    await expect(student2Row.getByRole("cell").nth(2)).toHaveText("9");
+  });
 });

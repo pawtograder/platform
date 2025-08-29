@@ -4,6 +4,7 @@ import { Container, Heading, VStack, Box, Tabs } from "@chakra-ui/react";
 import DueDateExceptionsTable from "./tables/dueDateExceptionsTable";
 import StudentExtensionsTable from "./tables/studentExtensionsTable";
 import ClassLateTokenSettings from "./classLateTokenSettings";
+import RosterTokensTable from "./tables/rosterTokensTable";
 
 /**
  * Course-level Due Date Extensions dashboard.
@@ -30,6 +31,9 @@ export default function DueDateExtensionsPage() {
               <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="student-extensions">
                 Student Extensions
               </Tabs.Trigger>
+              <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="roster-tokens">
+                Roster Tokens
+              </Tabs.Trigger>
             </Tabs.List>
           </Box>
           <Box mt={{ base: 3, md: 6 }}>
@@ -39,6 +43,9 @@ export default function DueDateExtensionsPage() {
             </Tabs.Content>
             <Tabs.Content value="student-extensions">
               <StudentExtensionsTable />
+            </Tabs.Content>
+            <Tabs.Content value="roster-tokens">
+              <RosterTokensTable />
             </Tabs.Content>
           </Box>
         </Tabs.Root>
