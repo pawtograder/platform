@@ -83,7 +83,7 @@ select
   cs.private_profile_id as student_private_profile_id,
   -- private map: includes all reviews regardless of release
   (
-    select jsonb_object_agg(x.review_round::text, x.total_score)
+    select coalesce(jsonb_object_agg(x.review_round::text, x.total_score), '{}'::jsonb)
     from (
       select distinct on (r.review_round)
         r.review_round,
@@ -96,7 +96,7 @@ select
   ) as scores_by_round_private,
   -- public map: only reviews released to students
   (
-    select jsonb_object_agg(x.review_round::text, x.total_score)
+    select coalesce(jsonb_object_agg(x.review_round::text, x.total_score), '{}'::jsonb)
     from (
       select distinct on (r.review_round)
         r.review_round,

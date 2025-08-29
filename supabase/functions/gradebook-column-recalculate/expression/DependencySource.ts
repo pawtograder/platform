@@ -263,17 +263,24 @@ class AssignmentsDependencySource extends DependencySourceBase {
     };
 
     const allRows: ReviewsByRoundRow[] = [];
+    const classIds = Array.from(new Set(keys.map((k) => k.class_id)));
     let from = 0;
     const pageSize = 1000;
     while (true) {
       const to = from + pageSize - 1;
-      const { data: rows, error } = await supabase
+      let query = supabase
         .from("submissions_with_reviews_by_round_for_assignment")
         .select(
           "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public"
         )
         .in("assignment_id", assignmentIds)
-        .range(from, to);
+        .in("student_private_profile_id", Array.from(students));
+      query = classIds.length === 1 ? query.eq("class_id", classIds[0]) : query.in("class_id", classIds);
+      // Ensure stable pagination
+      query = query
+        .order("assignment_id", { ascending: true })
+        .order("student_private_profile_id", { ascending: true });
+      const { data: rows, error } = await query.range(from, to);
       if (error) {
         throw error;
       }
