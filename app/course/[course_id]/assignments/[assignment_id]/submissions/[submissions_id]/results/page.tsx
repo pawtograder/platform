@@ -18,6 +18,7 @@ import {
   Table,
   Tabs,
   Text,
+  Textarea,
   VStack
 } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
@@ -26,7 +27,8 @@ import { useParams } from "next/navigation";
 import { Fragment, useEffect, useState } from "react";
 import { FaRobot, FaSpinner } from "react-icons/fa";
 
-import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
+import { GraderResultTestExtraData, GraderResultTestsHintFeedback } from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/client";
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,10 +91,270 @@ function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGene
   );
 }
 
+function HintFeedbackForm({
+  testId,
+  submissionId,
+  classId,
+  hintText,
+  onFeedbackSubmitted
+}: {
+  testId: number;
+  submissionId: number;
+  classId: number;
+  hintText: string;
+  onFeedbackSubmitted?: () => void;
+}) {
+  const [useful, setUseful] = useState<boolean | null>(null);
+  const [comment, setComment] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [existingFeedback, setExistingFeedback] = useState<GraderResultTestsHintFeedback | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+
+  // Fetch existing feedback on mount
+  useEffect(() => {
+    const fetchExistingFeedback = async () => {
+      try {
+        const supabase = createClient();
+        const {
+          data: { user }
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setIsLoading(false);
+          return;
+        }
+
+        // Get user's profile ID
+        const { data: profile } = await supabase
+          .from("user_roles")
+          .select("private_profile_id")
+          .eq("user_id", user.id)
+          .eq("class_id", classId)
+          .single();
+
+        if (!profile) {
+          setIsLoading(false);
+          return;
+        }
+
+        // Fetch existing feedback
+        const { data: feedback, error: fetchError } = await supabase
+          .from("grader_result_tests_hint_feedback" as any)
+          .select("*")
+          .eq("grader_result_tests_id", testId)
+          .eq("created_by", profile.private_profile_id)
+          .single();
+
+        if (feedback && !fetchError) {
+          const typedFeedback = feedback as unknown as GraderResultTestsHintFeedback;
+          setExistingFeedback(typedFeedback);
+          setUseful(typedFeedback.useful);
+          setComment(typedFeedback.comment || "");
+          setHasSubmitted(true);
+        }
+      } catch (err) {
+        // No existing feedback is fine
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchExistingFeedback();
+  }, [testId, classId]);
+
+  const handleSubmit = async () => {
+    if (useful === null) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const supabase = createClient();
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setError("You must be logged in to submit feedback");
+        return;
+      }
+
+      // Get user's profile ID
+      const { data: profile } = await supabase
+        .from("user_roles")
+        .select("private_profile_id")
+        .eq("user_id", user.id)
+        .eq("class_id", classId)
+        .single();
+
+      if (!profile) {
+        setError("Unable to find your profile");
+        return;
+      }
+
+      if (existingFeedback) {
+        // Update existing feedback
+        const { data: updatedFeedback, error: updateError } = await supabase
+          .from("grader_result_tests_hint_feedback" as any)
+          .update({
+            useful: useful,
+            comment: comment.trim() || null
+          })
+          .eq("id", existingFeedback.id)
+          .select()
+          .single();
+
+        if (updateError) {
+          setError("Failed to update feedback: " + updateError.message);
+          return;
+        }
+
+        // Update the existing feedback state with the new values
+        if (updatedFeedback) {
+          setExistingFeedback(updatedFeedback as unknown as GraderResultTestsHintFeedback);
+        }
+      } else {
+        // Insert new feedback
+        const { data: newFeedback, error: insertError } = await supabase
+          .from("grader_result_tests_hint_feedback" as any)
+          .insert({
+            class_id: classId,
+            grader_result_tests_id: testId,
+            submission_id: submissionId,
+            hint: hintText,
+            useful: useful,
+            comment: comment.trim() || null,
+            created_by: profile.private_profile_id
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          setError("Failed to submit feedback: " + insertError.message);
+          return;
+        }
+
+        // Set the existing feedback state with the newly created feedback
+        if (newFeedback) {
+          setExistingFeedback(newFeedback as unknown as GraderResultTestsHintFeedback);
+        }
+      }
+
+      setHasSubmitted(true);
+      setIsEditing(false);
+      onFeedbackSubmitted?.();
+    } catch (err) {
+      setError("An error occurred while submitting feedback");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <Box mt={4} p={3} bg="gray.50" borderRadius="md" border="1px solid" borderColor="gray.200">
+        <Text fontSize="sm" color="gray.600">
+          Loading feedback...
+        </Text>
+      </Box>
+    );
+  }
+
+  if (hasSubmitted && !isEditing) {
+    return (
+      <Box mt={4} p={3} bg="green.50" borderRadius="md" border="1px solid" borderColor="green.200">
+        <HStack justify="space-between" align="start">
+          <Box>
+            <Text fontSize="sm" color="green.700" fontWeight="medium">
+              Your feedback: {useful ? "👍 Helpful" : "👎 Not helpful"}
+            </Text>
+            {comment && (
+              <Text fontSize="sm" color="green.600" mt={1}>
+                "{comment}"
+              </Text>
+            )}
+            <Text fontSize="xs" color="green.500" mt={1}>
+              Thank you for helping us improve Feedbot!
+            </Text>
+          </Box>
+          <Button size="xs" variant="ghost" onClick={() => setIsEditing(true)}>
+            Edit
+          </Button>
+        </HStack>
+      </Box>
+    );
+  }
+
+  return (
+    <Box mt={4} p={3} bg="gray.50" borderRadius="md" border="1px solid" borderColor="gray.200">
+      <Text fontSize="sm" fontWeight="medium" mb={3}>
+        {existingFeedback ? "Update your feedback:" : "Was this Feedbot response helpful?"}
+      </Text>
+
+      <HStack mb={3}>
+        <Button
+          size="sm"
+          variant={useful === true ? "solid" : "outline"}
+          colorScheme={useful === true ? "green" : "gray"}
+          onClick={() => setUseful(true)}
+        >
+          👍 Yes
+        </Button>
+        <Button
+          size="sm"
+          variant={useful === false ? "solid" : "outline"}
+          colorScheme={useful === false ? "red" : "gray"}
+          onClick={() => setUseful(false)}
+        >
+          👎 No
+        </Button>
+      </HStack>
+
+      <Textarea
+        placeholder="Optional: Tell us more about your experience with this hint..."
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        size="sm"
+        mb={3}
+        maxLength={500}
+      />
+
+      <HStack>
+        <Button size="sm" onClick={handleSubmit} disabled={useful === null || isSubmitting} loading={isSubmitting}>
+          {existingFeedback ? "Update Feedback" : "Submit Feedback"}
+        </Button>
+        {isEditing && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setIsEditing(false);
+              setUseful(existingFeedback?.useful ?? null);
+              setComment(existingFeedback?.comment || "");
+            }}
+          >
+            Cancel
+          </Button>
+        )}
+        {error && (
+          <Text fontSize="xs" color="red.500">
+            {error}
+          </Text>
+        )}
+      </HStack>
+    </Box>
+  );
+}
+
 function TestResultOutput({
   result,
   testId,
-  extraData
+  extraData,
+  submissionId,
+  classId
 }: {
   result: {
     output: string | null | undefined;
@@ -100,6 +362,8 @@ function TestResultOutput({
   };
   testId?: number;
   extraData?: GraderResultTestExtraData;
+  submissionId?: number;
+  classId?: number;
 }) {
   const [hintContent, setHintContent] = useState<string | null>(null);
 
@@ -116,6 +380,9 @@ function TestResultOutput({
           Response from Feedbot
         </Alert>
         <Markdown>{displayHint}</Markdown>
+        {testId && submissionId && classId && (
+          <HintFeedbackForm testId={testId} submissionId={submissionId} classId={classId} hintText={displayHint} />
+        )}
       </Box>
     );
   }
@@ -491,6 +758,8 @@ export default function GraderResults() {
                     result={result}
                     testId={result.id}
                     extraData={result.extra_data as GraderResultTestExtraData}
+                    submissionId={data.id}
+                    classId={data.class_id}
                   />
                 )}
                 {hasInstructorOutput &&

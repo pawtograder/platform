@@ -21,6 +21,18 @@ export type GraderResultTestExtraData = {
   hide_score?: string;
   icon?: string;
 };
+
+export type GraderResultTestsHintFeedback = {
+  id: number;
+  created_at: string;
+  class_id: number;
+  grader_result_tests_id: number;
+  submission_id: number;
+  hint: string;
+  useful: boolean;
+  comment?: string;
+  created_by: string;
+};
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
