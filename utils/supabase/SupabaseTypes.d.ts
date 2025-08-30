@@ -8407,6 +8407,10 @@ export type Database = {
         Args: { class__id: number };
         Returns: boolean;
       };
+      authorizeforclasscourseobserver: {
+        Args: { class__id: number };
+        Returns: boolean;
+      };
       authorizeforclassgrader: {
         Args: { class__id: number };
         Returns: boolean;
@@ -8864,7 +8868,7 @@ export type Database = {
     };
     Enums: {
       allowed_modes: "private" | "public" | "question" | "note";
-      app_role: "admin" | "instructor" | "grader" | "student";
+      app_role: "admin" | "instructor" | "grader" | "student" | "course_observer";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
@@ -9016,7 +9020,7 @@ export const Constants = {
   public: {
     Enums: {
       allowed_modes: ["private", "public", "question", "note"],
-      app_role: ["admin", "instructor", "grader", "student"],
+      app_role: ["admin", "instructor", "grader", "student", "course_observer"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
