@@ -33,6 +33,7 @@ export type ChimeSNSMessage = {
     eventType: string;
     meetingId: string;
     attendeeId: string;
+    externalUserId?: string; // This contains the private_profile_id
     networkType: string;
     externalMeetingId: string;
     mediaRegion: string;
@@ -47,8 +48,18 @@ export async function processSNSMessage(message: ChimeSNSMessage, scope?: Sentry
   scope?.setTag("chime_meeting_id", message.detail.meetingId);
   scope?.setTag("chime_attendee_count", message.detail.attendeeCount.toString());
 
-  console.log(JSON.stringify(message, null, 2));
-  if (message.detail.eventType === "chime:AttendeeLeft") {
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
+  if (message.detail.eventType === "chime:AttendeeJoined") {
+    // Track user joining the meeting
+    await handleAttendeeJoined(message, adminSupabase, scope);
+  } else if (message.detail.eventType === "chime:AttendeeLeft") {
+    // Track user leaving the meeting
+    await handleAttendeeLeft(message, adminSupabase, scope);
+
     const remainingAttendees = message.detail.attendeeCount;
     if (remainingAttendees === 0) {
       const chime = new ChimeSDKMeetings({
@@ -59,10 +70,6 @@ export async function processSNSMessage(message: ChimeSNSMessage, scope?: Sentry
       });
     }
   } else if (message.detail.eventType === "chime:MeetingEnded") {
-    const adminSupabase = createClient<Database>(
-      Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-    );
     //format: `video-meeting-session-${newSession.class_id}-${newSession.help_request_id}-${newSession.id}`,
     const match = message.detail.externalMeetingId.match(/video-meeting-session-(.*)-(.*)-(.*)/);
     if (!match) {
@@ -87,16 +94,101 @@ export async function processSNSMessage(message: ChimeSNSMessage, scope?: Sentry
     if (!match) {
       throw new Error("Invalid external meeting ID");
     }
-    const adminSupabase = createClient<Database>(
-      Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-    );
     await adminSupabase
       .from("help_requests")
       .update({
         is_video_live: true
       })
       .eq("id", parseInt(match[2]));
+  }
+}
+
+async function handleAttendeeJoined(
+  message: ChimeSNSMessage,
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  scope?: Sentry.Scope
+): Promise<void> {
+  scope?.setTag("chime_operation", "handle_attendee_joined");
+  scope?.setTag("chime_attendee_id", message.detail.attendeeId);
+  scope?.setTag("chime_external_user_id", message.detail.externalUserId);
+
+  try {
+    // Parse the external meeting ID to get session info
+    const match = message.detail.externalMeetingId.match(/video-meeting-session-(.*)-(.*)-(.*)/);
+    if (!match) {
+      console.error("Invalid external meeting ID for attendee joined:", message.detail.externalMeetingId);
+      return;
+    }
+
+    const classId = parseInt(match[1]);
+    const helpRequestId = parseInt(match[2]);
+    const sessionId = parseInt(match[3]);
+
+    // Get the private_profile_id from the externalUserId
+    const privateProfileId = message.detail.externalUserId;
+    if (!privateProfileId) {
+      console.error("Missing externalUserId in attendee joined event");
+      return;
+    }
+
+    // Record the user joining the meeting
+    const { error: insertError } = await adminSupabase.from("video_meeting_session_users").insert({
+      video_meeting_session_id: sessionId,
+      class_id: classId,
+      private_profile_id: privateProfileId,
+      chime_attendee_id: message.detail.attendeeId,
+      joined_at: new Date().toISOString()
+    });
+
+    if (insertError) {
+      console.error("Failed to record user joined meeting:", insertError);
+      Sentry.captureException(insertError, scope);
+    } else {
+      console.log(`Recorded user ${privateProfileId} joined meeting session ${sessionId}`);
+    }
+  } catch (error) {
+    console.error("Error handling attendee joined:", error);
+    Sentry.captureException(error, scope);
+  }
+}
+
+async function handleAttendeeLeft(
+  message: ChimeSNSMessage,
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  scope?: Sentry.Scope
+): Promise<void> {
+  scope?.setTag("chime_operation", "handle_attendee_left");
+  scope?.setTag("chime_attendee_id", message.detail.attendeeId);
+
+  try {
+    // Parse the external meeting ID to get session info
+    const match = message.detail.externalMeetingId.match(/video-meeting-session-(.*)-(.*)-(.*)/);
+    if (!match) {
+      console.error("Invalid external meeting ID for attendee left:", message.detail.externalMeetingId);
+      return;
+    }
+
+    const sessionId = parseInt(match[3]);
+
+    // Update the left_at timestamp for this attendee
+    const { error: updateError } = await adminSupabase
+      .from("video_meeting_session_users")
+      .update({
+        left_at: new Date().toISOString()
+      })
+      .eq("video_meeting_session_id", sessionId)
+      .eq("chime_attendee_id", message.detail.attendeeId)
+      .is("left_at", null); // Only update if they haven't already left
+
+    if (updateError) {
+      console.error("Failed to update attendee left time:", updateError);
+      Sentry.captureException(updateError, scope);
+    } else {
+      console.log(`Attendee ${message.detail.attendeeId} left meeting session ${sessionId}`);
+    }
+  } catch (error) {
+    console.error("Error handling attendee left:", error);
+    Sentry.captureException(error, scope);
   }
 }
 export async function getActiveMeeting(helpRequest: HelpRequest, scope?: Sentry.Scope): Promise<VideoMeetingSession> {
@@ -146,7 +238,10 @@ export async function getActiveMeeting(helpRequest: HelpRequest, scope?: Sentry.
     const newMeeting = await chime.createMeeting({
       ClientRequestToken: uuid(),
       MediaRegion: "us-east-1",
-      ExternalMeetingId: `video-meeting-session-${newSession.class_id}-${newSession.help_request_id}-${newSession.id}`
+      ExternalMeetingId: `video-meeting-session-${newSession.class_id}-${newSession.help_request_id}-${newSession.id}`,
+      NotificationsConfiguration: {
+        SqsQueueArn: Deno.env.get("AWS_CHIME_SQS_QUEUE_ARN")!
+      }
     });
     if (!newMeeting) {
       throw new Error("Chime SDK Meeting Creation Failed");
