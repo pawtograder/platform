@@ -40,7 +40,16 @@ import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
-import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import {
+  FaBell,
+  FaCheckCircle,
+  FaFile,
+  FaHistory,
+  FaInfo,
+  FaQuestionCircle,
+  FaRobot,
+  FaTimesCircle
+} from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { HiOutlineInformationCircle } from "react-icons/hi";
 import { LuMoon, LuSun } from "react-icons/lu";
@@ -430,7 +439,9 @@ function TestResults() {
       {testResults?.map((test) => {
         let icon;
         const extraData = test.extra_data as GraderResultTestData;
-        if (extraData?.icon && iconMap[extraData.icon]) {
+        if (extraData?.llm_hint_prompt || extraData?.llm_hint_result) {
+          icon = <Icon as={FaRobot} />;
+        } else if (extraData?.icon && iconMap[extraData.icon]) {
           icon = <Icon as={iconMap[extraData.icon]} />;
         } else if (test.score === 0 && test.max_score === 0) {
           icon = <Icon as={FaInfo} color="fg.info" />;

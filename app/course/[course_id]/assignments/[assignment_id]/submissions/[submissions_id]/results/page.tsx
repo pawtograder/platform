@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -16,18 +17,131 @@ import {
   Skeleton,
   Table,
   Tabs,
-  Text
+  Text,
+  VStack
 } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
 import { Fragment, useEffect, useState } from "react";
+import { FaRobot, FaSpinner } from "react-icons/fa";
 
 export type GraderResultTestData = {
   hide_score?: string;
   icon?: string;
+  llm_hint_prompt?: string;
+  llm_hint_result?: string;
 };
-function format_result_output(result: { output: string | null | undefined; output_format: string | null | undefined }) {
+function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleGetHint = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/llm-hint", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          testId
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to get Feedbot response");
+      }
+
+      onHintGenerated(data.response);
+
+      // If this was cached, we could show a different message
+      if (data.cached) {
+        console.log("Feedbot response was retrieved from cache");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to get Feedbot response");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <VStack align="stretch" gap={2}>
+      <Button onClick={handleGetHint} disabled={isLoading} colorPalette="blue" variant="outline" size="sm">
+        {isLoading ? (
+          <>
+            <FaSpinner className="animate-spin" />
+            Getting Feedbot Response...
+          </>
+        ) : (
+          <>
+            <FaRobot />
+            Get Feedbot Response
+          </>
+        )}
+      </Button>
+      {error && (
+        <Alert status="error" size="sm">
+          {error}
+        </Alert>
+      )}
+    </VStack>
+  );
+}
+
+function TestResultOutput({
+  result,
+  testId,
+  extraData
+}: {
+  result: {
+    output: string | null | undefined;
+    output_format: string | null | undefined;
+  };
+  testId?: number;
+  extraData?: GraderResultTestData;
+}) {
+  const [hintContent, setHintContent] = useState<string | null>(null);
+
+  // Check if there's already a stored LLM hint result
+  const storedHintResult = extraData?.llm_hint_result;
+  const displayHint = hintContent || storedHintResult;
+
+  // If we have a feedbot response (either newly generated or stored), show it instead of the original output
+  if (displayHint) {
+    return (
+      <Box fontSize="sm" overflowX="auto">
+        <Alert status="info" size="sm" mb={3}>
+          <FaRobot />
+          Response from Feedbot
+        </Alert>
+        <Markdown>{displayHint}</Markdown>
+      </Box>
+    );
+  }
+
+  // If there's an LLM hint prompt but no result yet, show the hint button instead of output
+  if (extraData?.llm_hint_prompt && testId && !storedHintResult) {
+    return (
+      <Box fontSize="sm">
+        <Text color="text.muted" mb={3}>
+          Click below to generate response from Feedbot.
+        </Text>
+        <LLMHintButton testId={testId} onHintGenerated={setHintContent} />
+      </Box>
+    );
+  }
+
+  // Default output formatting
+  return format_basic_output(result);
+}
+
+function format_basic_output(result: { output: string | null | undefined; output_format: string | null | undefined }) {
   if (result.output === undefined && result.output_format === undefined) {
     return (
       <Text textStyle="sm" color="text.muted">
@@ -53,7 +167,7 @@ function format_result_output(result: { output: string | null | undefined; outpu
 }
 
 function format_output(output: GraderResultOutput) {
-  return format_result_output({ output: output.output, output_format: output.format as "text" | "markdown" });
+  return format_basic_output({ output: output.output, output_format: output.format as "text" | "markdown" });
 }
 
 export default function GraderResults() {
@@ -273,7 +387,7 @@ export default function GraderResults() {
           <Box borderWidth="1px" borderRadius="md" p={2}>
             <Heading size="sm">Lint Output</Heading>
             <Box maxH="400px" overflow="auto">
-              {format_result_output({
+              {format_basic_output({
                 output: data.grader_results?.lint_output,
                 output_format: data.grader_results?.lint_output_format
               })}
@@ -327,7 +441,15 @@ export default function GraderResults() {
                       </Table.Row>
                     )}
                     <Table.Row>
-                      <Table.Cell>{result.score === result.max_score ? "✅" : "❌"}</Table.Cell>
+                      <Table.Cell>
+                        {(() => {
+                          const extraData = result.extra_data as GraderResultTestData;
+                          if (extraData?.llm_hint_prompt || extraData?.llm_hint_result) {
+                            return <FaRobot />;
+                          }
+                          return result.score === result.max_score ? "✅" : "❌";
+                        })()}
+                      </Table.Cell>
                       <Table.Cell>
                         <Link variant="underline" href={`#test-${result.id}`}>
                           {result.name}
@@ -368,14 +490,20 @@ export default function GraderResults() {
                     {result.name} {showScore ? result.score + "/" + result.max_score : ""}
                   </Heading>
                 </CardHeader>
-                {maybeWrappedResult(format_result_output(result))}
+                {maybeWrappedResult(
+                  <TestResultOutput
+                    result={result}
+                    testId={result.id}
+                    extraData={result.extra_data as GraderResultTestData}
+                  />
+                )}
                 {hasInstructorOutput &&
                   result.grader_result_test_output.map((output) => (
                     <CardRoot key={output.id} m={2}>
                       <CardHeader bg="bg.muted" p={2}>
                         <Heading size="md">Instructor-Only Output</Heading>
                       </CardHeader>
-                      <CardBody>{format_result_output(output)}</CardBody>
+                      <CardBody>{format_basic_output(output)}</CardBody>
                     </CardRoot>
                   ))}
               </CardRoot>
