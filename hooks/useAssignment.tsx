@@ -2,6 +2,7 @@
 import {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentGroup,
+  AssignmentGroupMembersWithGroup,
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
   ReviewAssignmentParts,
@@ -11,11 +12,15 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
+import TableController, {
+  useFindTableControllerValue,
+  useListTableControllerValues,
+  useTableControllerValueById
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { useShow } from "@refinedev/core";
+import { useList, useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
