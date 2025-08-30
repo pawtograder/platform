@@ -26,12 +26,7 @@ import { useParams } from "next/navigation";
 import { Fragment, useEffect, useState } from "react";
 import { FaRobot, FaSpinner } from "react-icons/fa";
 
-export type GraderResultTestData = {
-  hide_score?: string;
-  icon?: string;
-  llm_hint_prompt?: string;
-  llm_hint_result?: string;
-};
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,12 +99,12 @@ function TestResultOutput({
     output_format: string | null | undefined;
   };
   testId?: number;
-  extraData?: GraderResultTestData;
+  extraData?: GraderResultTestExtraData;
 }) {
   const [hintContent, setHintContent] = useState<string | null>(null);
 
   // Check if there's already a stored LLM hint result
-  const storedHintResult = extraData?.llm_hint_result;
+  const storedHintResult = extraData?.llm?.result;
   const displayHint = hintContent || storedHintResult;
 
   // If we have a feedbot response (either newly generated or stored), show it instead of the original output
@@ -126,7 +121,7 @@ function TestResultOutput({
   }
 
   // If there's an LLM hint prompt but no result yet, show the hint button instead of output
-  if (extraData?.llm_hint_prompt && testId && !storedHintResult) {
+  if (extraData?.llm?.prompt && testId && !storedHintResult) {
     return (
       <Box fontSize="sm">
         <Text color="text.muted" mb={3}>
@@ -427,7 +422,8 @@ export default function GraderResults() {
             {data.grader_results?.grader_result_tests
               ?.filter(
                 (r) =>
-                  (r.extra_data as GraderResultTestData)?.hide_score !== "true" && (showHiddenOutput || r.is_released)
+                  (r.extra_data as GraderResultTestExtraData)?.hide_score !== "true" &&
+                  (showHiddenOutput || r.is_released)
               )
               .map((result, index) => {
                 const isNewPart = index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
@@ -443,8 +439,8 @@ export default function GraderResults() {
                     <Table.Row>
                       <Table.Cell>
                         {(() => {
-                          const extraData = result.extra_data as GraderResultTestData;
-                          if (extraData?.llm_hint_prompt || extraData?.llm_hint_result) {
+                          const extraData = result.extra_data as GraderResultTestExtraData;
+                          if (extraData?.llm?.prompt || extraData?.llm?.result) {
                             return <FaRobot />;
                           }
                           return result.score === result.max_score ? "✅" : "❌";
@@ -494,7 +490,7 @@ export default function GraderResults() {
                   <TestResultOutput
                     result={result}
                     testId={result.id}
-                    extraData={result.extra_data as GraderResultTestData}
+                    extraData={result.extra_data as GraderResultTestExtraData}
                   />
                 )}
                 {hasInstructorOutput &&
@@ -503,7 +499,12 @@ export default function GraderResults() {
                       <CardHeader bg="bg.muted" p={2}>
                         <Heading size="md">Instructor-Only Output</Heading>
                       </CardHeader>
-                      <CardBody>{format_basic_output(output)}</CardBody>
+                      <CardBody>
+                        {format_basic_output({
+                          output: output.output,
+                          output_format: output.output_format as "text" | "markdown"
+                        })}
+                      </CardBody>
                     </CardRoot>
                   ))}
               </CardRoot>

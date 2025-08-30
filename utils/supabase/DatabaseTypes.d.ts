@@ -8,6 +8,19 @@ export type GradebookColumnExternalData = {
   date: string;
   creator: string;
 };
+
+export type GraderResultTestExtraData = {
+  llm?: {
+    prompt: string;
+    result?: string;
+    model?: string;
+    temperature?: number;
+    max_tokens?: number;
+    type: "v1";
+  };
+  hide_score?: string;
+  icon?: string;
+};
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<

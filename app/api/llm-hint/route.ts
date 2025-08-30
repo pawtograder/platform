@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
+import * as Sentry from "@sentry/nextjs";
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -11,13 +13,16 @@ export async function POST(request: NextRequest) {
   try {
     // Check for required OpenAI configuration
     if (!process.env.OPENAI_API_KEY) {
+      Sentry.captureMessage("OpenAI API key missing", "error");
       return NextResponse.json({ error: "OpenAI API key missing" }, { status: 500 });
     }
 
     const { testId } = await request.json();
 
-    if (!testId) {
-      return NextResponse.json({ error: "Missing testId" }, { status: 400 });
+    Sentry.setTag("testId", testId);
+
+    if (!testId || typeof testId !== "number" || testId < 0 || !Number.isInteger(testId)) {
+      return NextResponse.json({ error: "testId must be a non-negative integer" }, { status: 400 });
     }
 
     // Verify user has access to this test result
@@ -30,119 +35,77 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Get the test result first
+    Sentry.setUser({ id: user.id });
+
+    // Try to get the test result - RLS will handle access control automatically
     const { data: testResult, error: testError } = await supabase
       .from("grader_result_tests")
-      .select("id, extra_data, grader_result_id")
+      .select(
+        `
+        id,
+        extra_data,
+        grader_results!inner (
+          submissions!inner (
+            id
+          )
+        )
+      `
+      )
       .eq("id", testId)
       .single();
 
     if (testError || !testResult) {
-      console.error("Test result query error:", testError);
-      return NextResponse.json({ error: "Test result not found" }, { status: 404 });
-    }
-
-    // Get the grader result and submission info
-    const { data: graderResult, error: graderError } = await supabase
-      .from("grader_results")
-      .select(
-        `
-        id,
-        submission_id,
-        submissions!inner(
-          id,
-          profile_id,
-          assignment_group_id,
-          assignment_id,
-          class_id
-        )
-      `
-      )
-      .eq("id", testResult.grader_result_id)
-      .single();
-
-    if (graderError || !graderResult) {
-      console.error("Grader result query error:", graderError);
-      return NextResponse.json({ error: "Submission not found" }, { status: 404 });
-    }
-
-    const submission = graderResult.submissions;
-
-    // Check if user has access
-    let hasAccess = false;
-
-    // Check if user is the submission owner (need to match against private_profile_id)
-    const { data: userProfile } = await supabase
-      .from("user_roles")
-      .select("private_profile_id")
-      .eq("user_id", user.id)
-      .eq("class_id", submission.class_id)
-      .single();
-
-    if (userProfile && submission.profile_id === userProfile.private_profile_id) {
-      hasAccess = true;
-    }
-
-    // Check if user is in the assignment group (if it exists)
-    if (!hasAccess && submission.assignment_group_id && userProfile) {
-      const { data: groupMember } = await supabase
-        .from("assignment_groups_members")
-        .select("profile_id")
-        .eq("assignment_group_id", submission.assignment_group_id)
-        .eq("profile_id", userProfile.private_profile_id)
-        .single();
-
-      if (groupMember) {
-        hasAccess = true;
+      if (testError) {
+        Sentry.captureException(testError, {
+          tags: { operation: "fetch_test_result", testId: testId.toString() }
+        });
       }
-    }
-
-    // Check if user is instructor or grader for this class
-    if (!hasAccess) {
-      const { data: userRole } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .eq("class_id", submission.class_id)
-        .in("role", ["instructor", "grader"])
-        .single();
-
-      if (userRole) {
-        hasAccess = true;
-      }
-    }
-
-    if (!hasAccess) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return NextResponse.json({ error: "Test result not found or access denied" }, { status: 404 });
     }
 
     // Get the prompt from extra_data and check if hint already exists
-    const extraData = testResult.extra_data as { llm_hint_prompt?: string; llm_hint_result?: string } | null;
-    if (!extraData?.llm_hint_prompt) {
+    const extraData = testResult.extra_data as GraderResultTestExtraData | null;
+    if (!extraData?.llm?.prompt) {
       return NextResponse.json({ error: "No LLM hint prompt found" }, { status: 400 });
     }
 
     // Check if hint has already been generated
-    if (extraData.llm_hint_result) {
+    if (extraData.llm.result) {
       return NextResponse.json({
         success: true,
-        response: extraData.llm_hint_result,
+        response: extraData.llm.result,
         cached: true
       });
     }
 
     // Call OpenAI API with the prompt from the database
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    const apiParams: any = {
+      model: extraData.llm.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
       messages: [
         {
           role: "user",
-          content: extraData.llm_hint_prompt
+          content: extraData.llm.prompt
         }
       ],
-      max_tokens: 1000,
-      temperature: 0.7
-    });
+      user: `pawtograder:${user.id}`
+    };
+
+    // Only include optional parameters if they're explicitly set in extra_data
+    if (extraData.llm.temperature !== undefined) {
+      const temp = extraData.llm.temperature;
+      if (typeof temp === "number" && temp >= 0 && temp <= 2) {
+        apiParams.temperature = temp;
+      }
+    }
+
+    if (extraData.llm.max_tokens !== undefined) {
+      const maxTokens = extraData.llm.max_tokens;
+      if (typeof maxTokens === "number" && maxTokens > 0) {
+        apiParams.max_completion_tokens = maxTokens;
+      }
+    }
+
+    const completion = await openai.chat.completions.create(apiParams);
 
     const aiResponse = completion.choices[0]?.message?.content;
 
@@ -151,9 +114,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Store the result in the database
-    const updatedExtraData = {
+    const updatedExtraData: GraderResultTestExtraData = {
       ...extraData,
-      llm_hint_result: aiResponse
+      llm: {
+        ...extraData.llm,
+        result: aiResponse
+      }
     };
 
     // Use service role client for the update since users might not have update permissions
@@ -165,7 +131,16 @@ export async function POST(request: NextRequest) {
       .eq("id", testId);
 
     if (updateError) {
-      console.error("Error storing LLM hint result:", updateError);
+      Sentry.captureException(updateError, {
+        tags: {
+          operation: "store_llm_hint",
+          testId: testId.toString()
+        },
+        extra: {
+          updateError: updateError.message,
+          testId
+        }
+      });
       // Still return the result even if storage fails
     }
 
@@ -176,7 +151,15 @@ export async function POST(request: NextRequest) {
       cached: false
     });
   } catch (error) {
-    console.error("LLM Hint API Error:", error);
+    Sentry.captureException(error, {
+      tags: {
+        operation: "llm_hint_api",
+        testId: "unknown"
+      },
+      extra: {
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
