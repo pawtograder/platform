@@ -15,7 +15,7 @@ interface ClassLateTokenUpdateFormData {
   late_tokens_per_student: number;
 }
 
-export default function DueDateExceptionsManagement() {
+export default function ClassLateTokenSettings() {
   const { course_id } = useParams();
   const { role } = useClassProfiles();
   const [isEditingTokens, setIsEditingTokens] = useState(false);
@@ -37,10 +37,14 @@ export default function DueDateExceptionsManagement() {
   const onSubmitTokens = handleSubmit(async (data) => {
     try {
       const supabase = createClient();
+      const courseIdNum = Number.parseInt(course_id as string, 10);
+      if (Number.isNaN(courseIdNum)) {
+        throw new Error("Invalid course id");
+      }
 
       // Call our SECURITY DEFINER PostgreSQL function directly
       const { error } = await supabase.rpc("update_class_late_tokens_per_student", {
-        p_class_id: Number.parseInt(course_id as string),
+        p_class_id: courseIdNum,
         p_late_tokens_per_student: data.late_tokens_per_student
       });
 
@@ -48,11 +52,7 @@ export default function DueDateExceptionsManagement() {
         throw new Error(error.message || "Failed to update late tokens");
       }
 
-      const { data: courseData } = await supabase
-        .from("classes")
-        .select("*")
-        .eq("id", Number.parseInt(course_id as string))
-        .single();
+      const { data: courseData } = await supabase.from("classes").select("*").eq("id", courseIdNum).single();
       if (courseData) {
         // Invalidate self
         setCourse(courseData);
@@ -78,7 +78,7 @@ export default function DueDateExceptionsManagement() {
   });
 
   // Verify instructor access
-  if (role.role !== "instructor") {
+  if (!role || role.role !== "instructor") {
     return (
       <Box p={6}>
         <Text>Access denied. This page is only available to instructors.</Text>

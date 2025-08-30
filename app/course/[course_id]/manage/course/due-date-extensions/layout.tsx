@@ -37,7 +37,10 @@ export default function DueDateExtensionsLayout({ children }: { children: React.
   const pathname = usePathname();
   const router = useRouter();
 
-  const courseId = Number.parseInt(course_id as string);
+  const courseId = Number.parseInt(course_id as string, 10);
+  if (Number.isNaN(courseId)) {
+    return <Heading size="md">Invalid course id</Heading>;
+  }
   const linkItems = LinkItems(courseId);
 
   return (

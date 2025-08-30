@@ -29,7 +29,7 @@ export default function DueDateExceptionsTable() {
   const tokenFilter = useModalManager<"any" | "has" | "none">();
   const assignments = useMemo(
     () =>
-      unsortedAssignments?.sort((a, b) => {
+      [...(unsortedAssignments ?? [])].sort((a, b) => {
         const aDate = new Date(a.due_date);
         const bDate = new Date(b.due_date);
         return aDate.getTime() - bDate.getTime();
