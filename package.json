@@ -94,6 +94,7 @@
     "next-themes": "^0.4.4",
     "node-fetch": "^3.3.2",
     "nodemailer": "^6.10.1",
+    "openai": "^5.16.0",
     "papaparse": "^5.5.3",
     "pluralize": "^8.0.0",
     "react": "18.3.0",
