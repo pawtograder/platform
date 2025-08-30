@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { FaExclamationTriangle } from "react-icons/fa";
+import { useTimeZonePreference } from "@/hooks/useTimeZonePreference";
 
 function CompleteReviewButton({
   assignment,
@@ -64,6 +65,7 @@ function SelfReviewNoticeInner({
   activeSubmission?: Submission;
 }) {
   const { dueDate, time_zone } = useAssignmentDueDate(assignment);
+  const { displayTimeZone } = useTimeZonePreference(assignment.class_id, time_zone || "America/New_York");
   const myReviewAssignments = useMyReviewAssignments();
   const selfReviewRubric = useRubric("self-review");
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
@@ -92,7 +94,7 @@ function SelfReviewNoticeInner({
             <FaExclamationTriangle />
             <Heading size="md">Self Review Now Due</Heading>
             <Text fontSize="sm" color="fg.muted">
-              Due by {formatInTimeZone(evalDeadline, time_zone || "America/New_York", "MMM d h:mm aaa")} ({time_zone})
+              Due by {formatInTimeZone(evalDeadline, displayTimeZone, "MMM d h:mm aaa")} ({displayTimeZone})
             </Text>
           </Flex>
           <Flex

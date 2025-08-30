@@ -139,7 +139,7 @@ export default function AssignmentPage() {
         <Box>
           <Heading size="lg">{assignment.title}</Heading>
           <HStack>
-            <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} showDue={true} />
+            <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showDue={true} />
           </HStack>
         </Box>
       </Flex>

@@ -17,6 +17,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaCheckCircle } from "react-icons/fa";
+import { useTimeZonePreference } from "@/hooks/useTimeZonePreference";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
@@ -61,6 +62,8 @@ export default function StudentPage() {
     }
   });
   const course = courseData && courseData.data.length > 0 ? courseData.data[0] : null;
+  const courseTimeZone = course?.time_zone || "America/New_York";
+  const { displayTimeZone } = useTimeZonePreference(Number(course_id), courseTimeZone);
 
   const private_profile_id = role.private_profile_id;
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
@@ -114,9 +117,7 @@ export default function StudentPage() {
       }
 
       // The view already provides the effective due date with all calculations
-      const modifiedDueDate = assignment.due_date
-        ? new TZDate(assignment.due_date, course?.time_zone ?? "America/New_York")
-        : undefined;
+      const modifiedDueDate = assignment.due_date ? new TZDate(assignment.due_date, displayTimeZone) : undefined;
       result.push({
         key: assignment.id.toString(),
         name: assignment.title!,
@@ -124,8 +125,8 @@ export default function StudentPage() {
         due_date: modifiedDueDate,
         due_date_component: (
           <>
-            {modifiedDueDate &&
-              formatInTimeZone(modifiedDueDate, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
+            {modifiedDueDate && formatInTimeZone(modifiedDueDate, displayTimeZone, "MMM d h:mm aaa")} ({displayTimeZone}
+            )
           </>
         ),
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
@@ -163,23 +164,23 @@ export default function StudentPage() {
       const dateB = b.due_date ? new TZDate(b.due_date) : new TZDate(new Date());
       return dateB.getTime() - dateA.getTime();
     });
-  }, [assignments, groups, course, course_id]);
+  }, [assignments, groups, course_id, displayTimeZone]);
 
   const workInFuture = useMemo(() => {
-    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+    const curTimeInCourseTimezone = new TZDate(new Date(), displayTimeZone);
     return allAssignedWork.filter((work) => {
       return work.due_date && work.due_date > curTimeInCourseTimezone;
     });
-  }, [allAssignedWork, course?.time_zone]);
+  }, [allAssignedWork, displayTimeZone]);
   workInFuture.sort((a, b) => {
     return (a.due_date?.getTime() ?? 0) - (b.due_date?.getTime() ?? 0);
   });
   const workInPast = useMemo(() => {
-    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+    const curTimeInCourseTimezone = new TZDate(new Date(), displayTimeZone);
     return allAssignedWork.filter((work) => {
       return work.due_date && work.due_date < curTimeInCourseTimezone;
     });
-  }, [allAssignedWork, course?.time_zone]);
+  }, [allAssignedWork, displayTimeZone]);
   workInPast.sort((a, b) => {
     return (b.due_date?.getTime() ?? 0) - (a.due_date?.getTime() ?? 0);
   });
@@ -197,7 +198,7 @@ export default function StudentPage() {
               Due Date
               <br />
               <Text fontSize="sm" color="fg.muted">
-                ({course?.time_zone})
+                ({displayTimeZone})
               </Text>
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
@@ -281,7 +282,7 @@ export default function StudentPage() {
               Due Date
               <br />
               <Text fontSize="sm" color="fg.muted">
-                ({course?.time_zone})
+                ({displayTimeZone})
               </Text>
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
