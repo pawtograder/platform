@@ -37,6 +37,7 @@ import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
 import { useTimeZonePreference } from "@/hooks/useTimeZonePreference";
+import type { TimeZonePreference } from "@/hooks/useTimeZonePreference";
 import useModalManager from "@/hooks/useModalManager";
 
 const LinkItems = (courseID: number) => [
@@ -160,9 +161,21 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
   );
 }
 
-function TimeZonePreferenceModal({ courseId, courseTz }: { courseId: number; courseTz: string }) {
+function TimeZonePreferenceModal({
+  courseId,
+  courseTz,
+  initialPreference
+}: {
+  courseId: number;
+  courseTz: string;
+  initialPreference?: TimeZonePreference;
+}) {
   const { isOpen, openModal, closeModal } = useModalManager();
-  const { shouldPrompt, browserTimeZone, setPreferenceChoice } = useTimeZonePreference(courseId, courseTz);
+  const { shouldPrompt, browserTimeZone, setPreferenceChoice } = useTimeZonePreference(
+    courseId,
+    courseTz,
+    initialPreference
+  );
 
   useEffect(() => {
     if (shouldPrompt) {
@@ -225,14 +238,16 @@ function TimeZoneDisplay({
   courseId,
   courseTz,
   fontSize,
-  prefix
+  prefix,
+  initialPreference
 }: {
   courseId: number;
   courseTz: string;
   fontSize: "xs" | "sm";
   prefix: string;
+  initialPreference?: TimeZonePreference;
 }) {
-  const { displayTimeZone } = useTimeZonePreference(courseId, courseTz);
+  const { displayTimeZone } = useTimeZonePreference(courseId, courseTz, initialPreference);
   return (
     <Text fontSize={fontSize} color="fg.muted">
       {prefix} {displayTimeZone}
@@ -240,7 +255,11 @@ function TimeZoneDisplay({
   );
 }
 
-export default function DynamicCourseNav() {
+export default function DynamicCourseNav({
+  initialTimeZonePreference
+}: {
+  initialTimeZonePreference?: TimeZonePreference;
+}) {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
@@ -386,6 +405,7 @@ export default function DynamicCourseNav() {
             courseTz={course.time_zone || "America/New_York"}
             fontSize="xs"
             prefix="Displaying times in"
+            initialPreference={initialTimeZonePreference}
           />
         </VStack>
       </Box>
@@ -474,11 +494,16 @@ export default function DynamicCourseNav() {
             courseTz={course.time_zone || "America/New_York"}
             fontSize="sm"
             prefix="Times shown in"
+            initialPreference={initialTimeZonePreference}
           />
           <UserMenu />
         </Flex>
       </Box>
-      <TimeZonePreferenceModal courseId={enrollment.class_id} courseTz={course.time_zone || "America/New_York"} />
+      <TimeZonePreferenceModal
+        courseId={enrollment.class_id}
+        courseTz={course.time_zone || "America/New_York"}
+        initialPreference={initialTimeZonePreference}
+      />
     </Box>
   );
 }

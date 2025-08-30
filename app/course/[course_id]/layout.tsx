@@ -9,6 +9,13 @@ import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
 import { getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { cookies } from "next/headers";
+
+type TimeZonePreference = "course" | "browser";
+
+function getCookieKey(courseId: number): string {
+  return `tz_pref_course_${courseId}`;
+}
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -30,6 +37,10 @@ const ProtectedLayout = async ({
   if (!user_role) {
     redirect("/");
   }
+  // Seed initial time zone preference from server cookie (if set)
+  const cookieStore = await cookies();
+  const key = getCookieKey(Number.parseInt(course_id));
+  const pref = cookieStore.get(key)?.value as TimeZonePreference | undefined;
   // const {open, onOpen, onClose} = useDisclosure()
   return (
     <Box minH="100vh">
@@ -43,7 +54,7 @@ const ProtectedLayout = async ({
           profileId={user_role.private_profile_id}
           role={user_role.role}
         >
-          <DynamicCourseNav />
+          <DynamicCourseNav initialTimeZonePreference={pref} />
           {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
           {/* mobilenav */}
           <Box pt="0" ml="0" mr="0">
