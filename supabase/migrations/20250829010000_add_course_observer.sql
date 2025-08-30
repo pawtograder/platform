@@ -4,21 +4,23 @@ CREATE OR REPLACE FUNCTION "public"."authorizeforclasscourseobserver"("class__id
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-declare
-  bind_permissions int;
 begin
-  -- Check if the user has the 'course_observer' role in the specified class
-  select count(*)
-  into bind_permissions
-  from public.user_roles as r
-  where r.class_id = class__id
-    and r.user_id = auth.uid()
-    and r.role = 'course_observer';
-
-  return bind_permissions > 0;
+  return exists (
+    select 1
+    from public.user_roles r
+    where r.class_id = class__id
+      and r.user_id = auth.uid()
+      and r.role = 'course_observer'
+  );
 end;
 $$;
 
 ALTER FUNCTION "public"."authorizeforclasscourseobserver"("class__id" bigint) OWNER TO "postgres";
+
+REVOKE ALL ON FUNCTION public.authorizeforclasscourseobserver(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.authorizeforclasscourseobserver(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.authorizeforclasscourseobserver(bigint) TO service_role;
+COMMENT ON FUNCTION public.authorizeforclasscourseobserver(bigint)
+  IS 'Returns true if current auth.uid() has course_observer role for the given class id.';
 
 
