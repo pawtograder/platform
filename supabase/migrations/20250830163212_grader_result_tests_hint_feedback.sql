@@ -46,14 +46,14 @@ alter table "public"."grader_result_tests_hint_feedback" add constraint "grader_
 create policy "Users can read feedback for submissions they have access to"
 on "public"."grader_result_tests_hint_feedback"
 for select
-using (authorize_for_submission(submission_id));
+using (authorizeforclassgrader(class_id) OR authorize_for_submission(submission_id));
 
 -- Insert policy: authorize_for_submission(submission_id) AND authorizeforprofile(created_by)
 create policy "Users can insert feedback for submissions they have access to and own profile"
 on "public"."grader_result_tests_hint_feedback"
 for insert
 with check (
-    authorize_for_submission(submission_id) 
+    (authorize_for_submission(submission_id) OR authorizeforclassgrader(class_id))
     AND authorizeforprofile(created_by)
 );
 
@@ -62,11 +62,11 @@ create policy "Users can update their own feedback for submissions they have acc
 on "public"."grader_result_tests_hint_feedback"
 for update
 using (
-    authorize_for_submission(submission_id) 
+    (authorize_for_submission(submission_id) OR authorizeforclassgrader(class_id))
     AND authorizeforprofile(created_by)
 )
 with check (
-    authorize_for_submission(submission_id) 
+    (authorize_for_submission(submission_id) OR authorizeforclassgrader(class_id))
     AND authorizeforprofile(created_by)
 );
 
@@ -75,7 +75,7 @@ create policy "Users can delete their own feedback for submissions they have acc
 on "public"."grader_result_tests_hint_feedback"
 for delete
 using (
-    authorize_for_submission(submission_id) 
+    (authorize_for_submission(submission_id) OR authorizeforclassgrader(class_id))
     AND authorizeforprofile(created_by)
 );
 

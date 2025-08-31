@@ -3880,7 +3880,7 @@ public class Entrypoint {
           );
         }
 
-        // Prepare grader result tests (2 per submission) for this chunk
+        // Prepare grader result tests (5 per submission: 2 regular + 3 with LLM hints) for this chunk
         const graderResultTestInserts = graderResultData.flatMap((graderResult, index) => [
           {
             score: 5,
@@ -3907,6 +3907,78 @@ public class Entrypoint {
             assignment_group_id: chunk[index].group?.id,
             grader_result_id: graderResult.id,
             is_released: true
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "OpenAI test",
+            name_format: "text",
+            output: "This test uses OpenAI for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "gpt-4o-mini",
+                account: "e2e_test",
+                provider: "openai",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "Azure test",
+            name_format: "text",
+            output: "This test uses Azure for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "gpt-4o-mini",
+                account: "e2e_test",
+                provider: "azure",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "Anthropic test",
+            name_format: "text",
+            output: "This test uses Anthropic for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "claude-3-haiku-20240307",
+                account: "e2e_test",
+                provider: "anthropic",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
           }
         ]);
 

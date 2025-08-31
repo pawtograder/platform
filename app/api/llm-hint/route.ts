@@ -8,6 +8,20 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import * as Sentry from "@sentry/nextjs";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 
+/**
+ * Custom error class for errors that should be displayed to users
+ * Use this for configuration issues, validation errors, etc. that users can act on
+ */
+class UserVisibleError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number = 500
+  ) {
+    super(message);
+    this.name = "UserVisibleError";
+  }
+}
+
 async function getChatModel({
   model,
   provider,
@@ -35,7 +49,7 @@ async function getChatModel({
     const instanceName = process.env.AZURE_OPENAI_ENDPOINT?.split("/")[2];
     const key_env_name = account ? `AZURE_OPENAI_KEY_${account}` : "AZURE_OPENAI_KEY";
     if (!process.env.AZURE_OPENAI_ENDPOINT || !process.env[key_env_name]) {
-      throw new Error(`Azure OpenAI endpoint and key are required, must set env var ${key_env_name}`);
+      throw new UserVisibleError(`Azure OpenAI endpoint and key are required, must set env var ${key_env_name}`, 500);
     }
     return new AzureChatOpenAI({
       model,
@@ -50,7 +64,7 @@ async function getChatModel({
   } else if (provider === "openai") {
     const key_env_name = account ? `OPENAI_API_KEY_${account}` : "OPENAI_API_KEY";
     if (!process.env[key_env_name]) {
-      throw new Error(`OpenAI API key is required, must set env var ${key_env_name}`);
+      throw new UserVisibleError(`OpenAI API key is required, must set env var ${key_env_name}`, 500);
     }
     return new ChatOpenAI({
       model,
@@ -62,7 +76,7 @@ async function getChatModel({
   } else if (provider === "anthropic") {
     const key_env_name = account ? `ANTHROPIC_API_KEY_${account}` : "ANTHROPIC_API_KEY";
     if (!process.env[key_env_name]) {
-      throw new Error(`Anthropic API key is required, must set env var ${key_env_name}`);
+      throw new UserVisibleError(`Anthropic API key is required, must set env var ${key_env_name}`, 500);
     }
     return new ChatAnthropic({
       model,
@@ -72,12 +86,15 @@ async function getChatModel({
       maxRetries: maxRetries || 2
     });
   }
-  throw new Error(`Invalid provider: ${provider}`);
+  throw new UserVisibleError(`Invalid provider: ${provider}. Supported providers are: openai, azure, anthropic`, 400);
 }
 
 async function getPrompt(input: GraderResultTestExtraData["llm"]) {
   if (!input) {
-    throw new Error("Input is required");
+    throw new UserVisibleError("LLM configuration is required", 400);
+  }
+  if (!input.prompt) {
+    throw new UserVisibleError("LLM prompt is required", 400);
   }
   return ChatPromptTemplate.fromMessages([["human", input.prompt]]);
 }
@@ -91,7 +108,7 @@ export async function POST(request: NextRequest) {
     Sentry.setTag("testId", testId);
 
     if (!testId || typeof testId !== "number" || testId < 0 || !Number.isInteger(testId)) {
-      return NextResponse.json({ error: "testId must be a non-negative integer" }, { status: 400 });
+      throw new UserVisibleError("testId must be a non-negative integer", 400);
     }
 
     // Retrieve user
@@ -101,7 +118,7 @@ export async function POST(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      throw new UserVisibleError("Authentication required", 401);
     }
 
     Sentry.setUser({ id: user.id });
@@ -131,13 +148,13 @@ export async function POST(request: NextRequest) {
           tags: { operation: "fetch_test_result", testId: testId.toString() }
         });
       }
-      return NextResponse.json({ error: "Test result not found or access denied" }, { status: 404 });
+      throw new UserVisibleError("Test result not found or access denied", 404);
     }
 
     // Get the prompt from extra_data and check if hint already exists
     const extraData = testResult.extra_data as GraderResultTestExtraData | null;
     if (!extraData?.llm?.prompt) {
-      return NextResponse.json({ error: "No LLM hint prompt found" }, { status: 400 });
+      throw new UserVisibleError("No LLM hint prompt found for this test", 400);
     }
 
     // Check if hint has already been generated
@@ -167,7 +184,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!response) {
-      return NextResponse.json({ error: "No response from AI" }, { status: 500 });
+      throw new UserVisibleError("No response received from AI provider", 500);
     }
 
     // Extract token usage from the response
@@ -247,14 +264,24 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error in llm-hint API:", error);
+
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
     Sentry.captureException(error, {
       tags: {
         operation: "llm_hint_api"
       },
       extra: {
-        error: error instanceof Error ? error.message : String(error)
+        error: errorMessage
       }
     });
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+
+    // If it's a UserVisibleError, return the message directly
+    if (error instanceof UserVisibleError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
+    // For other errors, use a generic message to avoid exposing internal details
+    return NextResponse.json({ error: "An unexpected error occurred. Please try again." }, { status: 500 });
   }
 }

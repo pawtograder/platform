@@ -25,7 +25,7 @@ import {
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { FaInfo, FaRobot, FaSpinner } from "react-icons/fa";
 import * as Sentry from "@sentry/nextjs";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -52,20 +52,67 @@ function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGene
         })
       });
 
+      if (!response.ok) {
+        // Try to parse JSON error response
+        let errorMessage = "Failed to get Feedbot response";
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // If JSON parsing fails, use status-based error messages
+          switch (response.status) {
+            case 400:
+              errorMessage = "Invalid request - please check the test configuration";
+              break;
+            case 401:
+              errorMessage = "Authentication required - please refresh the page and try again";
+              break;
+            case 403:
+              errorMessage = "Access denied - you may not have permission to access this feature";
+              break;
+            case 404:
+              errorMessage = "Test result not found or access denied";
+              break;
+            case 500:
+              errorMessage = "Server error - please try again later";
+              break;
+            default:
+              errorMessage = `Request failed with status ${response.status}`;
+          }
+        }
+        throw new Error(errorMessage);
+      }
+
       const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to get Feedbot response");
+      if (!data.success) {
+        throw new Error(data.error || "Unexpected response format");
       }
 
       onHintGenerated(data.response);
 
       // If this was cached, we could show a different message
       if (data.cached) {
+        // eslint-disable-next-line no-console
         console.log("Feedbot response was retrieved from cache");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to get Feedbot response");
+      const errorMessage = err instanceof Error ? err.message : "Failed to get Feedbot response";
+      // eslint-disable-next-line no-console
+      console.error("LLM Hint Error:", err);
+      setError(errorMessage);
+
+      // Log to Sentry for debugging
+      Sentry.captureException(err, {
+        tags: {
+          operation: "llm_hint_client",
+          testId: testId.toString()
+        },
+        extra: {
+          testId,
+          errorMessage
+        }
+      });
     } finally {
       setIsLoading(false);
     }
@@ -116,7 +163,9 @@ function HintFeedbackForm({
   const [isLoading, setIsLoading] = useState(true);
   const [existingFeedback, setExistingFeedback] = useState<GraderResultTestsHintFeedback | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const { private_profile_id } = useClassProfiles();
+  const debounceTimeoutRef = useRef<NodeJS.Timeout>();
 
   // Fetch existing feedback on mount
   useEffect(() => {
@@ -136,7 +185,7 @@ function HintFeedbackForm({
           setExistingFeedback(typedFeedback);
           setUseful(typedFeedback.useful);
           setComment(typedFeedback.comment || "");
-          setHasSubmitted(true);
+          setHasSubmitted(true); // Show as submitted if feedback exists
         }
       } finally {
         setIsLoading(false);
@@ -144,74 +193,133 @@ function HintFeedbackForm({
     };
 
     fetchExistingFeedback();
-  }, [testId, classId]);
+  }, [testId, classId, private_profile_id]);
+
+  // Auto-save function
+  const saveFeedback = useCallback(
+    async (newUseful?: boolean | null, newComment?: string) => {
+      const usefulToSave = newUseful !== undefined ? newUseful : useful;
+      const commentToSave = newComment !== undefined ? newComment : comment;
+
+      if (usefulToSave === null) return; // Don't save if no useful rating
+
+      setIsSaving(true);
+      setError(null);
+
+      try {
+        const supabase = createClient();
+
+        if (existingFeedback) {
+          // Update existing feedback
+          const { data: updatedFeedback, error: updateError } = await supabase
+            .from("grader_result_tests_hint_feedback")
+            .update({
+              useful: usefulToSave,
+              comment: commentToSave.trim() || null
+            })
+            .eq("id", existingFeedback.id)
+            .select()
+            .single();
+
+          if (updateError) {
+            setError("Failed to save feedback: " + updateError.message);
+            return;
+          }
+
+          if (updatedFeedback) {
+            setExistingFeedback(updatedFeedback as unknown as GraderResultTestsHintFeedback);
+          }
+        } else {
+          // Insert new feedback
+          const { data: newFeedback, error: insertError } = await supabase
+            .from("grader_result_tests_hint_feedback")
+            .insert({
+              class_id: classId,
+              grader_result_tests_id: testId,
+              submission_id: submissionId,
+              hint: hintText,
+              useful: usefulToSave,
+              comment: commentToSave.trim() || null,
+              created_by: private_profile_id
+            })
+            .select()
+            .single();
+
+          if (insertError) {
+            setError("Failed to save feedback: " + insertError.message);
+            return;
+          }
+
+          if (newFeedback) {
+            setExistingFeedback(newFeedback as unknown as GraderResultTestsHintFeedback);
+          }
+        }
+      } catch (err) {
+        Sentry.captureException(err);
+        setError("An error occurred while saving feedback");
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [useful, comment, existingFeedback, classId, testId, submissionId, hintText, private_profile_id]
+  );
+
+  // Handle thumbs up/down with immediate save
+  const handleUsefulChange = useCallback(
+    async (newUseful: boolean) => {
+      setUseful(newUseful);
+      await saveFeedback(newUseful, comment);
+    },
+    [saveFeedback, comment]
+  );
+
+  // Handle comment change with debounced save
+  const handleCommentChange = useCallback(
+    (newComment: string) => {
+      setComment(newComment);
+
+      // Clear existing timeout
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+
+      // Set new timeout for 3 seconds
+      debounceTimeoutRef.current = setTimeout(() => {
+        if (useful !== null) {
+          // Only save if useful rating exists
+          saveFeedback(useful, newComment);
+        }
+      }, 3000);
+    },
+    [useful, saveFeedback]
+  );
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleSubmit = async () => {
     if (useful === null) return;
 
     setIsSubmitting(true);
-    setError(null);
 
-    try {
-      const supabase = createClient();
-
-      if (existingFeedback) {
-        // Update existing feedback
-        const { data: updatedFeedback, error: updateError } = await supabase
-          .from("grader_result_tests_hint_feedback")
-          .update({
-            useful: useful,
-            comment: comment.trim() || null
-          })
-          .eq("id", existingFeedback.id)
-          .select()
-          .single();
-
-        if (updateError) {
-          setError("Failed to update feedback: " + updateError.message);
-          return;
-        }
-
-        // Update the existing feedback state with the new values
-        if (updatedFeedback) {
-          setExistingFeedback(updatedFeedback as unknown as GraderResultTestsHintFeedback);
-        }
-      } else {
-        // Insert new feedback
-        const { data: newFeedback, error: insertError } = await supabase
-          .from("grader_result_tests_hint_feedback")
-          .insert({
-            class_id: classId,
-            grader_result_tests_id: testId,
-            submission_id: submissionId,
-            hint: hintText,
-            useful: useful,
-            comment: comment.trim() || null,
-            created_by: private_profile_id
-          })
-          .select()
-          .single();
-
-        if (insertError) {
-          setError("Failed to submit feedback: " + insertError.message);
-          return;
-        }
-
-        // Set the existing feedback state with the newly created feedback
-        if (newFeedback) {
-          setExistingFeedback(newFeedback as unknown as GraderResultTestsHintFeedback);
-        }
-      }
-
-      setHasSubmitted(true);
-      setIsEditing(false);
-      onFeedbackSubmitted?.();
-    } catch (err) {
-      Sentry.captureException(err);
-      setError("An error occurred while submitting feedback");
-    } finally {
-      setIsSubmitting(false);
+    // Clear any pending debounced save
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
     }
+
+    // Save immediately
+    await saveFeedback();
+
+    setHasSubmitted(true);
+    setIsEditing(false);
+    onFeedbackSubmitted?.();
+    setIsSubmitting(false);
   };
 
   if (isLoading) {
@@ -226,7 +334,7 @@ function HintFeedbackForm({
 
   if (hasSubmitted && !isEditing) {
     return (
-      <Box mt={4} p={3} bg="bg.subtle" borderRadius="md" borderLeft="4px solid" borderColor="border.emphasized">
+      <Box mt={4} p={3} bg="bg.subtle" borderRadius="md" borderLeft="4px solid" borderColor="green.500">
         <HStack justify="space-between" align="start">
           <Box>
             <Text fontSize="sm" color="fg.muted" fontWeight="medium">
@@ -255,29 +363,36 @@ function HintFeedbackForm({
         {existingFeedback ? "Update your feedback:" : "Was this Feedbot response helpful?"}
       </Text>
 
-      <HStack mb={3}>
-        <Button
-          size="sm"
-          variant={useful === true ? "surface" : "outline"}
-          colorPalette={useful === true ? "green" : "gray"}
-          onClick={() => setUseful(true)}
-        >
-          👍 Yes
-        </Button>
-        <Button
-          size="sm"
-          variant={useful === false ? "surface" : "outline"}
-          colorPalette={useful === false ? "red" : "gray"}
-          onClick={() => setUseful(false)}
-        >
-          👎 No
-        </Button>
+      <HStack justify="space-between" align="center" mb={3}>
+        <HStack>
+          <Button
+            size="sm"
+            variant={useful === true ? "surface" : "outline"}
+            colorPalette={useful === true ? "green" : "gray"}
+            onClick={() => handleUsefulChange(true)}
+          >
+            👍 Yes
+          </Button>
+          <Button
+            size="sm"
+            variant={useful === false ? "surface" : "outline"}
+            colorPalette={useful === false ? "red" : "gray"}
+            onClick={() => handleUsefulChange(false)}
+          >
+            👎 No
+          </Button>
+        </HStack>
+        {isSaving && (
+          <Text fontSize="xs" color="fg.muted">
+            Saving...
+          </Text>
+        )}
       </HStack>
 
       <Textarea
         placeholder="Optional: Tell us more about your experience with this hint to help us improve..."
         value={comment}
-        onChange={(e) => setComment(e.target.value)}
+        onChange={(e) => handleCommentChange(e.target.value)}
         size="sm"
         mb={3}
         maxLength={500}
