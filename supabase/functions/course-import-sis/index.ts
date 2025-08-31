@@ -12,6 +12,39 @@ import * as Sentry from "npm:@sentry/deno";
 import type { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
 
 /**
+ * Parse Retry-After header value (supports both delta-seconds and HTTP-date formats)
+ * Returns delay in milliseconds, or null if invalid
+ */
+function parseRetryAfter(retryAfterValue: string): number | null {
+  if (!retryAfterValue?.trim()) {
+    return null;
+  }
+
+  const trimmed = retryAfterValue.trim();
+
+  // Try parsing as delta-seconds (integer)
+  const deltaSeconds = parseInt(trimmed, 10);
+  if (!isNaN(deltaSeconds) && deltaSeconds >= 0) {
+    return deltaSeconds * 1000; // Convert to milliseconds
+  }
+
+  // Try parsing as HTTP-date
+  try {
+    const retryDate = new Date(trimmed);
+    if (!isNaN(retryDate.getTime())) {
+      const now = new Date();
+      const delayMs = retryDate.getTime() - now.getTime();
+      // Only return positive delays (future dates)
+      return delayMs > 0 ? delayMs : 0;
+    }
+  } catch {
+    // Invalid date format, fall through to return null
+  }
+
+  return null;
+}
+
+/**
  * Fetch with retry and exponential backoff for SIS API calls
  */
 async function fetchWithRetry(
@@ -45,15 +78,56 @@ async function fetchWithRetry(
         return response;
       }
 
-      // If it's a client error (4xx), don't retry
+      // Handle different error status codes
       if (response.status >= 400 && response.status < 500) {
-        throw new Error(`SIS API client error: ${response.status} ${response.statusText}`);
+        // Only retry on 408 (Request Timeout) and 429 (Too Many Requests)
+        if (response.status !== 408 && response.status !== 429) {
+          throw new UserVisibleError(`SIS API client error: ${response.status} ${response.statusText}`);
+        }
       }
 
-      // For server errors (5xx) or network issues, prepare to retry
-      lastError = new Error(`SIS API server error: ${response.status} ${response.statusText}`);
+      // For retryable errors (5xx, 408, 429), prepare to retry
+      lastError = new Error(`SIS API error: ${response.status} ${response.statusText}`);
+      
+      // Check for Retry-After header on 429 and 503 responses
+      if (response.status === 429 || response.status === 503) {
+        const retryAfter = response.headers.get('Retry-After');
+        if (retryAfter) {
+          const retryDelay = parseRetryAfter(retryAfter);
+          if (retryDelay !== null) {
+            // Clamp to sensible max (e.g., 5 minutes)
+            const clampedDelay = Math.min(retryDelay, 5 * 60 * 1000);
+            
+            scope?.addBreadcrumb({
+              message: `Using Retry-After header for delay`,
+              category: "info",
+              data: { 
+                url, 
+                attempt, 
+                retryAfterHeader: retryAfter,
+                parsedDelay: retryDelay,
+                clampedDelay,
+                nextAttempt: attempt + 2
+              }
+            });
+
+            // Skip to delay section with server-provided delay
+            if (attempt < maxRetries) {
+              await new Promise((resolve) => setTimeout(resolve, clampedDelay));
+              continue;
+            }
+          }
+        }
+      }
+
     } catch (error) {
+      // Network errors or other fetch failures
       lastError = error instanceof Error ? error : new Error(String(error));
+
+      // If it's a UserVisibleError (non-retryable client error), re-throw immediately
+      if (error instanceof UserVisibleError) {
+        throw error;
+      }
 
       scope?.addBreadcrumb({
         message: `SIS API fetch attempt ${attempt + 1} failed`,
@@ -78,9 +152,17 @@ async function fetchWithRetry(
     const totalDelay = Math.floor(delay + jitter);
 
     scope?.addBreadcrumb({
-      message: `Retrying SIS API fetch after ${totalDelay}ms delay`,
+      message: `Using exponential backoff for retry delay`,
       category: "info",
-      data: { url, attempt, delay: totalDelay, nextAttempt: attempt + 2 }
+      data: { 
+        url, 
+        attempt, 
+        baseDelay: delay,
+        jitter,
+        totalDelay, 
+        nextAttempt: attempt + 2,
+        method: "exponential_backoff"
+      }
     });
 
     // Wait before retrying
