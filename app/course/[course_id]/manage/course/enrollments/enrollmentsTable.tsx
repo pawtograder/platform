@@ -174,6 +174,7 @@ export default function EnrollmentsTable() {
         .from("invitations")
         .select("*")
         .eq("class_id", parseInt(course_id as string))
+        .neq("status", "accepted")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
