@@ -6,7 +6,7 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 
 import * as Sentry from "@sentry/nextjs";
-import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
+import { GraderResultTestExtraData, LLMRateLimitConfig } from "@/utils/supabase/DatabaseTypes";
 
 /**
  * Custom error class for errors that should be displayed to users
@@ -99,6 +99,81 @@ async function getPrompt(input: GraderResultTestExtraData["llm"]) {
   return ChatPromptTemplate.fromMessages([["human", input.prompt]]);
 }
 
+async function checkRateLimits(
+  testResult: any,
+  rateLimit: LLMRateLimitConfig,
+  serviceSupabase: any
+): Promise<string | null> {
+  const submissionId = testResult.grader_results.submissions.id;
+  const classId = testResult.class_id;
+  const assignmentId = testResult.grader_results.submissions.assignment_id;
+
+  // Check cooldown (minutes since last inference on this assignment, excluding current submission)
+  if (rateLimit.cooldown) {
+    const { data: lastUsage } = await serviceSupabase
+      .from("llm_inference_usage")
+      .select(`
+        created_at,
+        submissions!inner (
+          assignment_id
+        )
+      `)
+      .eq("submissions.assignment_id", assignmentId)
+      .neq("submission_id", submissionId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (lastUsage) {
+      const minutesSinceLastUsage = Math.floor(
+        (Date.now() - new Date(lastUsage.created_at).getTime()) / (1000 * 60)
+      );
+      
+      if (minutesSinceLastUsage < rateLimit.cooldown) {
+        const remainingMinutes = rateLimit.cooldown - minutesSinceLastUsage;
+        return `Rate limit: Please wait ${remainingMinutes} more minute(s) before requesting Feedbot feedback for this assignment.`;
+      }
+    }
+  }
+
+  // Check assignment total limit
+  if (rateLimit.assignment_total) {
+    // First get all submissions for this assignment
+    const { data: assignmentSubmissions } = await serviceSupabase
+      .from("submissions")
+      .select("id")
+      .eq("assignment_id", assignmentId);
+
+    if (assignmentSubmissions && assignmentSubmissions.length > 0) {
+      const submissionIds = assignmentSubmissions.map((s: any) => s.id);
+      
+      // Count usage across all submissions for this assignment
+      const { count: assignmentUsageCount } = await serviceSupabase
+        .from("llm_inference_usage")
+        .select("*", { count: "exact", head: true })
+        .in("submission_id", submissionIds);
+
+      if (assignmentUsageCount && assignmentUsageCount >= rateLimit.assignment_total) {
+        return `Rate limit: Maximum number of Feedbot responses (${rateLimit.assignment_total}) for this assignment has been reached.`;
+      }
+    }
+  }
+
+  // Check class total limit
+  if (rateLimit.class_total) {
+    const { count: classUsageCount } = await serviceSupabase
+      .from("llm_inference_usage")
+      .select("*", { count: "exact", head: true })
+      .eq("class_id", classId);
+
+    if (classUsageCount && classUsageCount >= rateLimit.class_total) {
+      return `Rate limit: Maximum number of Feedbot responses (${rateLimit.class_total}) for this class has been reached.`;
+    }
+  }
+
+  return null; // No rate limiting issues
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { testId } = await request.json();
@@ -134,7 +209,8 @@ export async function POST(request: NextRequest) {
         grader_results!inner (
           submissions!inner (
             id,
-            class_id
+            class_id,
+            assignment_id
           )
         )
       `
@@ -166,8 +242,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Use service role client for the update since users might not have update permissions
+    const serviceSupabase = createServiceClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+
+    // Check rate limiting if configured
+    if (extraData.llm.rate_limit) {
+      
+      const rateLimitError = await checkRateLimits(
+        testResult,
+        extraData.llm.rate_limit,
+        serviceSupabase
+      );
+      if (rateLimitError) {
+        throw new UserVisibleError(rateLimitError, 429);
+      }
+    }
+
     const modelName = extraData.llm.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
-    const providerName = extraData.llm.provider || "anthropic";
+    const providerName = extraData.llm.provider || "openai";
     const accountName = extraData.llm.account;
 
     const chatModel = await getChatModel({
@@ -200,9 +292,7 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    // Use service role client for the update since users might not have update permissions
-    const serviceSupabase = createServiceClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-
+ 
     const { error: updateError } = await serviceSupabase
       .from("grader_result_tests")
       .update({ extra_data: updatedExtraData })

@@ -9,11 +9,16 @@ export type GradebookColumnExternalData = {
   creator: string;
 };
 
-
 export type PyretReplConfig = {
   initial_code?: string;
   initial_interactions?: string[];
   repl_contents?: string;
+};
+
+export type LLMRateLimitConfig = {
+  cooldown?: number;
+  assignment_total?: number;
+  class_total?: number;
 };
 
 export type GraderResultTestExtraData = {
@@ -25,6 +30,7 @@ export type GraderResultTestExtraData = {
     provider?: "openai" | "azure" | "anthropic";
     temperature?: number;
     max_tokens?: number;
+    rate_limit?: LLMRateLimitConfig;
     type: "v1";
   };
   hide_score?: string;

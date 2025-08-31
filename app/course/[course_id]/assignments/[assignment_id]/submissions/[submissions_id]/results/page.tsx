@@ -76,6 +76,9 @@ function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGene
             case 404:
               errorMessage = "Test result not found or access denied";
               break;
+            case 429:
+              errorMessage = "Rate limit exceeded.";
+              break;
             case 500:
               errorMessage = "Server error - please try again later";
               break;
@@ -1037,11 +1040,11 @@ export default function GraderResults() {
                         })}
                       </CardBody>
                       {hiddenExtraData?.pyret_repl && (
-                          <Box mt={3}>
-                            <PyretRepl testId={result.id} config={hiddenExtraData.pyret_repl} hidden />
-                          </Box>
-                        )}
-                    </CardRoot>
+                        <Box mt={3}>
+                          <PyretRepl testId={result.id} config={hiddenExtraData.pyret_repl} hidden />
+                        </Box>
+                      )}
+                    </CardRoot>;
                   })}
               </CardRoot>
             );

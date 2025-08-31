@@ -1803,25 +1803,31 @@ export class DatabaseSeeder {
       const isRecentlyDue = new Date(assignment.due_date) < now;
 
       if (assignment.groups && assignment.groups.length > 0) {
-        // Group assignment - 75% chance to create a group submission
+        // Group assignment - 75% chance to create 1-3 submissions per assignment
         assignment.groups.forEach((group) => {
           if (Math.random() < 0.75) {
-            submissionsToCreate.push({
-              assignment: { ...assignment },
-              group,
-              isRecentlyDue
-            });
+            const numSubmissions = Math.floor(Math.random() * 3) + 1; // 1-3 submissions
+            for (let i = 0; i < numSubmissions; i++) {
+              submissionsToCreate.push({
+                assignment: { ...assignment },
+                group,
+                isRecentlyDue
+              });
+            }
           }
         });
       } else {
-        // Individual assignment - 95% chance student submitted
+        // Individual assignment - 95% chance each student submits, with 1-4 submissions per student
         students.forEach((student) => {
           if (Math.random() < 0.95) {
-            submissionsToCreate.push({
-              assignment: { ...assignment },
-              student,
-              isRecentlyDue
-            });
+            const numSubmissions = Math.floor(Math.random() * 4) + 1; // 1-4 submissions per student
+            for (let i = 0; i < numSubmissions; i++) {
+              submissionsToCreate.push({
+                assignment: { ...assignment },
+                student,
+                isRecentlyDue
+              });
+            }
           }
         });
       }
@@ -3832,7 +3838,7 @@ public class Entrypoint {
   }
 }`;
 
-        const submissionFileInserts = submissionData.map((submission, index) => ({
+        const submissionFileInserts = submissionData.map((submission: any, index) => ({
           name: "sample.java",
           contents: sampleJavaCode,
           class_id: class_id,
@@ -3855,7 +3861,7 @@ public class Entrypoint {
         }
 
         // Prepare grader results for this chunk
-        const graderResultInserts = submissionData.map((submission, index) => ({
+        const graderResultInserts = submissionData.map((submission: any, index) => ({
           submission_id: submission.id,
           score: 5,
           class_id: class_id,
@@ -3881,7 +3887,7 @@ public class Entrypoint {
         }
 
         // Prepare grader result tests (5 per submission: 2 regular + 3 with LLM hints) for this chunk
-        const graderResultTestInserts = graderResultData.flatMap((graderResult, index) => [
+        const graderResultTestInserts = graderResultData.flatMap((graderResult: any, index) => [
           {
             score: 5,
             max_score: 5,
@@ -3997,7 +4003,7 @@ public class Entrypoint {
 
         // Return the results for this chunk
         return chunk.map((item, index) => ({
-          submission_id: submissionData[index].id,
+          submission_id: (submissionData[index] as any).id,
           assignment: { id: item.assignment.id, due_date: item.assignment.due_date },
           student: item.student,
           group: item.group,
