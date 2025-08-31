@@ -16,6 +16,7 @@ import {
   HStack,
   Icon,
   Skeleton,
+  Spinner,
   Table,
   Tabs,
   Text,
@@ -25,7 +26,8 @@ import {
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { makeEmbed } from "@ironm00n/pyret-embed/api";
+import { Fragment, useCallback, useEffect, useRef, useState, useId } from "react";
 import { FaInfo, FaRobot, FaSpinner } from "react-icons/fa";
 import * as Sentry from "@sentry/nextjs";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -33,6 +35,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { GraderResultTestExtraData, GraderResultTestsHintFeedback } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -534,6 +537,155 @@ function format_output(output: GraderResultOutput) {
   return format_basic_output({ output: output.output, output_format: output.format as "text" | "markdown" });
 }
 
+function PyretRepl({
+  testId,
+  config,
+  hidden
+}: {
+  testId: number;
+  config: NonNullable<PyretReplConfig>;
+  hidden?: boolean;
+}) {
+  const instanceId = useId();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const embedRef = useRef<Awaited<ReturnType<typeof makeEmbed>> | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const embedId = `pyret-repl-${testId}${hidden ? "-hidden" : ""}-${instanceId}`;
+  const regionId = `pyret-repl-region-${testId}${hidden ? "-instructor" : "-student"}-${instanceId}`;
+
+  const handleExpand = () => {
+    setIsExpanded((prev) => {
+      if (prev) {
+        // Collapsing: reset embed so it will re-initialize on next expand
+        embedRef.current = null;
+        if (containerRef.current) {
+          containerRef.current.innerHTML = "";
+        }
+      }
+      return !prev;
+    });
+  };
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    if (!containerRef.current) return;
+    if (embedRef.current && containerRef.current.childElementCount > 0) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        containerRef.current!.innerHTML = "";
+        const embed = await makeEmbed(embedId, containerRef.current!, undefined);
+        if (cancelled) return;
+        embedRef.current = embed;
+        if (config.initial_code != null || config.initial_interactions != null || config.repl_contents != null) {
+          const code = config.initial_code ?? "use context starter2024";
+          embed.sendReset({
+            definitionsAtLastRun: code,
+            interactionsSinceLastRun: config.initial_interactions || [],
+            editorContents: code,
+            replContents: config.repl_contents ?? ""
+          });
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } catch (e: any) {
+        if (!cancelled) {
+          console.error("Failed to initialize Pyret REPL:", e);
+          setError(e?.message || "Failed to load REPL");
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isExpanded, testId, config.initial_code, config.initial_interactions, config.repl_contents, embedId]);
+
+  return (
+    <Box borderWidth="1px" borderRadius="md" borderColor="border.default" overflow="hidden">
+      <Box
+        as="button"
+        onClick={handleExpand}
+        aria-expanded={isExpanded}
+        aria-controls={regionId}
+        width="100%"
+        textAlign="left"
+        bg="bg.muted"
+        _hover={{ bg: "bg.muted" }}
+        _focusVisible={{ outline: "2px solid", outlineColor: "focus" }}
+        px={3}
+        py={2}
+        cursor="pointer"
+        display="flex"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={3}
+      >
+        <HStack gap={3} align="center">
+          <Text fontWeight="semibold" color="fg.emphasized">
+            {hidden && (
+              <Text as="span" color="fg.muted">
+                (Instructor-Only){" "}
+              </Text>
+            )}
+            Interactive Pyret REPL
+          </Text>
+          {isLoading && (
+            <HStack gap={1} color="fg.muted">
+              <Spinner size="xs" />
+              <Text fontSize="xs">Loading...</Text>
+            </HStack>
+          )}
+          {error && !isLoading && (
+            <Text fontSize="xs" color="red.600">
+              {error}
+            </Text>
+          )}
+        </HStack>
+        <Text fontSize="lg" color="fg.muted" userSelect="none">
+          {isExpanded ? "−" : "+"}
+        </Text>
+      </Box>
+      {isExpanded && (
+        <Box id={regionId} borderTopWidth="1px" borderColor="border.default">
+          <Box height="400px" width="100%" position="relative" bg="bg.canvas" _dark={{ bg: "bg.subtle" }}>
+            <Box ref={containerRef} height="100%" width="100%" />
+            {isLoading && (
+              <Box
+                position="absolute"
+                inset={0}
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                bg="bg.overlay"
+                backdropFilter="blur(2px)"
+              >
+                <HStack gap={2}>
+                  <Spinner size="sm" />
+                  <Text fontSize="sm" color="fg.muted">
+                    Initializing REPL...
+                  </Text>
+                </HStack>
+              </Box>
+            )}
+            {error && !isLoading && (
+              <Box position="absolute" inset={0} display="flex" alignItems="center" justifyContent="center">
+                <Text fontSize="sm" color="red.600">
+                  {error} (click header to retry)
+                </Text>
+              </Box>
+            )}
+          </Box>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 export default function GraderResults() {
   const { submissions_id } = useParams();
   const { query } = useShow<SubmissionWithGraderResultsAndErrors>({
@@ -833,6 +985,7 @@ export default function GraderResults() {
           ?.filter((result) => result.is_released || showHiddenOutput)
           .map((result) => {
             const hasInstructorOutput = showHiddenOutput && result.grader_result_test_output.length > 0;
+            const extraData = result.extra_data as GraderResultTestData | undefined;
             const maybeWrappedResult = (content: React.ReactNode) => {
               if (hasInstructorOutput) {
                 return (
@@ -848,6 +1001,7 @@ export default function GraderResults() {
             };
             const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
             const showScore = result.max_score !== 0;
+
             return (
               <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
                 <CardHeader bg={`bg.${style}`} p={2}>
@@ -864,8 +1018,14 @@ export default function GraderResults() {
                     classId={data.class_id}
                   />
                 )}
+                {extraData?.pyret_repl && (
+                  <Box mt={3}>
+                    <PyretRepl testId={result.id} config={extraData.pyret_repl} />
+                  </Box>
+                )}
                 {hasInstructorOutput &&
-                  result.grader_result_test_output.map((output) => (
+                  result.grader_result_test_output.map((output) => {
+                    const hiddenExtraData = output.extra_data as GraderResultTestExtraData | undefined;
                     <CardRoot key={output.id} m={2}>
                       <CardHeader bg="bg.muted" p={2}>
                         <Heading size="md">Instructor-Only Output</Heading>
@@ -876,8 +1036,13 @@ export default function GraderResults() {
                           output_format: output.output_format as "text" | "markdown"
                         })}
                       </CardBody>
+                      {hiddenExtraData?.pyret_repl && (
+                          <Box mt={3}>
+                            <PyretRepl testId={result.id} config={hiddenExtraData.pyret_repl} hidden />
+                          </Box>
+                        )}
                     </CardRoot>
-                  ))}
+                  })}
               </CardRoot>
             );
           })}

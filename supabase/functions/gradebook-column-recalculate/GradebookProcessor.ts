@@ -238,7 +238,8 @@ async function processCellBatch(
       if (dependencyProvider !== "assignments" && dependencyProvider !== "gradebook_columns") {
         const newScope = scope.clone();
         newScope.setContext("cell", cell);
-        Sentry.captureMessage(`Dependency source ${dependencyProvider} not found`, newScope);
+        newScope.setTag("dependency_provider", dependencyProvider);
+        Sentry.captureMessage(`Dependency source not found`, newScope);
         continue;
       }
       ret.push(
