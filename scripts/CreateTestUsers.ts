@@ -1,8 +1,8 @@
-import { createClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/utils/supabase/client";
 import dotenv from "dotenv";
 import fs from "fs";
 dotenv.config({ path: ".env.local" });
-const adminSupabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+const adminSupabase = createAdminClient();
 const createTestUsers = async () => {
   for (let i = 2; i < 50; i++) {
     const password = require("crypto").randomBytes(32).toString("hex");

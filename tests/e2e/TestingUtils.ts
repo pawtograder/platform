@@ -1,14 +1,14 @@
+import { createAdminClient } from "@/utils/supabase/client";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
-import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
 dotenv.config({ path: ".env.local" });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
-export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+export const supabase = createAdminClient<Database>();
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
 export function getTestRunPrefix(randomSuffix?: string) {
@@ -134,7 +134,7 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
 
-    const magicLink = `${process.env.BASE_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL || "http://localhost:3000"}/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+    const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
 
     // Use magic link for login
     await page.goto(magicLink);
