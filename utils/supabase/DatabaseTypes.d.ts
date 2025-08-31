@@ -9,6 +9,13 @@ export type GradebookColumnExternalData = {
   creator: string;
 };
 
+
+export type PyretReplConfig = {
+  initial_code?: string;
+  initial_interactions?: string[];
+  repl_contents?: string;
+};
+
 export type GraderResultTestExtraData = {
   llm?: {
     prompt: string;
@@ -22,6 +29,7 @@ export type GraderResultTestExtraData = {
   };
   hide_score?: string;
   icon?: string;
+  pyret_repl?: PyretReplConfig;
 };
 
 export type GraderResultTestsHintFeedback = Database["public"]["Tables"]["grader_result_tests_hint_feedback"]["Row"];
