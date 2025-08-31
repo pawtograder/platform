@@ -131,14 +131,21 @@ async function handleAttendeeJoined(
       return;
     }
 
-    // Record the user joining the meeting
-    const { error: insertError } = await adminSupabase.from("video_meeting_session_users").insert({
-      video_meeting_session_id: sessionId,
-      class_id: classId,
-      private_profile_id: privateProfileId,
-      chime_attendee_id: message.detail.attendeeId,
-      joined_at: new Date().toISOString()
-    });
+    // Record the user joining the meeting (upsert to handle reconnections)
+    const { error: insertError } = await adminSupabase.from("video_meeting_session_users").upsert(
+      {
+        video_meeting_session_id: sessionId,
+        class_id: classId,
+        private_profile_id: privateProfileId,
+        chime_attendee_id: message.detail.attendeeId,
+        joined_at: new Date().toISOString(),
+        left_at: null // Reset left_at on rejoin
+      },
+      {
+        onConflict: "video_meeting_session_id,chime_attendee_id",
+        ignoreDuplicates: false
+      }
+    );
 
     if (insertError) {
       console.error("Failed to record user joined meeting:", insertError);

@@ -77,6 +77,9 @@ interface ClassMetrics {
   video_meeting_participants_recent_7d: number;
   video_meeting_avg_duration_minutes: number;
   video_meeting_unique_users_7d: number;
+
+  // SIS sync error metrics
+  sis_sync_errors_recent: number;
 }
 
 async function generatePrometheusMetrics(): Promise<Response> {
@@ -181,7 +184,10 @@ async function generatePrometheusMetrics(): Promise<Response> {
       video_meeting_participants_total: classData.video_meeting_participants_total || 0,
       video_meeting_participants_recent_7d: classData.video_meeting_participants_recent_7d || 0,
       video_meeting_avg_duration_minutes: classData.video_meeting_avg_duration_minutes || 0,
-      video_meeting_unique_users_7d: classData.video_meeting_unique_users_7d || 0
+      video_meeting_unique_users_7d: classData.video_meeting_unique_users_7d || 0,
+
+      // SIS sync error metrics
+      sis_sync_errors_recent: classData.sis_sync_errors_recent || 0
     }));
 
     // Generate Prometheus metrics format
@@ -502,6 +508,14 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
     "Number of unique users in video meetings in the last 7 days per class",
     "gauge",
     "video_meeting_unique_users_7d"
+  );
+
+  // === SIS SYNC ERROR METRICS ===
+  generateMetric(
+    "pawtograder_sis_sync_errors_recent",
+    "Number of recent SIS sync errors per class (enabled syncs with error status)",
+    "gauge",
+    "sis_sync_errors_recent"
   );
 
   return output;

@@ -297,6 +297,14 @@ BEGIN
         FROM "public"."video_meeting_session_users" 
         WHERE class_id = class_record.id 
           AND joined_at >= (NOW() - INTERVAL '7 days')
+      ),
+      
+      -- === SIS SYNC ERROR METRICS ===
+      'sis_sync_errors_recent', (
+        SELECT COUNT(*) FROM "public"."sis_sync_status" 
+        WHERE course_id = class_record.id 
+          AND sync_enabled = true 
+          AND last_sync_status = 'error'
       )
       
     ) INTO class_metrics;
@@ -343,6 +351,15 @@ CREATE INDEX "video_meeting_session_users_class_id_idx" ON "public"."video_meeti
 CREATE INDEX "video_meeting_session_users_joined_at_idx" ON "public"."video_meeting_session_users" USING btree ("joined_at");
 CREATE INDEX "video_meeting_session_users_chime_attendee_id_idx" ON "public"."video_meeting_session_users" USING btree ("chime_attendee_id");
 
+-- Create unique index to prevent duplicate entries for the same attendee in the same session
+CREATE UNIQUE INDEX "video_meeting_session_users_session_attendee_unique_idx" ON "public"."video_meeting_session_users" USING btree ("video_meeting_session_id", "chime_attendee_id");
+
+-- Create composite index for efficient metrics queries filtering by class_id and joined_at
+CREATE INDEX "video_meeting_session_users_class_id_joined_at_idx" ON "public"."video_meeting_session_users" USING btree ("class_id", "joined_at");
+
+-- Create unique partial index to prevent multiple concurrent active joins per user-session
+CREATE UNIQUE INDEX "video_meeting_session_users_session_profile_active_unique_idx" ON "public"."video_meeting_session_users" USING btree ("video_meeting_session_id", "private_profile_id") WHERE "left_at" IS NULL;
+
 -- Set table ownership
 ALTER TABLE "public"."video_meeting_session_users" OWNER TO "postgres";
 
@@ -356,16 +373,16 @@ DROP POLICY IF EXISTS "System can update video meeting participation records" ON
 
 -- Create RLS policies
 CREATE POLICY "System can insert video meeting participation records" ON "public"."video_meeting_session_users"
-    FOR INSERT WITH CHECK (true);
+    FOR INSERT WITH CHECK (auth.role() = 'service_role');
+
 
 CREATE POLICY "System can update video meeting participation records" ON "public"."video_meeting_session_users"
-    FOR UPDATE USING (true);
+    FOR UPDATE USING (auth.role() = 'service_role');
 
 -- Grant permissions
-GRANT ALL ON TABLE "public"."video_meeting_session_users" TO "anon";
+REVOKE ALL ON TABLE "public"."video_meeting_session_users" FROM "anon";
 GRANT ALL ON TABLE "public"."video_meeting_session_users" TO "authenticated";
 GRANT ALL ON TABLE "public"."video_meeting_session_users" TO "service_role";
 
-GRANT ALL ON SEQUENCE "public"."video_meeting_session_users_id_seq" TO "anon";
-GRANT ALL ON SEQUENCE "public"."video_meeting_session_users_id_seq" TO "authenticated";
+REVOKE ALL ON SEQUENCE "public"."video_meeting_session_users_id_seq" FROM "anon","authenticated";
 GRANT ALL ON SEQUENCE "public"."video_meeting_session_users_id_seq" TO "service_role";
