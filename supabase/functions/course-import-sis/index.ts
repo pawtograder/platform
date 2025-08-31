@@ -88,22 +88,22 @@ async function fetchWithRetry(
 
       // For retryable errors (5xx, 408, 429), prepare to retry
       lastError = new Error(`SIS API error: ${response.status} ${response.statusText}`);
-      
+
       // Check for Retry-After header on 429 and 503 responses
       if (response.status === 429 || response.status === 503) {
-        const retryAfter = response.headers.get('Retry-After');
+        const retryAfter = response.headers.get("Retry-After");
         if (retryAfter) {
           const retryDelay = parseRetryAfter(retryAfter);
           if (retryDelay !== null) {
             // Clamp to sensible max (e.g., 5 minutes)
             const clampedDelay = Math.min(retryDelay, 5 * 60 * 1000);
-            
+
             scope?.addBreadcrumb({
               message: `Using Retry-After header for delay`,
               category: "info",
-              data: { 
-                url, 
-                attempt, 
+              data: {
+                url,
+                attempt,
                 retryAfterHeader: retryAfter,
                 parsedDelay: retryDelay,
                 clampedDelay,
@@ -119,7 +119,6 @@ async function fetchWithRetry(
           }
         }
       }
-
     } catch (error) {
       // Network errors or other fetch failures
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -154,12 +153,12 @@ async function fetchWithRetry(
     scope?.addBreadcrumb({
       message: `Using exponential backoff for retry delay`,
       category: "info",
-      data: { 
-        url, 
-        attempt, 
+      data: {
+        url,
+        attempt,
         baseDelay: delay,
         jitter,
-        totalDelay, 
+        totalDelay,
         nextAttempt: attempt + 2,
         method: "exponential_backoff"
       }

@@ -4,6 +4,8 @@ import { Database } from "./SupabaseTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 function uuid() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
     const r = (Math.random() * 16) | 0,
@@ -105,7 +107,7 @@ export async function processSNSMessage(message: ChimeSNSMessage, scope?: Sentry
 
 async function handleAttendeeJoined(
   message: ChimeSNSMessage,
-  adminSupabase: ReturnType<typeof createClient<Database>>,
+  adminSupabase: SupabaseClient<Database>,
   scope?: Sentry.Scope
 ): Promise<void> {
   scope?.setTag("chime_operation", "handle_attendee_joined");
@@ -161,7 +163,7 @@ async function handleAttendeeJoined(
 
 async function handleAttendeeLeft(
   message: ChimeSNSMessage,
-  adminSupabase: ReturnType<typeof createClient<Database>>,
+  adminSupabase: SupabaseClient<Database>,
   scope?: Sentry.Scope
 ): Promise<void> {
   scope?.setTag("chime_operation", "handle_attendee_left");
