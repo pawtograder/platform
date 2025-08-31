@@ -14,6 +14,8 @@ export type GraderResultTestExtraData = {
     prompt: string;
     result?: string;
     model?: string;
+    account?: string;
+    provider?: "openai" | "azure" | "anthropic";
     temperature?: number;
     max_tokens?: number;
     type: "v1";
@@ -22,17 +24,7 @@ export type GraderResultTestExtraData = {
   icon?: string;
 };
 
-export type GraderResultTestsHintFeedback = {
-  id: number;
-  created_at: string;
-  class_id: number;
-  grader_result_tests_id: number;
-  submission_id: number;
-  hint: string;
-  useful: boolean;
-  comment?: string;
-  created_by: string;
-};
+export type GraderResultTestsHintFeedback = Database["public"]["Tables"]["grader_result_tests_hint_feedback"]["Row"];
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<

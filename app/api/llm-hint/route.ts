@@ -1,23 +1,92 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
+import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+
 import * as Sentry from "@sentry/nextjs";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+async function getChatModel({
+  model,
+  provider,
+  temperature,
+  maxTokens,
+  maxRetries,
+  account
+}: {
+  model: string;
+  provider: "openai" | "azure" | "anthropic";
+  temperature?: number;
+  maxTokens?: number;
+  maxRetries?: number;
+  account?: string;
+}) {
+  Sentry.addBreadcrumb({
+    message: "Getting chat model",
+    level: "info",
+    data: {
+      model,
+      provider
+    }
+  });
+  if (provider === "azure") {
+    const instanceName = process.env.AZURE_OPENAI_ENDPOINT?.split("/")[2];
+    const key_env_name = account ? `AZURE_OPENAI_KEY_${account}` : "AZURE_OPENAI_KEY";
+    if (!process.env.AZURE_OPENAI_ENDPOINT || !process.env[key_env_name]) {
+      throw new Error(`Azure OpenAI endpoint and key are required, must set env var ${key_env_name}`);
+    }
+    return new AzureChatOpenAI({
+      model,
+      temperature: temperature || 0.85,
+      maxTokens: maxTokens,
+      maxRetries: maxRetries || 2,
+      azureOpenAIApiKey: process.env[key_env_name],
+      azureOpenAIApiInstanceName: instanceName,
+      azureOpenAIApiDeploymentName: model,
+      azureOpenAIApiVersion: "2024-05-01-preview"
+    });
+  } else if (provider === "openai") {
+    const key_env_name = account ? `OPENAI_API_KEY_${account}` : "OPENAI_API_KEY";
+    if (!process.env[key_env_name]) {
+      throw new Error(`OpenAI API key is required, must set env var ${key_env_name}`);
+    }
+    return new ChatOpenAI({
+      model,
+      apiKey: process.env[key_env_name],
+      temperature: temperature || 0.85,
+      maxTokens: maxTokens,
+      maxRetries: maxRetries || 2
+    });
+  } else if (provider === "anthropic") {
+    const key_env_name = account ? `ANTHROPIC_API_KEY_${account}` : "ANTHROPIC_API_KEY";
+    if (!process.env[key_env_name]) {
+      throw new Error(`Anthropic API key is required, must set env var ${key_env_name}`);
+    }
+    return new ChatAnthropic({
+      model,
+      apiKey: process.env[key_env_name],
+      temperature: temperature || 0.85,
+      maxTokens: maxTokens,
+      maxRetries: maxRetries || 2
+    });
+  }
+  throw new Error(`Invalid provider: ${provider}`);
+}
+
+async function getPrompt(input: GraderResultTestExtraData["llm"]) {
+  if (!input) {
+    throw new Error("Input is required");
+  }
+  return ChatPromptTemplate.fromMessages([["human", input.prompt]]);
+}
 
 export async function POST(request: NextRequest) {
   try {
-    // Check for required OpenAI configuration
-    if (!process.env.OPENAI_API_KEY) {
-      Sentry.captureMessage("OpenAI API key missing", "error");
-      return NextResponse.json({ error: "OpenAI API key missing" }, { status: 500 });
-    }
-
     const { testId } = await request.json();
+    // eslint-disable-next-line no-console
+    console.log("testId", testId);
 
     Sentry.setTag("testId", testId);
 
@@ -25,7 +94,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "testId must be a non-negative integer" }, { status: 400 });
     }
 
-    // Verify user has access to this test result
+    // Retrieve user
     const supabase = await createClient();
     const {
       data: { user }
@@ -44,9 +113,11 @@ export async function POST(request: NextRequest) {
         `
         id,
         extra_data,
+        class_id,
         grader_results!inner (
           submissions!inner (
-            id
+            id,
+            class_id
           )
         )
       `
@@ -78,47 +149,37 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Call OpenAI API with the prompt from the database
-    const apiParams: any = {
-      model: extraData.llm.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: extraData.llm.prompt
-        }
-      ],
-      user: `pawtograder:${user.id}`
-    };
+    const modelName = extraData.llm.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
+    const providerName = extraData.llm.provider || "anthropic";
+    const accountName = extraData.llm.account;
 
-    // Only include optional parameters if they're explicitly set in extra_data
-    if (extraData.llm.temperature !== undefined) {
-      const temp = extraData.llm.temperature;
-      if (typeof temp === "number" && temp >= 0 && temp <= 2) {
-        apiParams.temperature = temp;
-      }
-    }
+    const chatModel = await getChatModel({
+      model: modelName,
+      provider: providerName,
+      temperature: extraData.llm.temperature,
+      maxTokens: extraData.llm.max_tokens,
+      account: extraData.llm.account
+    });
+    const prompt = await getPrompt(extraData.llm);
+    const chain = prompt.pipe(chatModel);
+    const response = await chain.invoke({
+      input: extraData.llm.prompt
+    });
 
-    if (extraData.llm.max_tokens !== undefined) {
-      const maxTokens = extraData.llm.max_tokens;
-      if (typeof maxTokens === "number" && maxTokens > 0) {
-        apiParams.max_completion_tokens = maxTokens;
-      }
-    }
-
-    const completion = await openai.chat.completions.create(apiParams);
-
-    const aiResponse = completion.choices[0]?.message?.content;
-
-    if (!aiResponse) {
+    if (!response) {
       return NextResponse.json({ error: "No response from AI" }, { status: 500 });
     }
+
+    // Extract token usage from the response
+    const inputTokens = response.usage_metadata?.input_tokens || 0;
+    const outputTokens = response.usage_metadata?.output_tokens || 0;
 
     // Store the result in the database
     const updatedExtraData: GraderResultTestExtraData = {
       ...extraData,
       llm: {
         ...extraData.llm,
-        result: aiResponse
+        result: response.content as string
       }
     };
 
@@ -144,17 +205,51 @@ export async function POST(request: NextRequest) {
       // Still return the result even if storage fails
     }
 
+    // Track LLM usage statistics
+    const submissionId = testResult.grader_results.submissions.id;
+    const classId = testResult.class_id;
+
+    const { error: usageError } = await serviceSupabase.from("llm_inference_usage").insert({
+      class_id: classId,
+      created_by: user.id,
+      grader_result_test_id: testId,
+      submission_id: submissionId,
+      account: accountName || "default",
+      model: modelName,
+      provider: providerName,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens
+    });
+
+    if (usageError) {
+      // Log usage tracking error but don't fail the request
+      Sentry.captureException(usageError, {
+        tags: {
+          operation: "store_llm_usage",
+          testId: testId.toString()
+        },
+        extra: {
+          usageError: usageError.message,
+          testId,
+          inputTokens,
+          outputTokens,
+          model: modelName,
+          provider: providerName
+        }
+      });
+    }
+
     return NextResponse.json({
       success: true,
-      response: aiResponse,
-      usage: completion.usage,
+      response: response.content as string,
       cached: false
     });
   } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error in llm-hint API:", error);
     Sentry.captureException(error, {
       tags: {
-        operation: "llm_hint_api",
-        testId: "unknown"
+        operation: "llm_hint_api"
       },
       extra: {
         error: error instanceof Error ? error.message : String(error)
