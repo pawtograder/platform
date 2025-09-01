@@ -306,12 +306,22 @@ export async function POST(request: NextRequest) {
             .join("\n")
         : (c as string);
 
+    const resultText = toText(response.content);
+
+    // Check if the result is empty and throw an error if so
+    if (!resultText || resultText.trim() === "") {
+      throw new UserVisibleError(
+        "AI provider returned an empty response. This may be due to content filtering or token limits.",
+        500
+      );
+    }
+
     // Store the result in the database
     const updatedExtraData: GraderResultTestExtraData = {
       ...extraData,
       llm: {
         ...extraData.llm,
-        result: toText(response.content)
+        result: resultText
       }
     };
 
