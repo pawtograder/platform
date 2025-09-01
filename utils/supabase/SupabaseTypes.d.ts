@@ -8855,12 +8855,20 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: Json;
       };
+      get_assignment_llm_metrics: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       get_gradebook_records_for_all_students: {
         Args: { class_id: number };
         Returns: Json;
       };
       get_gradebook_records_for_all_students_array: {
         Args: { class_id: number };
+        Returns: Json;
+      };
+      get_llm_tags_breakdown: {
+        Args: Record<PropertyKey, never>;
         Returns: Json;
       };
       get_system_notification_stats: {

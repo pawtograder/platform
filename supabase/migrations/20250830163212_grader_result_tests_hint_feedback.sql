@@ -560,3 +560,214 @@ ALTER FUNCTION "public"."get_all_class_metrics"() OWNER TO "postgres";
 REVOKE ALL ON FUNCTION "public"."get_all_class_metrics"() FROM "authenticated";
 REVOKE ALL ON FUNCTION "public"."get_all_class_metrics"() FROM "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_all_class_metrics"() TO "service_role";
+
+-- Create function to get assignment-level LLM metrics with tag breakdown
+CREATE OR REPLACE FUNCTION "public"."get_assignment_llm_metrics"() RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$
+DECLARE
+  result jsonb := '[]'::jsonb;
+  assignment_record record;
+  assignment_metrics jsonb;
+BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = public, pg_temp;
+  
+  -- Only allow service_role to call this function
+  IF auth.role() != 'service_role' THEN
+    RAISE EXCEPTION 'Access denied: function only available to service_role';
+  END IF;
+
+  -- Loop through all assignments that have LLM usage
+  FOR assignment_record IN 
+    SELECT DISTINCT 
+      a.id as assignment_id,
+      a.title as assignment_title,
+      a.class_id,
+      c.name as class_name,
+      c.slug as class_slug
+    FROM "public"."assignments" a
+    INNER JOIN "public"."classes" c ON c.id = a.class_id
+    WHERE a.archived_at IS NULL 
+      AND c.archived = false
+      AND EXISTS (
+        SELECT 1 FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = a.id
+      )
+  LOOP
+    -- Build assignment-level LLM metrics
+    assignment_metrics := jsonb_build_object(
+      'assignment_id', assignment_record.assignment_id,
+      'assignment_title', assignment_record.assignment_title,
+      'class_id', assignment_record.class_id,
+      'class_name', assignment_record.class_name,
+      'class_slug', assignment_record.class_slug
+    );
+    
+    -- Add LLM usage metrics for this assignment
+    assignment_metrics := assignment_metrics || jsonb_build_object(
+      'llm_inference_total', (
+        SELECT COUNT(*) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'llm_inference_recent_7d', (
+        SELECT COUNT(*) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+          AND liu.created_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'llm_input_tokens_total', (
+        SELECT COALESCE(SUM(liu.input_tokens), 0) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'llm_output_tokens_total', (
+        SELECT COALESCE(SUM(liu.output_tokens), 0) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'llm_unique_models', (
+        SELECT COUNT(DISTINCT liu.model) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'llm_unique_providers', (
+        SELECT COUNT(DISTINCT liu.provider) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'llm_unique_accounts', (
+        SELECT COUNT(DISTINCT liu.account) FROM "public"."llm_inference_usage" liu
+        INNER JOIN "public"."submissions" s ON s.id = liu.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      )
+    );
+    
+    -- Add hint feedback metrics for this assignment
+    assignment_metrics := assignment_metrics || jsonb_build_object(
+      'hint_feedback_total', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" gf
+        INNER JOIN "public"."submissions" s ON s.id = gf.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'hint_feedback_useful_total', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" gf
+        INNER JOIN "public"."submissions" s ON s.id = gf.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id AND gf.useful = true
+      ),
+      'hint_feedback_useful_percentage', (
+        SELECT CASE 
+          WHEN COUNT(*) = 0 THEN 0 
+          ELSE ROUND((COUNT(*) FILTER (WHERE gf.useful = true) * 100.0) / COUNT(*), 2)
+        END
+        FROM "public"."grader_result_tests_hint_feedback" gf
+        INNER JOIN "public"."submissions" s ON s.id = gf.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+      ),
+      'hint_feedback_with_comments', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" gf
+        INNER JOIN "public"."submissions" s ON s.id = gf.submission_id
+        WHERE s.assignment_id = assignment_record.assignment_id
+          AND gf.comment IS NOT NULL 
+          AND gf.comment != ''
+      )
+    );
+    
+    -- Add this assignment's metrics to the result array
+    result := result || jsonb_build_array(assignment_metrics);
+  END LOOP;
+
+  RETURN result;
+END;
+$$;
+
+-- Set permissions for assignment metrics function
+ALTER FUNCTION "public"."get_assignment_llm_metrics"() OWNER TO "postgres";
+REVOKE ALL ON FUNCTION "public"."get_assignment_llm_metrics"() FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."get_assignment_llm_metrics"() FROM "anon";
+GRANT EXECUTE ON FUNCTION "public"."get_assignment_llm_metrics"() TO "service_role";
+
+-- Create function to get LLM tag breakdown across all classes
+CREATE OR REPLACE FUNCTION "public"."get_llm_tags_breakdown"() RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$
+DECLARE
+  result jsonb := '[]'::jsonb;
+  tag_record record;
+  tag_metrics jsonb;
+BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = public, pg_temp;
+  
+  -- Only allow service_role to call this function
+  IF auth.role() != 'service_role' THEN
+    RAISE EXCEPTION 'Access denied: function only available to service_role';
+  END IF;
+
+  -- Get unique tag combinations with their metrics
+  FOR tag_record IN 
+    SELECT 
+      liu.class_id,
+      c.name as class_name,
+      c.slug as class_slug,
+      liu.tags,
+      liu.provider,
+      liu.model,
+      liu.account
+    FROM "public"."llm_inference_usage" liu
+    INNER JOIN "public"."classes" c ON c.id = liu.class_id
+    WHERE c.archived = false
+    GROUP BY liu.class_id, c.name, c.slug, liu.tags, liu.provider, liu.model, liu.account
+  LOOP
+    -- Build tag-level metrics
+    tag_metrics := jsonb_build_object(
+      'class_id', tag_record.class_id,
+      'class_name', tag_record.class_name,
+      'class_slug', tag_record.class_slug,
+      'tags', tag_record.tags,
+      'provider', tag_record.provider,
+      'model', tag_record.model,
+      'account', tag_record.account,
+      'inference_count', (
+        SELECT COUNT(*) FROM "public"."llm_inference_usage" liu
+        WHERE liu.class_id = tag_record.class_id
+          AND liu.tags = tag_record.tags
+          AND liu.provider = tag_record.provider
+          AND liu.model = tag_record.model
+          AND liu.account = tag_record.account
+      ),
+      'input_tokens', (
+        SELECT COALESCE(SUM(input_tokens), 0) FROM "public"."llm_inference_usage" liu
+        WHERE liu.class_id = tag_record.class_id
+          AND liu.tags = tag_record.tags
+          AND liu.provider = tag_record.provider
+          AND liu.model = tag_record.model
+          AND liu.account = tag_record.account
+      ),
+      'output_tokens', (
+        SELECT COALESCE(SUM(output_tokens), 0) FROM "public"."llm_inference_usage" liu
+        WHERE liu.class_id = tag_record.class_id
+          AND liu.tags = tag_record.tags
+          AND liu.provider = tag_record.provider
+          AND liu.model = tag_record.model
+          AND liu.account = tag_record.account
+      )
+    );
+    
+    -- Add this tag combination's metrics to the result array
+    result := result || jsonb_build_array(tag_metrics);
+  END LOOP;
+
+  RETURN result;
+END;
+$$;
+
+-- Set permissions for tags breakdown function
+ALTER FUNCTION "public"."get_llm_tags_breakdown"() OWNER TO "postgres";
+REVOKE ALL ON FUNCTION "public"."get_llm_tags_breakdown"() FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."get_llm_tags_breakdown"() FROM "anon";
+GRANT EXECUTE ON FUNCTION "public"."get_llm_tags_breakdown"() TO "service_role";

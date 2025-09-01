@@ -111,9 +111,25 @@ async function generatePrometheusMetrics(): Promise<Response> {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
     );
 
-    // Get all class metrics using the secure function (single call)
-    const { data: metricsData, error: metricsError } = (await supabase.rpc("get_all_class_metrics")) as unknown as {
+    // Get all class metrics, assignment metrics, and tags breakdown in parallel
+    const [classMetricsResult, assignmentMetricsResult, tagsMetricsResult] = await Promise.all([
+      supabase.rpc("get_all_class_metrics"),
+      supabase.rpc("get_assignment_llm_metrics"),
+      supabase.rpc("get_llm_tags_breakdown")
+    ]);
+
+    const { data: metricsData, error: metricsError } = classMetricsResult as unknown as {
       data: ClassMetrics[];
+      error: Error;
+    };
+
+    const { data: assignmentData, error: assignmentError } = assignmentMetricsResult as unknown as {
+      data: any[];
+      error: Error;
+    };
+
+    const { data: tagsData, error: tagsError } = tagsMetricsResult as unknown as {
+      data: any[];
       error: Error;
     };
 
@@ -226,8 +242,8 @@ async function generatePrometheusMetrics(): Promise<Response> {
       hint_feedback_with_comments: classData.hint_feedback_with_comments || 0
     }));
 
-    // Generate Prometheus metrics format
-    const prometheusOutput = generatePrometheusOutput(metrics);
+    // Generate comprehensive Prometheus metrics format
+    const prometheusOutput = generatePrometheusOutput(metrics, assignmentData, tagsData);
 
     return new Response(prometheusOutput, {
       headers: {
@@ -246,7 +262,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
   }
 }
 
-function generatePrometheusOutput(metrics: ClassMetrics[]): string {
+function generatePrometheusOutput(metrics: ClassMetrics[], assignmentData?: any[], tagsData?: any[]): string {
   const timestamp = Math.floor(Date.now()); // Use milliseconds since epoch
 
   let output = `# HELP pawtograder_info Information about Pawtograder instance
@@ -642,6 +658,102 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
     "hint_feedback_with_comments"
   );
 
+  // === ASSIGNMENT-LEVEL METRICS ===
+  if (assignmentData && assignmentData.length > 0) {
+    output += `# HELP pawtograder_assignment_llm_inference_total Total LLM inference requests per assignment
+# TYPE pawtograder_assignment_llm_inference_total counter
+`;
+    for (const assignment of assignmentData) {
+      const labels = `assignment_id="${assignment.assignment_id}",assignment_title="${escapeLabel(assignment.assignment_title)}",class_id="${assignment.class_id}",class_name="${escapeLabel(assignment.class_name)}",class_slug="${escapeLabel(assignment.class_slug)}"`;
+      output += `pawtograder_assignment_llm_inference_total{${labels}} ${assignment.llm_inference_total || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_assignment_llm_input_tokens_total Total input tokens consumed per assignment
+# TYPE pawtograder_assignment_llm_input_tokens_total counter
+`;
+    for (const assignment of assignmentData) {
+      const labels = `assignment_id="${assignment.assignment_id}",assignment_title="${escapeLabel(assignment.assignment_title)}",class_id="${assignment.class_id}",class_name="${escapeLabel(assignment.class_name)}",class_slug="${escapeLabel(assignment.class_slug)}"`;
+      output += `pawtograder_assignment_llm_input_tokens_total{${labels}} ${assignment.llm_input_tokens_total || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_assignment_llm_output_tokens_total Total output tokens generated per assignment
+# TYPE pawtograder_assignment_llm_output_tokens_total counter
+`;
+    for (const assignment of assignmentData) {
+      const labels = `assignment_id="${assignment.assignment_id}",assignment_title="${escapeLabel(assignment.assignment_title)}",class_id="${assignment.class_id}",class_name="${escapeLabel(assignment.class_name)}",class_slug="${escapeLabel(assignment.class_slug)}"`;
+      output += `pawtograder_assignment_llm_output_tokens_total{${labels}} ${assignment.llm_output_tokens_total || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_assignment_hint_feedback_total Total hint feedback responses per assignment
+# TYPE pawtograder_assignment_hint_feedback_total counter
+`;
+    for (const assignment of assignmentData) {
+      const labels = `assignment_id="${assignment.assignment_id}",assignment_title="${escapeLabel(assignment.assignment_title)}",class_id="${assignment.class_id}",class_name="${escapeLabel(assignment.class_name)}",class_slug="${escapeLabel(assignment.class_slug)}"`;
+      output += `pawtograder_assignment_hint_feedback_total{${labels}} ${assignment.hint_feedback_total || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_assignment_hint_feedback_useful_percentage Percentage of useful hint feedback per assignment
+# TYPE pawtograder_assignment_hint_feedback_useful_percentage gauge
+`;
+    for (const assignment of assignmentData) {
+      const labels = `assignment_id="${assignment.assignment_id}",assignment_title="${escapeLabel(assignment.assignment_title)}",class_id="${assignment.class_id}",class_name="${escapeLabel(assignment.class_name)}",class_slug="${escapeLabel(assignment.class_slug)}"`;
+      output += `pawtograder_assignment_hint_feedback_useful_percentage{${labels}} ${assignment.hint_feedback_useful_percentage || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+  }
+
+  // === TAG-BASED EXPERIMENTAL METRICS ===
+  if (tagsData && tagsData.length > 0) {
+    output += `# HELP pawtograder_llm_inference_by_tags LLM inference requests broken down by experimental tags
+# TYPE pawtograder_llm_inference_by_tags counter
+`;
+    for (const tag of tagsData) {
+      const tagLabels = Object.entries(tag.tags || {})
+        .map(([key, value]) => `tag_${key}="${escapeLabel(String(value))}"`)
+        .join(",");
+
+      const baseLabels = `class_id="${tag.class_id}",class_name="${escapeLabel(tag.class_name)}",class_slug="${escapeLabel(tag.class_slug)}",provider="${escapeLabel(tag.provider)}",model="${escapeLabel(tag.model)}",account="${escapeLabel(tag.account)}"`;
+      const fullLabels = tagLabels ? `${baseLabels},${tagLabels}` : baseLabels;
+
+      output += `pawtograder_llm_inference_by_tags{${fullLabels}} ${tag.inference_count || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_llm_input_tokens_by_tags Input tokens consumed broken down by experimental tags
+# TYPE pawtograder_llm_input_tokens_by_tags counter
+`;
+    for (const tag of tagsData) {
+      const tagLabels = Object.entries(tag.tags || {})
+        .map(([key, value]) => `tag_${key}="${escapeLabel(String(value))}"`)
+        .join(",");
+
+      const baseLabels = `class_id="${tag.class_id}",class_name="${escapeLabel(tag.class_name)}",class_slug="${escapeLabel(tag.class_slug)}",provider="${escapeLabel(tag.provider)}",model="${escapeLabel(tag.model)}",account="${escapeLabel(tag.account)}"`;
+      const fullLabels = tagLabels ? `${baseLabels},${tagLabels}` : baseLabels;
+
+      output += `pawtograder_llm_input_tokens_by_tags{${fullLabels}} ${tag.input_tokens || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_llm_output_tokens_by_tags Output tokens generated broken down by experimental tags
+# TYPE pawtograder_llm_output_tokens_by_tags counter
+`;
+    for (const tag of tagsData) {
+      const tagLabels = Object.entries(tag.tags || {})
+        .map(([key, value]) => `tag_${key}="${escapeLabel(String(value))}"`)
+        .join(",");
+
+      const baseLabels = `class_id="${tag.class_id}",class_name="${escapeLabel(tag.class_name)}",class_slug="${escapeLabel(tag.class_slug)}",provider="${escapeLabel(tag.provider)}",model="${escapeLabel(tag.model)}",account="${escapeLabel(tag.account)}"`;
+      const fullLabels = tagLabels ? `${baseLabels},${tagLabels}` : baseLabels;
+
+      output += `pawtograder_llm_output_tokens_by_tags{${fullLabels}} ${tag.output_tokens || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+  }
+
   return output;
 }
 
@@ -655,51 +767,45 @@ function escapeLabel(value: string): string {
     .replace(/\t/g, "\\t");
 }
 
+// Authentication helper function
+async function authenticateRequest(req: Request): Promise<boolean> {
+  const metricsToken = Deno.env.get("METRICS_TOKEN");
+  if (!metricsToken) return true; // No auth required
+
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return false;
+  }
+
+  const providedToken = authHeader.slice(7);
+
+  // Use constant-time comparison if available
+  try {
+    const encoder = new TextEncoder();
+    const expectedBytes = encoder.encode(metricsToken);
+    const providedBytes = encoder.encode(providedToken);
+
+    if (expectedBytes.length !== providedBytes.length) return false;
+
+    const expectedHash = await crypto.subtle.digest("SHA-256", expectedBytes);
+    const providedHash = await crypto.subtle.digest("SHA-256", providedBytes);
+    return new Uint8Array(expectedHash).every((byte, i) => byte === new Uint8Array(providedHash)[i]);
+  } catch {
+    return providedToken === metricsToken;
+  }
+}
+
 Deno.serve(async (req) => {
   // Only allow GET requests
   if (req.method !== "GET") {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Bearer token authentication if METRICS_TOKEN is set
-  const metricsToken = Deno.env.get("METRICS_TOKEN");
-  if (metricsToken) {
-    const authHeader = req.headers.get("Authorization");
-
-    if (!authHeader) {
-      return new Response("Unauthorized: Missing Authorization header", { status: 401 });
-    }
-
-    if (!authHeader.startsWith("Bearer ")) {
-      return new Response("Unauthorized: Invalid Authorization header format", { status: 401 });
-    }
-
-    const providedToken = authHeader.slice(7); // Remove "Bearer " prefix
-
-    // Use constant-time comparison if available, otherwise direct string compare
-    let isValidToken = false;
-    try {
-      // Try to use crypto.subtle for constant-time comparison
-      const encoder = new TextEncoder();
-      const expectedBytes = encoder.encode(metricsToken);
-      const providedBytes = encoder.encode(providedToken);
-
-      if (expectedBytes.length !== providedBytes.length) {
-        isValidToken = false;
-      } else {
-        const expectedHash = await crypto.subtle.digest("SHA-256", expectedBytes);
-        const providedHash = await crypto.subtle.digest("SHA-256", providedBytes);
-        isValidToken = new Uint8Array(expectedHash).every((byte, i) => byte === new Uint8Array(providedHash)[i]);
-      }
-    } catch {
-      // Fallback to direct string comparison if crypto.subtle is not available
-      isValidToken = providedToken === metricsToken;
-    }
-
-    if (!isValidToken) {
-      return new Response("Unauthorized: Invalid token", { status: 401 });
-    }
+  // Check authentication
+  if (!(await authenticateRequest(req))) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
+  // Single endpoint with all metrics
   return await generatePrometheusMetrics();
 });
