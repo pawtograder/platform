@@ -3726,6 +3726,7 @@ export type Database = {
           output_tokens: number;
           provider: string;
           submission_id: number;
+          tags: Json;
         };
         Insert: {
           account: string;
@@ -3739,6 +3740,7 @@ export type Database = {
           output_tokens: number;
           provider: string;
           submission_id: number;
+          tags?: Json;
         };
         Update: {
           account?: string;
@@ -3752,6 +3754,7 @@ export type Database = {
           output_tokens?: number;
           provider?: string;
           submission_id?: number;
+          tags?: Json;
         };
         Relationships: [
           {

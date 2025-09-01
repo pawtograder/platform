@@ -101,7 +101,8 @@ create table "public"."llm_inference_usage" (
     "model" text not null,
     "provider" text not null,
     "input_tokens" integer not null,
-    "output_tokens" integer not null
+    "output_tokens" integer not null,
+    "tags" jsonb not null default '{}'
 );
 
 -- Enable RLS
@@ -163,3 +164,399 @@ comment on column "public"."llm_inference_usage"."model" is 'Model name/identifi
 comment on column "public"."llm_inference_usage"."provider" is 'LLM provider (e.g., openai, anthropic, azure)';
 comment on column "public"."llm_inference_usage"."input_tokens" is 'Number of input tokens consumed';
 comment on column "public"."llm_inference_usage"."output_tokens" is 'Number of output tokens generated';
+
+-- Update the get_all_class_metrics function to include LLM inference and hint feedback metrics
+-- This extends the existing metrics with AI usage tracking capabilities
+
+-- Drop existing function to ensure clean recreation (idempotent)
+DROP FUNCTION IF EXISTS "public"."get_all_class_metrics"();
+
+CREATE OR REPLACE FUNCTION "public"."get_all_class_metrics"() RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$
+DECLARE
+  result jsonb := '[]'::jsonb;
+  class_record record;
+  class_metrics jsonb;
+BEGIN
+  -- Set explicit search_path to harden SECURITY DEFINER
+  SET LOCAL search_path = public, pg_temp;
+  
+  -- Only allow service_role to call this function
+  IF auth.role() != 'service_role' THEN
+    RAISE EXCEPTION 'Access denied: function only available to service_role';
+  END IF;
+
+  -- Loop through all active (non-archived) classes
+  FOR class_record IN 
+    SELECT id, name, slug FROM "public"."classes" WHERE archived = false
+  LOOP
+    -- Build comprehensive metrics JSON for this class using incremental approach
+    -- Start with base class information
+    class_metrics := jsonb_build_object(
+      'class_id', class_record.id,
+      'class_name', class_record.name,
+      'class_slug', class_record.slug
+    );
+    
+    -- Add workflow metrics (chunk 1)
+    class_metrics := class_metrics || jsonb_build_object(
+      'workflow_runs_total', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id
+      ),
+      'workflow_runs_completed', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id AND completed_at IS NOT NULL
+      ),
+      'workflow_runs_failed', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND requested_at IS NOT NULL 
+          AND completed_at IS NULL 
+          AND in_progress_at IS NULL
+      ),
+      'workflow_runs_in_progress', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND in_progress_at IS NOT NULL 
+          AND completed_at IS NULL
+      ),
+      'workflow_errors_total', (
+        SELECT COUNT(*) FROM "public"."workflow_run_error" 
+        WHERE class_id = class_record.id
+      ),
+      'workflow_runs_timeout', (
+        SELECT COUNT(*) FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND requested_at IS NOT NULL 
+          AND completed_at IS NULL 
+          AND in_progress_at IS NULL
+          AND requested_at < (NOW() - INTERVAL '30 minutes')
+      ),
+      'workflow_avg_queue_time_seconds', (
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (in_progress_at - requested_at))), 0)
+        FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND requested_at IS NOT NULL 
+          AND in_progress_at IS NOT NULL
+      ),
+      'workflow_avg_run_time_seconds', (
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (completed_at - in_progress_at))), 0)
+        FROM "public"."workflow_events_summary" 
+        WHERE class_id = class_record.id 
+          AND in_progress_at IS NOT NULL 
+          AND completed_at IS NOT NULL
+      )
+    );
+    
+    -- Add user engagement metrics (chunk 2)
+    class_metrics := class_metrics || jsonb_build_object(
+      'active_students_total', (
+        SELECT COUNT(*) FROM "public"."user_roles" ur 
+        WHERE ur.class_id = class_record.id::integer 
+          AND ur.role = 'student'
+      ),
+      'active_instructors_total', (
+        SELECT COUNT(*) FROM "public"."user_roles" ur
+        WHERE ur.class_id = class_record.id::integer 
+          AND ur.role = 'instructor'
+      ),
+      'active_graders_total', (
+        SELECT COUNT(*) FROM "public"."user_roles" ur
+        WHERE ur.class_id = class_record.id::integer 
+          AND ur.role = 'grader'
+      ),
+      'students_active_7d', (
+        SELECT COUNT(DISTINCT ur.private_profile_id) 
+        FROM "public"."user_roles" ur
+        WHERE ur.class_id = class_record.id::integer 
+          AND ur.role = 'student'
+          AND (
+            EXISTS (SELECT 1 FROM "public"."submissions" s WHERE s.profile_id = ur.private_profile_id AND s.created_at >= (NOW() - INTERVAL '7 days'))
+            OR EXISTS (SELECT 1 FROM "public"."discussion_threads" dt WHERE dt.author = ur.private_profile_id AND dt.created_at >= (NOW() - INTERVAL '7 days'))
+            OR EXISTS (SELECT 1 FROM "public"."help_requests" hr WHERE hr.created_by = ur.private_profile_id AND hr.created_at >= (NOW() - INTERVAL '7 days'))
+          )
+      ),
+      'students_active_24h', (
+        SELECT COUNT(DISTINCT ur.private_profile_id) 
+        FROM "public"."user_roles" ur
+        WHERE ur.class_id = class_record.id::integer 
+          AND ur.role = 'student'
+          AND (
+            EXISTS (SELECT 1 FROM "public"."submissions" s WHERE s.profile_id = ur.private_profile_id AND s.created_at >= (NOW() - INTERVAL '24 hours'))
+            OR EXISTS (SELECT 1 FROM "public"."discussion_threads" dt WHERE dt.author = ur.private_profile_id AND dt.created_at >= (NOW() - INTERVAL '24 hours'))
+            OR EXISTS (SELECT 1 FROM "public"."help_requests" hr WHERE hr.created_by = ur.private_profile_id AND hr.created_at >= (NOW() - INTERVAL '24 hours'))
+          )
+      )
+    );
+    
+    -- Add assignment and submission metrics (chunk 3)
+    class_metrics := class_metrics || jsonb_build_object(
+      'assignments_total', (
+        SELECT COUNT(*) FROM "public"."assignments" 
+        WHERE class_id = class_record.id AND archived_at IS NULL
+      ),
+      'assignments_active', (
+        SELECT COUNT(*) FROM "public"."assignments" 
+        WHERE class_id = class_record.id 
+          AND archived_at IS NULL
+          AND release_date <= NOW() 
+          AND due_date > NOW()
+      ),
+      'submissions_total', (
+        SELECT COUNT(*) FROM "public"."submissions" 
+        WHERE class_id = class_record.id AND is_active = true
+      ),
+      'submissions_recent_24h', (
+        SELECT COUNT(*) FROM "public"."submissions" 
+        WHERE class_id = class_record.id 
+          AND is_active = true 
+          AND created_at >= (NOW() - INTERVAL '24 hours')
+      ),
+      'submissions_graded', (
+        SELECT COUNT(DISTINCT s.id) FROM "public"."submissions" s
+        INNER JOIN "public"."submission_reviews" sr ON sr.submission_id = s.id
+        WHERE s.class_id = class_record.id 
+          AND s.is_active = true
+          AND sr.completed_at IS NOT NULL
+      ),
+      'submissions_pending_grading', (
+        SELECT COUNT(*) FROM "public"."submissions" s
+        WHERE s.class_id = class_record.id 
+          AND s.is_active = true
+          AND NOT EXISTS (
+            SELECT 1 FROM "public"."submission_reviews" sr 
+            WHERE sr.submission_id = s.id AND sr.completed_at IS NOT NULL
+          )
+      )
+    );
+    
+    -- Add grading and comment metrics (chunk 4)
+    class_metrics := class_metrics || jsonb_build_object(
+      'submission_reviews_total', (
+        SELECT COUNT(*) FROM "public"."submission_reviews" 
+        WHERE class_id = class_record.id AND completed_at IS NOT NULL
+      ),
+      'submission_reviews_recent_7d', (
+        SELECT COUNT(*) FROM "public"."submission_reviews" 
+        WHERE class_id = class_record.id 
+          AND completed_at IS NOT NULL
+          AND completed_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'avg_grading_turnaround_hours', (
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (sr.completed_at - s.created_at)) / 3600), 0)
+        FROM "public"."submission_reviews" sr
+        INNER JOIN "public"."submissions" s ON s.id = sr.submission_id
+        WHERE sr.class_id = class_record.id 
+          AND sr.completed_at IS NOT NULL
+          AND s.created_at >= (NOW() - INTERVAL '30 days')
+      ),
+      'submission_comments_total', (
+        SELECT (
+          COALESCE((SELECT COUNT(*) FROM "public"."submission_comments" WHERE class_id = class_record.id), 0) +
+          COALESCE((SELECT COUNT(*) FROM "public"."submission_artifact_comments" WHERE class_id = class_record.id), 0) +
+          COALESCE((SELECT COUNT(*) FROM "public"."submission_file_comments" WHERE class_id = class_record.id), 0) +
+          COALESCE((SELECT COUNT(*) FROM "public"."submission_regrade_request_comments" WHERE class_id = class_record.id), 0)
+        )
+      ),
+      'regrade_requests_total', (
+        SELECT COUNT(*) FROM "public"."submission_regrade_requests" 
+        WHERE class_id = class_record.id
+      ),
+      'regrade_requests_recent_7d', (
+        SELECT COUNT(*) FROM "public"."submission_regrade_requests" 
+        WHERE class_id = class_record.id 
+          AND created_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'discussion_threads_total', (
+        SELECT COUNT(*) FROM "public"."discussion_threads" 
+        WHERE class_id = class_record.id
+      ),
+      'discussion_posts_recent_7d', (
+        SELECT COUNT(*) FROM "public"."discussion_threads" 
+        WHERE class_id = class_record.id 
+          AND created_at >= (NOW() - INTERVAL '7 days')
+      )
+    );
+    
+    -- Add help request and notification metrics (chunk 5)
+    class_metrics := class_metrics || jsonb_build_object(
+      'help_requests_total', (
+        SELECT COUNT(*) FROM "public"."help_requests" 
+        WHERE class_id = class_record.id
+      ),
+      'help_requests_open', (
+        SELECT COUNT(*) FROM "public"."help_requests" 
+        WHERE class_id = class_record.id AND status = 'open'
+      ),
+      'help_requests_resolved_24h', (
+        SELECT COUNT(*) FROM "public"."help_requests" 
+        WHERE class_id = class_record.id 
+          AND status = 'resolved'
+          AND resolved_at >= (NOW() - INTERVAL '24 hours')
+      ),
+      'help_requests_avg_resolution_minutes', (
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60), 0)
+        FROM "public"."help_requests" 
+        WHERE class_id = class_record.id 
+          AND status = 'resolved'
+          AND resolved_at IS NOT NULL
+          AND created_at >= (NOW() - INTERVAL '30 days')
+      ),
+      'help_request_messages_total', (
+        SELECT COUNT(*) FROM "public"."help_request_messages" 
+        WHERE class_id = class_record.id
+      ),
+      'notifications_unread', (
+        SELECT COUNT(*) FROM "public"."notifications" 
+        WHERE class_id = class_record.id AND viewed_at IS NULL
+      ),
+      'gradebook_columns_total', (
+        SELECT COUNT(*) FROM "public"."gradebook_columns" 
+        WHERE class_id = class_record.id
+      )
+    );
+    
+    -- Add late token and video metrics (chunk 6)
+    class_metrics := class_metrics || jsonb_build_object(
+      'late_token_usage_total', (
+        SELECT COALESCE(SUM(tokens_consumed), 0) 
+        FROM "public"."assignment_due_date_exceptions" adde
+        INNER JOIN "public"."assignments" a ON a.id = adde.assignment_id
+        WHERE a.class_id = class_record.id AND adde.tokens_consumed > 0
+      ),
+      'late_tokens_per_student_limit', (
+        SELECT late_tokens_per_student FROM "public"."classes" 
+        WHERE id = class_record.id
+      ),
+      'video_meeting_sessions_total', (
+        SELECT COUNT(*) FROM "public"."video_meeting_sessions" 
+        WHERE class_id = class_record.id
+      ),
+      'video_meeting_sessions_recent_7d', (
+        SELECT COUNT(*) FROM "public"."video_meeting_sessions" 
+        WHERE class_id = class_record.id 
+          AND started >= (NOW() - INTERVAL '7 days')
+      ),
+      'video_meeting_participants_total', (
+        SELECT COUNT(*) FROM "public"."video_meeting_session_users" 
+        WHERE class_id = class_record.id
+      ),
+      'video_meeting_participants_recent_7d', (
+        SELECT COUNT(*) FROM "public"."video_meeting_session_users" 
+        WHERE class_id = class_record.id 
+          AND joined_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'video_meeting_avg_duration_minutes', (
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (ended - started)) / 60), 0)
+        FROM "public"."video_meeting_sessions" 
+        WHERE class_id = class_record.id 
+          AND started IS NOT NULL 
+          AND ended IS NOT NULL
+          AND started >= (NOW() - INTERVAL '30 days')
+      ),
+      'video_meeting_unique_users_7d', (
+        SELECT COUNT(DISTINCT private_profile_id) 
+        FROM "public"."video_meeting_session_users" 
+        WHERE class_id = class_record.id 
+          AND joined_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'sis_sync_errors_recent', (
+        SELECT COUNT(*) FROM "public"."sis_sync_status" 
+        WHERE course_id = class_record.id 
+          AND sync_enabled = true 
+          AND last_sync_status = 'error'
+      )
+    );
+    
+    -- Add LLM inference metrics (chunk 7)
+    class_metrics := class_metrics || jsonb_build_object(
+      'llm_inference_total', (
+        SELECT COUNT(*) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id
+      ),
+      'llm_inference_recent_7d', (
+        SELECT COUNT(*) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id 
+          AND created_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'llm_input_tokens_total', (
+        SELECT COALESCE(SUM(input_tokens), 0) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id
+      ),
+      'llm_output_tokens_total', (
+        SELECT COALESCE(SUM(output_tokens), 0) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id
+      ),
+      'llm_input_tokens_recent_7d', (
+        SELECT COALESCE(SUM(input_tokens), 0) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id 
+          AND created_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'llm_output_tokens_recent_7d', (
+        SELECT COALESCE(SUM(output_tokens), 0) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id 
+          AND created_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'llm_unique_accounts', (
+        SELECT COUNT(DISTINCT account) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id
+      ),
+      'llm_unique_models', (
+        SELECT COUNT(DISTINCT model) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id
+      ),
+      'llm_unique_providers', (
+        SELECT COUNT(DISTINCT provider) FROM "public"."llm_inference_usage" 
+        WHERE class_id = class_record.id
+      )
+    );
+    
+    -- Add hint feedback metrics (chunk 8 - final)
+    class_metrics := class_metrics || jsonb_build_object(
+      'hint_feedback_total', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" 
+        WHERE class_id = class_record.id
+      ),
+      'hint_feedback_useful_total', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" 
+        WHERE class_id = class_record.id AND useful = true
+      ),
+      'hint_feedback_useful_percentage', (
+        SELECT CASE 
+          WHEN COUNT(*) = 0 THEN 0 
+          ELSE ROUND((COUNT(*) FILTER (WHERE useful = true) * 100.0) / COUNT(*), 2)
+        END
+        FROM "public"."grader_result_tests_hint_feedback" 
+        WHERE class_id = class_record.id
+      ),
+      'hint_feedback_recent_7d', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" 
+        WHERE class_id = class_record.id 
+          AND created_at >= (NOW() - INTERVAL '7 days')
+      ),
+      'hint_feedback_with_comments', (
+        SELECT COUNT(*) FROM "public"."grader_result_tests_hint_feedback" 
+        WHERE class_id = class_record.id 
+          AND comment IS NOT NULL 
+          AND comment != ''
+      )
+    );
+    
+    -- Add this class's metrics to the result array
+    result := result || jsonb_build_array(class_metrics);
+  END LOOP;
+
+  RETURN result;
+END;
+$$;
+
+-- Update function ownership and permissions
+ALTER FUNCTION "public"."get_all_class_metrics"() OWNER TO "postgres";
+
+-- Ensure only service_role can execute this function
+REVOKE ALL ON FUNCTION "public"."get_all_class_metrics"() FROM "authenticated";
+REVOKE ALL ON FUNCTION "public"."get_all_class_metrics"() FROM "anon";
+GRANT EXECUTE ON FUNCTION "public"."get_all_class_metrics"() TO "service_role";

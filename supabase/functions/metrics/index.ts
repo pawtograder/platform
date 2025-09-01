@@ -80,6 +80,24 @@ interface ClassMetrics {
 
   // SIS sync error metrics
   sis_sync_errors_recent: number;
+
+  // LLM inference usage metrics
+  llm_inference_total: number;
+  llm_inference_recent_7d: number;
+  llm_input_tokens_total: number;
+  llm_output_tokens_total: number;
+  llm_input_tokens_recent_7d: number;
+  llm_output_tokens_recent_7d: number;
+  llm_unique_accounts: number;
+  llm_unique_models: number;
+  llm_unique_providers: number;
+
+  // Hint feedback metrics
+  hint_feedback_total: number;
+  hint_feedback_useful_total: number;
+  hint_feedback_useful_percentage: number;
+  hint_feedback_recent_7d: number;
+  hint_feedback_with_comments: number;
 }
 
 async function generatePrometheusMetrics(): Promise<Response> {
@@ -187,7 +205,25 @@ async function generatePrometheusMetrics(): Promise<Response> {
       video_meeting_unique_users_7d: classData.video_meeting_unique_users_7d || 0,
 
       // SIS sync error metrics
-      sis_sync_errors_recent: classData.sis_sync_errors_recent || 0
+      sis_sync_errors_recent: classData.sis_sync_errors_recent || 0,
+
+      // LLM inference usage metrics
+      llm_inference_total: classData.llm_inference_total || 0,
+      llm_inference_recent_7d: classData.llm_inference_recent_7d || 0,
+      llm_input_tokens_total: classData.llm_input_tokens_total || 0,
+      llm_output_tokens_total: classData.llm_output_tokens_total || 0,
+      llm_input_tokens_recent_7d: classData.llm_input_tokens_recent_7d || 0,
+      llm_output_tokens_recent_7d: classData.llm_output_tokens_recent_7d || 0,
+      llm_unique_accounts: classData.llm_unique_accounts || 0,
+      llm_unique_models: classData.llm_unique_models || 0,
+      llm_unique_providers: classData.llm_unique_providers || 0,
+
+      // Hint feedback metrics
+      hint_feedback_total: classData.hint_feedback_total || 0,
+      hint_feedback_useful_total: classData.hint_feedback_useful_total || 0,
+      hint_feedback_useful_percentage: classData.hint_feedback_useful_percentage || 0,
+      hint_feedback_recent_7d: classData.hint_feedback_recent_7d || 0,
+      hint_feedback_with_comments: classData.hint_feedback_with_comments || 0
     }));
 
     // Generate Prometheus metrics format
@@ -516,6 +552,94 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
     "Number of recent SIS sync errors per class (enabled syncs with error status)",
     "gauge",
     "sis_sync_errors_recent"
+  );
+
+  // === LLM INFERENCE USAGE METRICS ===
+  generateMetric(
+    "pawtograder_llm_inference_total",
+    "Total number of LLM inference requests per class",
+    "counter",
+    "llm_inference_total"
+  );
+  generateMetric(
+    "pawtograder_llm_inference_recent_7d",
+    "Number of LLM inference requests in the last 7 days per class",
+    "gauge",
+    "llm_inference_recent_7d"
+  );
+  generateMetric(
+    "pawtograder_llm_input_tokens_total",
+    "Total number of input tokens consumed per class",
+    "counter",
+    "llm_input_tokens_total"
+  );
+  generateMetric(
+    "pawtograder_llm_output_tokens_total",
+    "Total number of output tokens generated per class",
+    "counter",
+    "llm_output_tokens_total"
+  );
+  generateMetric(
+    "pawtograder_llm_input_tokens_recent_7d",
+    "Number of input tokens consumed in the last 7 days per class",
+    "gauge",
+    "llm_input_tokens_recent_7d"
+  );
+  generateMetric(
+    "pawtograder_llm_output_tokens_recent_7d",
+    "Number of output tokens generated in the last 7 days per class",
+    "gauge",
+    "llm_output_tokens_recent_7d"
+  );
+  generateMetric(
+    "pawtograder_llm_unique_accounts",
+    "Number of unique LLM accounts used per class",
+    "gauge",
+    "llm_unique_accounts"
+  );
+  generateMetric(
+    "pawtograder_llm_unique_models",
+    "Number of unique LLM models used per class",
+    "gauge",
+    "llm_unique_models"
+  );
+  generateMetric(
+    "pawtograder_llm_unique_providers",
+    "Number of unique LLM providers used per class",
+    "gauge",
+    "llm_unique_providers"
+  );
+
+  // === HINT FEEDBACK METRICS ===
+  generateMetric(
+    "pawtograder_hint_feedback_total",
+    "Total number of hint feedback responses per class",
+    "counter",
+    "hint_feedback_total"
+  );
+  generateMetric(
+    "pawtograder_hint_feedback_useful_total",
+    "Number of hint feedback responses marked as useful per class",
+    "counter",
+    "hint_feedback_useful_total"
+  );
+  generateMetric(
+    "pawtograder_hint_feedback_useful_percentage",
+    "Percentage of hint feedback marked as useful per class",
+    "gauge",
+    "hint_feedback_useful_percentage"
+  );
+  generateMetric(
+    "pawtograder_hint_feedback_recent_7d",
+    "Number of hint feedback responses in the last 7 days per class",
+    "gauge",
+    "hint_feedback_recent_7d"
+  );
+  generateMetric(
+    "pawtograder_hint_feedback_with_comments",
+    "Number of hint feedback responses with written comments per class",
+    "counter",
+    "hint_feedback_with_comments"
   );
 
   return output;

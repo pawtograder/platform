@@ -298,12 +298,20 @@ export async function POST(request: NextRequest) {
     const inputTokens = response.usage_metadata?.input_tokens || 0;
     const outputTokens = response.usage_metadata?.output_tokens || 0;
 
+    const toText = (c: unknown) =>
+      Array.isArray(c)
+        ? c
+            .map((b: unknown) => (typeof b === "string" ? b : b && typeof b === "object" && "text" in b ? b.text : ""))
+            .filter(Boolean)
+            .join("\n")
+        : (c as string);
+
     // Store the result in the database
     const updatedExtraData: GraderResultTestExtraData = {
       ...extraData,
       llm: {
         ...extraData.llm,
-        result: response.content as string
+        result: toText(response.content)
       }
     };
 
@@ -339,7 +347,11 @@ export async function POST(request: NextRequest) {
       model: modelName,
       provider: providerName,
       input_tokens: inputTokens,
-      output_tokens: outputTokens
+      output_tokens: outputTokens,
+      tags: {
+        type: "grader_result_test_hint",
+        hint_type: extraData.llm.type || "v1"
+      }
     });
 
     if (usageError) {
