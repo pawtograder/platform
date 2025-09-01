@@ -384,7 +384,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      response: response.content as string,
+      response: resultText,
       cached: false
     });
   } catch (error) {
