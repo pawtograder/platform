@@ -3966,6 +3966,7 @@ public class Entrypoint {
             is_released: true,
             extra_data: {
               llm: {
+                type: "v1",
                 prompt:
                   "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
                 model: "gpt-4o-mini",

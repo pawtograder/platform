@@ -5,7 +5,11 @@ import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
+import {
+  GraderResultOutput,
+  PyretReplConfig,
+  SubmissionWithGraderResultsAndErrors
+} from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   CardBody,
@@ -988,7 +992,7 @@ export default function GraderResults() {
           ?.filter((result) => result.is_released || showHiddenOutput)
           .map((result) => {
             const hasInstructorOutput = showHiddenOutput && result.grader_result_test_output.length > 0;
-            const extraData = result.extra_data as GraderResultTestData | undefined;
+            const extraData = result.extra_data as GraderResultTestExtraData | undefined;
             const maybeWrappedResult = (content: React.ReactNode) => {
               if (hasInstructorOutput) {
                 return (
@@ -1029,22 +1033,24 @@ export default function GraderResults() {
                 {hasInstructorOutput &&
                   result.grader_result_test_output.map((output) => {
                     const hiddenExtraData = output.extra_data as GraderResultTestExtraData | undefined;
-                    <CardRoot key={output.id} m={2}>
-                      <CardHeader bg="bg.muted" p={2}>
-                        <Heading size="md">Instructor-Only Output</Heading>
-                      </CardHeader>
-                      <CardBody>
-                        {format_basic_output({
-                          output: output.output,
-                          output_format: output.output_format as "text" | "markdown"
-                        })}
-                      </CardBody>
-                      {hiddenExtraData?.pyret_repl && (
-                        <Box mt={3}>
-                          <PyretRepl testId={result.id} config={hiddenExtraData.pyret_repl} hidden />
-                        </Box>
-                      )}
-                    </CardRoot>;
+                    return (
+                      <CardRoot key={output.id} m={2}>
+                        <CardHeader bg="bg.muted" p={2}>
+                          <Heading size="md">Instructor-Only Output</Heading>
+                        </CardHeader>
+                        <CardBody>
+                          {format_basic_output({
+                            output: output.output,
+                            output_format: output.output_format as "text" | "markdown"
+                          })}
+                        </CardBody>
+                        {hiddenExtraData?.pyret_repl && (
+                          <Box mt={3}>
+                            <PyretRepl testId={result.id} config={hiddenExtraData.pyret_repl} hidden />
+                          </Box>
+                        )}
+                      </CardRoot>
+                    );
                   })}
               </CardRoot>
             );

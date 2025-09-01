@@ -148,7 +148,7 @@ using (
 create policy "System can insert LLM usage data"
 on "public"."llm_inference_usage"
 for insert
-with check (true);
+with check (auth.role() = 'service_role');
 
 -- No update/delete policies - this is append-only audit data
 
