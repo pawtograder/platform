@@ -1,12 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
-import { createClient as createServiceClient } from "@supabase/supabase-js";
+import { createClient as createServiceClient, SupabaseClient } from "@supabase/supabase-js";
 import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 
 import * as Sentry from "@sentry/nextjs";
 import { GraderResultTestExtraData, LLMRateLimitConfig } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+
+type GradrResultTestWithGraderResults = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["grader_result_tests"]["Row"],
+  "grader_result_tests",
+  Database["public"]["Tables"]["grader_result_tests"]["Relationships"],
+  ` id,
+        extra_data,
+        class_id,
+        grader_results!inner (
+          submissions!inner (
+            id,
+            class_id,
+            assignment_id
+          )
+        )
+      `
+>;
 
 /**
  * Custom error class for errors that should be displayed to users
@@ -100,9 +120,9 @@ async function getPrompt(input: GraderResultTestExtraData["llm"]) {
 }
 
 async function checkRateLimits(
-  testResult: any,
+  testResult: GradrResultTestWithGraderResults,
   rateLimit: LLMRateLimitConfig,
-  serviceSupabase: any
+  serviceSupabase: SupabaseClient<Database>
 ): Promise<string | null> {
   const submissionId = testResult.grader_results.submissions.id;
   const classId = testResult.class_id;
@@ -112,12 +132,14 @@ async function checkRateLimits(
   if (rateLimit.cooldown) {
     const { data: lastUsage } = await serviceSupabase
       .from("llm_inference_usage")
-      .select(`
+      .select(
+        `
         created_at,
         submissions!inner (
           assignment_id
         )
-      `)
+      `
+      )
       .eq("submissions.assignment_id", assignmentId)
       .neq("submission_id", submissionId)
       .order("created_at", { ascending: false })
@@ -125,10 +147,8 @@ async function checkRateLimits(
       .single();
 
     if (lastUsage) {
-      const minutesSinceLastUsage = Math.floor(
-        (Date.now() - new Date(lastUsage.created_at).getTime()) / (1000 * 60)
-      );
-      
+      const minutesSinceLastUsage = Math.floor((Date.now() - new Date(lastUsage.created_at).getTime()) / (1000 * 60));
+
       if (minutesSinceLastUsage < rateLimit.cooldown) {
         const remainingMinutes = rateLimit.cooldown - minutesSinceLastUsage;
         return `Rate limit: Please wait ${remainingMinutes} more minute(s) before requesting Feedbot feedback for this assignment.`;
@@ -145,8 +165,8 @@ async function checkRateLimits(
       .eq("assignment_id", assignmentId);
 
     if (assignmentSubmissions && assignmentSubmissions.length > 0) {
-      const submissionIds = assignmentSubmissions.map((s: any) => s.id);
-      
+      const submissionIds = assignmentSubmissions.map((s) => s.id);
+
       // Count usage across all submissions for this assignment
       const { count: assignmentUsageCount } = await serviceSupabase
         .from("llm_inference_usage")
@@ -247,12 +267,7 @@ export async function POST(request: NextRequest) {
 
     // Check rate limiting if configured
     if (extraData.llm.rate_limit) {
-      
-      const rateLimitError = await checkRateLimits(
-        testResult,
-        extraData.llm.rate_limit,
-        serviceSupabase
-      );
+      const rateLimitError = await checkRateLimits(testResult, extraData.llm.rate_limit, serviceSupabase);
       if (rateLimitError) {
         throw new UserVisibleError(rateLimitError, 429);
       }
@@ -292,7 +307,6 @@ export async function POST(request: NextRequest) {
       }
     };
 
- 
     const { error: updateError } = await serviceSupabase
       .from("grader_result_tests")
       .update({ extra_data: updatedExtraData })

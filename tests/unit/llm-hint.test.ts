@@ -33,8 +33,14 @@ describe("LLM Hint API Route", () => {
     limit: jest.MockedFunction<(count?: number) => MockQueryBuilder>;
     single: jest.MockedFunction<() => Promise<{ data: unknown; error: unknown | null }>>;
     insert: jest.MockedFunction<(data: unknown) => Promise<{ error: unknown | null }>>;
-    update: jest.MockedFunction<(data: unknown) => { eq: jest.MockedFunction<(column: string, value: unknown) => Promise<{ error: unknown | null }>> }>;
-    in: jest.MockedFunction<(column?: string, values?: unknown[]) => Promise<{ count?: number; error: unknown | null; data?: unknown }>>;
+    update: jest.MockedFunction<
+      (data: unknown) => {
+        eq: jest.MockedFunction<(column: string, value: unknown) => Promise<{ error: unknown | null }>>;
+      }
+    >;
+    in: jest.MockedFunction<
+      (column?: string, values?: unknown[]) => Promise<{ count?: number; error: unknown | null; data?: unknown }>
+    >;
   }
 
   let mockSupabase: {
@@ -165,12 +171,8 @@ describe("LLM Hint API Route", () => {
     } as unknown as typeof mockServiceSupabase;
 
     // Setup mocks
-    mockCreateClient.mockResolvedValue(
-      mockSupabase as unknown as Awaited<ReturnType<typeof createClient>>
-    );
-    mockCreateServiceClient.mockReturnValue(
-      mockServiceSupabase as unknown as ReturnType<typeof createServiceClient>
-    );
+    mockCreateClient.mockResolvedValue(mockSupabase as unknown as Awaited<ReturnType<typeof createClient>>);
+    mockCreateServiceClient.mockReturnValue(mockServiceSupabase as unknown as ReturnType<typeof createServiceClient>);
     (mockChatPromptTemplate.fromMessages as jest.Mock).mockReturnValue({
       pipe: jest.fn().mockReturnValue(mockChain)
     });
@@ -199,7 +201,9 @@ describe("LLM Hint API Route", () => {
     });
 
     it("should return 404 when test result is not found", async () => {
-      ((mockSupabase.from() as unknown as MockQueryBuilder).select("*").eq("id", 1).single as jest.Mock).mockResolvedValue({
+      (
+        (mockSupabase.from() as unknown as MockQueryBuilder).select("*").eq("id", 1).single as jest.Mock
+      ).mockResolvedValue({
         data: null,
         error: { message: "Not found" }
       });
@@ -319,13 +323,12 @@ describe("LLM Hint API Route", () => {
         const recentUsage = {
           created_at: new Date(Date.now() - 2 * 60 * 1000).toISOString()
         };
-        const cooldownSingle = ((mockServiceSupabase.from() as unknown as MockQueryBuilder)
+        const cooldownSingle = (mockServiceSupabase.from() as unknown as MockQueryBuilder)
           .select("*")
           .eq("submissions.assignment_id", 1)
           .neq("submission_id", 1)
           .order("created_at", { ascending: false })
-          .limit(1)
-          .single) as unknown as jest.Mock;
+          .limit(1).single as unknown as jest.Mock;
         cooldownSingle.mockResolvedValue({
           data: recentUsage,
           error: null
@@ -418,7 +421,9 @@ describe("LLM Hint API Route", () => {
         const data = await response.json();
 
         expect(response.status).toBe(429);
-        expect(data.error).toContain("Rate limit: Maximum number of Feedbot responses (10) for this assignment has been reached");
+        expect(data.error).toContain(
+          "Rate limit: Maximum number of Feedbot responses (10) for this assignment has been reached"
+        );
       });
 
       it("should allow request when assignment total limit is not reached", async () => {
@@ -471,7 +476,9 @@ describe("LLM Hint API Route", () => {
         const data = await response.json();
 
         expect(response.status).toBe(429);
-        expect(data.error).toContain("Rate limit: Maximum number of Feedbot responses (50) for this class has been reached");
+        expect(data.error).toContain(
+          "Rate limit: Maximum number of Feedbot responses (50) for this class has been reached"
+        );
       });
 
       it("should allow request when class total limit is not reached", async () => {
@@ -769,7 +776,7 @@ describe("LLM Hint API Route", () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect((mockServiceSupabase.from as unknown as jest.Mock)).toHaveBeenCalledWith("grader_result_tests");
+      expect(mockServiceSupabase.from as unknown as jest.Mock).toHaveBeenCalledWith("grader_result_tests");
       expect(serviceQueryBuilder.update).toHaveBeenCalledWith({
         extra_data: expect.objectContaining({
           llm: expect.objectContaining({
@@ -788,7 +795,7 @@ describe("LLM Hint API Route", () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect((mockServiceSupabase.from as unknown as jest.Mock)).toHaveBeenCalledWith("llm_inference_usage");
+      expect(mockServiceSupabase.from as unknown as jest.Mock).toHaveBeenCalledWith("llm_inference_usage");
       expect(serviceQueryBuilder.insert).toHaveBeenCalledWith({
         class_id: 100,
         created_by: "user-123",
@@ -886,7 +893,9 @@ describe("LLM Hint API Route", () => {
     });
 
     it("should capture exceptions with proper context", async () => {
-      (((mockSupabase.from() as unknown as MockQueryBuilder).select("*").eq("id", 1).single) as jest.Mock).mockResolvedValue({
+      (
+        (mockSupabase.from() as unknown as MockQueryBuilder).select("*").eq("id", 1).single as jest.Mock
+      ).mockResolvedValue({
         data: null,
         error: { message: "Test error" }
       });

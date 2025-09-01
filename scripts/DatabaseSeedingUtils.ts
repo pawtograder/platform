@@ -98,6 +98,15 @@ export interface SeedingConfiguration {
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
 }
 
+// Type for submission data items used in grading
+export type SubmissionDataItem = {
+  submission_id: number;
+  assignment: { id: number; due_date: string };
+  student?: TestingUser;
+  group?: { id: number; name: string; memberCount: number; members: string[] };
+  repository_id?: number;
+};
+
 // ============================
 // USER RECYCLING CONFIGURATION
 // ============================
@@ -652,12 +661,16 @@ export class DatabaseSeeder {
       const assignments = await this.createAssignments(config, class_id, students);
       const submissionData = await this.createSubmissions(assignments, students, class_id);
 
-      // Create workflow events and errors
+      // Create workflow events and errors for ALL submissions
       await this.createWorkflowEvents(submissionData, class_id);
       await this.createWorkflowErrors(submissionData, class_id);
 
-      // Grade submissions
-      await this.gradeSubmissions(submissionData, graders, students);
+      // Grade only the latest submission per assignment per student/group
+      const latestSubmissions = this.filterToLatestSubmissions(submissionData);
+      console.log(
+        `   Filtered from ${submissionData.length} to ${latestSubmissions.length} latest submissions for grading`
+      );
+      await this.gradeSubmissions(latestSubmissions, graders, students);
 
       // const class_id = 208;
       // const { data: testClassData } = await supabase.from("classes").select("*").eq("id", class_id);
@@ -1842,16 +1855,7 @@ export class DatabaseSeeder {
     return createdSubmissions;
   }
 
-  protected async createWorkflowEvents(
-    submissionData: Array<{
-      submission_id: number;
-      assignment: { id: number; due_date: string };
-      student?: TestingUser;
-      group?: { id: number; name: string; memberCount: number; members: string[] };
-      repository_id?: number;
-    }>,
-    class_id: number
-  ) {
+  protected async createWorkflowEvents(submissionData: Array<SubmissionDataItem>, class_id: number) {
     console.log("\n⚡ Creating workflow events...");
 
     if (submissionData.length === 0) {
@@ -2319,14 +2323,48 @@ export class DatabaseSeeder {
     return results;
   }
 
-  protected async gradeSubmissions(
-    submissionData: Array<{
+  /**
+   * Filters submission data to only include the latest submission per assignment per student/group.
+   * This ensures we only grade the most recent submission for each assignment.
+   */
+  protected filterToLatestSubmissions(submissionData: Array<SubmissionDataItem>): Array<SubmissionDataItem> {
+    // Group submissions by assignment and student/group
+    const submissionsByAssignmentAndProfile = new Map<string, Array<SubmissionDataItem>>();
+
+    submissionData.forEach((submission) => {
+      // Create a unique key for each assignment + student/group combination
+      const profileKey = submission.group
+        ? `assignment_${submission.assignment.id}_group_${submission.group.id}`
+        : `assignment_${submission.assignment.id}_profile_${submission.student?.private_profile_id}`;
+
+      if (!submissionsByAssignmentAndProfile.has(profileKey)) {
+        submissionsByAssignmentAndProfile.set(profileKey, []);
+      }
+      submissionsByAssignmentAndProfile.get(profileKey)!.push(submission);
+    });
+
+    // For each group, keep only the submission with the highest submission_id (latest)
+    const latestSubmissions: Array<{
       submission_id: number;
       assignment: { id: number; due_date: string };
       student?: TestingUser;
       group?: { id: number; name: string; memberCount: number; members: string[] };
       repository_id?: number;
-    }>,
+    }> = [];
+
+    submissionsByAssignmentAndProfile.forEach((submissions) => {
+      if (submissions.length > 0) {
+        // Sort by submission_id in descending order and take the first (highest ID = latest)
+        const latestSubmission = submissions.sort((a, b) => b.submission_id - a.submission_id)[0];
+        latestSubmissions.push(latestSubmission);
+      }
+    });
+
+    return latestSubmissions;
+  }
+
+  protected async gradeSubmissions(
+    submissionData: Array<SubmissionDataItem>,
     graders: TestingUser[],
     _students: TestingUser[]
   ) {
@@ -2335,7 +2373,7 @@ export class DatabaseSeeder {
     if (submissionData.length === 0) return;
 
     // Get all submission review IDs (batched to avoid query length limits)
-    const submissionIds = submissionData.map((s) => s.submission_id);
+    const submissionIds = submissionData.map((s: SubmissionDataItem) => s.submission_id);
     const submissionReviews = await this.batchQuerySubmissions(submissionIds);
 
     const reviewsToProcess = submissionReviews?.filter((s) => s.grading_review_id) || [];
