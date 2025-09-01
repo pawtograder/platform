@@ -2322,6 +2322,106 @@ export type Database = {
           }
         ];
       };
+      grader_result_tests_hint_feedback: {
+        Row: {
+          class_id: number;
+          comment: string | null;
+          created_at: string;
+          created_by: string;
+          grader_result_tests_id: number;
+          hint: string;
+          id: number;
+          submission_id: number;
+          useful: boolean;
+        };
+        Insert: {
+          class_id: number;
+          comment?: string | null;
+          created_at?: string;
+          created_by: string;
+          grader_result_tests_id: number;
+          hint: string;
+          id?: number;
+          submission_id: number;
+          useful: boolean;
+        };
+        Update: {
+          class_id?: number;
+          comment?: string | null;
+          created_at?: string;
+          created_by?: string;
+          grader_result_tests_id?: number;
+          hint?: string;
+          id?: number;
+          submission_id?: number;
+          useful?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_grader_result_tests_id_fkey";
+            columns: ["grader_result_tests_id"];
+            isOneToOne: false;
+            referencedRelation: "grader_result_tests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
       grader_results: {
         Row: {
           assignment_group_id: number | null;
@@ -3610,6 +3710,101 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment";
             referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      llm_inference_usage: {
+        Row: {
+          account: string;
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          grader_result_test_id: number;
+          id: number;
+          input_tokens: number;
+          model: string;
+          output_tokens: number;
+          provider: string;
+          submission_id: number;
+          tags: Json;
+        };
+        Insert: {
+          account: string;
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          grader_result_test_id: number;
+          id?: number;
+          input_tokens: number;
+          model: string;
+          output_tokens: number;
+          provider: string;
+          submission_id: number;
+          tags?: Json;
+        };
+        Update: {
+          account?: string;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          grader_result_test_id?: number;
+          id?: number;
+          input_tokens?: number;
+          model?: string;
+          output_tokens?: number;
+          provider?: string;
+          submission_id?: number;
+          tags?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "llm_inference_usage_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "llm_inference_usage_grader_result_test_id_fkey";
+            columns: ["grader_result_test_id"];
+            isOneToOne: false;
+            referencedRelation: "grader_result_tests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "llm_inference_usage_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
+          },
+          {
+            foreignKeyName: "llm_inference_usage_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "llm_inference_usage_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "llm_inference_usage_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "llm_inference_usage_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
           }
         ];
       };
@@ -6906,6 +7101,68 @@ export type Database = {
         };
         Relationships: [];
       };
+      video_meeting_session_users: {
+        Row: {
+          chime_attendee_id: string | null;
+          class_id: number;
+          created_at: string;
+          id: number;
+          joined_at: string;
+          left_at: string | null;
+          private_profile_id: string;
+          video_meeting_session_id: number;
+        };
+        Insert: {
+          chime_attendee_id?: string | null;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          joined_at?: string;
+          left_at?: string | null;
+          private_profile_id: string;
+          video_meeting_session_id: number;
+        };
+        Update: {
+          chime_attendee_id?: string | null;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          joined_at?: string;
+          left_at?: string | null;
+          private_profile_id?: string;
+          video_meeting_session_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "video_meeting_session_users_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "video_meeting_session_users_private_profile_id_fkey";
+            columns: ["private_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "video_meeting_session_users_private_profile_id_fkey";
+            columns: ["private_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "video_meeting_session_users_video_meeting_session_id_fkey";
+            columns: ["video_meeting_session_id"];
+            isOneToOne: false;
+            referencedRelation: "video_meeting_sessions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       video_meeting_sessions: {
         Row: {
           chime_meeting_id: string | null;
@@ -8598,12 +8855,20 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: Json;
       };
+      get_assignment_llm_metrics: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       get_gradebook_records_for_all_students: {
         Args: { class_id: number };
         Returns: Json;
       };
       get_gradebook_records_for_all_students_array: {
         Args: { class_id: number };
+        Returns: Json;
+      };
+      get_llm_tags_breakdown: {
+        Args: Record<PropertyKey, never>;
         Returns: Json;
       };
       get_system_notification_stats: {
