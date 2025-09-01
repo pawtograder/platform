@@ -5,6 +5,7 @@ import { Page } from "@playwright/test";
 import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
+import { createClient } from "@supabase/supabase-js";
 dotenv.config({ path: ".env.local" });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
