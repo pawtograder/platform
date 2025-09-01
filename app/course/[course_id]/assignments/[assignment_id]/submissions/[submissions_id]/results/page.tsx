@@ -463,56 +463,71 @@ function TestResultOutput({
   // Check if there's already a stored LLM hint result
   const storedHintResult = extraData?.llm?.result;
   const displayHint = hintContent || storedHintResult;
+  const hasLLMPrompt = extraData?.llm?.prompt;
 
-  // If we have a feedbot response (either newly generated or stored), show it instead of the original output
-  if (displayHint) {
-    return (
-      <Box fontSize="sm" overflowX="auto" border="1px solid" borderColor="border.emphasized" borderRadius="md" p={0}>
-        <HStack
-          p={2}
-          w="100%"
-          bg="bg.info"
-          borderTopRadius="md"
-          color="fg.info"
-          fontWeight="bold"
-          justify="space-between"
-        >
-          <HStack>
-            {" "}
-            <Icon as={FaRobot} />
-            Response from Feedbot
-          </HStack>
-          <Tooltip
-            content="Feedbot is an AI-powered assistant that is currently in research & development. We welcome feedback to help us improve!"
-            openDelay={0}
-          >
-            <Icon as={FaInfo} />
-          </Tooltip>
-        </HStack>
-        <Box p={2}>
-          <Markdown>{displayHint}</Markdown>
-          {testId && submissionId && classId && (
-            <HintFeedbackForm testId={testId} submissionId={submissionId} classId={classId} hintText={displayHint} />
+  return (
+    <VStack align="stretch" gap={4}>
+      {/* Always show the original output */}
+      {format_basic_output(result)}
+
+      {/* Show LLM section if there's a prompt */}
+      {hasLLMPrompt && (
+        <>
+          {displayHint ? (
+            /* Show Feedbot response if available */
+            <Box
+              fontSize="sm"
+              overflowX="auto"
+              border="1px solid"
+              borderColor="border.emphasized"
+              borderRadius="md"
+              p={0}
+            >
+              <HStack
+                p={2}
+                w="100%"
+                bg="bg.info"
+                borderTopRadius="md"
+                color="fg.info"
+                fontWeight="bold"
+                justify="space-between"
+              >
+                <HStack>
+                  <Icon as={FaRobot} />
+                  Response from Feedbot
+                </HStack>
+                <Tooltip
+                  content="Feedbot is an AI-powered assistant that is currently in research & development. We welcome feedback to help us improve!"
+                  openDelay={0}
+                >
+                  <Icon as={FaInfo} />
+                </Tooltip>
+              </HStack>
+              <Box p={2}>
+                <Markdown>{displayHint}</Markdown>
+                {testId && submissionId && classId && (
+                  <HintFeedbackForm
+                    testId={testId}
+                    submissionId={submissionId}
+                    classId={classId}
+                    hintText={displayHint}
+                  />
+                )}
+              </Box>
+            </Box>
+          ) : (
+            /* Show hint button if no result yet */
+            <Box fontSize="sm">
+              <Text color="text.muted" mb={3}>
+                Click below to generate response from Feedbot.
+              </Text>
+              {testId && <LLMHintButton testId={testId} onHintGenerated={setHintContent} />}
+            </Box>
           )}
-        </Box>
-      </Box>
-    );
-  }
-
-  // If there's an LLM hint prompt but no result yet, show the hint button instead of output
-  if (extraData?.llm?.prompt && testId && !storedHintResult) {
-    return (
-      <Box fontSize="sm">
-        <Text color="text.muted" mb={3}>
-          Click below to generate response from Feedbot.
-        </Text>
-        <LLMHintButton testId={testId} onHintGenerated={setHintContent} />
-      </Box>
-    );
-  }
-
-  // Default output formatting
-  return format_basic_output(result);
+        </>
+      )}
+    </VStack>
+  );
 }
 
 function format_basic_output(result: { output: string | null | undefined; output_format: string | null | undefined }) {
