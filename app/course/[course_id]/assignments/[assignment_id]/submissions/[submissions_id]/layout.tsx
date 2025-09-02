@@ -40,14 +40,23 @@ import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
-import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import {
+  FaBell,
+  FaCheckCircle,
+  FaFile,
+  FaHistory,
+  FaInfo,
+  FaQuestionCircle,
+  FaRobot,
+  FaTimesCircle
+} from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { HiOutlineInformationCircle } from "react-icons/hi";
 import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { GraderResultTestData } from "./results/page";
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
 import { useAssignmentController } from "@/hooks/useAssignment";
 
@@ -429,8 +438,10 @@ function TestResults() {
       </Heading>
       {testResults?.map((test) => {
         let icon;
-        const extraData = test.extra_data as GraderResultTestData;
-        if (extraData?.icon && iconMap[extraData.icon]) {
+        const extraData = test.extra_data as GraderResultTestExtraData;
+        if (extraData?.llm?.prompt || extraData?.llm?.result) {
+          icon = <Icon as={FaRobot} />;
+        } else if (extraData?.icon && iconMap[extraData.icon]) {
           icon = <Icon as={iconMap[extraData.icon]} />;
         } else if (test.score === 0 && test.max_score === 0) {
           icon = <Icon as={FaInfo} color="fg.info" />;

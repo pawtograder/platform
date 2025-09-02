@@ -51,7 +51,6 @@ For development work that requires changes to the database schema or backend fun
    - (Optional) `ENABLE_SIGNUPS=true` - If you want to easily create new users using the UI for local dev
 
    > Security: Never expose `SUPABASE_SERVICE_ROLE_KEY` to the browser or commit it. Keep it in server-only code and CI secrets.
-
 5. Build the application: `npm run build`
 6. Start Supabase Edge Functions: `npx supabase functions serve`
 7. Start the development server: `npm start`
