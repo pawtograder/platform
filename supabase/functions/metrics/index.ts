@@ -123,12 +123,12 @@ async function generatePrometheusMetrics(): Promise<Response> {
       error: Error;
     };
 
-    const { data: assignmentData, error: _assignmentError } = assignmentMetricsResult as unknown as {
+    const { data: assignmentData } = assignmentMetricsResult as unknown as {
       data: unknown[];
       error: Error;
     };
 
-    const { data: tagsData, error: _tagsError } = tagsMetricsResult as unknown as {
+    const { data: tagsData } = tagsMetricsResult as unknown as {
       data: unknown[];
       error: Error;
     };

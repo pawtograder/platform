@@ -5,10 +5,7 @@ import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
-import {
-  GraderResultOutput,
-  SubmissionWithGraderResultsAndErrors
-} from "@/utils/supabase/DatabaseTypes";
+import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   CardBody,
@@ -35,7 +32,11 @@ import { FaInfo, FaRobot, FaSpinner } from "react-icons/fa";
 import * as Sentry from "@sentry/nextjs";
 import { Tooltip } from "@/components/ui/tooltip";
 
-import { GraderResultTestExtraData, GraderResultTestsHintFeedback, PyretReplConfig } from "@/utils/supabase/DatabaseTypes";
+import {
+  GraderResultTestExtraData,
+  GraderResultTestsHintFeedback,
+  PyretReplConfig
+} from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
