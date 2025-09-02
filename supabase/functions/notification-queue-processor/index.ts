@@ -600,7 +600,8 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       })) || [];
 
     if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
-      Sentry.captureMessage("No SMTP host found, deferring email processing", scope);
+      // eslint-disable-next-line no-console
+      console.log("No SMTP host found, deferring email processing");
       // Do not archive; allow messages to become visible again after VT expires.
       return false;
     }

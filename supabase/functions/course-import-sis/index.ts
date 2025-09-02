@@ -11,6 +11,175 @@ import { createInvitationsBulk, type InvitationRequest } from "../_shared/Invita
 import * as Sentry from "npm:@sentry/deno";
 import type { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
 
+/**
+ * Parse Retry-After header value (supports both delta-seconds and HTTP-date formats)
+ * Returns delay in milliseconds, or null if invalid
+ */
+function parseRetryAfter(retryAfterValue: string): number | null {
+  if (!retryAfterValue?.trim()) {
+    return null;
+  }
+
+  const trimmed = retryAfterValue.trim();
+
+  // Try parsing as delta-seconds (integer)
+  const deltaSeconds = parseInt(trimmed, 10);
+  if (!isNaN(deltaSeconds) && deltaSeconds >= 0) {
+    return deltaSeconds * 1000; // Convert to milliseconds
+  }
+
+  // Try parsing as HTTP-date
+  try {
+    const retryDate = new Date(trimmed);
+    if (!isNaN(retryDate.getTime())) {
+      const now = new Date();
+      const delayMs = retryDate.getTime() - now.getTime();
+      // Only return positive delays (future dates)
+      return delayMs > 0 ? delayMs : 0;
+    }
+  } catch {
+    // Invalid date format, fall through to return null
+  }
+
+  return null;
+}
+
+/**
+ * Fetch with retry and exponential backoff for SIS API calls
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000,
+  scope?: Sentry.Scope
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      scope?.addBreadcrumb({
+        message: `SIS API fetch attempt ${attempt + 1}/${maxRetries + 1}`,
+        category: "info",
+        data: { url, attempt }
+      });
+
+      const response = await fetch(url, options);
+
+      // If successful, return immediately
+      if (response.ok) {
+        if (attempt > 0) {
+          scope?.addBreadcrumb({
+            message: `SIS API fetch succeeded after ${attempt + 1} attempts`,
+            category: "info",
+            data: { url, totalAttempts: attempt + 1 }
+          });
+        }
+        return response;
+      }
+
+      // Handle different error status codes
+      if (response.status >= 400 && response.status < 500) {
+        // Only retry on 408 (Request Timeout) and 429 (Too Many Requests)
+        if (response.status !== 408 && response.status !== 429) {
+          throw new UserVisibleError(`SIS API client error: ${response.status} ${response.statusText}`);
+        }
+      }
+
+      // For retryable errors (5xx, 408, 429), prepare to retry
+      lastError = new Error(`SIS API error: ${response.status} ${response.statusText}`);
+
+      // Check for Retry-After header on 429 and 503 responses
+      if (response.status === 429 || response.status === 503) {
+        const retryAfter = response.headers.get("Retry-After");
+        if (retryAfter) {
+          const retryDelay = parseRetryAfter(retryAfter);
+          if (retryDelay !== null) {
+            // Clamp to sensible max (e.g., 5 minutes)
+            const clampedDelay = Math.min(retryDelay, 5 * 60 * 1000);
+
+            scope?.addBreadcrumb({
+              message: `Using Retry-After header for delay`,
+              category: "info",
+              data: {
+                url,
+                attempt,
+                retryAfterHeader: retryAfter,
+                parsedDelay: retryDelay,
+                clampedDelay,
+                nextAttempt: attempt + 2
+              }
+            });
+
+            // Skip to delay section with server-provided delay
+            if (attempt < maxRetries) {
+              await new Promise((resolve) => setTimeout(resolve, clampedDelay));
+              continue;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      // Network errors or other fetch failures
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      // If it's a UserVisibleError (non-retryable client error), re-throw immediately
+      if (error instanceof UserVisibleError) {
+        throw error;
+      }
+
+      scope?.addBreadcrumb({
+        message: `SIS API fetch attempt ${attempt + 1} failed`,
+        category: "error",
+        data: {
+          url,
+          attempt,
+          error: lastError.message,
+          willRetry: attempt < maxRetries
+        }
+      });
+    }
+
+    // If this was the last attempt, break out of the loop
+    if (attempt === maxRetries) {
+      break;
+    }
+
+    // Calculate delay with exponential backoff and jitter
+    const delay = baseDelayMs * Math.pow(2, attempt);
+    const jitter = Math.random() * 0.1 * delay; // Add up to 10% jitter
+    const totalDelay = Math.floor(delay + jitter);
+
+    scope?.addBreadcrumb({
+      message: `Using exponential backoff for retry delay`,
+      category: "info",
+      data: {
+        url,
+        attempt,
+        baseDelay: delay,
+        jitter,
+        totalDelay,
+        nextAttempt: attempt + 2,
+        method: "exponential_backoff"
+      }
+    });
+
+    // Wait before retrying
+    await new Promise((resolve) => setTimeout(resolve, totalDelay));
+  }
+
+  // If we get here, all attempts failed
+  scope?.addBreadcrumb({
+    message: `SIS API fetch failed after ${maxRetries + 1} attempts`,
+    category: "error",
+    data: { url, totalAttempts: maxRetries + 1, finalError: lastError?.message }
+  });
+
+  throw new UserVisibleError(
+    `SIS API request failed after ${maxRetries + 1} attempts: ${lastError?.message || "Unknown error"}`
+  );
+}
+
 // SIS API Types
 interface SISCRNResponse {
   [courseCode: string]: number[];
@@ -427,20 +596,15 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // Fetch current rosters for all CRNs
       const rosterPromises = allCRNs.map(async (crn) => {
-        const response = await fetch(`${SIS_API_URL}/roster/?semester=${classData.term}&crn=${crn}`, {
-          headers: { Authorization: `Token ${SIS_AUTH_TOKEN}` }
-        });
-
-        if (!response.ok) {
-          scope?.addBreadcrumb({
-            message: `Failed to fetch roster for CRN ${crn}`,
-            category: "error",
-            data: { classId: classData.id, crn, status: response.status }
-          });
-          throw new UserVisibleError(
-            `Failed to fetch roster for CRN ${crn}: ${response.status} ${response.statusText}`
-          );
-        }
+        const response = await fetchWithRetry(
+          `${SIS_API_URL}/roster/?semester=${classData.term}&crn=${crn}`,
+          {
+            headers: { Authorization: `Token ${SIS_AUTH_TOKEN}` }
+          },
+          3, // maxRetries
+          5000, // baseDelayMs
+          scope
+        );
 
         const data = (await response.json()) as SISRosterResponse;
         return { crn, roster: data[crn.toString()] };
@@ -1608,17 +1772,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
 
     // Step 1: Get CRNs for all courses
     const crnPromises = courseCodes.map(async (courseCode) => {
-      const crnResponse = await fetch(`${SIS_API_URL}/?semester=${term}&course=${courseCode}`, {
-        headers: {
-          Authorization: `Token ${SIS_AUTH_TOKEN}`
-        }
-      });
-
-      if (!crnResponse.ok) {
-        throw new UserVisibleError(
-          `Failed to fetch CRNs for ${courseCode}: ${crnResponse.status} ${crnResponse.statusText}`
-        );
-      }
+      const crnResponse = await fetchWithRetry(
+        `${SIS_API_URL}/?semester=${term}&course=${courseCode}`,
+        {
+          headers: {
+            Authorization: `Token ${SIS_AUTH_TOKEN}`
+          }
+        },
+        3, // maxRetries
+        5000, // baseDelayMs
+        scope
+      );
 
       const crnData: SISCRNResponse = await crnResponse.json();
       return {
@@ -1645,26 +1809,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     // Step 2: Get roster data for all CRNs
     const allCRNs = [...mainCourseCRNs, ...labCourseCRNs];
     const rosterPromises = allCRNs.map(async (crn) => {
-      const rosterResponse = await fetch(`${SIS_API_URL}/roster/?semester=${term}&crn=${crn}`, {
-        headers: {
-          Authorization: `Token ${SIS_AUTH_TOKEN}`
-        }
-      });
-
-      if (!rosterResponse.ok) {
-        scope?.addBreadcrumb({
-          message: `Failed to fetch roster for CRN ${crn}`,
-          category: "error",
-          data: {
-            crn,
-            status: rosterResponse.status,
-            statusText: rosterResponse.statusText
+      const rosterResponse = await fetchWithRetry(
+        `${SIS_API_URL}/roster/?semester=${term}&crn=${crn}`,
+        {
+          headers: {
+            Authorization: `Token ${SIS_AUTH_TOKEN}`
           }
-        });
-        throw new UserVisibleError(
-          `Failed to fetch roster for CRN ${crn}: ${rosterResponse.status} ${rosterResponse.statusText}`
-        );
-      }
+        },
+        3, // maxRetries
+        5000, // baseDelayMs
+        scope
+      );
 
       const rosterData: SISRosterResponse = await rosterResponse.json();
       return {
