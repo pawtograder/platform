@@ -1,10 +1,10 @@
-import { createClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/utils/supabase/client";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 console.log(process.env.NEXT_PUBLIC_SUPABASE_URL);
 export async function generateMagicLink(email: string) {
-  const adminSupabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  const adminSupabase = createAdminClient();
   const { data, error } = await adminSupabase.auth.admin.generateLink({
     email,
     type: "magiclink"

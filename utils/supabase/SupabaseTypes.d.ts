@@ -7060,6 +7060,68 @@ export type Database = {
         };
         Relationships: [];
       };
+      video_meeting_session_users: {
+        Row: {
+          chime_attendee_id: string | null;
+          class_id: number;
+          created_at: string;
+          id: number;
+          joined_at: string;
+          left_at: string | null;
+          private_profile_id: string;
+          video_meeting_session_id: number;
+        };
+        Insert: {
+          chime_attendee_id?: string | null;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          joined_at?: string;
+          left_at?: string | null;
+          private_profile_id: string;
+          video_meeting_session_id: number;
+        };
+        Update: {
+          chime_attendee_id?: string | null;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          joined_at?: string;
+          left_at?: string | null;
+          private_profile_id?: string;
+          video_meeting_session_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "video_meeting_session_users_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "video_meeting_session_users_private_profile_id_fkey";
+            columns: ["private_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "video_meeting_session_users_private_profile_id_fkey";
+            columns: ["private_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "video_meeting_session_users_video_meeting_session_id_fkey";
+            columns: ["video_meeting_session_id"];
+            isOneToOne: false;
+            referencedRelation: "video_meeting_sessions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       video_meeting_sessions: {
         Row: {
           chime_meeting_id: string | null;
