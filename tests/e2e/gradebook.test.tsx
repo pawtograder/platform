@@ -1,6 +1,6 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import type { Page } from "@playwright/test";
+import type { Page, Locator } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import {
@@ -43,6 +43,55 @@ async function readCellNumber(page: Page, rowName: string, columnName: string) {
 async function readCellText(page: Page, rowName: string, columnName: string) {
   const cell = await getGridcellInRow(page, rowName, columnName);
   return (await cell.innerText()).trim();
+}
+
+// Virtualization stability helpers
+async function waitForVirtualizerIdle(page: Page) {
+  await page.waitForFunction(
+    () => {
+      const container = document.querySelector(
+        '[role="region"][aria-label="Instructor Gradebook Table"]'
+      ) as HTMLElement | null;
+      if (!container) return false;
+      const body = container.querySelector("tbody");
+      if (!body) return false;
+      const rows = Array.from(body.querySelectorAll('[role="row"]')) as HTMLElement[];
+      if (rows.length === 0) return false;
+
+      const sig = [
+        container.scrollTop,
+        container.scrollLeft,
+        ...rows.map((r) => `${r.style.transform}:${r.style.height}`)
+      ].join("|");
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((window as any).__virtSig === sig) return true;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__virtSig = sig;
+      return false;
+    },
+    { polling: "raf", timeout: 2000 }
+  );
+}
+
+async function waitForStableBox(page: Page, locator: Locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await expect(locator).toBeVisible();
+  const handle = await locator.elementHandle();
+  if (!handle) throw new Error("Element handle not found for locator");
+  await page.waitForFunction(
+    (el: Element) => {
+      const r = el.getBoundingClientRect();
+      const key = `${r.x},${r.y},${r.width},${r.height}`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((el as any).__lastBox === key) return true;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).__lastBox = key;
+      return false;
+    },
+    handle,
+    { polling: "raf", timeout: 1500 }
+  );
 }
 
 test.describe("Gradebook Page - Comprehensive", () => {
@@ -106,6 +155,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       .filter({ hasText: /^Gradebook$/ })
       .click();
     await page.waitForLoadState("networkidle");
+    await waitForVirtualizerIdle(page);
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
@@ -146,6 +196,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const studentName = students[0].private_profile_name;
     // Open Participation cell and set score to 80
     const partCell = await getGridcellInRow(page, studentName, "Participation");
+    await waitForVirtualizerIdle(page);
+    await waitForStableBox(page, partCell);
     await partCell.click();
     await page.locator('input[name="score"]').fill("80");
     await page.getByRole("button", { name: /^Update$/ }).click();
@@ -160,6 +212,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Open Final Grade cell and override
     const finalCell = await getGridcellInRow(page, studentName, "Final Grade");
+    await waitForVirtualizerIdle(page);
+    await waitForStableBox(page, finalCell);
     await finalCell.click();
     await page.locator('input[name="score_override"]').fill("92");
     await page.getByRole("button", { name: /^Save Override$/ }).click();
