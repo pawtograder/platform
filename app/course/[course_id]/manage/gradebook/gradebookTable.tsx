@@ -99,6 +99,7 @@ import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import { WhatIf } from "../../gradebook/whatIf";
 import GradebookCell from "./gradebookCell";
 import ImportGradebookColumn from "./importGradebookColumn";
+import { LucideInfo } from "lucide-react";
 const MemoizedGradebookCell = React.memo(GradebookCell);
 
 function RenderExprDocs() {
@@ -1151,6 +1152,18 @@ function GradebookColumnHeader({
   const column = useGradebookColumn(column_id);
   const gradebookController = useGradebookController();
   const areAllDependenciesReleased = useAreAllDependenciesReleased(column_id);
+  const allGrades = useGradebookColumnGrades(column_id);
+
+  // Check for mixed release status (some students have released grades, others don't)
+  const hasMixedReleaseStatus = useMemo(() => {
+    if (!column.score_expression || allGrades.length === 0) return false;
+
+    const releasedCount = allGrades.filter((grade) => grade.released).length;
+    const totalCount = allGrades.length;
+
+    // Mixed status: some but not all grades are released
+    return releasedCount > 0 && releasedCount < totalCount;
+  }, [column.score_expression, allGrades]);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
@@ -1162,8 +1175,6 @@ function GradebookColumnHeader({
   const supabase = createClient();
   const invalidate = useInvalidate();
   const headerRef = useRef<HTMLDivElement>(null);
-
-  const allGrades = useGradebookColumnGrades(column_id);
 
   const moveLeft = useCallback(async () => {
     if (column.sort_order == null || column.sort_order === 0) return;
@@ -1301,6 +1312,13 @@ function GradebookColumnHeader({
       } else {
         ret.push("Some dependencies are not released - students cannot see the same calculation that you see");
       }
+
+      // Add mixed release status information
+      if (hasMixedReleaseStatus) {
+        const releasedCount = allGrades.filter((grade) => grade.released).length;
+        const totalCount = allGrades.length;
+        ret.push(`Mixed release status: ${releasedCount}/${totalCount} students can see their grades`);
+      }
     }
     if (column.render_expression) {
       ret.push(`Rendered as ${column.render_expression}`);
@@ -1319,7 +1337,7 @@ function GradebookColumnHeader({
         ))}
       </VStack>
     );
-  }, [column, areAllDependenciesReleased]);
+  }, [column, areAllDependenciesReleased, hasMixedReleaseStatus, allGrades]);
 
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px" height="100%">
@@ -1418,41 +1436,32 @@ function GradebookColumnHeader({
                 {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
-              <MenuSeparator />
-              <MenuItem
-                value="release"
-                onClick={releaseColumn}
-                disabled={!!column.score_expression || isReleasing || isUnreleasing}
-                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-              >
-                {isReleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuCheck} boxSize={3} mr={2} />}
-                Release Column
-                {column.score_expression && (
-                  <WrappedTooltip content="Auto-calculated columns cannot be manually released">
-                    <Box ml="auto">
-                      <Icon as={LuCalculator} boxSize={3} color="fg.muted" />
-                    </Box>
-                  </WrappedTooltip>
-                )}
-              </MenuItem>
-              <MenuItem
-                value="unrelease"
-                onClick={unreleaseColumn}
-                disabled={!!column.score_expression || isReleasing || isUnreleasing}
-                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-              >
-                {isUnreleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuX} boxSize={3} mr={2} />}
-                Unrelease Column
-                {column.score_expression && (
-                  <WrappedTooltip content="Auto-calculated columns cannot be manually unreleased">
-                    <Box ml="auto">
-                      <Icon as={LuCalculator} boxSize={3} color="fg.muted" />
-                    </Box>
-                  </WrappedTooltip>
-                )}
-              </MenuItem>
-              <MenuSeparator />
               {!column.score_expression && (
+                <>
+                  <MenuSeparator />
+                  <MenuItem
+                    value="release"
+                    onClick={releaseColumn}
+                    disabled={isReleasing || isUnreleasing}
+                    _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                  >
+                    {isReleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuCheck} boxSize={3} mr={2} />}
+                    Release Column
+                  </MenuItem>
+                  <MenuItem
+                    value="unrelease"
+                    onClick={unreleaseColumn}
+                    disabled={isReleasing || isUnreleasing}
+                    _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                  >
+                    {isUnreleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuX} boxSize={3} mr={2} />}
+                    Unrelease Column
+                  </MenuItem>
+                </>
+              )}
+              <MenuSeparator />
+              {(!column.score_expression ||
+                (column.score_expression && column.score_expression.startsWith("assignments("))) && (
                 <MenuItem
                   value="convertMissing"
                   onClick={() => setIsConvertingMissing(true)}
@@ -1510,7 +1519,7 @@ function GradebookColumnHeader({
                     </Box>
                   </Tooltip.Trigger>
                   <Portal>
-                    <Tooltip.Positioner>
+                    <Tooltip.Positioner style={{ zIndex: 10000 }}>
                       <Tooltip.Content>
                         <ExteralDataAdvice externalData={column.external_data as GradebookColumnExternalData} />
                       </Tooltip.Content>
@@ -1520,19 +1529,9 @@ function GradebookColumnHeader({
               </Box>
             )}
             {column.score_expression ? (
-              <Box position="relative" zIndex={100}>
-                <WrappedTooltip
-                  content={
-                    areAllDependenciesReleased
-                      ? "All dependencies are effectively released - this column can be calculated"
-                      : "Some dependencies are not effectively released - this column cannot be calculated yet"
-                  }
-                >
-                  <Icon
-                    as={areAllDependenciesReleased ? FaLockOpen : FaLock}
-                    size="sm"
-                    color={areAllDependenciesReleased ? "green.500" : "orange.500"}
-                  />
+              <Box position="relative" zIndex={10000}>
+                <WrappedTooltip content="Visibility: Students see this value calculated based on released dependencies">
+                  <Icon as={LucideInfo} size="sm" color="blue.500" />
                 </WrappedTooltip>
               </Box>
             ) : gradebookController.isColumnEffectivelyReleased(column_id) ? (

@@ -3,10 +3,14 @@ import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
-import TableController from "@/lib/TableController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { CourseController, useCourseController } from "./useCourseController";
+import { useLogIfChanged } from "@/app/course/[course_id]/discussion/discussion_thread";
+import { Spinner } from "@chakra-ui/react";
+
+const TRACE_WHAT_IF_CALCULATIONS = true;
+
 export type ExpressionContext = {
   student_id: string;
   is_private_calculation: boolean;
@@ -41,7 +45,7 @@ export type GradebookColumnStudentWithMaxScore = Omit<GradebookColumnStudent, "s
   column_slug: string;
 };
 function isGradebookColumnStudent(value: unknown): value is GradebookColumnStudentWithMaxScore {
-  return (
+  const ret =
     typeof value === "object" &&
     value !== null &&
     "score" in value &&
@@ -50,13 +54,20 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "is_excused" in value &&
     "is_missing" in value &&
     "max_score" in value &&
-    "column_slug" in value
-  );
+    "column_slug" in value;
+  if (typeof value === "number") {
+    return false;
+  }
+  if (!ret) {
+    throw new Error(`Value is not a GradebookColumnStudentWithMaxScore: ${JSON.stringify(value, null, 2)}`);
+  }
+  return ret;
 }
 
 type AssignmentForStudentDashboard = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};
+  public debugID: string = crypto.randomUUID();
   private _incompleteValues: GradebookWhatIfIncompleteValuesMap = {};
   private _subscribers: (() => void)[] = [];
   private _gradebookUnsubscribe: (() => void) | null = null;
@@ -102,7 +113,7 @@ class GradebookWhatIfController {
         gradebook_score: gradebookScore
       };
     }
-    //Recalculate all columns
+    // Recalculate all dependent formula columns (initial full pass)
     this.recalculateDependentColumns();
   }
 
@@ -112,12 +123,12 @@ class GradebookWhatIfController {
       this.private_profile_id,
       (students) => {
         let hasChanges = false;
+        const changedColumnIds: number[] = [];
 
         for (const student of students) {
           const gradebookScore =
             student.score_override !== null ? student.score_override : (student.score ?? undefined);
           const existingGrade = this._grades[student.gradebook_column_id];
-
           if (!existingGrade || existingGrade.gradebook_score !== gradebookScore) {
             if (!existingGrade) {
               this._grades[student.gradebook_column_id] = {
@@ -131,19 +142,36 @@ class GradebookWhatIfController {
               existingGrade.gradebook_score = gradebookScore;
             }
             hasChanges = true;
+            changedColumnIds.push(student.gradebook_column_id);
           }
         }
 
         // If there were changes, recalculate any what-if grades that depend on these columns
         if (hasChanges) {
-          this.recalculateDependentColumns();
+          this.recalculateDependentColumns(changedColumnIds);
         }
       }
     );
   }
 
-  private recalculateDependentColumns() {
+  private recalculateDependentColumns(startingColumnIds?: number[]) {
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
+    // If specific starting columns provided, recalc only downstream dependents transitively via recalculate()
+    if (startingColumnIds && startingColumnIds.length > 0) {
+      const started = new Set<number>();
+      for (const changedId of startingColumnIds) {
+        for (const column of allColumns) {
+          if (column.dependencies?.gradebook_columns?.includes(changedId)) {
+            if (!started.has(column.id)) {
+              started.add(column.id);
+              this.recalculate(column.id);
+            }
+          }
+        }
+      }
+      return;
+    }
+    // Otherwise, full pass: recalc all formula columns
     for (const column of allColumns) {
       if (column.dependencies?.gradebook_columns) {
         this.recalculate(column.id);
@@ -157,6 +185,44 @@ class GradebookWhatIfController {
 
   getIncompleteValues(columnId: number): IncompleteValuesAdvice | null {
     return this._incompleteValues[columnId] ?? null;
+  }
+
+  // Check if a column depends on other columns that have user-set what-if values
+  private hasWhatIfDependencies(columnId: number): boolean {
+    const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
+    const column = allColumns.find((c) => c.id === columnId);
+
+    if (!column?.dependencies?.gradebook_columns) {
+      return false;
+    }
+
+    // Recursively check if any dependency has user-set what-if values
+    const checkDependencies = (depColumnId: number, visited = new Set<number>()): boolean => {
+      if (visited.has(depColumnId)) return false; // Prevent cycles
+      visited.add(depColumnId);
+
+      const depGrade = this._grades[depColumnId];
+
+      // If this dependency has a user-set what-if value, return true
+      if (depGrade?.what_if !== undefined) {
+        const depColumn = allColumns.find((c) => c.id === depColumnId);
+        // Check if it's a user-editable column (no dependencies) with a what-if value
+        // OR if it's a calculated column that depends on user what-if values
+        if (!depColumn?.dependencies?.gradebook_columns) {
+          // This is a user-editable column with a what-if value
+          return true;
+        } else {
+          // This is a calculated column, check its dependencies recursively
+          return depColumn.dependencies.gradebook_columns.some((subDepId) =>
+            checkDependencies(subDepId, new Set(visited))
+          );
+        }
+      }
+
+      return false;
+    };
+
+    return column.dependencies.gradebook_columns.some((depId) => checkDependencies(depId));
   }
 
   setWhatIfGrade(columnId: number, value: number | undefined, incompleteValues: IncompleteValuesAdvice | null) {
@@ -224,13 +290,21 @@ class GradebookWhatIfController {
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
       const imports: Record<string, (...args: any[]) => unknown> = {};
       imports["gradebook_columns"] = (context: ExpressionContext, columnSlug: string | string[]) => {
+        if (TRACE_WHAT_IF_CALCULATIONS) {
+          console.log("context", context);
+          console.log("columnSlug", columnSlug);
+        }
         const findOne = (slug: string) => {
           const matchingColumns = allColumns.filter((c) => minimatch(c.slug, slug));
           if (!matchingColumns.length) return null;
+          if (TRACE_WHAT_IF_CALCULATIONS) {
+            console.log("matchingColumns", matchingColumns);
+          }
           const scoreForColumnID = (columnId: number) => {
             const whatIfVal = this.getGrade(columnId);
             const incompleteValues = this.getIncompleteValues(columnId);
             const columnStudent = this.gradebookController.getGradebookColumnStudent(columnId, this.private_profile_id);
+
             const thisColumn = allColumns.find((c) => c.id === columnId);
             if (!thisColumn) {
               throw new Error(`Column ${columnId} not found in allColumns`);
@@ -239,6 +313,15 @@ class GradebookWhatIfController {
             let score: number | undefined;
             let released = columnStudent?.released ?? false;
             let is_missing = columnStudent?.is_missing ?? true;
+            if (TRACE_WHAT_IF_CALCULATIONS) {
+              console.log("===========Getting Score For Column =============");
+              console.log("columnStudent", columnStudent);
+              console.log("whatIfVal", whatIfVal);
+              console.log("incompleteValues", incompleteValues);
+              console.log("context", context);
+              console.log("columnSlug", columnSlug);
+              console.log("================================================");
+            }
 
             if (columnStudent?.score_override !== null && columnStudent?.score_override !== undefined) {
               score = columnStudent.score_override;
@@ -400,19 +483,91 @@ class GradebookWhatIfController {
           return ret;
         }
       };
-      imports["multiply"] = (a: number, b: number) => {
+      imports["divide"] = (
+        a: number | GradebookColumnStudentWithMaxScore,
+        b: number | GradebookColumnStudentWithMaxScore
+      ) => {
         if (a === undefined || b === undefined) {
           return undefined;
         }
-        return a * b;
+        let a_val = 0;
+        let b_val = 0;
+        if (isGradebookColumnStudent(a)) {
+          a_val = a.score ?? 0;
+        } else if (typeof a === "number") {
+          a_val = a;
+        }
+        if (isGradebookColumnStudent(b)) {
+          b_val = b.score ?? 0;
+        } else if (typeof b === "number") {
+          b_val = b;
+        }
+        return a_val / b_val;
       };
-      imports["add"] = (a: number, b: number) => {
+      imports["subtract"] = (
+        a: number | GradebookColumnStudentWithMaxScore,
+        b: number | GradebookColumnStudentWithMaxScore
+      ) => {
         if (a === undefined || b === undefined) {
           return undefined;
         }
-        return a + b;
+        let a_val = 0;
+        let b_val = 0;
+        if (isGradebookColumnStudent(a)) {
+          a_val = a.score ?? 0;
+        } else if (typeof a === "number") {
+          a_val = a;
+        }
+        if (isGradebookColumnStudent(b)) {
+          b_val = b.score ?? 0;
+        } else if (typeof b === "number") {
+          b_val = b;
+        }
+        return a_val - b_val;
       };
-      imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+      imports["multiply"] = (
+        a: number | GradebookColumnStudentWithMaxScore,
+        b: number | GradebookColumnStudentWithMaxScore
+      ) => {
+        if (a === undefined || b === undefined) {
+          return undefined;
+        }
+        let a_val = 0;
+        let b_val = 0;
+        if (isGradebookColumnStudent(a)) {
+          a_val = a.score ?? 0;
+        } else if (typeof a === "number") {
+          a_val = a;
+        }
+        if (isGradebookColumnStudent(b)) {
+          b_val = b.score ?? 0;
+        } else if (typeof b === "number") {
+          b_val = b;
+        }
+        return a_val * b_val;
+      };
+      imports["add"] = (
+        a: number | GradebookColumnStudentWithMaxScore,
+        b: number | GradebookColumnStudentWithMaxScore
+      ) => {
+        if (a === undefined || b === undefined) {
+          return undefined;
+        }
+        let a_val = 0;
+        let b_val = 0;
+        if (isGradebookColumnStudent(a)) {
+          a_val = a.score ?? 0;
+        } else if (typeof a === "number") {
+          a_val = a;
+        }
+        if (isGradebookColumnStudent(b)) {
+          b_val = b.score ?? 0;
+        } else if (typeof b === "number") {
+          b_val = b;
+        }
+        return a_val + b_val;
+      };
+      imports["sum"] = (_context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
         if (Array.isArray(value)) {
           const values = value
             .map((v) => {
@@ -490,7 +645,7 @@ class GradebookWhatIfController {
         return value < threshold ? 1 : 0;
       };
       imports["countif"] = (
-        context: ExpressionContext,
+        _context: ExpressionContext,
         value: GradebookColumnStudentWithMaxScore[],
         condition: (value: GradebookColumnStudentWithMaxScore) => boolean
       ) => {
@@ -509,13 +664,14 @@ class GradebookWhatIfController {
       };
 
       imports["mean"] = (
-        context: ExpressionContext,
+        _context: ExpressionContext,
         value: GradebookColumnStudentWithMaxScore[],
         weighted: boolean = true
       ) => {
         if (Array.isArray(value)) {
           const valuesToAverage = value.map((v) => {
             if (isGradebookColumnStudent(v)) {
+              console.log("v", v);
               if (!v.released && !v.is_private) {
                 return undefined;
               } else if (v.is_missing) {
@@ -534,8 +690,9 @@ class GradebookWhatIfController {
             );
           });
           const validValues = valuesToAverage.filter(
-            (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined
+            (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
           );
+          console.log("mean of", validValues);
           if (validValues.length === 0) {
             return undefined;
           }
@@ -557,17 +714,22 @@ class GradebookWhatIfController {
         throw new Error("Mean called with non-matrix value");
       };
       imports["drop_lowest"] = (
-        context: ExpressionContext,
+        _context: ExpressionContext,
         value: GradebookColumnStudentWithMaxScore[],
         count: number
       ) => {
         if (Array.isArray(value)) {
-          const droppableValues = value.filter((v) => !v.is_missing && !v.is_excused && v.is_droppable);
-          const sortedValues = droppableValues.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-          if (sortedValues.length === 0) {
-            return undefined;
+          const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
+          const ret: GradebookColumnStudentWithMaxScore[] = [];
+          let numDropped = 0;
+          for (const v of sorted) {
+            if (numDropped < count && v.is_droppable) {
+              numDropped++;
+              continue;
+            }
+            ret.push(v);
           }
-          return sortedValues.slice(count);
+          return ret;
         }
         throw new Error("Drop_lowest called with non-matrix value");
       };
@@ -642,9 +804,27 @@ class GradebookWhatIfController {
             this._incompleteValues[columnId] = context.incomplete_values;
           }
         }
-        if (scores.gradebook_score !== scores.report_only && scores.report_only !== null) {
+
+        // Determine if we should show a what-if value
+        const existingWhatIf = this._grades[columnId]?.what_if;
+        const hasUserSetWhatIf = existingWhatIf !== undefined;
+
+        // Check if this column depends on other columns with user-set what-if values
+        const hasWhatIfDependencies = this.hasWhatIfDependencies(columnId);
+
+        if (hasUserSetWhatIf) {
+          // User has explicitly set a what-if value, preserve it
+          scores.what_if = existingWhatIf;
+        } else if (
+          hasWhatIfDependencies &&
+          scores.gradebook_score !== scores.report_only &&
+          scores.report_only !== null
+        ) {
+          // This calculated column depends on other columns with what-if values
+          // and the calculated result differs from the gradebook score
           scores.what_if = scores.report_only;
         } else {
+          // No user-set what-if value and no what-if dependencies
           scores.what_if = undefined;
         }
         if (Number.isNaN(scores.what_if ?? 0)) {
@@ -691,7 +871,7 @@ class GradebookWhatIfController {
 
 const GradebookWhatIfContext = createContext<GradebookWhatIfController | null>(null);
 
-export function GradebookWhatIfProvider({
+function GradebookWhatIfProviderInternal({
   children,
   private_profile_id
 }: {
@@ -700,12 +880,9 @@ export function GradebookWhatIfProvider({
 }) {
   const gradebookController = useGradebookController();
   const courseController = useCourseController();
-  const controllerRef = useRef<GradebookWhatIfController>();
-
-  // Initialize controller synchronously if it doesn't exist
-  if (!controllerRef.current) {
-    controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id, courseController);
-  }
+  const controllerRef = useRef<GradebookWhatIfController | null>(null);
+  useLogIfChanged("private_profile_id", private_profile_id);
+  useLogIfChanged("gradebookController", gradebookController);
 
   // Cleanup and reinitialize when private_profile_id changes
   useEffect(() => {
@@ -718,11 +895,38 @@ export function GradebookWhatIfProvider({
     return () => {
       if (controllerRef.current) {
         controllerRef.current.cleanup();
+        controllerRef.current = null;
       }
     };
   }, [private_profile_id, gradebookController, courseController]);
 
+  if (!controllerRef.current) {
+    controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id, courseController);
+  }
   return <GradebookWhatIfContext.Provider value={controllerRef.current}>{children}</GradebookWhatIfContext.Provider>;
+}
+
+export function GradebookWhatIfProvider({
+  children,
+  private_profile_id
+}: {
+  children: React.ReactNode;
+  private_profile_id: string;
+}) {
+  const gradebookController = useGradebookController();
+  const [isReady, setIsReady] = useState(gradebookController.isReady);
+  useEffect(() => {
+    gradebookController.readyPromise.then(() => setIsReady(true));
+  }, [gradebookController]);
+  if (!isReady) {
+    return <Spinner />;
+  }
+
+  return (
+    <GradebookWhatIfProviderInternal private_profile_id={private_profile_id}>
+      {children}
+    </GradebookWhatIfProviderInternal>
+  );
 }
 
 export function useWhatIfGrade(columnId: number) {

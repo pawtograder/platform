@@ -433,7 +433,7 @@ export class GradebookCellController {
   private _data: GradebookRecordsForStudent[] = [];
   private _ready: boolean = false;
   private _readyPromise: Promise<void>;
-  private _client: SupabaseClient;
+  private _client: SupabaseClient<Database>;
   private _classRealTimeController: ClassRealTimeController;
   private _class_id: number;
   private _unsubscribes: (() => void)[] = [];
@@ -451,20 +451,61 @@ export class GradebookCellController {
     this._readyPromise = this._initialize();
   }
 
+  private async _initializeEntireGradebookForAllStudents(): Promise<void> {
+    const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
+      class_id: this._class_id
+    });
+
+    if (this._closed) return;
+
+    if (error) {
+      throw new Error(`Failed to load gradebook data: ${error.message}`);
+    }
+
+    this._data = (data as GradebookRecordsForStudent[]) || [];
+  }
+  private async _initializeGradebookForThisStudent(): Promise<void> {
+    const { data, error } = await this._client
+      .from("gradebook_column_students")
+      .select("*")
+      .eq("class_id", this._class_id)
+      .eq("student_id", this._classRealTimeController.profileId);
+    if (this._closed) return;
+
+    if (error) {
+      throw new Error(`Failed to load gradebook data: ${error.message}`);
+    }
+    this._data = [
+      {
+        private_profile_id: this._classRealTimeController.profileId,
+        entries: data.map((item) => ({
+          gcs_id: item.id,
+          gc_id: item.gradebook_column_id,
+          is_private: item.is_private,
+          score: item.score,
+          score_override: item.score_override,
+          is_missing: item.is_missing,
+          is_excused: item.is_excused,
+          is_droppable: item.is_droppable,
+          released: item.released,
+          score_override_note: item.score_override_note,
+          is_recalculating: item.is_recalculating,
+          incomplete_values: item.incomplete_values
+        }))
+      }
+    ];
+  }
   private async _initialize(): Promise<void> {
     try {
-      // Load initial data using the efficient bulk fetch function
-      const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
-        class_id: this._class_id
-      });
-
-      if (this._closed) return;
-
-      if (error) {
-        throw new Error(`Failed to load gradebook data: ${error.message}`);
+      if (this._classRealTimeController.isStaff) {
+        // Load initial data using the efficient bulk fetch function
+        await this._initializeEntireGradebookForAllStudents();
+      } else {
+        //Load initial data from gradebook_column_students table directly
+        await this._initializeGradebookForThisStudent();
       }
 
-      this._data = (data as GradebookRecordsForStudent[]) || [];
+      if (this._closed) return;
 
       // Set up real-time subscriptions for gradebook updates
       this._setupRealTimeSubscriptions();
@@ -950,9 +991,9 @@ export class GradebookController {
           score_override: entry.score_override,
           score_override_note: entry.score_override_note,
           student_id: student_id,
-          is_recalculating: false, // Not available in new format
+          is_recalculating: entry.is_recalculating,
           is_private: entry.is_private,
-          incomplete_values: null // Not available in new format
+          incomplete_values: entry.incomplete_values
         };
         cb(gradebookColumnStudent);
       } else {
@@ -989,9 +1030,9 @@ export class GradebookController {
           score_override: entry.score_override,
           score_override_note: entry.score_override_note,
           student_id: studentData.private_profile_id,
-          is_recalculating: false, // Not available in new format
+          is_recalculating: entry.is_recalculating,
           is_private: entry.is_private,
-          incomplete_values: null // Not available in new format
+          incomplete_values: entry.incomplete_values
         };
         students.push(gradebookColumnStudent);
       }
@@ -1042,9 +1083,9 @@ export class GradebookController {
           score_override: entry.score_override,
           score_override_note: entry.score_override_note,
           student_id: student_id,
-          is_recalculating: false, // Not available in new format
+          is_recalculating: entry.is_recalculating,
           is_private: entry.is_private,
-          incomplete_values: null // Not available in new format
+          incomplete_values: entry.incomplete_values
         };
         columns.push(gradebookColumnStudent);
       }
@@ -1095,32 +1136,25 @@ export class GradebookController {
       return undefined;
     }
 
-    // Apply privacy filter - return entry if authorized, undefined if not
-    if (entry.is_private || !this._isInstructorOrGrader) {
-      // Convert to GradebookColumnStudent format for backward compatibility
-      return {
-        id: entry.gcs_id,
-        created_at: "", // Not available in new format
-        class_id: this.class_id,
-        gradebook_column_id: entry.gc_id,
-        gradebook_id: this.gradebook_id,
-        is_droppable: entry.is_droppable,
-        is_excused: entry.is_excused,
-        is_missing: entry.is_missing,
-        released: entry.released,
-        score: entry.score,
-        score_override: entry.score_override,
-        score_override_note: entry.score_override_note,
-        student_id: student_id,
-        is_recalculating: entry.is_recalculating,
-        is_private: entry.is_private,
-        incomplete_values: entry.incomplete_values
-      };
-    }
-
-    // Return undefined for unauthorized access instead of throwing
-    // This handles cases where students shouldn't see private data
-    return undefined;
+    // Convert to GradebookColumnStudent format for backward compatibility
+    return {
+      id: entry.gcs_id,
+      created_at: "", // Not available in new format
+      class_id: this.class_id,
+      gradebook_column_id: entry.gc_id,
+      gradebook_id: this.gradebook_id,
+      is_droppable: entry.is_droppable,
+      is_excused: entry.is_excused,
+      is_missing: entry.is_missing,
+      released: entry.released,
+      score: entry.score,
+      score_override: entry.score_override,
+      score_override_note: entry.score_override_note,
+      student_id: student_id,
+      is_recalculating: entry.is_recalculating,
+      is_private: entry.is_private,
+      incomplete_values: entry.incomplete_values
+    };
   }
 
   public getRendererForColumn(column_id: number) {

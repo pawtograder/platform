@@ -1709,7 +1709,7 @@ export async function createAssignmentsAndGradebookColumns({
           slug,
           max_score,
           score_expression,
-          dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
+          dependencies: finalDependencies ? finalDependencies : null,
           released,
           sort_order
         })
@@ -1882,7 +1882,7 @@ export async function createAssignmentsAndGradebookColumns({
     slug: string;
     due_date: string;
     group_config: string;
-    rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+    rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean; [key: string]: unknown }>;
     rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
     [key: string]: unknown;
   }> {
@@ -2097,7 +2097,7 @@ export async function createAssignmentsAndGradebookColumns({
       slug: string;
       due_date: string;
       group_config: string;
-      rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+      rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean; [key: string]: unknown }>;
       rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
       [key: string]: unknown;
     };
@@ -2241,44 +2241,47 @@ export async function createAssignmentsAndGradebookColumns({
     rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
-  const averageLabAssignmentsColumn = await createGradebookColumn({
-    class_id,
-    name: "Average Lab Assignments",
-    description: "Average of all lab assignments",
-    slug: "average-lab-assignments",
-    score_expression: "mean(gradebook_columns('assignment-lab-*'))",
-    max_score: 100,
-    sort_order: 3,
-    rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
-  });
+  // const averageLabAssignmentsColumn = await createGradebookColumn({
+  //   class_id,
+  //   name: "Average Lab Assignments",
+  //   description: "Average of all lab assignments",
+  //   slug: "average-lab-assignments",
+  //   score_expression: "mean(gradebook_columns('assignment-lab-*'))",
+  //   max_score: 100,
+  //   sort_order: 3,
+  //   rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
+  // });
 
   const finalGradeColumn = await createGradebookColumn({
     class_id,
     name: "Final Grade",
     description: "Calculated final grade",
     slug: "final-grade",
-    score_expression:
-      "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
+    score_expression: "gradebook_columns('average-assignments') * 0.9 + gradebook_columns('participation') * 0.1",
     max_score: 100,
     sort_order: 999,
     rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
-  gradebookColumns.push(participationColumn, averageAssignmentsColumn, averageLabAssignmentsColumn, finalGradeColumn);
+  gradebookColumns.push(participationColumn, averageAssignmentsColumn, finalGradeColumn);
 
   // Get students for manual grading
   const { data: students } = await supabase
     .from("user_roles")
-    .select("private_profile_id, public_profile_id, user_id")
+    .select(
+      "private_profile_id, public_profile_id, user_id, profiles_private:profiles!private_profile_id(name), profiles_public:profiles!public_profile_id(name), users(email)"
+    )
     .eq("class_id", class_id)
-    .eq("role", "student");
+    .eq("role", "student")
+    .order("users(email)", { ascending: true });
+  console.log(students);
 
   if (students && students.length > 0) {
     // Transform the data to match TestingUser structure
     const transformedStudents: TestingUser[] = students.map((student) => ({
-      private_profile_name: `Student ${student.user_id}`,
-      public_profile_name: `Pseudonym ${student.user_id}`,
-      email: `student-${student.user_id}@pawtograder.net`,
+      private_profile_name: student.profiles_private?.name || `Student ${student.user_id}`,
+      public_profile_name: student.profiles_public?.name || `Pseudonym ${student.user_id}`,
+      email: student.users?.email || `student-${student.user_id}@pawtograder.net`,
       password: process.env.TEST_PASSWORD || "change-it",
       user_id: student.user_id,
       private_profile_id: student.private_profile_id,

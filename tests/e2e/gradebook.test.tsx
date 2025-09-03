@@ -8,7 +8,9 @@ import {
   createUsersInClass,
   loginAsUser,
   TestingUser,
-  createAssignmentsAndGradebookColumns
+  createAssignmentsAndGradebookColumns,
+  insertPreBakedSubmission,
+  supabase
 } from "./TestingUtils";
 // removed unused import
 
@@ -40,10 +42,10 @@ async function readCellNumber(page: Page, rowName: string, columnName: string) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-async function readCellText(page: Page, rowName: string, columnName: string) {
-  const cell = await getGridcellInRow(page, rowName, columnName);
-  return (await cell.innerText()).trim();
-}
+// async function readCellText(page: Page, rowName: string, columnName: string) {
+//   const cell = await getGridcellInRow(page, rowName, columnName);
+//   return (await cell.innerText()).trim();
+// }
 
 // Virtualization stability helpers
 async function waitForVirtualizerIdle(page: Page) {
@@ -74,24 +76,41 @@ async function waitForVirtualizerIdle(page: Page) {
   );
 }
 
-async function waitForStableBox(page: Page, locator: Locator) {
-  await locator.scrollIntoViewIfNeeded();
-  await expect(locator).toBeVisible();
-  const handle = await locator.elementHandle();
-  if (!handle) throw new Error("Element handle not found for locator");
-  await page.waitForFunction(
-    (el: Element) => {
-      const r = el.getBoundingClientRect();
-      const key = `${r.x},${r.y},${r.width},${r.height}`;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((el as any).__lastBox === key) return true;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (el as any).__lastBox = key;
-      return false;
-    },
-    handle,
-    { polling: "raf", timeout: 1500 }
-  );
+async function waitForStableLocator(page: Page, getLocator: () => Promise<Locator> | Locator, timeoutMs = 3000) {
+  const start = Date.now();
+  while (Date.now() - start <= timeoutMs) {
+    try {
+      const loc = await getLocator();
+      await loc.waitFor({ state: "visible", timeout: 250 });
+      try {
+        await loc.scrollIntoViewIfNeeded();
+      } catch {
+        // Element may have remounted between wait and scroll; retry
+        await waitForVirtualizerIdle(page);
+        continue;
+      }
+      const box1 = await loc.boundingBox();
+      if (!box1) {
+        await page.waitForTimeout(50);
+        continue;
+      }
+      await page.waitForTimeout(75);
+      const loc2 = await getLocator();
+      await loc2.waitFor({ state: "visible", timeout: 250 });
+      const box2 = await loc2.boundingBox();
+      if (!box2) continue;
+      const same =
+        Math.abs(box1.x - box2.x) < 1 &&
+        Math.abs(box1.y - box2.y) < 1 &&
+        Math.abs(box1.width - box2.width) < 1 &&
+        Math.abs(box1.height - box2.height) < 1;
+      if (same) return loc2;
+    } catch (/* eslint-disable-line @typescript-eslint/no-unused-vars */ _e) {
+      // Locator may be detached; small backoff and retry
+    }
+    await waitForVirtualizerIdle(page);
+  }
+  throw new Error("Timed out waiting for stable locator box");
 }
 
 test.describe("Gradebook Page - Comprehensive", () => {
@@ -138,13 +157,187 @@ test.describe("Gradebook Page - Comprehensive", () => {
     instructor = users[3];
 
     // Create a minimal set of assignments and gradebook columns (helper handles expressions and dependencies)
-    await createAssignmentsAndGradebookColumns({
+    const { assignments } = await createAssignmentsAndGradebookColumns({
       class_id: course.id,
-      numAssignments: 2,
+      numAssignments: 4,
       numManualGradedColumns: 0,
       manualGradedColumnSlugs: ["participation"],
-      groupConfig: "individual"
+      groupConfig: "both"
     });
+    //Add an individual submission for first assignment
+    const submission1 = await insertPreBakedSubmission({
+      student_profile_id: students[0].private_profile_id,
+      assignment_id: assignments[0].id,
+      class_id: course.id
+    });
+    //Add a group submission for second assignment
+    const assignmentGroup = await supabase
+      .from("assignment_groups")
+      .insert({
+        assignment_id: assignments[1].id,
+        class_id: course.id,
+        name: "E2ETestGroup"
+      })
+      .select("id")
+      .single();
+    if (assignmentGroup.error) {
+      throw new Error(`Failed to create assignment group: ${assignmentGroup.error.message}`);
+    }
+    const assignmentGroupMember = await supabase.from("assignment_groups_members").insert({
+      assignment_group_id: assignmentGroup.data!.id,
+      profile_id: students[0].private_profile_id,
+      assignment_id: assignments[1].id,
+      class_id: course.id,
+      added_by: instructor!.private_profile_id
+    });
+    if (assignmentGroupMember.error) {
+      throw new Error(`Failed to create assignment group member: ${assignmentGroupMember.error.message}`);
+    }
+    const assignmentGroupMember2 = await supabase.from("assignment_groups_members").insert({
+      assignment_group_id: assignmentGroup.data!.id,
+      profile_id: students[1].private_profile_id,
+      assignment_id: assignments[1].id,
+      class_id: course.id,
+      added_by: instructor!.private_profile_id
+    });
+    if (assignmentGroupMember2.error) {
+      throw new Error(`Failed to create assignment group member: ${assignmentGroupMember2.error.message}`);
+    }
+    //Add a submission for the group
+    const submission2 = await insertPreBakedSubmission({
+      assignment_group_id: assignmentGroup.data!.id,
+      assignment_id: assignments[1].id,
+      class_id: course.id
+    });
+
+    const { error: submissionComment1Error } = await supabase
+      .from("submission_comments")
+      .insert({
+        submission_id: submission1.submission_id,
+        class_id: course.id,
+        author: instructor!.private_profile_id,
+        comment: "Good work on this aspect!",
+        submission_review_id: submission1.grading_review_id,
+        rubric_check_id: assignments[0].rubricChecks.find((check) => check.is_annotation)?.id,
+        points: 90
+      })
+      .select("id");
+    const { error: submissionComment2Error } = await supabase
+      .from("submission_comments")
+      .insert({
+        submission_id: submission2.submission_id,
+        class_id: course.id,
+        author: instructor!.private_profile_id,
+        comment: "Good work on this aspect!",
+        submission_review_id: submission2.grading_review_id,
+        rubric_check_id: assignments[1].rubricChecks.find((check) => check.is_annotation)?.id,
+        points: 80
+      })
+      .select("id");
+    if (submissionComment1Error || submissionComment2Error) {
+      throw new Error(
+        `Failed to create submission comments: ${submissionComment1Error?.message || submissionComment2Error?.message}`
+      );
+    }
+
+    // Release submission review for assignment 1 and 2 only
+    await supabase.from("submission_reviews").update({ released: true }).eq("id", submission1.grading_review_id);
+    await supabase.from("submission_reviews").update({ released: true }).eq("id", submission2.grading_review_id);
+
+    // Add a code walk for assignment 1
+    const codeWalkRubric = await supabase
+      .from("rubrics")
+      .insert({
+        assignment_id: assignments[0].id,
+        class_id: course.id,
+        name: "Code Walk",
+        review_round: "code-walk"
+      })
+      .select("id")
+      .single();
+    if (codeWalkRubric.error) {
+      throw new Error(`Failed to create code walk: ${codeWalkRubric.error.message}`);
+    }
+    // Populate with a single rubric part, criteria and check
+    const codeWalkPart = await supabase
+      .from("rubric_parts")
+      .insert({
+        class_id: course.id,
+        name: "Code Walk",
+        description: "Code Walk",
+        ordinal: 0,
+        rubric_id: codeWalkRubric.data!.id
+      })
+      .select("id")
+      .single();
+    if (codeWalkPart.error) {
+      throw new Error(`Failed to create code walk part: ${codeWalkPart.error.message}`);
+    }
+    // Populate with a single rubric part, criteria and check
+    const codeWalkCriteria = await supabase
+      .from("rubric_criteria")
+      .insert({
+        class_id: course.id,
+        name: "Code Walk",
+        description: "Code Walk",
+        ordinal: 0,
+        total_points: 90,
+        is_additive: true,
+        rubric_part_id: codeWalkPart.data!.id,
+        rubric_id: codeWalkRubric.data!.id
+      })
+      .select("id")
+      .single();
+    if (codeWalkCriteria.error) {
+      throw new Error(`Failed to create code walk criteria: ${codeWalkCriteria.error.message}`);
+    }
+    // Populate with a single rubric part, criteria and check
+    const codeWalkCheck = await supabase
+      .from("rubric_checks")
+      .insert({
+        class_id: course.id,
+        name: "Code Walk",
+        description: "Code Walk",
+        ordinal: 0,
+        points: 90,
+        is_annotation: false,
+        is_comment_required: false,
+        is_required: true,
+        rubric_criteria_id: codeWalkCriteria.data!.id
+      })
+      .select("id")
+      .single();
+    if (codeWalkCheck.error) {
+      throw new Error(`Failed to create code walk check: ${codeWalkCheck.error.message}`);
+    }
+    const submissionCodeWalkReview = await supabase
+      .from("submission_reviews")
+      .select("id")
+      .eq("submission_id", submission1.submission_id)
+      .eq("rubric_id", codeWalkRubric.data!.id)
+      .single();
+    if (submissionCodeWalkReview.error) {
+      throw new Error(`Failed to create code walk review: ${submissionCodeWalkReview.error.message}`);
+    }
+    //Throw in a quick review for the code walk on submission 1
+    const submissionCodeWalkComment = await supabase.from("submission_comments").insert({
+      submission_id: submission1.submission_id,
+      class_id: course.id,
+      author: instructor!.private_profile_id,
+      comment: "Good work on this aspect!",
+      rubric_check_id: codeWalkCheck.data!.id,
+      points: 90,
+      submission_review_id: submissionCodeWalkReview.data!.id
+    });
+    if (submissionCodeWalkComment.error) {
+      throw new Error(`Failed to create code walk comment: ${submissionCodeWalkComment.error.message}`);
+    }
+    await supabase
+      .from("submission_reviews")
+      .update({
+        released: true
+      })
+      .eq("id", submissionCodeWalkReview.data!.id);
   });
 
   test.beforeEach(async ({ page }) => {
@@ -171,13 +364,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Verify calculated/summary columns are present (some headers may be grouped/virtualized)
     // Check for at least one Average column and the Final Grade column
-    await expect(page.getByText("Average Lab Assignments")).toBeVisible();
+    await expect(page.getByText("Average Assignments")).toBeVisible();
 
     // Verify manual grading columns
     await expect(page.getByText("Participation")).toBeVisible();
 
     // Check calculated columns (avoid relying on hidden/virtualized headers)
-    await expect(page.getByText("Average Lab Assignments")).toBeVisible();
     await expect(page.getByText("Final Grade")).toBeVisible();
 
     // Verify student count
@@ -188,42 +380,97 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByRole("button", { name: "Import Column" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Column" })).toBeVisible();
 
+    // Check that Student 1's assignments are showing grades, final grade is calculated
+
+    await expect(async () => {
+      const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 1 (Group)");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(25);
+    }).toPass();
+
+    await expect(async () => {
+      const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 2 (Group)");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(30);
+    }).toPass();
+
+    await expect(async () => {
+      const after = await readCellNumber(page, students[1].private_profile_name, "Test Assignment 2 (Group)");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(30);
+    }).toPass();
+
+    await expect(async () => {
+      const after = await readCellNumber(
+        page,
+        students[0].private_profile_name,
+        "Code Walk: Test Assignment 1 (Group)"
+      );
+      expect(after).not.toBeNaN();
+      expect(after).toBe(90);
+    }).toPass();
+
+    await expect(async () => {
+      const after = await readCellNumber(page, students[0].private_profile_name, "Participation");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(84.5);
+    }).toPass();
+
+    await expect(async () => {
+      const after = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(33.2);
+    }).toPass();
+
     // Take screenshot for visual regression testing
     await argosScreenshot(page, "Gradebook Page - Full Data");
   });
 
   test("Editing a manual column updates the Participation cell value", async ({ page }) => {
     const studentName = students[0].private_profile_name;
-    // Open Participation cell and set score to 80
-    const partCell = await getGridcellInRow(page, studentName, "Participation");
     await waitForVirtualizerIdle(page);
-    await waitForStableBox(page, partCell);
+    // Open Participation cell and set score to 80
+    const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
+    const partCell = await waitForStableLocator(page, getPartCell);
     await partCell.click();
     await page.locator('input[name="score"]').fill("80");
     await page.getByRole("button", { name: /^Update$/ }).click();
 
     // Expect participation cell to show the new value and final grade to change
     await expect(partCell).toHaveText(/80(\.0+)?|80$/);
+
+    await expect(async () => {
+      const after = await readCellNumber(page, studentName, "Final Grade");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(32.75);
+    }).toPass();
   });
 
-  test("Overriding a calculated column (Final Grade) persists and displays the override", async ({ page }) => {
+  test("Overriding a calculated column (Average Assignments) persists and displays the override", async ({ page }) => {
     const studentName = students[0].private_profile_name;
-    const before = await readCellNumber(page, studentName, "Final Grade");
-
-    // Open Final Grade cell and override
-    const finalCell = await getGridcellInRow(page, studentName, "Final Grade");
     await waitForVirtualizerIdle(page);
-    await waitForStableBox(page, finalCell);
+    const before = await readCellNumber(page, studentName, "Average Assignments");
+
+    // Open Average Assignments cell and override
+    const getFinalCell = () => getGridcellInRow(page, studentName, "Average Assignments");
+    const finalCell = await waitForStableLocator(page, getFinalCell);
     await finalCell.click();
     await page.locator('input[name="score_override"]').fill("92");
     await page.getByRole("button", { name: /^Save Override$/ }).click();
 
     // Value should update to the override
     await expect(async () => {
-      const after = await readCellNumber(page, studentName, "Final Grade");
+      const after = await readCellNumber(page, studentName, "Average Assignments");
       expect(after).not.toBeNaN();
       expect(after).toBe(92);
       expect(after).not.toBe(before);
+    }).toPass();
+
+    // Final Grade should update
+    await expect(async () => {
+      const after = await readCellNumber(page, studentName, "Final Grade");
+      expect(after).not.toBeNaN();
+      expect(after).toBe(90.8);
     }).toPass();
   });
 
@@ -258,9 +505,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Validate at least one student's imported score shows up in the new column
     await expect(page.getByRole("gridcell", { name: /Grade cell for Imported Quiz.*:\s*95(\.0+)?/ })).toBeVisible();
 
-    // Re-check Final Grade cell renders some content (may be '-' until inputs exist, or numeric if overridden)
-    const finalText = await readCellText(page, students[0].private_profile_name, "Final Grade");
-    expect(finalText).not.toEqual("");
+    // This column is not included in final grade so don't check that it updates
   });
 
   test("Add Column workflow creates a manual column and allows entering a score", async ({ page }) => {
@@ -281,14 +526,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await page.getByRole("button", { name: /^Update$/ }).click();
     await expect(ecCell).toHaveText(/7/);
 
-    // Re-check Final Grade still renders as a number
-    await expect(async () => {
-      const val = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
-      expect(val).not.toBeNaN();
-    }).toPass();
+    // This column is not included in final grade so don't check that it updates
   });
 
-  test("Student What If page allows simulating grades", async ({ page }) => {
+  test("Student What If page allows simulating grades and shows released grades", async ({ page }) => {
     // Log in as a student and navigate to the student gradebook
     // Didn't want to make another test suite with a different beforEach just for a single test
     await loginAsUser(page, students[0], course);
@@ -356,130 +597,6 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Student should still see the Participation card, but it should show "In Progress"
     await loginAsUser(page, students[0], course);
     await page.goto(`/course/${course.id}/gradebook`);
-    await page.waitForLoadState("networkidle");
-    const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
-    await expect(unreleasedCard).toBeVisible();
-    await expect(unreleasedCard).toContainText(/In Progress/i);
-  });
-});
-
-// Separate suite for group assignments
-test.describe("Gradebook Page - Groups & Release States", () => {
-  test.describe.configure({ mode: "serial" });
-
-  let groupCourse: Course;
-  let groupStudents: TestingUser[] = [];
-  let groupInstructor: TestingUser | undefined;
-
-  test.beforeAll(async () => {
-    // Create the class for group assignments
-    groupCourse = await createClass({ name: "Gradebook Group Test Course" });
-
-    // Create roster
-    const users = await createUsersInClass([
-      {
-        name: "Dana Diaz",
-        email: "dana-gradebook@pawtograder.net",
-        role: "student",
-        class_id: groupCourse.id,
-        useMagicLink: true
-      },
-      {
-        name: "Evan Edwards",
-        email: "evan-gradebook@pawtograder.net",
-        role: "student",
-        class_id: groupCourse.id,
-        useMagicLink: true
-      },
-      {
-        name: "Frankie Flores",
-        email: "frankie-gradebook@pawtograder.net",
-        role: "student",
-        class_id: groupCourse.id,
-        useMagicLink: true
-      },
-      {
-        name: "Prof Gomez",
-        email: "prof-gomez-gradebook@pawtograder.net",
-        role: "instructor",
-        class_id: groupCourse.id,
-        useMagicLink: true
-      }
-    ]);
-
-    groupStudents = users.slice(0, 3);
-    groupInstructor = users[3];
-
-    // Create assignments and gradebook columns for groups
-    await createAssignmentsAndGradebookColumns({
-      class_id: groupCourse.id,
-      numAssignments: 2,
-      numManualGradedColumns: 0,
-      manualGradedColumnSlugs: ["participation"],
-      groupConfig: "groups"
-    });
-  });
-
-  test.beforeEach(async ({ page }) => {
-    await loginAsUser(page, groupInstructor!, groupCourse);
-    const navRegion = page.locator("#course-nav");
-    await navRegion
-      .getByRole("link")
-      .filter({ hasText: /^Gradebook$/ })
-      .click();
-    await page.waitForLoadState("networkidle");
-  });
-
-  test("Instructor gradebook loads for group course", async ({ page }) => {
-    await expect(page.getByText("Student Name")).toBeVisible();
-    for (const s of groupStudents) {
-      await expect(
-        page.getByRole("row", { name: new RegExp(`^Student ${escapeRegExp(s.private_profile_name)} grades$`) })
-      ).toBeVisible();
-    }
-    await expect(page.getByText("Average Lab Assignments")).toBeVisible();
-    await expect(page.getByText("Final Grade")).toBeVisible();
-    await expect(page.getByText("Participation")).toBeVisible();
-    await expect(page.getByText(`Showing ${groupStudents.length} students`)).toBeVisible();
-  });
-
-  test("Release/unrelease manual column toggles student visibility (group)", async ({ page }) => {
-    // Release Participation using the same pattern as individual gradebook
-    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
-    await expect(tableRegion).toBeVisible();
-    await tableRegion.evaluate((el) => {
-      el.scrollLeft = el.scrollWidth;
-    });
-    await tableRegion.locator('button[aria-label="Column options"]').last().click();
-    const releaseItem = page.getByRole("menuitem", { name: "Release Column", exact: true });
-    await releaseItem.click();
-
-    // Student sees card
-    await loginAsUser(page, groupStudents[0], groupCourse);
-    await page.goto(`/course/${groupCourse.id}/gradebook`);
-    await page.waitForLoadState("networkidle");
-    await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
-
-    // Unrelease and verify it's hidden
-    await loginAsUser(page, groupInstructor!, groupCourse);
-    const navRegion = page.locator("#course-nav");
-    await navRegion
-      .getByRole("link")
-      .filter({ hasText: /^Gradebook$/ })
-      .click();
-    await page.waitForLoadState("networkidle");
-
-    const tableRegion2 = page.getByRole("region", { name: "Instructor Gradebook Table" });
-    await expect(tableRegion2).toBeVisible();
-    await tableRegion2.evaluate((el) => {
-      el.scrollLeft = el.scrollWidth;
-    });
-    await tableRegion2.locator('button[aria-label="Column options"]').last().click();
-    const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
-    await unreleaseItem.click();
-
-    await loginAsUser(page, groupStudents[0], groupCourse);
-    await page.goto(`/course/${groupCourse.id}/gradebook`);
     await page.waitForLoadState("networkidle");
     const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
     await expect(unreleasedCard).toBeVisible();

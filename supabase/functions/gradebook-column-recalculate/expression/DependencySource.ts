@@ -331,6 +331,64 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     return ["gradebook_columns"];
   }
   private gradebookColumnMap: Map<number, GradebookColumn> = new Map();
+
+  private _pushMissingIfNeeded(
+    context: ExpressionContext,
+    ret: GradebookColumnStudentWithMaxScore | GradebookColumnStudentWithMaxScore[]
+  ) {
+    const handleOne = (ret: GradebookColumnStudentWithMaxScore) => {
+      // Handle cases where THIS gradebook column is missing
+      if (!ret || ret.is_missing || (ret.score === null && ret.score_override === null)) {
+        if (!context.incomplete_values) {
+          context.incomplete_values = {
+            missing: {
+              gradebook_columns: []
+            }
+          };
+        }
+        if (!context.incomplete_values.missing) {
+          context.incomplete_values.missing = {
+            gradebook_columns: []
+          };
+        }
+        if (!context.incomplete_values.missing.gradebook_columns) {
+          context.incomplete_values.missing.gradebook_columns = [];
+        }
+        context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
+      }
+      // Handle cases where OUR DEPENDENCIES ARE MISSING
+      if (
+        ret &&
+        ret.incomplete_values !== null &&
+        typeof ret.incomplete_values === "object" &&
+        "missing" in ret.incomplete_values
+      ) {
+        const missing = ret.incomplete_values.missing as { gradebook_columns?: string[] };
+        if (!context.incomplete_values) {
+          context.incomplete_values = {
+            missing: {
+              gradebook_columns: []
+            }
+          };
+        }
+        if (!context.incomplete_values.missing) {
+          context.incomplete_values.missing = {
+            gradebook_columns: []
+          };
+        }
+        if (!context.incomplete_values.missing.gradebook_columns) {
+          context.incomplete_values.missing.gradebook_columns = [];
+        }
+        context.incomplete_values.missing.gradebook_columns.push(...(missing.gradebook_columns ?? []));
+      }
+    };
+    if (Array.isArray(ret)) {
+      ret.forEach(handleOne);
+    } else {
+      handleOne(ret);
+    }
+  }
+
   override execute({
     function_name,
     context,
@@ -342,51 +400,12 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     key: string | string[];
     class_id: number;
   }): unknown {
-    const ret = super.execute({ function_name, context, key, class_id }) as GradebookColumnStudentWithMaxScore;
-    if (!ret || ret.is_missing || (ret.score === null && ret.score_override === null)) {
-      if (!context.incomplete_values) {
-        context.incomplete_values = {
-          missing: {
-            gradebook_columns: []
-          }
-        };
-      }
-      if (!context.incomplete_values.missing) {
-        context.incomplete_values.missing = {
-          gradebook_columns: []
-        };
-      }
-      if (!context.incomplete_values.missing.gradebook_columns) {
-        context.incomplete_values.missing.gradebook_columns = [];
-      }
-      if (ret) {
-        context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
-      }
-    }
-    if (
-      ret &&
-      ret.incomplete_values !== null &&
-      typeof ret.incomplete_values === "object" &&
-      "missing" in ret.incomplete_values
-    ) {
-      const missing = ret.incomplete_values.missing as { gradebook_columns?: string[] };
-      if (!context.incomplete_values) {
-        context.incomplete_values = {
-          missing: {
-            gradebook_columns: []
-          }
-        };
-      }
-      if (!context.incomplete_values.missing) {
-        context.incomplete_values.missing = {
-          gradebook_columns: []
-        };
-      }
-      if (!context.incomplete_values.missing.gradebook_columns) {
-        context.incomplete_values.missing.gradebook_columns = [];
-      }
-      context.incomplete_values.missing.gradebook_columns.push(...(missing.gradebook_columns ?? []));
-    }
+    const ret = super.execute({ function_name, context, key, class_id }) as
+      | GradebookColumnStudentWithMaxScore
+      | GradebookColumnStudentWithMaxScore[];
+    this._pushMissingIfNeeded(context, ret);
+    console.log(context.incomplete_values);
+
     return ret;
   }
   async _retrieveValues({
@@ -469,7 +488,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         student_id: studentRecord.student_id!,
         value: {
           ...studentRecord,
-          score: studentRecord.score_override ?? studentRecord.score ?? 0,
+          score: studentRecord.score_override ?? studentRecord.score ?? null,
           max_score: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.max_score ?? 0,
           column_slug: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown"
         },
@@ -754,7 +773,7 @@ export async function addDependencySourceFunctions({
         );
       });
       const validValues = valuesToAverage.filter(
-        (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined
+        (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
       );
       if (validValues.length === 0) {
         return undefined;

@@ -362,13 +362,31 @@ async function processCellBatch(
               ? null
               : context.incomplete_values;
 
+          // Calculate released status for assignment-dependent columns
+          let isReleased = false;
+          if (
+            column.dependencies &&
+            column.dependencies.assignments &&
+            Array.isArray(column.dependencies.assignments)
+          ) {
+            // For assignment-dependent columns, check if all underlying assignment reviews are released
+            // This is determined by checking if there are any not_released items in incomplete_values
+            const hasUnreleasedDependencies =
+              (context.incomplete_values?.not_released?.gradebook_columns?.length ?? 0) > 0;
+            isReleased = !hasUnreleasedDependencies && !isMissing;
+          } else {
+            // For non-assignment columns, use the column's released status
+            isReleased = column.released;
+          }
+
           const { error: updateError } = await adminSupabase
             .from("gradebook_column_students")
             .update({
               is_missing: isMissing,
               score,
               incomplete_values: incompleteValues,
-              is_recalculating: false
+              is_recalculating: false,
+              released: isReleased
             })
             .eq("id", cell.gradebook_column_student_id);
 
@@ -379,7 +397,8 @@ async function processCellBatch(
               is_missing: isMissing,
               score,
               incomplete_values: incompleteValues,
-              is_recalculating: false
+              is_recalculating: false,
+              released: isReleased
             });
             Sentry.captureException(updateError, newScope);
             console.error("Error updating gradebook cell:", updateError);
@@ -397,7 +416,8 @@ async function processCellBatch(
               is_missing: true,
               score: null,
               incomplete_values: null,
-              is_recalculating: false
+              is_recalculating: false,
+              released: false
             })
             .eq("id", cell.gradebook_column_student_id);
           if (errorUpdateError) {
@@ -405,7 +425,8 @@ async function processCellBatch(
               is_missing: true,
               score: null,
               incomplete_values: null,
-              is_recalculating: false
+              is_recalculating: false,
+              released: false
             });
             Sentry.captureException(errorUpdateError, newScope);
             console.error("Error updating gradebook cell in error state:", errorUpdateError);

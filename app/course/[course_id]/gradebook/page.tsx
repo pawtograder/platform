@@ -7,7 +7,9 @@ export default function GradebookPage() {
     <Box p={4}>
       <Heading size="lg">Gradebook</Heading>
       <Text fontSize="sm" color="fg.muted">
-        Grades that have been released by your instructor are shown below.
+        Grades that have been released by your instructor are shown below. To use the &quot;What If&quot; grade
+        simulator, click on a score for an assignment, and edit the value. Calculated fields will automatically
+        re-calculate, and you can not edit those fields directly.
       </Text>
       <WhatIf />
     </Box>
