@@ -733,7 +733,7 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
   const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  
+
   useEffect(() => {
     let isMounted = true;
 
@@ -790,7 +790,7 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
       const newObjectUrl = URL.createObjectURL(artifactData);
       setObjectUrl(newObjectUrl);
     }
-    
+
     return () => {
       // Cleanup on unmount or when artifactData changes
       if (objectUrl) {
@@ -803,8 +803,8 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     if (objectUrl) {
       return (
         //eslint-disable-next-line @next/next/no-img-element
-        <img 
-          src={objectUrl} 
+        <img
+          src={objectUrl}
           alt={artifact.name}
           style={{
             maxWidth: "100%",
@@ -887,7 +887,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   if (downloadError) {
     return <Text color="fg.error">{downloadError}</Text>;
   }
-  
+
   if (artifact.data) {
     return (
       <Box w="100%">
