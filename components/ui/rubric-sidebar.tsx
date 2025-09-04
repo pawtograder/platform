@@ -1420,7 +1420,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
 
   // Scroll event logic for active rubric - simplified with hash-based state
   useEffect(() => {
-    let scrollTimeout: number | null = null;
+    let scrollTimeout: NodeJS.Timeout | null = null;
 
     const handleScroll = () => {
       // Clear any existing timeout to debounce the scroll handling
@@ -1484,7 +1484,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
 
   // Scroll to active rubric when it changes
   useEffect(() => {
-    let manualSelectTimeout: number | null = null;
+    let manualSelectTimeout: NodeJS.Timeout | null = null;
 
     if (scrollToRubricId && rubricRefs.current[scrollToRubricId]) {
       const container = scrollRootRef.current;
