@@ -48,7 +48,7 @@ import {
   useRubricCheck,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor, useIsInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor, useIsInstructor, useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -318,10 +318,20 @@ export function CommentActions({
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
+  const isStudent = useIsStudent();
+
+  // Get the submission review to check if it's completed
+  const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id || -1);
 
   // Check if current user can edit/delete this comment
-  // Instructors can edit all comments, graders can only edit their own
-  const canEditComment = isInstructor || (isGraderOrInstructor && comment.author === private_profile_id);
+  // 1. Instructors can edit all comments
+  // 2. Graders can only edit their own comments
+  // 3. Students can edit their own comments IF the review is not completed (or no review exists)
+  const isCommentAuthor = comment.author === private_profile_id;
+  const isReviewCompleted = comment.submission_review_id ? submissionReview?.completed_at != null : false;
+
+  const canEditComment =
+    isInstructor || (isGraderOrInstructor && isCommentAuthor) || (isStudent && isCommentAuthor && !isReviewCompleted);
 
   // Don't show actions if user can't edit
   if (!canEditComment) {

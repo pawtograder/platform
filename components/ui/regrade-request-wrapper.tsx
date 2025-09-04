@@ -89,12 +89,6 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
     resource: "submission_regrade_request_comments"
   });
 
-  // Check if current user can edit this comment
-  const { private_profile_id } = useClassProfiles();
-  const isInstructor = useIsInstructor();
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const canEditComment = isInstructor || (isGraderOrInstructor && comment.author === private_profile_id);
-
   if (!authorProfile) {
     return <Skeleton height="60px" width="100%" />;
   }
@@ -166,14 +160,7 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
                 }}
               />
             ) : (
-              <Box
-                onClick={canEditComment ? () => setIsEditing(true) : undefined}
-                cursor={canEditComment ? "pointer" : "default"}
-                _hover={canEditComment ? { bg: "bg.muted" } : {}}
-                borderRadius="sm"
-                p={1}
-                m={-1}
-              >
+              <Box borderRadius="sm" p={1} m={-1}>
                 <Markdown>{comment.comment}</Markdown>
               </Box>
             )}
