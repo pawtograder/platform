@@ -100,6 +100,14 @@ export class ClassRealTimeController {
     this._initializationPromise = this._initializeChannels();
   }
 
+  public get isStaff(): boolean {
+    return this._isStaff;
+  }
+
+  public get profileId(): string {
+    return this._profileId;
+  }
+
   /**
    * Start the realtime controller with enhanced features
    * Returns true when initialization is complete
@@ -126,13 +134,12 @@ export class ClassRealTimeController {
 
     // Session refresh is now handled by the channel manager
 
+    await this._subscribeToUserChannel();
+
     // Initialize staff channel if user is staff
     if (this._isStaff) {
       await this._subscribeToStaffChannel();
     }
-
-    // Initialize user channel (all users get their own channel)
-    await this._subscribeToUserChannel();
   }
 
   /**

@@ -328,10 +328,11 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
         >
           <Tooltip
             content={scoreAdvice}
-            positioning={{ placement: "top" }}
+            positioning={{ placement: "bottom" }}
             showArrow={true}
             ids={{ trigger: triggerId }}
             disabled={!scoreAdvice}
+            contentProps={{ style: { zIndex: 10000 } }}
           >
             <Popover.Trigger asChild>
               <Box
