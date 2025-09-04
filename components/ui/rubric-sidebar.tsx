@@ -1418,32 +1418,77 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
 
   // Scroll event logic for active rubric
   useEffect(() => {
+    let scrollTimeout: NodeJS.Timeout;
+
     const handleScroll = () => {
-      if (!scrollRootRef.current) return;
-      let bestId: number | undefined = undefined;
-      let bestTop: number | undefined = undefined;
-      for (const rubric of rubrics) {
-        const ref = rubricRefs.current[rubric.id];
-        if (ref && scrollRootRef.current) {
-          const containerRect = scrollRootRef.current.getBoundingClientRect();
-          const boxRect = ref.getBoundingClientRect();
-          const relativeTop = boxRect.top - containerRect.top;
-          if (bestTop === undefined || Math.abs(relativeTop) < Math.abs(bestTop)) {
-            bestTop = relativeTop;
-            bestId = rubric.id;
+      // Clear any existing timeout to debounce the scroll handling
+      clearTimeout(scrollTimeout);
+
+      scrollTimeout = setTimeout(() => {
+        if (!scrollRootRef.current) return;
+
+        const container = scrollRootRef.current;
+        const containerRect = container.getBoundingClientRect();
+
+        let bestId: number | undefined = undefined;
+        let bestTop: number | undefined = undefined;
+        let anyRubricVisible = false;
+
+        for (const rubric of rubrics) {
+          const ref = rubricRefs.current[rubric.id];
+          if (ref) {
+            const boxRect = ref.getBoundingClientRect();
+            const relativeTop = boxRect.top - containerRect.top;
+            const relativeBottom = boxRect.bottom - containerRect.top;
+
+            // Check if this rubric is at least partially visible in the container
+            const isVisible = relativeBottom > 0 && relativeTop < containerRect.height;
+
+            if (isVisible) {
+              anyRubricVisible = true;
+
+              // For visible rubrics, find the one closest to the top of the container
+              if (bestTop === undefined || Math.abs(relativeTop) < Math.abs(bestTop)) {
+                bestTop = relativeTop;
+                bestId = rubric.id;
+              }
+            }
           }
         }
-      }
-      if (bestId !== undefined && bestId !== activeRubricId) {
-        setActiveRubricId(bestId);
-      }
+
+        // Only update active rubric if:
+        // 1. We found a visible rubric, AND
+        // 2. It's different from the current active rubric, AND
+        // 3. We're not in a state where no rubrics are visible (scrolled past content)
+        if (anyRubricVisible && bestId !== undefined && bestId !== activeRubricId) {
+          setActiveRubricId(bestId);
+        } else if (!anyRubricVisible && rubrics.length > 0) {
+          // If no rubrics are visible, check if we're scrolled past all content
+          // In this case, keep the last rubric as active to prevent oscillation
+          const lastRubric = rubrics[rubrics.length - 1];
+          const lastRef = rubricRefs.current[lastRubric.id];
+
+          if (lastRef) {
+            const lastBoxRect = lastRef.getBoundingClientRect();
+            const lastRelativeBottom = lastBoxRect.bottom - containerRect.top;
+
+            // If we're scrolled past the last rubric, keep it as active
+            if (lastRelativeBottom < 0 && activeRubricId !== lastRubric.id) {
+              setActiveRubricId(lastRubric.id);
+            }
+          }
+        }
+      }, 100); // 100ms debounce
     };
+
     const container = scrollRootRef.current;
     if (container) {
       container.addEventListener("scroll", handleScroll, { passive: true });
       handleScroll();
     }
+
     return () => {
+      clearTimeout(scrollTimeout);
       if (container) {
         container.removeEventListener("scroll", handleScroll);
       }
@@ -1493,7 +1538,6 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
           {index < rubrics.length - 1 && (
             <Separator orientation="horizontal" borderTopWidth="4px" borderColor="border.emphasized" my={2} mt="50px" />
           )}
-          {index === rubrics.length - 1 && rubrics.length > 1 && <Box w="100%" h="100vh" />}
         </Box>
       ))}
     </VStack>
