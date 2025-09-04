@@ -8,6 +8,7 @@ import CodeFile, {
   RubricCriteriaSelectGroupOption
 } from "@/components/ui/code-file";
 import Link from "@/components/ui/link";
+import DownloadLink from "@/components/ui/download-link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
@@ -71,7 +72,7 @@ import { format } from "date-fns";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useActiveRubricId } from "@/hooks/useSubmissionReview";
 
@@ -729,11 +730,9 @@ function ArtifactWithComments({
     </Box>
   );
 }
-function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
-  // Load the artifact data from supabase
+function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtifact; artifactKey: string }) {
   const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
-  const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   useEffect(() => {
     let isMounted = true;
 
@@ -824,12 +823,53 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         return <Spinner />;
       }
     }
+  } else {
+    return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }
-  return (
-    <Box>
-      <Text>{artifact.name}</Text>
-    </Box>
-  );
+}
+
+function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
+  const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
+  // Load the artifact data from supabase
+  const [downloadLink, setDownloadLink] = useState<string | null>(null);
+  useEffect(() => {
+    let isMounted = true;
+    async function loadArtifact() {
+      const client = createClient();
+      const { data, error } = await client.storage
+        .from("submission-artifacts")
+        .createSignedUrl(artifactKey, 60 * 60 * 24 * 30);
+      if (!isMounted) return;
+      if (error) {
+        return <Text>Error downloading artifact: {error.message}</Text>;
+      }
+      setDownloadLink(data.signedUrl);
+    }
+    loadArtifact();
+    return () => {
+      isMounted = false;
+    };
+  }, [artifactKey]);
+  if (artifact.data) {
+    return (
+      <Box w="100%">
+        {downloadLink && (
+          <DownloadLink href={downloadLink} filename={artifact.name} mb={2}>
+            <Icon as={FaDownload} mr={2} /> Download {artifact.name}
+          </DownloadLink>
+        )}
+        <RenderedArtifact artifact={artifact} artifactKey={artifactKey} />
+      </Box>
+    );
+  } else if (downloadLink) {
+    return (
+      <DownloadLink href={downloadLink} filename={artifact.name}>
+        Download {artifact.name} (Hint: add artifact.data to get a better grading experience)
+      </DownloadLink>
+    );
+  } else {
+    return <Spinner />;
+  }
 }
 
 export default function FilesView() {
