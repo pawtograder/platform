@@ -43,6 +43,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const writableReviews = useWritableSubmissionReviews();
   const assignmentController = useAssignmentController();
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
+  const [clientActiveRubricId, setClientActiveRubricId] = useState<number | undefined>(undefined);
 
   const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
   const selectedReviewIdParam = searchParams.get("selected_review_id");
@@ -175,12 +176,20 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     submission.grading_review_id
   ]);
 
-  // Derive activeRubricId
+  // Derive activeRubricId - prioritize client state, then URL param, then defaults
   const activeRubricId: number | undefined = useMemo(() => {
+    // If we have client state, use that
+    if (clientActiveRubricId !== undefined) {
+      return clientActiveRubricId;
+    }
+
+    // Otherwise fall back to URL param if specified
     if (selectedRubricIdParam) {
       const id = parseInt(selectedRubricIdParam, 10);
       if (Number.isFinite(id)) return id;
     }
+
+    // Then fall back to defaults based on context
     if (activeReviewAssignmentId) {
       const ra = myAssignedReviews.find((r) => r.id === activeReviewAssignmentId);
       if (ra?.rubric_id) return ra.rubric_id;
@@ -191,6 +200,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     }
     return assignmentController.assignment.grading_rubric_id ?? undefined;
   }, [
+    clientActiveRubricId,
     selectedRubricIdParam,
     activeReviewAssignmentId,
     myAssignedReviews,
@@ -272,15 +282,9 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     router.push(qs ? `${pathname}?${qs}` : pathname);
   };
 
+  // Simple React state setter - no URL manipulation
   const setActiveRubricId = (id: number | undefined) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (id === undefined || id === null) {
-      params.delete("selected_rubric_id");
-    } else {
-      params.set("selected_rubric_id", String(id));
-    }
-    const qs = params.toString();
-    router.push(qs ? `${pathname}?${qs}` : pathname);
+    setClientActiveRubricId(id);
   };
 
   const value = {
