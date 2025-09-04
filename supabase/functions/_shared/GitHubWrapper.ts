@@ -911,11 +911,23 @@ export async function syncRepoPermissions(
   }
   const team_slug = `${courseSlug}-staff`;
   if (!staffTeamCache.has(org + "-" + courseSlug)) {
-    staffTeamCache.set(org + "-" + courseSlug, getTeamMembers(org, team_slug, octokit));
+    staffTeamCache.set(
+      org + "-" + courseSlug,
+      getTeamMembers(org, team_slug, octokit).catch((err) => {
+        staffTeamCache.delete(org + "-" + courseSlug);
+        throw err;
+      })
+    );
   }
   const staffTeamUsernames = await staffTeamCache.get(org + "-" + courseSlug);
   if (!orgMembershipCache.has(org)) {
-    orgMembershipCache.set(org, getOrgMembers(org, octokit));
+    orgMembershipCache.set(
+      org,
+      getOrgMembers(org, octokit).catch((err) => {
+        orgMembershipCache.delete(org);
+        throw err;
+      })
+    );
   }
   const orgMembers = await orgMembershipCache.get(org);
   const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());

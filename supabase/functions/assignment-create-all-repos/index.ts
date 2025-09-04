@@ -217,9 +217,9 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
           const [org, repoName] = repo.repository.split("/");
           let student_github_usernames = [];
           if (repo.assignment_groups?.assignment_groups_members) {
-            student_github_usernames = repo.assignment_groups.assignment_groups_members.map(
-              (member) => member.user_roles.users.github_username!
-            );
+            student_github_usernames = repo.assignment_groups.assignment_groups_members
+              .map((member) => member.user_roles.users.github_username)
+              .filter((username) => username); // Filter out falsy values
           } else {
             const github_username = repo.profiles?.user_roles?.users.github_username;
             if (!github_username) {
@@ -228,7 +228,19 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
             }
             student_github_usernames = [github_username];
           }
-          await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, student_github_usernames, scope);
+
+          // Deduplicate and filter out any remaining falsy values
+          const uniqueUsernames = [
+            ...new Set(student_github_usernames.filter((username): username is string => Boolean(username)))
+          ];
+
+          // Skip if no valid usernames
+          if (uniqueUsernames.length === 0) {
+            console.log(`No valid github usernames for repo ${repo.repository}`);
+            return;
+          }
+
+          await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
         })
       )
     );
