@@ -1,11 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { syncStaffTeam } from "../_shared/GitHubWrapper.ts";
-import {
-  assertUserIsInstructor,
-  fetchAllPages,
-  UserVisibleError,
-  wrapRequestHandler
-} from "../_shared/HandlerUtils.ts";
+import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -46,7 +41,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await adminSupabase
         .from("user_roles")
-        .select("users(github_username)")
+        .select("github_org_confirmed, users(github_username)")
         .eq("class_id", course_id)
         .or("role.eq.instructor,role.eq.grader")
         .limit(1000);
@@ -54,8 +49,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.error(staffError);
         throw new UserVisibleError("Error fetching staff");
       }
-      return staff!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
-    });
+      return staff!
+        .filter((s) => s.users.github_username && s.github_org_confirmed)
+        .map((s) => s.users.github_username!);
+    }, scope);
   } else {
     const { course_id } = (await req.json()) as { course_id: number };
     scope?.setTag("course_id", course_id.toString());
@@ -76,16 +73,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await supabase
         .from("user_roles")
-        .select("users(github_username)")
+        .select("github_org_confirmed, users(github_username)")
         .eq("class_id", course_id)
         .or("role.eq.instructor,role.eq.grader")
+        .eq("github_org_confirmed", true)
         .limit(1000);
       if (staffError) {
         console.error(staffError);
         throw new UserVisibleError("Error fetching staff");
       }
-      return staff!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
-    });
+      return staff!
+        .filter((s) => s.users.github_username && s.github_org_confirmed)
+        .map((s) => s.users.github_username!);
+    }, scope);
   }
 }
 

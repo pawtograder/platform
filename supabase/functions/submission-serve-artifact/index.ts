@@ -2,7 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Open as openZip } from "npm:unzipper";
 import { create, Payload, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts";
-import { assertUserIsInstructorOrGrader, SecurityError, UserVisibleError } from "../_shared/HandlerUtils.ts";
+import {
+  assertUserIsInCourse,
+  assertUserIsInstructorOrGrader,
+  SecurityError,
+  UserVisibleError
+} from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 const corsHeaders = {
@@ -153,8 +158,8 @@ const handleAuthRequest = async (req: Request): Promise<Response> => {
   const { classId, submissionId, artifactId } = await req.json();
   const courseId = parseInt(classId);
 
-  // Validate user permissions for the course
-  const { supabase } = await assertUserIsInstructorOrGrader(courseId, authToken);
+  // Validate user permissions for the course, will later validate that user has access to the submission
+  const { supabase } = await assertUserIsInCourse(courseId, authToken);
 
   // Get user info for JWT
   const {
