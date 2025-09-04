@@ -785,12 +785,14 @@ export async function syncTeam(
       throw e;
     }
   }
-  const githubUsernames = await githubUsernamesFetcher();
-  const existingMembers = new Map(members.map((m) => [m.login.toLowerCase(), m]));
-  const newMembers = githubUsernames.filter((u) => u && !existingMembers.has(u.toLowerCase()));
-  const removeMembers = existingMembers.keys().filter((u) => u && !githubUsernames.includes(u.toLowerCase()));
+  const githubUsernames = (await githubUsernamesFetcher()).map((u) => u.toLowerCase());
+  const existingMembers = members.map((m) => m.login.toLowerCase());
+  const newMembers = githubUsernames.filter((u) => u && !existingMembers.includes(u));
+  const removeMembers = existingMembers.filter((u) => u && !githubUsernames.includes(u));
   console.log(`Class team: ${team_slug} intended members: ${githubUsernames.join(", ")}`);
   console.log(`Existing members in team ${team_slug}: ${members.map((m) => m.login).join(", ")}`);
+  console.log(`New members to add: ${newMembers.join(", ")}`);
+  console.log(`Members to remove: ${removeMembers.join(", ")}`);
   for (const username of newMembers) {
     try {
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
@@ -809,6 +811,9 @@ export async function syncTeam(
     }
   }
   for (const username of removeMembers) {
+    const newScope = scope?.clone();
+    newScope?.setTag("username", username);
+    Sentry.captureMessage(`Removing member from team ${team_slug}`, newScope);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug,
@@ -983,6 +988,9 @@ export async function syncRepoPermissions(
   }
   for (const username of removeAccess) {
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
+    const newScope = scope?.clone();
+    newScope?.setTag("username", username);
+    Sentry.captureMessage(`Removing collaborator in ${org}`, newScope);
     await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,

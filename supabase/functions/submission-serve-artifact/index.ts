@@ -2,11 +2,7 @@ import { create, Payload, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Open as openZip } from "npm:unzipper";
-import {
-  assertUserIsInCourse,
-  SecurityError,
-  UserVisibleError
-} from "../_shared/HandlerUtils.ts";
+import { assertUserIsInCourse, SecurityError, UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 const corsHeaders = {
