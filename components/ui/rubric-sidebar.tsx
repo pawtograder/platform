@@ -48,7 +48,7 @@ import {
   useRubricCheck,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor, useIsInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -315,6 +315,18 @@ export function CommentActions({
   setIsEditing: (isEditing: boolean) => void;
 }) {
   const submissionController = useSubmissionController();
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+
+  // Check if current user can edit/delete this comment
+  // Instructors can edit all comments, graders can only edit their own
+  const canEditComment = isInstructor || (isGraderOrInstructor && comment.author === private_profile_id);
+
+  // Don't show actions if user can't edit
+  if (!canEditComment) {
+    return null;
+  }
 
   return (
     <HStack gap={1}>

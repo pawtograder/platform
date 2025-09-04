@@ -11,6 +11,7 @@ import {
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { useAssignmentController, useRegradeRequest } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useProfileRole } from "@/hooks/useCourseController";
 import { useSubmission, useSubmissionController, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
@@ -26,7 +27,6 @@ import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
-import { useProfileRole } from "@/hooks/useCourseController";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -88,6 +88,12 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_regrade_request_comments"
   });
+
+  // Check if current user can edit this comment
+  const { private_profile_id } = useClassProfiles();
+  const isInstructor = useIsInstructor();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const canEditComment = isInstructor || (isGraderOrInstructor && comment.author === private_profile_id);
 
   if (!authorProfile) {
     return <Skeleton height="60px" width="100%" />;
@@ -160,7 +166,16 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <Box
+                onClick={canEditComment ? () => setIsEditing(true) : undefined}
+                cursor={canEditComment ? "pointer" : "default"}
+                _hover={canEditComment ? { bg: "bg.muted" } : {}}
+                borderRadius="sm"
+                p={1}
+                m={-1}
+              >
+                <Markdown>{comment.comment}</Markdown>
+              </Box>
             )}
           </Box>
         </VStack>
