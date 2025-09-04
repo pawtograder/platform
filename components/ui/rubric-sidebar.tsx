@@ -1420,11 +1420,14 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
 
   // Scroll event logic for active rubric - simplified with hash-based state
   useEffect(() => {
-    let scrollTimeout: NodeJS.Timeout;
+    let scrollTimeout: number | null = null;
 
     const handleScroll = () => {
       // Clear any existing timeout to debounce the scroll handling
-      clearTimeout(scrollTimeout);
+      if (scrollTimeout !== null) {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = null;
+      }
 
       scrollTimeout = setTimeout(() => {
         if (!scrollRootRef.current) return;
@@ -1469,7 +1472,10 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
     }
 
     return () => {
-      clearTimeout(scrollTimeout);
+      if (scrollTimeout !== null) {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = null;
+      }
       if (container) {
         container.removeEventListener("scroll", handleScroll);
       }
@@ -1478,6 +1484,8 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
 
   // Scroll to active rubric when it changes
   useEffect(() => {
+    let manualSelectTimeout: number | null = null;
+
     if (scrollToRubricId && rubricRefs.current[scrollToRubricId]) {
       const container = scrollRootRef.current;
       const target = rubricRefs.current[scrollToRubricId];
@@ -1496,12 +1504,19 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
       container.scrollTo({ top: scrollTop, behavior: "smooth" });
 
       // Clear the flag after scroll animation completes
-      setTimeout(() => {
+      manualSelectTimeout = setTimeout(() => {
         isManuallySelecting.current = false;
       }, 1000); // Give time for smooth scroll to complete
 
       setScrollToRubricId(undefined);
     }
+
+    return () => {
+      if (manualSelectTimeout !== null) {
+        clearTimeout(manualSelectTimeout);
+        manualSelectTimeout = null;
+      }
+    };
   }, [scrollToRubricId, scrollRootRef, setScrollToRubricId, setActiveRubricId]);
 
   // Callback to set refs
