@@ -293,7 +293,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               message: "No GitHub check runs; creating check run",
               data: { repository, sha }
             });
-            fetchedCheckRun = await createCheckRun(repository, sha, workflow_ref);
+            const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}`;
+            fetchedCheckRun = await createCheckRun(repository, sha, detailsUrl, scope);
             Sentry.addBreadcrumb({
               category: "fallback",
               level: "info",
@@ -367,9 +368,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             data: { id: upsertResult.data?.id }
           });
           checkRun = upsertResult.data;
-          Sentry.captureMessage(
-            `We made it through the fallback on ${repository}@${sha}, check_run_id=${checkRun.check_run_id}`
-          );
         }
         return { ...checkRun, user_roles: userRoles };
       };

@@ -91,7 +91,8 @@ async function handleAssignmentGroupJoin(
         assignmentGroup.classes!.github_org!,
         assignmentGroup.repositories[0].repository,
         assignmentGroup.classes!.slug!,
-        remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!)
+        remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        scope
       );
     } else if (remaining_members_error) {
       console.log(remaining_members_error);

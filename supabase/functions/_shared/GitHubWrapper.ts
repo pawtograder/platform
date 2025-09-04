@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 
+const adminsThatShouldNotBeListedAsAdmins = ["smaran-teja", "jonathantarun", "ricksva", "jondenman", "tsrats"];
 /**
  * Retry utility with exponential backoff for GitHub API calls
  */
@@ -773,7 +774,6 @@ export async function syncTeam(
       per_page: 100
     });
     console.log(`Found ${data.length} members in team ${team_slug}`);
-    console.log(JSON.stringify(data, null, 2));
     members = data;
   } catch (e) {
     if (e instanceof RequestError && e.message.includes("Not Found")) {
@@ -785,21 +785,35 @@ export async function syncTeam(
       throw e;
     }
   }
-  const githubUsernames = await githubUsernamesFetcher();
-  const existingMembers = new Map(members.map((m) => [m.login, m]));
-  const newMembers = githubUsernames.filter((u) => u && !existingMembers.has(u));
-  const removeMembers = existingMembers.keys().filter((u) => u && !githubUsernames.includes(u));
+  const githubUsernames = (await githubUsernamesFetcher()).map((u) => u.toLowerCase());
+  const existingMembers = members.map((m) => m.login.toLowerCase());
+  const newMembers = githubUsernames.filter((u) => u && !existingMembers.includes(u));
+  const removeMembers = existingMembers.filter((u) => u && !githubUsernames.includes(u));
   console.log(`Class team: ${team_slug} intended members: ${githubUsernames.join(", ")}`);
   console.log(`Existing members in team ${team_slug}: ${members.map((m) => m.login).join(", ")}`);
+  console.log(`New members to add: ${newMembers.join(", ")}`);
+  console.log(`Members to remove: ${removeMembers.join(", ")}`);
   for (const username of newMembers) {
-    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
-      org,
-      team_slug,
-      username,
-      role: "member"
-    });
+    try {
+      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+        org,
+        team_slug,
+        username,
+        role: "member"
+      });
+    } catch (e) {
+      const newScope = scope?.clone();
+      newScope?.setTag("github_operation_error", "failed_to_add_member");
+      newScope?.setTag("username", username);
+      console.log("Error adding member", username);
+      console.error(e);
+      Sentry.captureException(e, newScope);
+    }
   }
   for (const username of removeMembers) {
+    const newScope = scope?.clone();
+    newScope?.setTag("username", username);
+    Sentry.captureMessage(`Removing member from team ${team_slug}`, newScope);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug,
@@ -858,22 +872,39 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   console.log(`Invitation response: ${JSON.stringify(resp.data)}`);
   return true;
 }
-const staffTeamCache = new Map<string, string[]>();
-const orgMembershipCache = new Map<string, string[]>();
+const staffTeamCache = new Map<string, Promise<string[]>>();
+const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
+async function getTeamMembers(org: string, team_slug: string, octokit: Octokit): Promise<string[]> {
+  const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
+    org,
+    team_slug
+  });
+  console.log(`Found ${team.length} members in team ${team_slug}`);
+  return team.map((m) => m.login.toLowerCase());
+}
+async function getOrgMembers(
+  org: string,
+  octokit: Octokit
+): Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]> {
+  const members = await octokit.paginate("GET /orgs/{org}/members", {
+    org
+  });
+  return members;
+}
 export async function syncRepoPermissions(
   org: string,
   repo: string,
   courseSlug: string,
-  githubUsernames: string[],
+  githubUsernamesMixedCase: string[],
   scope?: Sentry.Scope
 ) {
+  const githubUsernames = githubUsernamesMixedCase.map((u) => u.toLowerCase());
   scope?.setTag("github_operation", "sync_repo_permissions");
   scope?.setTag("org", org);
   scope?.setTag("repo", repo);
   scope?.setTag("course_slug", courseSlug);
   scope?.setTag("user_count", githubUsernames.length.toString());
 
-  console.log("syncing repo permissions", org, repo, courseSlug, githubUsernames);
   if (repo.includes("/")) {
     const [owner, repoName] = repo.split("/");
     org = owner;
@@ -884,52 +915,27 @@ export async function syncRepoPermissions(
     throw new Error("No octokit found for organization " + org);
   }
   const team_slug = `${courseSlug}-staff`;
-  if (!staffTeamCache.has(courseSlug)) {
-    const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
-      org,
-      team_slug
-    });
-    const staffGithubUsernames = team.map((m) => m.login);
-    staffTeamCache.set(courseSlug, staffGithubUsernames);
-    console.log("staff team", staffGithubUsernames);
-  }
-  const staffTeamUsernames = staffTeamCache.get(courseSlug) || [];
-  if (!orgMembershipCache.has(org)) {
-    const orgMembers = await octokit.request("GET /orgs/{org}/members", {
-      org,
-      per_page: 100
-    });
-    orgMembershipCache.set(
-      org,
-      orgMembers.data.map((m) => m.login)
+  if (!staffTeamCache.has(org + "-" + courseSlug)) {
+    staffTeamCache.set(
+      org + "-" + courseSlug,
+      getTeamMembers(org, team_slug, octokit).catch((err) => {
+        staffTeamCache.delete(org + "-" + courseSlug);
+        throw err;
+      })
     );
   }
-
-  const existingInvitations = await octokit.paginate("GET /repos/{owner}/{repo}/invitations", {
-    owner: org,
-    repo
-  });
-
-  //Find expired invitations and re-send
-  const expiredInvitations = existingInvitations.filter((i) => i.expired);
-  for (const invitation of expiredInvitations) {
-    const invitee = invitation.invitee?.login;
-    if (invitee) {
-      console.log(`re-sending invitation for ${invitee}`);
-      await octokit.request("DELETE /repos/{owner}/{repo}/invitations/{invitation_id}", {
-        owner: org,
-        repo,
-        invitation_id: invitation.id
-      });
-      await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
-        owner: org,
-        repo,
-        username: invitee,
-        permission: "write"
-      });
-    }
+  const staffTeamUsernames = await staffTeamCache.get(org + "-" + courseSlug);
+  if (!orgMembershipCache.has(org)) {
+    orgMembershipCache.set(
+      org,
+      getOrgMembers(org, octokit).catch((err) => {
+        orgMembershipCache.delete(org);
+        throw err;
+      })
+    );
   }
-
+  const orgMembers = await orgMembershipCache.get(org);
+  const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
   const existingAccess = await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
     owner: org,
     repo,
@@ -937,8 +943,8 @@ export async function syncRepoPermissions(
   });
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
-    .map((c) => c.login);
-  console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
+    .map((c) => c.login.toLowerCase());
+  // console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
   //Check if staff team has access to the repo, if not, add it
   const teamsWithAccess = await octokit.paginate("GET /repos/{owner}/{repo}/teams", {
     owner: org,
@@ -955,9 +961,14 @@ export async function syncRepoPermissions(
     });
   }
   const newAccess = githubUsernames.filter(
-    (u) => !existingUsernames.includes(u) && !existingInvitations.some((i) => i.invitee?.login === u)
+    (u) => !existingUsernames.includes(u) && allOrgMembers?.includes(u) // && !existingInvitations.some((i) => i.invitee?.login === u)
   );
-  const removeAccess = existingUsernames.filter((u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u));
+  const removeAccess = existingUsernames.filter(
+    (u) =>
+      !githubUsernames.includes(u) &&
+      !staffTeamUsernames?.includes(u) &&
+      !adminsThatShouldNotBeListedAsAdmins.includes(u)
+  );
   for (const username of newAccess) {
     console.log(`adding collaborator ${username} to ${org}/${repo}`);
     const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
@@ -966,17 +977,26 @@ export async function syncRepoPermissions(
       username,
       permission: "write"
     });
-    console.log(`response for adding collaborator ${username} to ${org}/${repo}: ${JSON.stringify(resp.data)}`);
+    if (resp.status !== 201 && resp.status !== 204) {
+      console.log(`Failed to add collaborator ${username} to ${org}/${repo}`);
+      console.log(resp);
+      const localScope = scope?.clone();
+      localScope?.setTag("github_operation_error", "failed_to_add_collaborator");
+      localScope?.setContext("response", { data: resp });
+      Sentry.captureException(new Error(`Failed to add collaborator to repo`), localScope);
+    }
   }
   for (const username of removeAccess) {
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
+    const newScope = scope?.clone();
+    newScope?.setTag("username", username);
+    Sentry.captureMessage(`Removing collaborator in ${org}`, newScope);
     await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
       username
     });
   }
-  console.log(`${org}/${repo} updated`);
 }
 
 export async function listCommits(

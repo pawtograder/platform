@@ -43,19 +43,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
     scope?.setTag("github_org", classData.github_org!);
     scope?.setTag("slug", classData.slug!);
-    await syncStudentTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: students, error: studentsError } = await adminSupabase
-        .from("user_roles")
-        .select("users(github_username)")
-        .eq("class_id", course_id)
-        .or("role.eq.student")
-        .limit(1000);
-      if (studentsError) {
-        console.error(studentsError);
-        throw new UserVisibleError("Error fetching students");
-      }
-      return students!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
-    });
+    await syncStudentTeam(
+      classData.github_org!,
+      classData.slug!,
+      async () => {
+        const { data: students, error: studentsError } = await adminSupabase
+          .from("user_roles")
+          .select("github_org_confirmed, users(github_username)")
+          .eq("class_id", course_id)
+          .or("role.eq.student")
+          .limit(1000);
+        if (studentsError) {
+          console.error(studentsError);
+          throw new UserVisibleError("Error fetching students");
+        }
+        return students!
+          .filter((s) => s.users.github_username && s.github_org_confirmed)
+          .map((s) => s.users.github_username!);
+      },
+      scope
+    );
   } else {
     const { course_id } = (await req.json()) as { course_id: number };
     scope?.setTag("course_id", course_id.toString());
@@ -73,19 +80,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
     scope?.setTag("github_org", classData.github_org!);
     scope?.setTag("slug", classData.slug!);
-    await syncStudentTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: students, error: studentsError } = await supabase
-        .from("user_roles")
-        .select("users(github_username)")
-        .eq("class_id", course_id)
-        .or("role.eq.student")
-        .limit(1000);
-      if (studentsError) {
-        console.error(studentsError);
-        throw new UserVisibleError("Error fetching students");
-      }
-      return students!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
-    });
+    await syncStudentTeam(
+      classData.github_org!,
+      classData.slug!,
+      async () => {
+        const { data: students, error: studentsError } = await supabase
+          .from("user_roles")
+          .select("github_org_confirmed, users(github_username)")
+          .eq("class_id", course_id)
+          .or("role.eq.student")
+          .limit(1000);
+        if (studentsError) {
+          console.error(studentsError);
+          throw new UserVisibleError("Error fetching students");
+        }
+        return students!
+          .filter((s) => s.users.github_username && s.github_org_confirmed)
+          .map((s) => s.users.github_username!);
+      },
+      scope
+    );
   }
 }
 

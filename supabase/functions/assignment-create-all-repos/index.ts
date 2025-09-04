@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
+import Bottleneck from "npm:bottleneck";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
@@ -18,6 +19,12 @@ type RepoToCreate = {
   profile_id?: string;
   student_github_usernames: string[];
 };
+
+// Rate limiter to ensure no more than 20 concurrent operations
+const rateLimiter = new Bottleneck({
+  maxConcurrent: 30,
+  minTime: 0 // No minimum time between requests
+});
 
 async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: string; scope: Sentry.Scope }) {
   let repoExists = false;
@@ -48,7 +55,7 @@ async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: stri
   }
 }
 
-async function createAllRepos(courseId: number, assignmentId: number, scope: Sentry.Scope) {
+export async function createAllRepos(courseId: number, assignmentId: number, scope: Sentry.Scope) {
   scope.setTag("assignment_id", assignmentId.toString());
   scope.setTag("course_id", courseId.toString());
 
@@ -88,7 +95,9 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
     .select(
       "*, assignment_groups(assignment_groups_members(*,user_roles(users(github_username)))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username)))"
     )
-    .eq("assignment_id", assignmentId);
+    .eq("assignment_id", assignmentId)
+    .limit(1000);
+  console.log(`Found ${existingRepos?.length} existing repos`);
 
   const studentsInAGroup = assignment.assignment_groups?.flatMap((group) =>
     group.assignment_groups_members.map((member) => member.profile_id)
@@ -194,32 +203,49 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
       throw new UserVisibleError(`Error creating repo: ${e}`);
     }
   };
-  await Promise.all(
-    reposToCreate.map(async (repo) =>
-      createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
+  await Promise.allSettled(
+    reposToCreate.map((repo) =>
+      rateLimiter.schedule(() =>
+        createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
+      )
     )
   );
   if (existingRepos) {
-    await Promise.all(
-      existingRepos.map(async (repo) => {
-        const [org, repoName] = repo.repository.split("/");
-        let student_github_usernames = [];
-        if (repo.assignment_groups?.assignment_groups_members) {
-          student_github_usernames = repo.assignment_groups.assignment_groups_members.map(
-            (member) => member.user_roles.users.github_username!
-          );
-        } else {
-          const github_username = repo.profiles?.user_roles?.users.github_username;
-          if (!github_username) {
-            console.log(`No github username for repo ${repo.repository}`);
+    await Promise.allSettled(
+      existingRepos.map((repo) =>
+        rateLimiter.schedule(async () => {
+          const [org, repoName] = repo.repository.split("/");
+          let student_github_usernames = [];
+          if (repo.assignment_groups?.assignment_groups_members) {
+            student_github_usernames = repo.assignment_groups.assignment_groups_members
+              .map((member) => member.user_roles.users.github_username)
+              .filter((username) => username); // Filter out falsy values
+          } else {
+            const github_username = repo.profiles?.user_roles?.users.github_username;
+            if (!github_username) {
+              console.log(`No github username for repo ${repo.repository}`);
+              return;
+            }
+            student_github_usernames = [github_username];
+          }
+
+          // Deduplicate and filter out any remaining falsy values
+          const uniqueUsernames = [
+            ...new Set(student_github_usernames.filter((username): username is string => Boolean(username)))
+          ];
+
+          // Skip if no valid usernames
+          if (uniqueUsernames.length === 0) {
+            console.log(`No valid github usernames for repo ${repo.repository}`);
             return;
           }
-          student_github_usernames = [github_username];
-        }
-        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, student_github_usernames, scope);
-      })
+
+          await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
+        })
+      )
     );
   }
+  console.log("All repos created + synced");
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {

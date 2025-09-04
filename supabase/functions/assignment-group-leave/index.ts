@@ -77,7 +77,8 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
         membership.classes!.slug!,
         remaining_members
           .filter((m) => m.profiles!.user_roles!.users!.github_username)
-          .map((m) => m.profiles!.user_roles!.users!.github_username!)
+          .map((m) => m.profiles!.user_roles!.users!.github_username!),
+        scope
       );
     }
   }
