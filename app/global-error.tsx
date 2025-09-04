@@ -37,24 +37,28 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
             }}
           >
             <div style={{ fontSize: "4rem", marginBottom: "1rem" }}>🐾</div>
-            <h1 style={{ 
-              fontSize: "2.5rem", 
-              fontWeight: "bold", 
-              color: "#1a202c", 
-              marginBottom: "1rem",
-              margin: "0 0 1rem 0"
-            }}>
+            <h1
+              style={{
+                fontSize: "2.5rem",
+                fontWeight: "bold",
+                color: "#1a202c",
+                marginBottom: "1rem",
+                margin: "0 0 1rem 0"
+              }}
+            >
               Oops! We&apos;ve Hit a Ruff Patch
             </h1>
-            <p style={{ 
-              fontSize: "1.125rem", 
-              color: "#4a5568", 
-              marginBottom: "1.5rem",
-              lineHeight: "1.6",
-              margin: "0 0 1.5rem 0"
-            }}>
-              It looks like a husky encountered a bug and buried it... a little too well!
-              This error has been automatically reported to our pack of developers.
+            <p
+              style={{
+                fontSize: "1.125rem",
+                color: "#4a5568",
+                marginBottom: "1.5rem",
+                lineHeight: "1.6",
+                margin: "0 0 1.5rem 0"
+              }}
+            >
+              It looks like a husky encountered a bug and buried it... a little too well! This error has been
+              automatically reported to our pack of developers.
             </p>
             <button
               onClick={() => window.location.reload()}
@@ -70,8 +74,8 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
                 transition: "background-color 0.2s",
                 marginRight: "1rem"
               }}
-              onMouseOver={(e) => e.currentTarget.style.backgroundColor = "#2c5aa0"}
-              onMouseOut={(e) => e.currentTarget.style.backgroundColor = "#3182ce"}
+              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#2c5aa0")}
+              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#3182ce")}
             >
               Try Again
             </button>
@@ -88,8 +92,8 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
                 cursor: "pointer",
                 transition: "background-color 0.2s"
               }}
-              onMouseOver={(e) => e.currentTarget.style.backgroundColor = "#cbd5e0"}
-              onMouseOut={(e) => e.currentTarget.style.backgroundColor = "#e2e8f0"}
+              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#cbd5e0")}
+              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#e2e8f0")}
             >
               Go Back
             </button>
