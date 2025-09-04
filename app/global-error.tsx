@@ -8,8 +8,52 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
     Sentry.captureException(error);
   }, [error]);
 
+  const handleGoBack = () => {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.location.href = "/";
+    }
+  };
+
   return (
     <html>
+      <head>
+        <style>{`
+          .error-button-primary {
+            background-color: #3182ce;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            border: none;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-right: 1rem;
+          }
+          
+          .error-button-primary:hover {
+            background-color: #2c5aa0;
+          }
+          
+          .error-button-secondary {
+            background-color: #e2e8f0;
+            color: #4a5568;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            border: none;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+          }
+          
+          .error-button-secondary:hover {
+            background-color: #cbd5e0;
+          }
+        `}</style>
+      </head>
       <body>
         <div
           style={{
@@ -60,41 +104,10 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               It looks like a husky encountered a bug and buried it... a little too well! This error has been
               automatically reported to our pack of developers.
             </p>
-            <button
-              onClick={() => window.location.reload()}
-              style={{
-                backgroundColor: "#3182ce",
-                color: "white",
-                padding: "0.75rem 1.5rem",
-                borderRadius: "8px",
-                border: "none",
-                fontSize: "1rem",
-                fontWeight: "600",
-                cursor: "pointer",
-                transition: "background-color 0.2s",
-                marginRight: "1rem"
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#2c5aa0")}
-              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#3182ce")}
-            >
+            <button type="button" onClick={() => window.location.reload()} className="error-button-primary">
               Try Again
             </button>
-            <button
-              onClick={() => window.history.back()}
-              style={{
-                backgroundColor: "#e2e8f0",
-                color: "#4a5568",
-                padding: "0.75rem 1.5rem",
-                borderRadius: "8px",
-                border: "none",
-                fontSize: "1rem",
-                fontWeight: "600",
-                cursor: "pointer",
-                transition: "background-color 0.2s"
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#cbd5e0")}
-              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#e2e8f0")}
-            >
+            <button type="button" onClick={handleGoBack} className="error-button-secondary">
               Go Back
             </button>
           </div>
