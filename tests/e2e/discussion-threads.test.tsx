@@ -179,7 +179,11 @@ test.describe("Discussion Thread Page", () => {
       );
     await page.getByRole("button").filter({ hasText: "Send" }).click();
     await expect(page.getByText(instructor?.private_profile_name ?? "")).toBeVisible();
-    await expect(page.getByText("Yes.")).not.toBeVisible();
+    await expect(
+      page.getByText(
+        "Java has had support for functions through lambda expressions for a while now, all the way back from Java 8. It also has lots of documentation and tutorials for new learners. If it's good enough for Netflix's backend through Spring Boot, it's good enough for the purposes of this class. We can schedule a private meeting to continue discussing your personal grievances with the course."
+      )
+    ).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).toBeVisible();
