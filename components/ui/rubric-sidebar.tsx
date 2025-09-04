@@ -1415,35 +1415,67 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   }, [unsortedRubrics, activeReviewAssignment]);
   // Refs for each rubric box
   const rubricRefs = useRef<{ [id: number]: HTMLDivElement | null }>({});
+  // Flag to temporarily disable scroll handler during manual selection
+  const isManuallySelecting = useRef<boolean>(false);
 
-  // Scroll event logic for active rubric
+  // Scroll event logic for active rubric - simplified with hash-based state
   useEffect(() => {
+    let scrollTimeout: NodeJS.Timeout | null = null;
+
     const handleScroll = () => {
-      if (!scrollRootRef.current) return;
-      let bestId: number | undefined = undefined;
-      let bestTop: number | undefined = undefined;
-      for (const rubric of rubrics) {
-        const ref = rubricRefs.current[rubric.id];
-        if (ref && scrollRootRef.current) {
-          const containerRect = scrollRootRef.current.getBoundingClientRect();
-          const boxRect = ref.getBoundingClientRect();
-          const relativeTop = boxRect.top - containerRect.top;
-          if (bestTop === undefined || Math.abs(relativeTop) < Math.abs(bestTop)) {
-            bestTop = relativeTop;
-            bestId = rubric.id;
+      // Clear any existing timeout to debounce the scroll handling
+      if (scrollTimeout !== null) {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = null;
+      }
+
+      scrollTimeout = setTimeout(() => {
+        if (!scrollRootRef.current) return;
+
+        const container = scrollRootRef.current;
+        const containerRect = container.getBoundingClientRect();
+
+        let bestId: number | undefined = undefined;
+        let bestTop: number | undefined = undefined;
+
+        for (const rubric of rubrics) {
+          const ref = rubricRefs.current[rubric.id];
+          if (ref) {
+            const boxRect = ref.getBoundingClientRect();
+            const relativeTop = boxRect.top - containerRect.top;
+            const relativeBottom = boxRect.bottom - containerRect.top;
+
+            // Check if this rubric is at least partially visible in the container
+            const isVisible = relativeBottom > 0 && relativeTop < containerRect.height;
+
+            if (isVisible) {
+              // For visible rubrics, find the one closest to the top of the container
+              if (bestTop === undefined || Math.abs(relativeTop) < Math.abs(bestTop)) {
+                bestTop = relativeTop;
+                bestId = rubric.id;
+              }
+            }
           }
         }
-      }
-      if (bestId !== undefined && bestId !== activeRubricId) {
-        setActiveRubricId(bestId);
-      }
+
+        // Only update active rubric if we found a visible one, it's different, and we're not manually selecting
+        if (bestId !== undefined && bestId !== activeRubricId && !isManuallySelecting.current) {
+          setActiveRubricId(bestId);
+        }
+      }, 100); // 100ms debounce
     };
+
     const container = scrollRootRef.current;
     if (container) {
       container.addEventListener("scroll", handleScroll, { passive: true });
       handleScroll();
     }
+
     return () => {
+      if (scrollTimeout !== null) {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = null;
+      }
       if (container) {
         container.removeEventListener("scroll", handleScroll);
       }
@@ -1452,10 +1484,18 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
 
   // Scroll to active rubric when it changes
   useEffect(() => {
-    if (scrollToRubricId && rubricRefs.current[scrollToRubricId] && scrollToRubricId !== activeRubricId) {
+    let manualSelectTimeout: NodeJS.Timeout | null = null;
+
+    if (scrollToRubricId && rubricRefs.current[scrollToRubricId]) {
       const container = scrollRootRef.current;
       const target = rubricRefs.current[scrollToRubricId];
       if (!container || !target) return;
+
+      // Set flag to prevent scroll handler from interfering
+      isManuallySelecting.current = true;
+
+      // Immediately set the active rubric to the selected one
+      setActiveRubricId(scrollToRubricId);
 
       const containerRect = container.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
@@ -1463,9 +1503,21 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
       const scrollTop = container.scrollTop + (targetRect.top - containerRect.top) - offset;
       container.scrollTo({ top: scrollTop, behavior: "smooth" });
 
+      // Clear the flag after scroll animation completes
+      manualSelectTimeout = setTimeout(() => {
+        isManuallySelecting.current = false;
+      }, 1000); // Give time for smooth scroll to complete
+
       setScrollToRubricId(undefined);
     }
-  }, [scrollToRubricId, scrollRootRef, activeRubricId, setScrollToRubricId]);
+
+    return () => {
+      if (manualSelectTimeout !== null) {
+        clearTimeout(manualSelectTimeout);
+        manualSelectTimeout = null;
+      }
+    };
+  }, [scrollToRubricId, scrollRootRef, setScrollToRubricId, setActiveRubricId]);
 
   // Callback to set refs
   const setRubricRef = useCallback(
@@ -1493,7 +1545,6 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
           {index < rubrics.length - 1 && (
             <Separator orientation="horizontal" borderTopWidth="4px" borderColor="border.emphasized" my={2} mt="50px" />
           )}
-          {index === rubrics.length - 1 && rubrics.length > 1 && <Box w="100%" h="100vh" />}
         </Box>
       ))}
     </VStack>
