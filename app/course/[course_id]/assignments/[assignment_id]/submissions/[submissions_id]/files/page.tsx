@@ -69,7 +69,6 @@ import {
 import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
-import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
@@ -733,6 +732,8 @@ function ArtifactWithComments({
 function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtifact; artifactKey: string }) {
   const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  
   useEffect(() => {
     let isMounted = true;
 
@@ -778,9 +779,40 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     artifact.id
   ]);
 
+  // Create object URL when artifactData changes and cleanup previous URL
+  useEffect(() => {
+    if (artifactData && artifact.data.format === "png") {
+      // Revoke previous URL if it exists
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      // Create new object URL
+      const newObjectUrl = URL.createObjectURL(artifactData);
+      setObjectUrl(newObjectUrl);
+    }
+    
+    return () => {
+      // Cleanup on unmount or when artifactData changes
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [artifactData, artifact.data?.format, objectUrl]);
+
   if (artifact.data.format === "png") {
-    if (artifactData) {
-      return <Image src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
+    if (objectUrl) {
+      return (
+        //eslint-disable-next-line @next/next/no-img-element
+        <img 
+          src={objectUrl} 
+          alt={artifact.name}
+          style={{
+            maxWidth: "100%",
+            height: "auto",
+            display: "block"
+          }}
+        />
+      );
     } else {
       return <Spinner />;
     }
@@ -832,6 +864,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   // Load the artifact data from supabase
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   useEffect(() => {
     let isMounted = true;
     async function loadArtifact() {
@@ -841,7 +874,8 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         .createSignedUrl(artifactKey, 60 * 60 * 24 * 30);
       if (!isMounted) return;
       if (error) {
-        return <Text>Error downloading artifact: {error.message}</Text>;
+        setDownloadError(`Error downloading artifact: ${error.message}`);
+        return;
       }
       setDownloadLink(data.signedUrl);
     }
@@ -850,6 +884,10 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
       isMounted = false;
     };
   }, [artifactKey]);
+  if (downloadError) {
+    return <Text color="fg.error">{downloadError}</Text>;
+  }
+  
   if (artifact.data) {
     return (
       <Box w="100%">
