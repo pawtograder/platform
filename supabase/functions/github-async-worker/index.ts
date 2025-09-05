@@ -17,6 +17,9 @@ declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
 };
 
+// Guard to prevent multiple concurrent batch handlers per runtime instance
+let started = false;
+
 type QueueMessage<T> = {
   msg_id: number;
   read_ct: number;
@@ -60,13 +63,13 @@ async function recordMetric(
     enqueued_at?: string;
   }
 ) {
-  const latency_ms = params.enqueued_at ? toMsLatency(params.enqueued_at) : null;
+  const latency_ms = params.enqueued_at ? toMsLatency(params.enqueued_at) : undefined;
   await adminSupabase.schema("public").rpc("log_api_gateway_call", {
-    p_type: params.method,
+    p_method: params.method,
     p_status_code: params.status_code,
-    p_class_id: params.class_id ?? null,
-    p_debug_id: params.debug_id ?? null,
-    p_message_enqueued_at: params.enqueued_at ? new Date(params.enqueued_at).toISOString() : null,
+    p_class_id: params.class_id,
+    p_debug_id: params.debug_id,
+    p_message_enqueued_at: params.enqueued_at ? new Date(params.enqueued_at).toISOString() : undefined,
     p_latency_ms: latency_ms
   });
 }
@@ -257,14 +260,35 @@ export async function runBatchHandler() {
 
 Deno.serve((req) => {
   const secret = req.headers.get("x-edge-function-secret");
-  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
-  if (secret !== expectedSecret) {
-    return new Response(JSON.stringify({ error: "Invalid secret" }), {
-      headers: { "Content-Type": "application/json" }
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
+
+  if (!expectedSecret) {
+    return new Response(JSON.stringify({ error: "EDGE_FUNCTION_SECRET is not configured" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
     });
   }
-  EdgeRuntime.waitUntil(runBatchHandler());
-  return new Response(JSON.stringify({ message: "GitHub async worker started", timestamp: new Date().toISOString() }), {
-    headers: { "Content-Type": "application/json" }
-  });
+
+  if (secret !== expectedSecret) {
+    return new Response(JSON.stringify({ error: "Invalid or missing secret" }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "WWW-Authenticate": "Bearer realm=\"github_async_worker\", error=\"invalid_token\""
+      }
+    });
+  }
+
+  if (!started) {
+    started = true;
+    EdgeRuntime.waitUntil(runBatchHandler());
+  }
+
+  return new Response(
+    JSON.stringify({ message: "GitHub async worker started", already_running: started, timestamp: new Date().toISOString() }),
+    {
+      headers: { "Content-Type": "application/json" }
+    }
+  );
 });
