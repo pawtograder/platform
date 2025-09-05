@@ -43,6 +43,47 @@ export type Database = {
   };
   public: {
     Tables: {
+      api_gateway_calls: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          id: number;
+          latency_ms: number | null;
+          message_enqueued_at: string | null;
+          status_code: number;
+          type: string;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          id?: number;
+          latency_ms?: number | null;
+          message_enqueued_at?: string | null;
+          status_code: number;
+          type: string;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          id?: number;
+          latency_ms?: number | null;
+          message_enqueued_at?: string | null;
+          status_code?: number;
+          type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "api_gateway_calls_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_due_date_exceptions: {
         Row: {
           assignment_group_id: number | null;
@@ -8736,7 +8777,9 @@ export type Database = {
         Returns: boolean;
       };
       create_all_repos_for_assignment: {
-        Args: { assignment_id: number; course_id: number } | { assignment_id: number; course_id: number };
+        Args:
+          | { assignment_id: number; course_id: number; p_force?: boolean }
+          | { assignment_id: number; course_id: number; p_force?: boolean };
         Returns: undefined;
       };
       create_help_request_message_notification: {
@@ -8797,7 +8840,7 @@ export type Database = {
         Returns: number;
       };
       create_repos_for_student: {
-        Args: { class_id?: number; user_id: string };
+        Args: { class_id?: number; p_force?: boolean; user_id: string } | { class_id?: number; user_id: string };
         Returns: undefined;
       };
       create_system_notification: {
@@ -8843,6 +8886,57 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      enqueue_github_archive_repo: {
+        Args: {
+          p_class_id: number;
+          p_debug_id?: string;
+          p_org: string;
+          p_repo: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_create_repo: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_is_template_repo?: boolean;
+          p_org: string;
+          p_repo_name: string;
+          p_template_repo: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_sync_repo_permissions: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_org: string;
+          p_repo: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_sync_staff_team: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_org: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_sync_student_team: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_org: string;
+        };
+        Returns: number;
+      };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
@@ -8858,6 +8952,17 @@ export type Database = {
       get_assignment_llm_metrics: {
         Args: Record<PropertyKey, never>;
         Returns: Json;
+      };
+      get_async_github_metrics: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          avg_latency_ms: number;
+          calls_total: number;
+          class_id: number;
+          errors_recent_1h: number;
+          errors_total: number;
+          method: string;
+        }[];
       };
       get_gradebook_records_for_all_students: {
         Args: { class_id: number };
@@ -9003,6 +9108,17 @@ export type Database = {
       is_instructor_for_student: {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
+      };
+      log_api_gateway_call: {
+        Args: {
+          p_class_id?: number;
+          p_debug_id?: string;
+          p_latency_ms?: number;
+          p_message_enqueued_at?: string;
+          p_status_code: number;
+          p_type: string;
+        };
+        Returns: undefined;
       };
       log_flashcard_interaction: {
         Args: {
