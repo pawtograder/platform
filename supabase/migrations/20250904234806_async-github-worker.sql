@@ -62,6 +62,46 @@ begin
 end;
 $$;
 
+-- 9) Background invoker and cron schedule for the GitHub async worker
+create or replace function public.invoke_github_async_worker_background_task()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Start two instances; function returns immediately
+  perform public.call_edge_function_internal(
+    '/functions/v1/github-async-worker',
+    'POST',
+    '{"Content-type":"application/json","x-supabase-webhook-source":"github-async-worker"}'::jsonb,
+    '{}'::jsonb,
+    3000,
+    null, null, null, null, null
+  );
+  perform public.call_edge_function_internal(
+    '/functions/v1/github-async-worker',
+    'POST',
+    '{"Content-type":"application/json","x-supabase-webhook-source":"github-async-worker"}'::jsonb,
+    '{}'::jsonb,
+    3000,
+    null, null, null, null, null
+  );
+end;
+$$;
+
+revoke all on function public.invoke_github_async_worker_background_task() from public;
+grant execute on function public.invoke_github_async_worker_background_task() to service_role;
+
+-- Idempotent cron schedule: drop if exists, then create
+select cron.unschedule('invoke-github-async-worker-every-minute')
+where exists (select 1 from cron.job where jobname = 'invoke-github-async-worker-every-minute');
+select cron.schedule(
+  'invoke-github-async-worker-every-minute',
+  '* * * * *',
+  $$select public.invoke_github_async_worker_background_task();$$
+);
+
 revoke all on function public.log_api_gateway_call(text, integer, bigint, text, timestamptz, integer) from public;
 grant execute on function public.log_api_gateway_call(text, integer, bigint, text, timestamptz, integer) to service_role;
 
@@ -424,6 +464,8 @@ end;
 $$;
 
 -- 8) Replace create_repos_for_student to enqueue per-assignment create_repo (non-batch)
+-- Ensure no ambiguous overload remains before creating new signature
+drop function if exists public.create_repos_for_student(uuid, integer);
 create or replace function public.create_repos_for_student(user_id uuid, class_id integer default null, p_force boolean default false)
 returns void
 language plpgsql
@@ -434,13 +476,21 @@ declare
   v_username text;
   v_slug text;
   v_org text;
+  v_user_id uuid := user_id;
+  v_class_id integer := class_id;
+  r_assignment_id bigint;
+  r_assignment_slug text;
+  r_template_repo text;
+  r_course_id bigint;
+  r_course_slug text;
+  r_github_org text;
 begin
   if user_id is null then
     raise warning 'create_repos_for_student called with NULL user_id, skipping';
     return;
   end if;
 
-  select github_username into v_username from public.users where user_id = user_id;
+  select u.github_username into v_username from public.users u where u.user_id = v_user_id;
   if v_username is null or v_username = '' then
     raise exception 'User % has no GitHub username linked', user_id;
   end if;
@@ -457,30 +507,29 @@ begin
     end if;
   end if;
 
-  for
+  for r_assignment_id, r_assignment_slug, r_template_repo, r_course_id, r_course_slug, r_github_org in
     select a.id as assignment_id, a.slug as assignment_slug, a.template_repo, c.id as course_id, c.slug as course_slug, c.github_org
     from public.assignments a
     join public.classes c on c.id = a.class_id
     join public.user_roles ur on ur.class_id = c.id
-    where ur.user_id = user_id
-      and (class_id is null or c.id = class_id)
+    where ur.user_id = v_user_id
+      and (v_class_id is null or c.id = v_class_id)
       and a.template_repo is not null and a.template_repo <> ''
       and a.group_config <> 'groups'
       and (
         p_force
         or not exists (
           select 1 from public.repositories r
-          join public.profiles p on p.id = r.profile_id
-          where r.assignment_id = a.id and p.user_id = user_id
+          where r.assignment_id = a.id and r.profile_id = ur.private_profile_id
         )
       )
   loop
     perform public.enqueue_github_create_repo(
-      course_id,
-      github_org,
-      course_slug || '-' || assignment_slug || '-' || v_username,
-      template_repo,
-      course_slug,
+      r_course_id,
+      r_github_org,
+      r_course_slug || '-' || r_assignment_slug || '-' || v_username,
+      r_template_repo,
+      r_course_slug,
       array[v_username],
       false,
       null

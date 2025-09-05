@@ -863,14 +863,57 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     // Continue with invitation if we can't check membership
   }
 
-  const resp = await octokit.request("POST /orgs/{org}/invitations", {
-    org,
-    role: "direct_member",
-    invitee_id: userID,
-    team_ids: [teamID]
-  });
-  console.log(`Invitation response: ${JSON.stringify(resp.data)}`);
-  return true;
+  try {
+    const resp = await octokit.request("POST /orgs/{org}/invitations", {
+      org,
+      role: "direct_member",
+      invitee_id: userID,
+      team_ids: [teamID]
+    });
+    console.log(`Invitation response: ${JSON.stringify(resp.data)}`);
+    return true;
+  } catch (err) {
+    console.log("Org invitation failed, inspecting error message...");
+    const errWithShape = err as {
+      message?: unknown;
+      response?: { data?: { errors?: Array<{ message?: unknown }> } };
+    };
+    const collectedMessages: string[] = [];
+    if (typeof errWithShape.message === "string") {
+      collectedMessages.push(errWithShape.message);
+    }
+    const responseErrors = errWithShape.response?.data?.errors;
+    if (Array.isArray(responseErrors)) {
+      for (const e of responseErrors) {
+        if (typeof e?.message === "string") {
+          collectedMessages.push(e.message);
+        }
+      }
+    }
+    const combinedMessage = collectedMessages.join("; ") || JSON.stringify(err);
+    console.log(`Invitation error message: ${combinedMessage}`);
+    if (/already.*(part|member).*organization/i.test(combinedMessage)) {
+      console.log(`User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`);
+      //Update our user_role to mark that they are in the org!
+      const { error: updateError } = await adminSupabase
+        .from("user_roles")
+        .update({ github_org_confirmed: true })
+        .eq("user_id", userID)
+        .eq("class_id", classID);
+      if (updateError) {
+        console.error("Error updating user role:", updateError);
+        throw updateError;
+      }
+      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+        org,
+        team_slug,
+        username: githubUsername,
+        role: "member"
+      });
+      return true;
+    }
+    throw err;
+  }
 }
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();

@@ -275,7 +275,7 @@ Deno.serve((req) => {
       headers: {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
-        "WWW-Authenticate": "Bearer realm=\"github_async_worker\", error=\"invalid_token\""
+        "WWW-Authenticate": 'Bearer realm="github_async_worker", error="invalid_token"'
       }
     });
   }
@@ -286,7 +286,11 @@ Deno.serve((req) => {
   }
 
   return new Response(
-    JSON.stringify({ message: "GitHub async worker started", already_running: started, timestamp: new Date().toISOString() }),
+    JSON.stringify({
+      message: "GitHub async worker started",
+      already_running: started,
+      timestamp: new Date().toISOString()
+    }),
     {
       headers: { "Content-Type": "application/json" }
     }
