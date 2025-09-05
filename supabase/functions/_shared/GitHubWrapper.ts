@@ -893,24 +893,19 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     const combinedMessage = collectedMessages.join("; ") || JSON.stringify(err);
     console.log(`Invitation error message: ${combinedMessage}`);
     if (/already.*(part|member).*organization/i.test(combinedMessage)) {
+      const adminSupabase = createClient<Database>(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      );
       console.log(`User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`);
       //Update our user_role to mark that they are in the org!
-      const { error: updateError } = await adminSupabase
-        .from("user_roles")
-        .update({ github_org_confirmed: true })
-        .eq("user_id", userID)
-        .eq("class_id", classID);
-      if (updateError) {
-        console.error("Error updating user role:", updateError);
-        throw updateError;
-      }
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
         team_slug,
         username: githubUsername,
         role: "member"
       });
-      return true;
+      return false;
     }
     throw err;
   }

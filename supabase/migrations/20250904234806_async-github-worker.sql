@@ -1,6 +1,13 @@
 -- Create async GitHub worker infrastructure
 -- 1) Ensure queue exists
-select pgmq.create('async_calls');
+do $$
+begin
+  perform pgmq.create('async_calls');
+exception when others then
+  -- queue likely exists; ignore
+  null;
+end $$;
+
 
 -- Enum for async call methods
 do $$ begin
@@ -281,8 +288,8 @@ as $$
   group by class_id, method;
 $$;
 
-revoke all on function public.get_async_github_metrics() from public;
-grant execute on function public.get_async_github_metrics() to service_role, anon, authenticated;
+revoke all on function public.get_async_github_metrics() from public, anon, authenticated;
+grant execute on function public.get_async_github_metrics() to service_role;
 
 -- 6) Replace edge function invocations with enqueue RPCs for team sync
 create or replace function public.sync_staff_github_team(class_id integer)
@@ -462,6 +469,10 @@ begin
   perform public.create_all_repos_for_assignment(course_id::bigint, assignment_id::bigint, p_force);
 end;
 $$;
+
+-- Lock down the overload wrapper with same permissions as primary function
+revoke all on function public.create_all_repos_for_assignment(integer, integer, boolean) from public;
+grant execute on function public.create_all_repos_for_assignment(integer, integer, boolean) to service_role;
 
 -- 8) Replace create_repos_for_student to enqueue per-assignment create_repo (non-batch)
 -- Ensure no ambiguous overload remains before creating new signature

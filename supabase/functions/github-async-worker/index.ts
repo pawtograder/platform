@@ -53,7 +53,7 @@ async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: nu
   }
 }
 
-async function recordMetric(
+function recordMetric(
   adminSupabase: SupabaseClient<Database>,
   params: {
     method: GitHubAsyncMethod;
@@ -64,13 +64,18 @@ async function recordMetric(
   }
 ) {
   const latency_ms = params.enqueued_at ? toMsLatency(params.enqueued_at) : undefined;
-  await adminSupabase.schema("public").rpc("log_api_gateway_call", {
+  
+  // Fire-and-forget metric logging - don't let metric failures affect delivery status
+  adminSupabase.schema("public").rpc("log_api_gateway_call", {
     p_method: params.method,
     p_status_code: params.status_code,
     p_class_id: params.class_id,
     p_debug_id: params.debug_id,
     p_message_enqueued_at: params.enqueued_at ? new Date(params.enqueued_at).toISOString() : undefined,
     p_latency_ms: latency_ms
+  }).catch((error) => {
+    // Log metric errors but don't rethrow - metric failures should not affect delivery status
+    console.error("Failed to record metric:", error);
   });
 }
 
@@ -105,7 +110,7 @@ async function processEnvelope(
           },
           scope
         );
-        await recordMetric(adminSupabase, {
+        recordMetric(adminSupabase, {
           method: envelope.method,
           status_code: 200,
           class_id: envelope.class_id,
@@ -131,7 +136,7 @@ async function processEnvelope(
           },
           scope
         );
-        await recordMetric(adminSupabase, {
+        recordMetric(adminSupabase, {
           method: envelope.method,
           status_code: 200,
           class_id: envelope.class_id,
@@ -145,7 +150,7 @@ async function processEnvelope(
           envelope.args as CreateRepoArgs;
         await github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope);
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
-        await recordMetric(adminSupabase, {
+        recordMetric(adminSupabase, {
           method: envelope.method,
           status_code: 200,
           class_id: envelope.class_id,
@@ -157,7 +162,7 @@ async function processEnvelope(
       case "sync_repo_permissions": {
         const { org, repo, courseSlug, githubUsernames } = envelope.args as SyncRepoPermissionsArgs;
         await github.syncRepoPermissions(org, repo, courseSlug, githubUsernames, scope);
-        await recordMetric(adminSupabase, {
+        recordMetric(adminSupabase, {
           method: envelope.method,
           status_code: 200,
           class_id: envelope.class_id,
@@ -169,7 +174,7 @@ async function processEnvelope(
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
         await github.archiveRepoAndLock(org, repo, scope);
-        await recordMetric(adminSupabase, {
+        recordMetric(adminSupabase, {
           method: envelope.method,
           status_code: 200,
           class_id: envelope.class_id,
@@ -189,7 +194,7 @@ async function processEnvelope(
       }
       return 500;
     })();
-    await recordMetric(adminSupabase, {
+    recordMetric(adminSupabase, {
       method: envelope.method,
       status_code: status || 500,
       class_id: envelope.class_id,
@@ -280,6 +285,8 @@ Deno.serve((req) => {
     });
   }
 
+  const already_running = started;
+  
   if (!started) {
     started = true;
     EdgeRuntime.waitUntil(runBatchHandler());
@@ -288,11 +295,14 @@ Deno.serve((req) => {
   return new Response(
     JSON.stringify({
       message: "GitHub async worker started",
-      already_running: started,
+      already_running: already_running,
       timestamp: new Date().toISOString()
     }),
     {
-      headers: { "Content-Type": "application/json" }
+      headers: { 
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store"
+      }
     }
   );
 });
