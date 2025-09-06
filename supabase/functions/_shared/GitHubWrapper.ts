@@ -7,6 +7,29 @@ import { Redis } from "https://esm.sh/ioredis?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import * as Sentry from "npm:@sentry/deno";
 
+// Structured error used to signal Octokit secondary rate limit back to callers
+export class SecondaryRateLimitError extends Error {
+  retryAfter?: number;
+  scopeKey?: string;
+  constructor(retryAfter?: number, scopeKey?: string) {
+    super("SecondaryRateLimit");
+    this.name = "SecondaryRateLimitError";
+    this.retryAfter = retryAfter;
+    this.scopeKey = scopeKey;
+  }
+}
+
+export class PrimaryRateLimitError extends Error {
+  retryAfter?: number;
+  scopeKey?: string;
+  constructor(retryAfter?: number, scopeKey?: string) {
+    super("PrimaryRateLimit");
+    this.name = "PrimaryRateLimitError";
+    this.retryAfter = retryAfter;
+    this.scopeKey = scopeKey;
+  }
+}
+
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 
@@ -191,8 +214,9 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
     }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
+      const orgLogin = i.account?.login || "";
       installations.push({
-        orgName: i.account?.login || "",
+        orgName: orgLogin,
         id: i.id,
         octokit: new MyOctokit({
           authStrategy: createAppAuth,
@@ -205,12 +229,14 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
             connection,
             id: "pawtograder-production",
             Bottleneck,
-            onRateLimit: () => {
-              Sentry.captureMessage("Request quota exhausted for request, retrying", scope);
-              return true;
+            onRateLimit: (retryAfter: number) => {
+              Sentry.captureMessage("PrimaryRateLimit detected for request, not retrying (worker will backoff)", scope);
+              // Do not retry here; let the request fail with RequestError so worker can handle
+              return false;
             },
-            onSecondaryRateLimit: () => {
+            onSecondaryRateLimit: (retryAfter: number) => {
               Sentry.captureMessage("SecondaryRateLimit detected for request, not retrying", scope);
+              // Do not retry here; let the request fail with RequestError so worker can detect & requeue
               return false;
             }
           }
@@ -514,17 +540,19 @@ export async function createRepo(
   scope?.setTag("template_repo", template_repo);
   scope?.setTag("is_template", is_template_repo?.toString() || "false");
 
-  console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
-  console.log(`Found octokit for ${org}`);
   const owner = template_repo.split("/")[0];
   const repo = template_repo.split("/")[1];
 
   try {
     scope?.setTag("github_operation", "create_repo_request");
+    scope?.setTag("template_repo", template_repo);
+    scope?.setTag("template_owner", owner);
+    scope?.setTag("repo_name", repoName);
+    scope?.setTag("org", org);
     await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
@@ -561,13 +589,12 @@ export async function createRepo(
       scope
     );
     scope?.setTag("head_sha", heads.data.object.sha);
-    console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
-    console.log(`Heads: ${JSON.stringify(heads.data)}`);
     return heads.data.object.sha as string;
   } catch (e) {
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
         // Repo already exists, get the head SHA
+        scope?.setTag("repo_already_exists", "true");
         scope?.setTag("github_operation", "get_existing_repo_head_sha");
         const heads = await retryWithBackoff(
           () =>
@@ -580,7 +607,6 @@ export async function createRepo(
           scope
         );
         scope?.setTag("head_sha", heads.data.object.sha);
-        console.log(`Repo ${org}/${repoName} already exists with head SHA ${heads.data.object.sha}`);
         return heads.data.object.sha as string;
       } else {
         throw e;
@@ -934,8 +960,9 @@ export async function syncRepoPermissions(
   repo: string,
   courseSlug: string,
   githubUsernamesMixedCase: string[],
-  scope?: Sentry.Scope
+  _scope?: Sentry.Scope
 ) {
+  const scope = _scope?.clone();
   const githubUsernames = githubUsernamesMixedCase.map((u) => u.toLowerCase());
   scope?.setTag("github_operation", "sync_repo_permissions");
   scope?.setTag("org", org);
@@ -989,7 +1016,6 @@ export async function syncRepoPermissions(
     repo
   });
   if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
-    console.log(`${org}/${repo} does not have team ${team_slug}, adding it`);
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
       org,
       team_slug,
@@ -1008,7 +1034,6 @@ export async function syncRepoPermissions(
       !adminsThatShouldNotBeListedAsAdmins.includes(u)
   );
   for (const username of newAccess) {
-    console.log(`adding collaborator ${username} to ${org}/${repo}`);
     const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
@@ -1076,8 +1101,9 @@ export async function triggerWorkflow(
   repo_full_name: string,
   sha: string,
   workflow_name: string,
-  scope?: Sentry.Scope
+  _scope?: Sentry.Scope
 ) {
+  const scope = _scope?.clone();
   scope?.setTag("github_operation", "trigger_workflow");
   scope?.setTag("repository", repo_full_name);
   scope?.setTag("sha", sha);

@@ -74,4 +74,6 @@ export type GitHubAsyncEnvelope = {
   args: GitHubAsyncArgs;
   class_id?: number;
   debug_id?: string;
+  log_id?: number;
+  retry_count?: number;
 };

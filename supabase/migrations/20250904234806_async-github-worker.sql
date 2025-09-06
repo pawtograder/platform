@@ -31,7 +31,7 @@ create table if not exists public.api_gateway_calls (
   class_id bigint null references public.classes(id) on delete set null,
   debug_id text null,
   latency_ms integer null,
-  message_enqueued_at timestamptz null
+  message_processed_at timestamptz null
 );
 
 alter table public.api_gateway_calls enable row level security;
@@ -56,7 +56,7 @@ create or replace function public.log_api_gateway_call(
   p_status_code integer,
   p_class_id bigint default null,
   p_debug_id text default null,
-  p_message_enqueued_at timestamptz default null,
+  p_message_processed_at timestamptz default null,
   p_latency_ms integer default null
 ) returns void
 language plpgsql
@@ -64,8 +64,8 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.api_gateway_calls(method, status_code, class_id, debug_id, message_enqueued_at, latency_ms)
-  values (p_method::public.github_async_method, p_status_code, p_class_id, p_debug_id, p_message_enqueued_at, p_latency_ms);
+  insert into public.api_gateway_calls(method, status_code, class_id, debug_id, message_processed_at, latency_ms)
+  values (p_method::public.github_async_method, p_status_code, p_class_id, p_debug_id, p_message_processed_at, p_latency_ms);
 end;
 $$;
 
@@ -76,29 +76,179 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  queue_size integer;
+  worker_count integer;
+  i integer;
+  message_count integer;
+  open_circuits integer;
 begin
-  -- Start two instances; function returns immediately
-  perform public.call_edge_function_internal(
-    '/functions/v1/github-async-worker',
-    'POST',
-    '{"Content-type":"application/json","x-supabase-webhook-source":"github-async-worker"}'::jsonb,
-    '{}'::jsonb,
-    3000,
-    null, null, null, null, null
-  );
-  perform public.call_edge_function_internal(
-    '/functions/v1/github-async-worker',
-    'POST',
-    '{"Content-type":"application/json","x-supabase-webhook-source":"github-async-worker"}'::jsonb,
-    '{}'::jsonb,
-    3000,
-    null, null, null, null, null
-  );
+  -- Check if there are at least 50 messages by reading 50 with 0 expiration
+  -- Messages automatically become available again immediately with 0 expiration
+  select count(*)::integer into message_count from pgmq_public.read('async_calls', 0, 50);
+  
+  -- If we got 50 messages, there are at least 50 (could be more)
+  -- If we got fewer, that's the actual count
+  if message_count = 50 then
+    queue_size := 30; -- At least 30, could be more
+  else
+    queue_size := message_count; -- Exact count
+  end if;
+  
+  -- Determine number of workers based on queue size
+  if queue_size >= 20 then
+    worker_count := 20;
+    raise notice 'High queue load detected (% messages), starting % workers', queue_size, worker_count;
+  elsif queue_size >= 10 then
+    worker_count := 10;
+    raise notice 'Moderate queue load detected (% messages), starting % workers', queue_size, worker_count;
+  else
+    worker_count := 2;
+    raise notice 'Normal queue load (% messages), starting % workers', queue_size, worker_count;
+  end if;
+  
+  -- If any circuit is OPEN, cap worker count to 1 to mass-slowdown
+  select count(*)::integer into open_circuits
+  from public.github_circuit_breakers
+  where state = 'open' and (open_until is null or open_until > now());
+  if open_circuits > 0 then
+    worker_count := 1;
+    raise notice 'Circuit breaker active (% open). Capping workers to %', open_circuits, worker_count;
+  end if;
+  
+  -- Start workers dynamically
+  for i in 1..worker_count loop
+    perform public.call_edge_function_internal(
+      '/functions/v1/github-async-worker',
+      'POST',
+      '{"Content-type":"application/json","x-supabase-webhook-source":"github-async-worker"}'::jsonb,
+      '{}'::jsonb,
+      3000,
+      null, null, null, null, null
+    );
+  end loop;
 end;
 $$;
 
 revoke all on function public.invoke_github_async_worker_background_task() from public;
 grant execute on function public.invoke_github_async_worker_background_task() to service_role;
+
+-- 3b) Circuit breaker store and RPCs
+create table if not exists public.github_circuit_breakers (
+  scope text not null,
+  key text not null,
+  state text not null default 'closed', -- 'open' | 'half_open' | 'closed'
+  open_until timestamptz null,
+  last_reason text null,
+  updated_at timestamptz not null default now(),
+  primary key (scope, key)
+);
+
+alter table public.github_circuit_breakers enable row level security;
+revoke all on table public.github_circuit_breakers from anon, authenticated;
+grant select, insert, update on table public.github_circuit_breakers to service_role;
+
+drop policy if exists github_circuit_breakers_srv_select on public.github_circuit_breakers;
+create policy github_circuit_breakers_srv_select on public.github_circuit_breakers for select to service_role using (true);
+drop policy if exists github_circuit_breakers_srv_mod on public.github_circuit_breakers;
+create policy github_circuit_breakers_srv_mod on public.github_circuit_breakers for all to service_role using (true) with check (true);
+
+-- Events table to count circuit breaker trips
+create table if not exists public.github_circuit_breaker_events (
+  id bigint generated by default as identity primary key,
+  scope text not null,
+  key text not null,
+  reason text null,
+  opened_at timestamptz not null default now()
+);
+
+alter table public.github_circuit_breaker_events enable row level security;
+revoke all on table public.github_circuit_breaker_events from anon, authenticated;
+grant select, insert on table public.github_circuit_breaker_events to service_role;
+
+drop policy if exists github_circuit_breaker_events_srv_select on public.github_circuit_breaker_events;
+create policy github_circuit_breaker_events_srv_select on public.github_circuit_breaker_events for select to service_role using (true);
+drop policy if exists github_circuit_breaker_events_srv_insert on public.github_circuit_breaker_events;
+create policy github_circuit_breaker_events_srv_insert on public.github_circuit_breaker_events for insert to service_role with check (true);
+
+-- Add trip_count for breaker trip tracking
+do $$ begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'github_circuit_breakers' and column_name = 'trip_count'
+  ) then
+    alter table public.github_circuit_breakers add column trip_count integer not null default 0;
+  end if;
+end $$;
+
+create or replace function public.open_github_circuit(
+  p_scope text,
+  p_key text,
+  p_open_for_seconds integer,
+  p_reason text default null
+) returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.github_circuit_breakers%rowtype;
+  v_seconds integer := greatest(1, p_open_for_seconds);
+  v_trip_count integer;
+begin
+  select * into v_row from public.github_circuit_breakers where scope = p_scope and key = p_key for update;
+
+  if not found then
+    insert into public.github_circuit_breakers(scope, key, state, open_until, last_reason, updated_at, trip_count)
+    values (p_scope, p_key, 'open', now() + make_interval(secs => v_seconds), p_reason, now(), 1);
+    v_trip_count := 1;
+  else
+    if v_row.state = 'open' and (v_row.open_until is null or v_row.open_until > now()) then
+      v_trip_count := v_row.trip_count + 1;
+      if v_trip_count >= 3 then
+        v_row.open_until := now() + interval '24 hours';
+      else
+        -- Exponential increase when tripped again during the open window
+        v_seconds := least(43200, v_seconds * 2);
+        v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_seconds));
+      end if;
+    else
+      v_trip_count := 1;
+      v_row.open_until := now() + make_interval(secs => v_seconds);
+      v_row.state := 'open';
+    end if;
+    update public.github_circuit_breakers
+      set state = v_row.state,
+          open_until = v_row.open_until,
+          last_reason = coalesce(p_reason, v_row.last_reason),
+          updated_at = now(),
+          trip_count = v_trip_count
+      where scope = p_scope and key = p_key;
+  end if;
+
+  insert into public.github_circuit_breaker_events(scope, key, reason)
+  values (p_scope, p_key, coalesce(p_reason, 'unspecified'));
+
+  return (select trip_count from public.github_circuit_breakers where scope = p_scope and key = p_key);
+end;
+$$;
+
+revoke all on function public.open_github_circuit(text, text, integer, text) from public;
+grant execute on function public.open_github_circuit(text, text, integer, text) to service_role;
+
+create or replace function public.get_github_circuit(
+  p_scope text,
+  p_key text
+) returns table(state text, open_until timestamptz)
+language sql
+security definer
+set search_path = public
+as $$
+  select c.state, c.open_until from public.github_circuit_breakers c where c.scope = p_scope and c.key = p_key;
+$$;
+
+revoke all on function public.get_github_circuit(text, text) from public;
+grant execute on function public.get_github_circuit(text, text) to service_role;
 
 -- Idempotent cron schedule: drop if exists, then create
 select cron.unschedule('invoke-github-async-worker-every-minute')
@@ -111,6 +261,26 @@ select cron.schedule(
 
 revoke all on function public.log_api_gateway_call(text, integer, bigint, text, timestamptz, integer) from public;
 grant execute on function public.log_api_gateway_call(text, integer, bigint, text, timestamptz, integer) to service_role;
+
+-- Function to update log record by ID
+create or replace function public.update_api_gateway_call(
+  p_log_id bigint,
+  p_status_code integer,
+  p_latency_ms integer default null
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.api_gateway_calls
+  set status_code = p_status_code,
+      latency_ms = p_latency_ms,
+      message_processed_at = now()
+  where id = p_log_id;
+$$;
+
+revoke all on function public.update_api_gateway_call(bigint, integer, integer) from public;
+grant execute on function public.update_api_gateway_call(bigint, integer, integer) to service_role;
 
 -- 4) Enqueue helpers for async calls
 -- Envelope: { method: text, args: jsonb, class_id: bigint, debug_id: text }
@@ -125,16 +295,27 @@ create or replace function public.enqueue_github_create_repo(
   p_is_template_repo boolean default false,
   p_debug_id text default null
 ) returns bigint
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  log_id bigint;
+  message_id bigint;
+begin
+  -- Insert log record first
+  insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
+  values ('create_repo', 0, p_class_id, p_debug_id)
+  returning id into log_id;
+  
+  -- Enqueue message with log_id
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
       'method', 'create_repo',
       'class_id', p_class_id,
       'debug_id', p_debug_id,
+      'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
         'repoName', p_repo_name,
@@ -144,7 +325,10 @@ as $$
         'githubUsernames', p_github_usernames
       )
     )
-  );
+  ) into message_id;
+  
+  return message_id;
+end;
 $$;
 
 revoke all on function public.enqueue_github_create_repo(bigint, text, text, text, text, text[], boolean, text) from public;
@@ -156,22 +340,36 @@ create or replace function public.enqueue_github_sync_student_team(
   p_course_slug text,
   p_debug_id text default null
 ) returns bigint
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  log_id bigint;
+  message_id bigint;
+begin
+  -- Insert log record first
+  insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
+  values ('sync_student_team', 0, p_class_id, p_debug_id)
+  returning id into log_id;
+  
+  -- Enqueue message with log_id
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
       'method', 'sync_student_team',
       'class_id', p_class_id,
       'debug_id', p_debug_id,
+      'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
         'courseSlug', p_course_slug
       )
     )
-  );
+  ) into message_id;
+  
+  return message_id;
+end;
 $$;
 
 revoke all on function public.enqueue_github_sync_student_team(bigint, text, text, text) from public;
@@ -183,22 +381,36 @@ create or replace function public.enqueue_github_sync_staff_team(
   p_course_slug text,
   p_debug_id text default null
 ) returns bigint
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  log_id bigint;
+  message_id bigint;
+begin
+  -- Insert log record first
+  insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
+  values ('sync_staff_team', 0, p_class_id, p_debug_id)
+  returning id into log_id;
+  
+  -- Enqueue message with log_id
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
       'method', 'sync_staff_team',
       'class_id', p_class_id,
       'debug_id', p_debug_id,
+      'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
         'courseSlug', p_course_slug
       )
     )
-  );
+  ) into message_id;
+  
+  return message_id;
+end;
 $$;
 
 revoke all on function public.enqueue_github_sync_staff_team(bigint, text, text, text) from public;
@@ -212,16 +424,27 @@ create or replace function public.enqueue_github_sync_repo_permissions(
   p_github_usernames text[],
   p_debug_id text default null
 ) returns bigint
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  log_id bigint;
+  message_id bigint;
+begin
+  -- Insert log record first
+  insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
+  values ('sync_repo_permissions', 0, p_class_id, p_debug_id)
+  returning id into log_id;
+  
+  -- Enqueue message with log_id
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
       'method', 'sync_repo_permissions',
       'class_id', p_class_id,
       'debug_id', p_debug_id,
+      'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
         'repo', p_repo,
@@ -229,7 +452,10 @@ as $$
         'githubUsernames', p_github_usernames
       )
     )
-  );
+  ) into message_id;
+  
+  return message_id;
+end;
 $$;
 
 revoke all on function public.enqueue_github_sync_repo_permissions(bigint, text, text, text, text[], text) from public;
@@ -241,22 +467,36 @@ create or replace function public.enqueue_github_archive_repo(
   p_repo text,
   p_debug_id text default null
 ) returns bigint
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  log_id bigint;
+  message_id bigint;
+begin
+  -- Insert log record first
+  insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
+  values ('archive_repo_and_lock', 0, p_class_id, p_debug_id)
+  returning id into log_id;
+  
+  -- Enqueue message with log_id
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
       'method', 'archive_repo_and_lock',
       'class_id', p_class_id,
       'debug_id', p_debug_id,
+      'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
         'repo', p_repo
       )
     )
-  );
+  ) into message_id;
+  
+  return message_id;
+end;
 $$;
 
 revoke all on function public.enqueue_github_archive_repo(bigint, text, text, text) from public;
@@ -290,6 +530,33 @@ $$;
 
 revoke all on function public.get_async_github_metrics() from public, anon, authenticated;
 grant execute on function public.get_async_github_metrics() to service_role;
+
+-- 5b) Recent API metrics helper (per class/method/status over a time window)
+create or replace function public.get_github_api_metrics_recent(p_window_seconds integer default 3600)
+returns table (
+  class_id bigint,
+  method text,
+  status_code integer,
+  calls bigint,
+  avg_latency_ms numeric
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    class_id,
+    method::text as method,
+    status_code,
+    count(*)::bigint as calls,
+    avg(latency_ms)::numeric as avg_latency_ms
+  from public.api_gateway_calls
+  where created_at >= now() - make_interval(secs => p_window_seconds)
+  group by class_id, method, status_code;
+$$;
+
+revoke all on function public.get_github_api_metrics_recent(integer) from public, anon, authenticated;
+grant execute on function public.get_github_api_metrics_recent(integer) to service_role;
 
 -- 6) Replace edge function invocations with enqueue RPCs for team sync
 create or replace function public.sync_staff_github_team(class_id integer)

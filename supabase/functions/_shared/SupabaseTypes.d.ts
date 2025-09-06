@@ -50,7 +50,7 @@ export type Database = {
           debug_id: string | null;
           id: number;
           latency_ms: number | null;
-          message_enqueued_at: string | null;
+          message_processed_at: string | null;
           method: Database["public"]["Enums"]["github_async_method"];
           status_code: number;
         };
@@ -60,7 +60,7 @@ export type Database = {
           debug_id?: string | null;
           id?: number;
           latency_ms?: number | null;
-          message_enqueued_at?: string | null;
+          message_processed_at?: string | null;
           method: Database["public"]["Enums"]["github_async_method"];
           status_code: number;
         };
@@ -70,7 +70,7 @@ export type Database = {
           debug_id?: string | null;
           id?: number;
           latency_ms?: number | null;
-          message_enqueued_at?: string | null;
+          message_processed_at?: string | null;
           method?: Database["public"]["Enums"]["github_async_method"];
           status_code?: number;
         };
@@ -1840,6 +1840,60 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      github_circuit_breaker_events: {
+        Row: {
+          id: number;
+          key: string;
+          opened_at: string;
+          reason: string | null;
+          scope: string;
+        };
+        Insert: {
+          id?: number;
+          key: string;
+          opened_at?: string;
+          reason?: string | null;
+          scope: string;
+        };
+        Update: {
+          id?: number;
+          key?: string;
+          opened_at?: string;
+          reason?: string | null;
+          scope?: string;
+        };
+        Relationships: [];
+      };
+      github_circuit_breakers: {
+        Row: {
+          key: string;
+          last_reason: string | null;
+          open_until: string | null;
+          scope: string;
+          state: string;
+          trip_count: number;
+          updated_at: string;
+        };
+        Insert: {
+          key: string;
+          last_reason?: string | null;
+          open_until?: string | null;
+          scope: string;
+          state?: string;
+          trip_count?: number;
+          updated_at?: string;
+        };
+        Update: {
+          key?: string;
+          last_reason?: string | null;
+          open_until?: string | null;
+          scope?: string;
+          state?: string;
+          trip_count?: number;
+          updated_at?: string;
+        };
+        Relationships: [];
       };
       gradebook_column_students: {
         Row: {
@@ -8840,7 +8894,7 @@ export type Database = {
         Returns: number;
       };
       create_repos_for_student: {
-        Args: { class_id?: number; p_force?: boolean; user_id: string } | { class_id?: number; user_id: string };
+        Args: { class_id?: number; p_force?: boolean; user_id: string };
         Returns: undefined;
       };
       create_system_notification: {
@@ -8962,6 +9016,23 @@ export type Database = {
           errors_recent_1h: number;
           errors_total: number;
           method: string;
+        }[];
+      };
+      get_github_api_metrics_recent: {
+        Args: { p_window_seconds?: number };
+        Returns: {
+          avg_latency_ms: number;
+          calls: number;
+          class_id: number;
+          method: string;
+          status_code: number;
+        }[];
+      };
+      get_github_circuit: {
+        Args: { p_key: string; p_scope: string };
+        Returns: {
+          open_until: string;
+          state: string;
         }[];
       };
       get_gradebook_records_for_all_students: {
@@ -9089,6 +9160,10 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      invoke_github_async_worker_background_task: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
       invoke_gradebook_recalculation_background_task: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
@@ -9114,7 +9189,7 @@ export type Database = {
           p_class_id?: number;
           p_debug_id?: string;
           p_latency_ms?: number;
-          p_message_enqueued_at?: string;
+          p_message_processed_at?: string;
           p_method: string;
           p_status_code: number;
         };
@@ -9130,6 +9205,15 @@ export type Database = {
           p_student_id: string;
         };
         Returns: undefined;
+      };
+      open_github_circuit: {
+        Args: {
+          p_key: string;
+          p_open_for_seconds: number;
+          p_reason?: string;
+          p_scope: string;
+        };
+        Returns: number;
       };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };
@@ -9195,6 +9279,10 @@ export type Database = {
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
+      };
+      update_api_gateway_call: {
+        Args: { p_latency_ms?: number; p_log_id: number; p_status_code: number };
+        Returns: undefined;
       };
       update_card_progress: {
         Args: {
