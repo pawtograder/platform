@@ -48,6 +48,46 @@ interface RosterEntry {
   location: string | null;
 }
 
+/**
+ * Get numeric precedence for role (higher number = higher precedence)
+ */
+function getRolePrecedence(role: "instructor" | "grader" | "student"): number {
+  switch (role) {
+    case "instructor":
+      return 3;
+    case "grader":
+      return 2;
+    case "student":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Securely escape CSV field to prevent injection attacks
+ * Handles quotes, commas, and formula injection (leading =,+,-,@)
+ */
+function escapeCSVField(value: string | number | null): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const str = String(value);
+
+  // Check for formula injection patterns and prefix with single quote
+  if (/^[=+\-@]/.test(str)) {
+    return `'${str.replace(/"/g, '""')}`;
+  }
+
+  // If field contains quotes, commas, or newlines, wrap in quotes and escape internal quotes
+  if (/[",\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+
+  return str;
+}
+
 // Configuration
 class Config {
   static supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -193,6 +233,7 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
     for (const instructor of roster.instructors) {
       const sisUserId = instructor.nuid;
       const fullName = `${instructor.first_name} ${instructor.last_name}`;
+      const incomingRole = "instructor" as const;
 
       if (!userMap.has(sisUserId)) {
         userMap.set(sisUserId, {
@@ -200,7 +241,7 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
           firstName: instructor.first_name,
           lastName: instructor.last_name,
           fullName,
-          role: "instructor",
+          role: incomingRole,
           courseCRN: null,
           courseSectionName: null,
           labCRN: null,
@@ -208,6 +249,22 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
           meetingTimes: roster.section_meta.meeting_times,
           location: roster.section_meta.meeting_location
         });
+      } else {
+        const entry = userMap.get(sisUserId)!;
+        const incomingPrecedence = getRolePrecedence(incomingRole);
+        const existingPrecedence = getRolePrecedence(entry.role);
+
+        // If incoming role has higher precedence, upgrade the entry
+        if (incomingPrecedence > existingPrecedence) {
+          entry.role = incomingRole;
+          entry.firstName = instructor.first_name;
+          entry.lastName = instructor.last_name;
+          entry.fullName = fullName;
+          entry.meetingTimes = roster.section_meta.meeting_times;
+          entry.location = roster.section_meta.meeting_location;
+        }
+        // If roles are equal or incoming is lower, only update CRN/section fields
+        // (no downgrade of role or role-specific fields)
       }
 
       const entry = userMap.get(sisUserId)!;
@@ -224,6 +281,7 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
     for (const ta of roster.tas) {
       const sisUserId = ta.nuid;
       const fullName = `${ta.first_name} ${ta.last_name}`;
+      const incomingRole = "grader" as const;
 
       if (!userMap.has(sisUserId)) {
         userMap.set(sisUserId, {
@@ -231,7 +289,7 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
           firstName: ta.first_name,
           lastName: ta.last_name,
           fullName,
-          role: "grader",
+          role: incomingRole,
           courseCRN: null,
           courseSectionName: null,
           labCRN: null,
@@ -239,6 +297,22 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
           meetingTimes: roster.section_meta.meeting_times,
           location: roster.section_meta.meeting_location
         });
+      } else {
+        const entry = userMap.get(sisUserId)!;
+        const incomingPrecedence = getRolePrecedence(incomingRole);
+        const existingPrecedence = getRolePrecedence(entry.role);
+
+        // If incoming role has higher precedence, upgrade the entry
+        if (incomingPrecedence > existingPrecedence) {
+          entry.role = incomingRole;
+          entry.firstName = ta.first_name;
+          entry.lastName = ta.last_name;
+          entry.fullName = fullName;
+          entry.meetingTimes = roster.section_meta.meeting_times;
+          entry.location = roster.section_meta.meeting_location;
+        }
+        // If roles are equal or incoming is lower, only update CRN/section fields
+        // (no downgrade of role or role-specific fields)
       }
 
       const entry = userMap.get(sisUserId)!;
@@ -255,6 +329,7 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
     for (const student of roster.students) {
       const sisUserId = Number(student.nuid);
       const fullName = `${student.first_name} ${student.last_name}`;
+      const incomingRole = "student" as const;
 
       if (!userMap.has(sisUserId)) {
         userMap.set(sisUserId, {
@@ -262,7 +337,7 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
           firstName: student.first_name,
           lastName: student.last_name,
           fullName,
-          role: "student",
+          role: incomingRole,
           courseCRN: null,
           courseSectionName: null,
           labCRN: null,
@@ -270,6 +345,22 @@ async function getCompleteRoster(classId: number): Promise<RosterEntry[]> {
           meetingTimes: roster.section_meta.meeting_times,
           location: roster.section_meta.meeting_location
         });
+      } else {
+        const entry = userMap.get(sisUserId)!;
+        const incomingPrecedence = getRolePrecedence(incomingRole);
+        const existingPrecedence = getRolePrecedence(entry.role);
+
+        // If incoming role has higher precedence, upgrade the entry
+        if (incomingPrecedence > existingPrecedence) {
+          entry.role = incomingRole;
+          entry.firstName = student.first_name;
+          entry.lastName = student.last_name;
+          entry.fullName = fullName;
+          entry.meetingTimes = roster.section_meta.meeting_times;
+          entry.location = roster.section_meta.meeting_location;
+        }
+        // If roles are equal or incoming is lower, only update CRN/section fields
+        // (no downgrade of role or role-specific fields)
       }
 
       const entry = userMap.get(sisUserId)!;
@@ -319,21 +410,23 @@ async function exportRosterToCSV(roster: RosterEntry[], filename: string): Promi
   ];
 
   const csvRows = [
-    headers.join(","),
+    headers.map(escapeCSVField).join(","),
     ...roster.map((entry) =>
       [
         entry.sisUserId,
-        `"${entry.firstName}"`,
-        `"${entry.lastName}"`,
-        `"${entry.fullName}"`,
+        entry.firstName,
+        entry.lastName,
+        entry.fullName,
         entry.role,
-        entry.courseCRN || "",
-        `"${entry.courseSectionName || ""}"`,
-        entry.labCRN || "",
-        `"${entry.labSectionName || ""}"`,
-        `"${entry.meetingTimes || ""}"`,
-        `"${entry.location || ""}"`
-      ].join(",")
+        entry.courseCRN,
+        entry.courseSectionName,
+        entry.labCRN,
+        entry.labSectionName,
+        entry.meetingTimes,
+        entry.location
+      ]
+        .map(escapeCSVField)
+        .join(",")
     )
   ];
 
