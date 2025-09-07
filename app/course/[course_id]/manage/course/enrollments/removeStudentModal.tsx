@@ -41,10 +41,7 @@ export default function RemoveStudentModal({
                 <Text>
                   Are you sure you want to remove <strong>{studentName || "this user"}</strong> from the course?
                 </Text>
-                <Text>
-                  This action will remove their enrollment and associated permissions. It cannot be undone directly,
-                  though they could be re-added later.
-                </Text>
+                <Text>This action will remove their enrollment and associated permissions.</Text>
               </VStack>
             </Dialog.Body>
             <Dialog.Footer>
@@ -58,7 +55,7 @@ export default function RemoveStudentModal({
                   loading={isLoading}
                   disabled={!userRoleId || isLoading}
                 >
-                  Remove User
+                  Disable User
                 </Button>
               </HStack>
             </Dialog.Footer>

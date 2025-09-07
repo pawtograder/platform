@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { syncStudentTeam } from "../_shared/GitHubWrapper.ts";
+import { reinviteToOrgTeam, syncStudentTeam } from "../_shared/GitHubWrapper.ts";
 import {
   assertUserIsInstructor,
   UserVisibleError,
@@ -43,6 +43,47 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
     scope?.setTag("github_org", classData.github_org!);
     scope?.setTag("slug", classData.slug!);
+    //Find any students who never got an invitatino
+    const { data: usersWithoutInvitation, error: usersWithoutInvitationError } = await adminSupabase
+      .from("user_roles")
+      .select("user_id, invitation_date, users(github_username)")
+      .eq("class_id", course_id)
+      .eq("role", "student")
+      .is("invitation_date", null)
+      .not("users!inner(github_username)", "is", null)
+      .limit(1000);
+    if (usersWithoutInvitationError) {
+      console.error(usersWithoutInvitationError);
+      throw new UserVisibleError("Error fetching students");
+    }
+    for (const user of usersWithoutInvitation!) {
+      if (user.users.github_username) {
+        console.log(`User ${user.users.github_username} has no invitation, invitation date: ${user.invitation_date}`);
+        try {
+          const resp = await reinviteToOrgTeam(
+            classData.github_org!,
+            classData.slug! + "-students",
+            user.users.github_username!
+          );
+          if (!resp) {
+            await adminSupabase
+              .from("user_roles")
+              .update({
+                github_org_confirmed: true
+              })
+              .eq("user_id", user.user_id)
+              .eq("class_id", course_id);
+          }
+        } catch (error) {
+          const newScope = new Sentry.Scope();
+          newScope.setTag("user_id", user.user_id);
+          newScope.setTag("github_username", user.users.github_username!);
+          Sentry.captureException(error, newScope);
+          console.error(error);
+        }
+      }
+    }
+
     await syncStudentTeam(
       classData.github_org!,
       classData.slug!,

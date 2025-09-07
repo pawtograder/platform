@@ -69,7 +69,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   const { data: assignment, error: assignmentError } = await adminSupabase
     .from("assignments")
     .select(
-      "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
+      "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username), disabled, profiles!private_profile_id(id, name, sortable_name)))"
     ) // , classes(canvas_id), user_roles(user_id)')
     .eq("id", assignmentId)
     .lte("release_date", TZDate.tz(timeZone || "America/New_York").toISOString())
@@ -109,6 +109,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
       (userRole) =>
         userRole.users.github_username &&
         !studentsInAGroup?.includes(userRole.profiles!.id) &&
+        !userRole.disabled &&
         !existingRepos?.find((repo) => repo.profile_id === userRole.profiles!.id)
     );
     reposToCreate.push(

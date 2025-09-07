@@ -80,9 +80,9 @@ export default function EnrollmentsTable() {
   const labSections = useLabSections();
   const classSections = useClassSections();
 
-  const deleteUserRole = useCallback(
+  const disableUserRole = useCallback(
     async (userRoleId: string) => {
-      const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
+      const { error } = await supabase.from("user_roles").update({ disabled: true }).eq("id", parseInt(userRoleId));
       if (error) throw error;
     },
     [supabase]
@@ -123,7 +123,7 @@ export default function EnrollmentsTable() {
     async (userRoleIdToRemove: string) => {
       setIsDeletingUserRole(true);
       try {
-        await deleteUserRole(userRoleIdToRemove);
+        await disableUserRole(userRoleIdToRemove);
         toaster.create({
           title: "User Removed",
           description: `${removingStudentData?.userName || "User"} has been removed from the course.`,
@@ -141,7 +141,7 @@ export default function EnrollmentsTable() {
         setIsDeletingUserRole(false);
       }
     },
-    [deleteUserRole, removingStudentData?.userName, closeRemoveStudentModal]
+    [disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
 
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
@@ -175,6 +175,7 @@ export default function EnrollmentsTable() {
         .select("*")
         .eq("class_id", parseInt(course_id as string))
         .neq("status", "accepted")
+        .neq("status", "expired")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -285,10 +286,20 @@ export default function EnrollmentsTable() {
               </Flex>
             );
           }
+          if (row.original.disabled) {
+            return (
+              <Flex alignItems="center" gap={2}>
+                <Icon as={FaTimes} color="gray.fg" />
+                <Text color="gray.fg" fontWeight="medium">
+                  Dropped
+                </Text>
+              </Flex>
+            );
+          }
           return (
             <Flex alignItems="center" gap={2}>
-              <Icon as={CheckIcon} color="green.500" />
-              <Text color="green.500" fontWeight="medium">
+              <Icon as={CheckIcon} color="green.fg" />
+              <Text color="green.fg" fontWeight="medium">
                 Enrolled
               </Text>
             </Flex>
@@ -303,6 +314,9 @@ export default function EnrollmentsTable() {
             const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
             const status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
             return values.includes(status);
+          }
+          if (row.original.disabled) {
+            return values.includes("Dropped");
           }
           return values.includes("Enrolled");
         }
@@ -990,7 +1004,8 @@ export default function EnrollmentsTable() {
                                   { label: "Pending", value: "pending" },
                                   { label: "Accepted", value: "accepted" },
                                   { label: "Cancelled", value: "cancelled" },
-                                  { label: "Expired", value: "Expired" }
+                                  { label: "Expired", value: "Expired" },
+                                  { label: "Dropped", value: "Dropped" }
                                 ]}
                                 placeholder="Filter by status..."
                               />
