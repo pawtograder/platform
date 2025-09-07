@@ -248,6 +248,22 @@ async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
+        console.log(`Syncing student team for user ${args.userId}`);
+        if (args.userId) {
+          //Make sure that the student has been invited to the org
+          const { data, error } = await adminSupabase
+            .from("user_roles")
+            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .eq("class_id", envelope.class_id || 0)
+            .eq("user_id", args.userId)
+            .eq("role", "student")
+            .single();
+          if (error) throw error;
+          if (data && data.invitation_date === null && data.users?.github_username && data.classes?.github_org && data.classes?.slug) {
+            await github.reinviteToOrgTeam(data.classes.github_org, `${data.classes.slug}-students`, data.users.github_username, scope);
+          }
+        }
+
         await github.syncStudentTeam(
           args.org,
           args.courseSlug,
@@ -257,7 +273,7 @@ async function processEnvelope(
               .select("github_org_confirmed, users(github_username)")
               .eq("class_id", envelope.class_id || 0)
               .or("role.eq.student")
-              .limit(5000);
+              .limit(1000);
             if (error) throw error;
             return (data || [])
               .filter((s) => s.users?.github_username && s.github_org_confirmed)
@@ -306,6 +322,20 @@ async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
+        if (args.userId) {
+          //Make sure that the student has been invited to the org
+          const { data, error } = await adminSupabase
+            .from("user_roles")
+            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .eq("class_id", envelope.class_id || 0)
+            .eq("user_id", args.userId)
+            .eq("role", "instructor")
+            .single();
+          if (error) throw error;
+          if (data && data.invitation_date === null && data.users?.github_username && data.classes?.github_org && data.classes?.slug) {
+            await github.reinviteToOrgTeam(data.classes.github_org, `${data.classes.slug}-staff`, data.users.github_username, scope);
+          }
+        }
         await github.syncStaffTeam(
           args.org,
           args.courseSlug,

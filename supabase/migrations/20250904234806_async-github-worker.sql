@@ -80,6 +80,69 @@ begin
 end;
 $$;
 
+-- Update the user_roles change trigger function to pass user_id through to team sync
+create or replace function public.sync_github_teams_on_role_change() returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  -- Handle INSERT: new role added
+  if TG_OP = 'INSERT' then
+    if NEW.role in ('instructor', 'grader') then
+      perform public.sync_staff_github_team(NEW.class_id, NEW.user_id);
+    elsif NEW.role = 'student' then
+      perform public.sync_student_github_team(NEW.class_id, NEW.user_id);
+      -- Also create repos for the student if github_org_confirmed is true
+      if NEW.github_org_confirmed = true then
+        perform public.create_repos_for_student(NEW.user_id, NEW.class_id);
+      end if;
+    end if;
+    return NEW;
+  end if;
+
+  -- Handle UPDATE: role changed or github_org_confirmed changed
+  if TG_OP = 'UPDATE' then
+    -- If role changed to/from staff role or between staff roles
+    if (OLD.role not in ('instructor', 'grader') and NEW.role in ('instructor', 'grader')) or
+       (OLD.role in ('instructor', 'grader') and NEW.role not in ('instructor', 'grader')) or
+       (OLD.role in ('instructor', 'grader') and NEW.role in ('instructor', 'grader') and OLD.role != NEW.role) then
+      perform public.sync_staff_github_team(NEW.class_id, NEW.user_id);
+    end if;
+
+    -- If role changed to/from student role
+    if (OLD.role != 'student' and NEW.role = 'student') or
+       (OLD.role = 'student' and NEW.role != 'student') then
+      perform public.sync_student_github_team(NEW.class_id, NEW.user_id);
+      -- Also create repos when role changes to student and github_org_confirmed is true
+      if NEW.role = 'student' and NEW.github_org_confirmed = true then
+        perform public.create_repos_for_student(NEW.user_id, NEW.class_id);
+      end if;
+    end if;
+
+    -- If github_org_confirmed changed to true for a student
+    if NEW.role = 'student' and 
+       (OLD.github_org_confirmed is distinct from NEW.github_org_confirmed) and 
+       NEW.github_org_confirmed = true then
+      perform public.create_repos_for_student(NEW.user_id, NEW.class_id);
+    end if;
+
+    return NEW;
+  end if;
+
+  -- Handle DELETE: role removed
+  if TG_OP = 'DELETE' then
+    if OLD.role in ('instructor', 'grader') then
+      perform public.sync_staff_github_team(OLD.class_id, OLD.user_id);
+    elsif OLD.role = 'student' then
+      perform public.sync_student_github_team(OLD.class_id, OLD.user_id);
+    end if;
+    return OLD;
+  end if;
+
+  return null;
+end;
+$$;
+
 -- 9) Background invoker and cron schedule for the GitHub async worker
 create or replace function public.invoke_github_async_worker_background_task()
 returns void
@@ -596,7 +659,7 @@ revoke all on function public.get_github_api_metrics_recent(integer) from public
 grant execute on function public.get_github_api_metrics_recent(integer) to service_role;
 
 -- 6) Replace edge function invocations with enqueue RPCs for team sync
-create or replace function public.sync_staff_github_team(class_id integer)
+create or replace function public.sync_staff_github_team(class_id integer, user_id uuid default null)
 returns void
 language plpgsql
 security definer
@@ -617,12 +680,12 @@ begin
   if v_slug is null or v_org is null then
     raise exception 'Class not found or missing org/slug for class %', class_id;
   end if;
-  perform public.enqueue_github_sync_staff_team(class_id::bigint, v_org, v_slug, null);
+  perform public.enqueue_github_sync_staff_team(class_id::bigint, v_org, v_slug, user_id, null);
 end;
 $$;
 
 
-create or replace function public.sync_student_github_team(class_id integer)
+create or replace function public.sync_student_github_team(class_id integer, user_id uuid default null)
 returns void
 language plpgsql
 security definer
@@ -643,7 +706,7 @@ begin
   if v_slug is null or v_org is null then
     raise exception 'Class not found or missing org/slug for class %', class_id;
   end if;
-  perform public.enqueue_github_sync_student_team(class_id::bigint, v_org, v_slug, null);
+  perform public.enqueue_github_sync_student_team(class_id::bigint, v_org, v_slug, user_id, null);
 end;
 $$;
 
