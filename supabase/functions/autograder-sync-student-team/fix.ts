@@ -19,7 +19,7 @@ async function main() {
       console.warn(`Skipping class ${classData.slug || classData.id}: github_org is null or undefined`);
       continue;
     }
-    
+
     await syncStudentTeam(classData.github_org, classData.slug!, async () => {
       const { data: students, error: studentsError } = await adminSupabase
         .from("user_roles")
