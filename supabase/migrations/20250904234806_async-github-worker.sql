@@ -184,7 +184,8 @@ end $$;
 create or replace function public.open_github_circuit(
   p_scope text,
   p_key text,
-  p_open_for_seconds integer,
+  p_event text, -- 'primary' | 'secondary' | 'extreme'
+  p_retry_after_seconds integer default null,
   p_reason text default null
 ) returns integer
 language plpgsql
@@ -193,14 +194,25 @@ set search_path = public
 as $$
 declare
   v_row public.github_circuit_breakers%rowtype;
-  v_seconds integer := greatest(1, p_open_for_seconds);
+  v_base_seconds integer;
   v_trip_count integer;
 begin
   select * into v_row from public.github_circuit_breakers where scope = p_scope and key = p_key for update;
 
+  -- Determine base seconds by event type
+  if p_event = 'extreme' then
+    v_base_seconds := 43200; -- 12h
+  elsif p_event = 'secondary' then
+    v_base_seconds := 180; -- 3m
+  elsif p_event = 'primary' then
+    v_base_seconds := 60; -- 1m
+  else
+    v_base_seconds := coalesce(p_retry_after_seconds, 60);
+  end if;
+
   if not found then
     insert into public.github_circuit_breakers(scope, key, state, open_until, last_reason, updated_at, trip_count)
-    values (p_scope, p_key, 'open', now() + make_interval(secs => v_seconds), p_reason, now(), 1);
+    values (p_scope, p_key, 'open', now() + make_interval(secs => v_base_seconds), p_reason, now(), 1);
     v_trip_count := 1;
   else
     if v_row.state = 'open' and (v_row.open_until is null or v_row.open_until > now()) then
@@ -208,13 +220,14 @@ begin
       if v_trip_count >= 3 then
         v_row.open_until := now() + interval '24 hours';
       else
-        -- Exponential increase when tripped again during the open window
-        v_seconds := least(43200, v_seconds * 2);
-        v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_seconds));
+        -- Exponential increase when tripped again during the open window (double each subsequent trip)
+        -- Calculate next window: base * 2^(trip_count-1), capped at 12h
+        v_base_seconds := least(43200, v_base_seconds * (2 ^ (v_trip_count - 1)));
+        v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_base_seconds));
       end if;
     else
       v_trip_count := 1;
-      v_row.open_until := now() + make_interval(secs => v_seconds);
+      v_row.open_until := now() + make_interval(secs => v_base_seconds);
       v_row.state := 'open';
     end if;
     update public.github_circuit_breakers
@@ -233,8 +246,8 @@ begin
 end;
 $$;
 
-revoke all on function public.open_github_circuit(text, text, integer, text) from public;
-grant execute on function public.open_github_circuit(text, text, integer, text) to service_role;
+revoke all on function public.open_github_circuit(text, text, text, integer, text) from public;
+grant execute on function public.open_github_circuit(text, text, text, integer, text) to service_role;
 
 create or replace function public.get_github_circuit(
   p_scope text,

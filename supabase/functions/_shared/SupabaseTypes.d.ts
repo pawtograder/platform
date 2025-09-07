@@ -9208,9 +9208,10 @@ export type Database = {
       };
       open_github_circuit: {
         Args: {
+          p_event: string;
           p_key: string;
-          p_open_for_seconds: number;
           p_reason?: string;
+          p_retry_after_seconds?: number;
           p_scope: string;
         };
         Returns: number;

@@ -919,11 +919,8 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     const combinedMessage = collectedMessages.join("; ") || JSON.stringify(err);
     console.log(`Invitation error message: ${combinedMessage}`);
     if (/already.*(part|member).*organization/i.test(combinedMessage)) {
-      const adminSupabase = createClient<Database>(
-        Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-      );
       console.log(`User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`);
+      await updateUserRolesForGithubOrg({ github_username: githubUsername, org });
       //Update our user_role to mark that they are in the org!
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
@@ -1060,6 +1057,44 @@ export async function syncRepoPermissions(
       username
     });
   }
+}
+async function updateUserRolesForGithubOrg({ github_username, org }: { github_username: string; org: string }) {
+  const adminSupabase = createAdminClient<Database>();
+
+  // First, find the user by github_username
+  const { data: userData } = await adminSupabase
+    .from("users")
+    .select("*")
+    .eq("github_username", github_username)
+    .single();
+
+  if (!userData) {
+    throw new Error(`User with github_username ${github_username} not found`);
+  }
+
+  // Find all classes with the specified GitHub org
+  const { data: classes } = await adminSupabase.from("classes").select("id").eq("github_org", org);
+
+  if (!classes || classes.length === 0) {
+    throw new Error(`No classes found with GitHub org ${org}`);
+  }
+
+  const classIds = classes.map((c) => c.id);
+
+  // Update user_roles for this user in all classes with the specified org
+  const { data: updatedRoles, error } = await adminSupabase
+    .from("user_roles")
+    .update({ github_org_confirmed: true })
+    .eq("user_id", userData.user_id)
+    .in("class_id", classIds)
+    .select();
+
+  if (error) {
+    throw new Error(`Failed to update user roles: ${error.message}`);
+  }
+
+  console.log(`Updated ${updatedRoles?.length || 0} user roles for ${github_username} in classes with org ${org}`);
+  return updatedRoles;
 }
 
 export async function listCommits(

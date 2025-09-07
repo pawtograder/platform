@@ -141,7 +141,10 @@ function getHeaders(error: unknown): Record<string, string> | undefined {
   return lower;
 }
 
-function detectRateLimitType(error: unknown): { type: "secondary" | "primary" | "extreme" | null; retryAfter?: number } {
+function detectRateLimitType(error: unknown): {
+  type: "secondary" | "primary" | "extreme" | null;
+  retryAfter?: number;
+} {
   console.log("detectRateLimitType error", error);
   if (isSecondaryRateLimit(error)) return { type: "secondary", retryAfter: parseRetryAfterSeconds(error) };
   if (isPrimaryRateLimit(error)) return { type: "primary", retryAfter: parseRetryAfterSeconds(error) };
@@ -370,127 +373,109 @@ async function processEnvelope(
     console.log("rt", rt.type);
     console.log("Opening breaker for org");
     try {
-      const org = ((): string | undefined => {
-        if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
-        if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
-          return (envelope.args as SyncTeamArgs).org;
-        if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
-          return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
-        return undefined;
-      })();
-      console.log("org", org);
-      if (org) {
-        await adminSupabase.schema("public").rpc("open_github_circuit", {
-          p_scope: "org",
-          p_key: org,
-          p_open_for_seconds: 180,
-          p_reason: rt.type === "secondary" ? "secondary_rate_limit" : "primary_rate_limit"
+      if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
+        const retryAfter = rt.retryAfter;
+        // Defaults: primary=60s, secondary=180s, extreme=43200s (12h)
+        const baseDefault = rt.type === "primary" ? 60 : rt.type === "secondary" ? 180 : 43200;
+        const delay =
+          rt.type === "extreme"
+            ? baseDefault
+            : computeBackoffSeconds(retryAfter ?? baseDefault, envelope.retry_count ?? 0);
+        const type = rt.type;
+        scope.setTag("rate_limit", type);
+        scope.setContext("rate_limit_detail", {
+          type,
+          retry_after: retryAfter,
+          delay_seconds: delay,
+          retry_count: envelope.retry_count ?? 0
         });
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: type === "secondary" ? 403 : 429,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        // Open circuit for this org to mass-slowdown (shorter for primary)
+        try {
+          const org = ((): string | undefined => {
+            if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
+            if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
+              return (envelope.args as SyncTeamArgs).org;
+            if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
+              return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
+            return undefined;
+          })();
+          if (org) {
+            const { data: tripCountResult, error: tripErr } = (await adminSupabase
+              .schema("public")
+              .rpc("open_github_circuit", {
+                p_scope: "org",
+                p_key: org,
+                p_event: type,
+                p_retry_after_seconds: rt.retryAfter ?? null,
+                p_reason:
+                  type === "secondary"
+                    ? "secondary_rate_limit"
+                    : type === "primary"
+                      ? "primary_rate_limit"
+                      : "extreme_rate_limit"
+              })) as unknown as { data: number; error: any };
+            const tripCount = tripErr ? undefined : tripCountResult;
+            if (tripCount) {
+              Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
+              scope.setTag("circuit_trip_count", String(tripCount));
+              if (tripCount >= 3) {
+                Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
+                  level: "error"
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.error("error", e);
+          Sentry.captureException(e, scope);
+        }
+        await requeueWithDelay(adminSupabase, envelope, delay, scope);
+        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        return false;
       }
-    } catch (e) {
-      console.error("error", e);
-      Sentry.captureException(e, scope);
-    }
-    if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
-      const retryAfter = rt.retryAfter;
-      // Defaults: primary=60s, secondary=180s, extreme=43200s (12h)
-      const baseDefault = rt.type === "primary" ? 60 : rt.type === "secondary" ? 180 : 43200;
-      const delay =
-        rt.type === "extreme"
-          ? baseDefault
-          : computeBackoffSeconds(retryAfter ?? baseDefault, envelope.retry_count ?? 0);
-      const type = rt.type;
-      scope.setTag("rate_limit", type);
-      scope.setContext("rate_limit_detail", {
-        type,
-        retry_after: retryAfter,
-        delay_seconds: delay,
-        retry_count: envelope.retry_count ?? 0
-      });
+      const status = ((): number => {
+        if (typeof error === "object" && error !== null && "status" in error) {
+          const val = (error as { status?: unknown }).status;
+          if (typeof val === "number") return val;
+        }
+        return 500;
+      })();
       recordMetric(
         adminSupabase,
         {
           method: envelope.method,
-          status_code: type === "secondary" ? 403 : 429,
+          status_code: status || 500,
           class_id: envelope.class_id,
           debug_id: envelope.debug_id,
-          enqueued_at: meta.enqueued_at,
-          log_id: envelope.log_id
+          enqueued_at: meta.enqueued_at
         },
         scope
       );
-      // Open circuit for this org to mass-slowdown (shorter for primary)
-      try {
-        const org = ((): string | undefined => {
-          if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
-          if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
-            return (envelope.args as SyncTeamArgs).org;
-          if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
-            return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
-          return undefined;
-        })();
-        if (org) {
-          const { data: tripCountResult, error: tripErr } = (await adminSupabase
-            .schema("public")
-            .rpc("open_github_circuit", {
-              p_scope: "org",
-              p_key: org,
-              p_open_for_seconds:
-                type === "secondary"
-                  ? Math.max(180, delay)
-                  : type === "primary"
-                    ? Math.max(60, Math.min(delay, 300))
-                    : 43200,
-              p_reason:
-                type === "secondary"
-                  ? "secondary_rate_limit"
-                  : type === "primary"
-                    ? "primary_rate_limit"
-                    : "extreme_rate_limit"
-            })) as unknown as { data: number; error: any };
-          const tripCount = tripErr ? undefined : tripCountResult;
-          if (tripCount) {
-            Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
-            scope.setTag("circuit_trip_count", String(tripCount));
-            if (tripCount >= 3) {
-              Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, { level: "error" });
-            }
-          }
-        }
-      } catch (e) {
-        console.error("error", e);
-        Sentry.captureException(e, scope);
-      }
-      await requeueWithDelay(adminSupabase, envelope, delay, scope);
-      await archiveMessage(adminSupabase, meta.msg_id, scope);
+      // On failure, do NOT archive so the message becomes visible again after VT
+      scope.setContext("async_error", {
+        method: envelope.method,
+        status_code: status,
+        error_message: error instanceof Error ? error.message : String(error)
+      });
+      Sentry.captureException(error, scope);
+      return false;
+    } catch (e) {
+      console.error("error", e);
+      Sentry.captureException(e, scope);
       return false;
     }
-    const status = ((): number => {
-      if (typeof error === "object" && error !== null && "status" in error) {
-        const val = (error as { status?: unknown }).status;
-        if (typeof val === "number") return val;
-      }
-      return 500;
-    })();
-    recordMetric(
-      adminSupabase,
-      {
-        method: envelope.method,
-        status_code: status || 500,
-        class_id: envelope.class_id,
-        debug_id: envelope.debug_id,
-        enqueued_at: meta.enqueued_at
-      },
-      scope
-    );
-    // On failure, do NOT archive so the message becomes visible again after VT
-    scope.setContext("async_error", {
-      method: envelope.method,
-      status_code: status,
-      error_message: error instanceof Error ? error.message : String(error)
-    });
-    Sentry.captureException(error, scope);
-    return false;
   }
 }
 
