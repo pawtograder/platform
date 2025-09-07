@@ -315,6 +315,21 @@ async function processEnvelope(
           envelope.args as CreateRepoArgs;
         await github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope);
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
+        // Mark repository as ready if we can resolve the database record (idempotent best-effort)
+        try {
+          if (envelope.class_id) {
+            // repository naming convention used earlier in enqueue: org / repoName
+            const fullName = `${org}/${repoName}`;
+            await adminSupabase
+              .from("repositories")
+              .update({ is_github_ready: true })
+              .eq("class_id", envelope.class_id)
+              .eq("repository", fullName);
+          }
+        } catch (e) {
+          scope.setContext("repo_ready_update_error", { error_message: e instanceof Error ? e.message : String(e) });
+          Sentry.captureException(e, scope);
+        }
         recordMetric(
           adminSupabase,
           {

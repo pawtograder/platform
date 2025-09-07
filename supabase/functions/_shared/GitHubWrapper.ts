@@ -553,13 +553,14 @@ export async function createRepo(
     scope?.setTag("template_owner", owner);
     scope?.setTag("repo_name", repoName);
     scope?.setTag("org", org);
-    await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+    const resp = await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
       owner: org,
       name: repoName,
       private: true
     });
+    console.log(JSON.stringify(resp.headers, null, 2));
     scope?.setTag("github_operation", "create_repo_request_done");
     //Disable squash merging, make template
     scope?.setTag("github_operation", "patch_repo_settings");
@@ -799,7 +800,6 @@ export async function syncTeam(
       team_slug,
       per_page: 100
     });
-    console.log(`Found ${data.length} members in team ${team_slug}`);
     members = data;
   } catch (e) {
     if (e instanceof RequestError && e.message.includes("Not Found")) {
@@ -940,7 +940,6 @@ async function getTeamMembers(org: string, team_slug: string, octokit: Octokit):
     org,
     team_slug
   });
-  console.log(`Found ${team.length} members in team ${team_slug}`);
   return team.map((m) => m.login.toLowerCase());
 }
 async function getOrgMembers(
