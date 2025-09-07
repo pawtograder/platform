@@ -1363,10 +1363,10 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
           !sisUserIds.has(Number(enr.users.sis_user_id)) &&
           !enr.disabled && // Don't re-disable already disabled users
           enr.invitations !== null && //Only disable users who have an invitation
-          enr.invitations.sis_managed !== false //Only disable users who were originally from SIS
+          enr.invitations.sis_managed !== false && //Only disable users who were originally from SIS
           // Don't disable users who are notin a SIS-managed section
-          && (enr.class_section_id === null || sisEnrollmentByCRN.has(enr.class_section_id))
-          && (enr.lab_section_id === null || sisEnrollmentByCRN.has(enr.lab_section_id))
+          (enr.class_section_id === null || sisEnrollmentByCRN.has(enr.class_section_id)) &&
+          (enr.lab_section_id === null || sisEnrollmentByCRN.has(enr.lab_section_id))
       );
 
       if (enrolledUsersToDisable.length > 0) {
