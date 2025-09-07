@@ -1060,7 +1060,6 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
                 class_section_id: classSectionId,
                 lab_section_id: labSectionId,
                 status: "pending",
-                name: userData.name, // Update name in case it changed
                 updated_at: new Date().toISOString()
               })
               .eq("id", existingInvitation.id);
@@ -1353,6 +1352,10 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
         }
       }
 
+      // Build quick-lookup sets of SIS-managed section IDs for membership checks
+      const sisManagedClassSectionIds = new Set(enabledClassSectionsWithSIS.map((s) => s.id));
+      const sisManagedLabSectionIds = new Set(enabledLabSectionsWithSIS.map((s) => s.id));
+
       // 7b. Disable user_roles for enrolled users no longer in THIS CLASS's SIS data
       // Use the comprehensive enrollment map to catch ALL users, not just those in SIS-enabled sections
       // Only disable users who were originally from SIS (have canvas_id set to their nuid)
@@ -1365,8 +1368,8 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
           enr.invitations !== null && //Only disable users who have an invitation
           enr.invitations.sis_managed !== false && //Only disable users who were originally from SIS
           // Don't disable users who are notin a SIS-managed section
-          (enr.class_section_id === null || sisEnrollmentByCRN.has(enr.class_section_id)) &&
-          (enr.lab_section_id === null || sisEnrollmentByCRN.has(enr.lab_section_id))
+          (enr.class_section_id === null || sisManagedClassSectionIds.has(enr.class_section_id)) &&
+          (enr.lab_section_id === null || sisManagedLabSectionIds.has(enr.lab_section_id))
       );
 
       if (enrolledUsersToDisable.length > 0) {
