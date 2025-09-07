@@ -1364,6 +1364,9 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
           !enr.disabled && // Don't re-disable already disabled users
           enr.invitations !== null && //Only disable users who have an invitation
           enr.invitations.sis_managed !== false //Only disable users who were originally from SIS
+          // Don't disable users who are notin a SIS-managed section
+          && (enr.class_section_id === null || sisEnrollmentByCRN.has(enr.class_section_id))
+          && (enr.lab_section_id === null || sisEnrollmentByCRN.has(enr.lab_section_id))
       );
 
       if (enrolledUsersToDisable.length > 0) {
@@ -1405,7 +1408,7 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
             "canvas_id",
             usersToReenable.map((enr) => enr.canvas_id)
           )
-          .eq("disabled", false); // Only re-enable currently disabled users
+          .eq("disabled", true); // Only re-enable currently disabled users
 
         if (reenableError) {
           Sentry.captureException(reenableError, scope);
