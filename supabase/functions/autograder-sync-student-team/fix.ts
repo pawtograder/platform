@@ -5,8 +5,6 @@ import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function main() {
-  console.log(Deno.env.get("SUPABASE_URL")!);
-  console.log(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -16,12 +14,18 @@ async function main() {
     throw new Error("Error fetching f25 classes");
   }
   for (const classData of f25Classes.data!) {
-    await syncStudentTeam(classData.github_org!, classData.slug!, async () => {
+    // Guard against null/undefined github_org
+    if (!classData.github_org) {
+      console.warn(`Skipping class ${classData.slug || classData.id}: github_org is null or undefined`);
+      continue;
+    }
+    
+    await syncStudentTeam(classData.github_org, classData.slug!, async () => {
       const { data: students, error: studentsError } = await adminSupabase
         .from("user_roles")
         .select("users(github_username)")
         .eq("class_id", classData.id)
-        .or("role.eq.student")
+        .eq("role", "student")
         .eq("github_org_confirmed", true)
         .limit(1000);
       if (studentsError) {

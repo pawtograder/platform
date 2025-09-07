@@ -229,7 +229,7 @@ begin
     if v_row.state = 'open' and (v_row.open_until is null or v_row.open_until > now()) then
       -- Already OPEN: do not count as another trip; optionally extend window modestly
       v_trip_count := v_row.trip_count; -- unchanged
-      v_base_seconds := least(43200, v_base_seconds * 2); -- extend window but don't escalate count
+      v_base_seconds := least(43200, cast(v_base_seconds * power(2, v_trip_count - 1) as integer)); -- extend window but don't escalate count
       v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_base_seconds));
       update public.github_circuit_breakers
         set open_until = v_row.open_until,
@@ -244,6 +244,7 @@ begin
       if v_trip_count >= 3 then
         v_row.open_until := now() + interval '24 hours';
       else
+        v_base_seconds := least(43200, cast(v_base_seconds * power(2, v_trip_count - 1) as integer));
         v_row.open_until := now() + make_interval(secs => v_base_seconds);
       end if;
       v_row.state := 'open';
