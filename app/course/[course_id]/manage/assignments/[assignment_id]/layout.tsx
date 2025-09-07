@@ -60,6 +60,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
     icon: FaPooStorm,
     instructorsOnly: true
+  },
+  {
+    label: "Repository Status",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
+    icon: FaCode,
+    instructorsOnly: true
   }
 ];
 

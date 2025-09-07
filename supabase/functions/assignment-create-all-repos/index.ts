@@ -193,7 +193,8 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
       await adminSupabase
         .from("repositories")
         .update({
-          synced_repo_sha: headSha
+          synced_repo_sha: headSha,
+          is_github_ready: true
         })
         .eq("id", dbRepo.id);
     } catch (e) {
@@ -223,7 +224,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
           } else {
             const github_username = repo.profiles?.user_roles?.users.github_username;
             if (!github_username) {
-              console.log(`No github username for repo ${repo.repository}`);
+              // console.log(`No github username for repo ${repo.repository}`);
               return;
             }
             student_github_usernames = [github_username];
@@ -241,6 +242,12 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
           }
 
           await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
+          await adminSupabase
+            .from("repositories")
+            .update({
+              is_github_ready: true
+            })
+            .eq("id", repo.id);
         })
       )
     );

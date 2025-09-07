@@ -108,7 +108,7 @@ function parseRetryAfterSeconds(error: unknown): number | undefined {
     headers?: Record<string, string>;
     message?: string;
   };
-  const headers = err?.response?.headers || (err as any)?.headers;
+  const headers = err?.response?.headers || (err as { headers?: Record<string, string> })?.headers;
   const retryAfter = headers?.["retry-after"] || headers?.["Retry-After"];
   if (retryAfter) {
     const seconds = parseInt(String(retryAfter), 10);
@@ -117,9 +117,9 @@ function parseRetryAfterSeconds(error: unknown): number | undefined {
   // If structured SecondaryRateLimitError with retryAfter, use it
   if (
     (error instanceof SecondaryRateLimitError || error instanceof PrimaryRateLimitError) &&
-    typeof (error as any).retryAfter === "number"
+    typeof (error as { retryAfter?: number }).retryAfter === "number"
   ) {
-    return (error as any).retryAfter;
+    return (error as { retryAfter?: number }).retryAfter;
   }
   return undefined;
 }
@@ -265,6 +265,31 @@ async function processEnvelope(
           },
           scope
         );
+        // If an affected user is provided and they haven't been invited yet, ensure org invitation to students team
+        if (args.userId && envelope.class_id) {
+          const { data: ur, error } = await adminSupabase
+            .from("user_roles")
+            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .eq("class_id", envelope.class_id)
+            .eq("user_id", args.userId)
+            .eq("role", "student")
+            .single();
+          if (
+            !error &&
+            ur &&
+            ur.invitation_date === null &&
+            ur.users?.github_username &&
+            ur.classes?.github_org &&
+            ur.classes?.slug
+          ) {
+            await github.reinviteToOrgTeam(
+              ur.classes.github_org,
+              `${ur.classes.slug}-students`,
+              ur.users.github_username,
+              scope
+            );
+          }
+        }
         recordMetric(
           adminSupabase,
           {
@@ -296,6 +321,30 @@ async function processEnvelope(
           },
           scope
         );
+        if (args.userId && envelope.class_id) {
+          const { data: ur, error } = await adminSupabase
+            .from("user_roles")
+            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .eq("class_id", envelope.class_id)
+            .eq("user_id", args.userId)
+            .in("role", ["instructor", "grader"])
+            .single();
+          if (
+            !error &&
+            ur &&
+            ur.invitation_date === null &&
+            ur.users?.github_username &&
+            ur.classes?.github_org &&
+            ur.classes?.slug
+          ) {
+            await github.reinviteToOrgTeam(
+              ur.classes.github_org,
+              `${ur.classes.slug}-staff`,
+              ur.users.github_username,
+              scope
+            );
+          }
+        }
         recordMetric(
           adminSupabase,
           {
@@ -427,20 +476,20 @@ async function processEnvelope(
             return undefined;
           })();
           if (org) {
-            const { data: tripCountResult, error: tripErr } = (await adminSupabase
+            const { data: tripCountResult, error: tripErr } = await adminSupabase
               .schema("public")
               .rpc("open_github_circuit", {
                 p_scope: "org",
                 p_key: org,
                 p_event: type,
-                p_retry_after_seconds: rt.retryAfter ?? null,
+                p_retry_after_seconds: rt.retryAfter,
                 p_reason:
                   type === "secondary"
                     ? "secondary_rate_limit"
                     : type === "primary"
                       ? "primary_rate_limit"
                       : "extreme_rate_limit"
-              })) as unknown as { data: number; error: any };
+              });
             const tripCount = tripErr ? undefined : tripCountResult;
             if (tripCount) {
               Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });

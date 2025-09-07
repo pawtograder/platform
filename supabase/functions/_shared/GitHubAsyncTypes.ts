@@ -8,6 +8,7 @@ export type GitHubAsyncMethod =
 export type SyncTeamArgs = {
   org: string;
   courseSlug: string;
+  userId?: string; // affected user to ensure org invitation
 };
 
 export type CreateRepoArgs = {

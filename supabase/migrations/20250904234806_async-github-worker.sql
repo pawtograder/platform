@@ -9,6 +9,7 @@ exception when others then
 end $$;
 
 
+
 -- Enum for async call methods
 do $$ begin
   if not exists (select 1 from pg_type where typname = 'github_async_method') then
@@ -369,6 +370,7 @@ create or replace function public.enqueue_github_sync_student_team(
   p_class_id bigint,
   p_org text,
   p_course_slug text,
+  p_affected_user_id uuid default null,
   p_debug_id text default null
 ) returns bigint
 language plpgsql
@@ -394,7 +396,8 @@ begin
       'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
-        'courseSlug', p_course_slug
+        'courseSlug', p_course_slug,
+        'userId', p_affected_user_id
       )
     )
   ) into message_id;
@@ -403,13 +406,14 @@ begin
 end;
 $$;
 
-revoke all on function public.enqueue_github_sync_student_team(bigint, text, text, text) from public;
-grant execute on function public.enqueue_github_sync_student_team(bigint, text, text, text) to service_role;
+revoke all on function public.enqueue_github_sync_student_team(bigint, text, text, uuid, text) from public;
+grant execute on function public.enqueue_github_sync_student_team(bigint, text, text, uuid, text) to service_role;
 
 create or replace function public.enqueue_github_sync_staff_team(
   p_class_id bigint,
   p_org text,
   p_course_slug text,
+  p_affected_user_id uuid default null,
   p_debug_id text default null
 ) returns bigint
 language plpgsql
@@ -435,7 +439,8 @@ begin
       'log_id', log_id,
       'args', jsonb_build_object(
         'org', p_org,
-        'courseSlug', p_course_slug
+        'courseSlug', p_course_slug,
+        'userId', p_affected_user_id
       )
     )
   ) into message_id;
@@ -444,8 +449,8 @@ begin
 end;
 $$;
 
-revoke all on function public.enqueue_github_sync_staff_team(bigint, text, text, text) from public;
-grant execute on function public.enqueue_github_sync_staff_team(bigint, text, text, text) to service_role;
+revoke all on function public.enqueue_github_sync_staff_team(bigint, text, text, uuid, text) from public;
+grant execute on function public.enqueue_github_sync_staff_team(bigint, text, text, uuid, text) to service_role;
 
 create or replace function public.enqueue_github_sync_repo_permissions(
   p_class_id bigint,
@@ -848,3 +853,142 @@ end;
 $$;
 
 
+
+DROP VIEW IF EXISTS public.assignments_for_student_dashboard;
+-- 2b) Update assignments_for_student_dashboard view to include repositories.is_github_ready
+create or replace view public.assignments_for_student_dashboard
+with ("security_invoker"='true') as
+with latest_submissions as (
+  select distinct on (s.assignment_id, coalesce(s.profile_id, agm.profile_id))
+    s.id,
+    s.assignment_id,
+    s.created_at,
+    s.is_active,
+    s.ordinal,
+    s.profile_id,
+    s.assignment_group_id,
+    coalesce(s.profile_id, agm.profile_id) as student_profile_id
+  from public.submissions s
+  left join public.assignment_groups_members agm on agm.assignment_group_id = s.assignment_group_id
+  order by s.assignment_id, coalesce(s.profile_id, agm.profile_id), s.created_at desc
+), student_repositories as (
+  select distinct
+    r.assignment_id,
+    ur_1.private_profile_id as student_profile_id,
+    r.id as repository_id,
+    r.repository,
+    r.is_github_ready
+  from public.repositories r
+  left join public.user_roles ur_1 on ur_1.private_profile_id = r.profile_id
+  where r.profile_id is not null
+  union
+  select distinct
+    r.assignment_id,
+    agm.profile_id as student_profile_id,
+    r.id as repository_id,
+    r.repository,
+    r.is_github_ready
+  from public.repositories r
+  join public.assignment_groups_members agm on agm.assignment_group_id = r.assignment_group_id
+  where r.assignment_group_id is not null
+)
+select
+  a.id,
+  a.created_at,
+  a.class_id,
+  a.title,
+  a.release_date,
+  public.calculate_effective_due_date(a.id, ur.private_profile_id) as due_date,
+  a.student_repo_prefix,
+  a.total_points,
+  a.has_autograder,
+  a.has_handgrader,
+  a.description,
+  a.slug,
+  a.template_repo,
+  a.allow_student_formed_groups,
+  a.group_config,
+  a.group_formation_deadline,
+  a.max_group_size,
+  a.min_group_size,
+  a.archived_at,
+  a.autograder_points,
+  a.grading_rubric_id,
+  a.max_late_tokens,
+  a.latest_template_sha,
+  a.meta_grading_rubric_id,
+  a.self_review_rubric_id,
+  a.self_review_setting_id,
+  a.gradebook_column_id,
+  a.minutes_due_after_lab,
+  a.allow_not_graded_submissions,
+  ur.private_profile_id as student_profile_id,
+  ur.user_id as student_user_id,
+  ls.id as submission_id,
+  ls.created_at as submission_created_at,
+  ls.is_active as submission_is_active,
+  ls.ordinal as submission_ordinal,
+  gr.id as grader_result_id,
+  gr.score as grader_result_score,
+  gr.max_score as grader_result_max_score,
+  sr.repository_id,
+  sr.repository,
+  sr.is_github_ready,
+  asrs.id as assignment_self_review_setting_id,
+  asrs.enabled as self_review_enabled,
+  asrs.deadline_offset as self_review_deadline_offset,
+  ra.id as review_assignment_id,
+  ra.submission_id as review_submission_id,
+  sr_review.id as submission_review_id,
+  sr_review.completed_at as submission_review_completed_at,
+  ade.id as due_date_exception_id,
+  ade.hours as exception_hours,
+  ade.minutes as exception_minutes,
+  ade.tokens_consumed as exception_tokens_consumed,
+  ade.created_at as exception_created_at,
+  ade.creator_id as exception_creator_id,
+  ade.note as exception_note
+from public.assignments a
+join public.user_roles ur on ur.class_id = a.class_id and ur.role = 'student'::public.app_role
+left join latest_submissions ls on ls.assignment_id = a.id and ls.student_profile_id = ur.private_profile_id
+left join public.grader_results gr on gr.submission_id = ls.id
+left join student_repositories sr on sr.assignment_id = a.id and sr.student_profile_id = ur.private_profile_id
+left join public.assignment_self_review_settings asrs on asrs.id = a.self_review_setting_id
+left join public.review_assignments ra on ra.assignment_id = a.id and ra.assignee_profile_id = ur.private_profile_id
+left join public.submission_reviews sr_review on sr_review.id = ra.submission_review_id
+left join public.assignment_due_date_exceptions ade on ade.assignment_id = a.id and (
+  ade.student_id = ur.private_profile_id or ade.assignment_group_id in (
+    select agm.assignment_group_id from public.assignment_groups_members agm
+    where agm.profile_id = ur.private_profile_id and agm.assignment_id = a.id
+  )
+)
+where a.archived_at is null;
+ALTER TABLE "public"."assignments_for_student_dashboard" OWNER TO "postgres";
+
+-- 10) Trigger: on assignment update, if release_date is in the past, enqueue repo creation
+drop trigger if exists trigger_create_repos_on_release on public.assignments;
+drop function if exists public.trigger_create_repos_on_release();
+
+create or replace function public.trigger_create_repos_on_release()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Only act when release_date changed and is now in the past
+  if (TG_OP = 'UPDATE')
+     and (OLD.release_date is distinct from NEW.release_date)
+     and (NEW.release_date is not null)
+     and (NEW.release_date <= now())
+  then
+    perform public.create_all_repos_for_assignment(NEW.class_id::bigint, NEW.id::bigint, false);
+  end if;
+  return NEW;
+end;
+$$;
+
+create trigger trigger_create_repos_on_release
+after update of release_date on public.assignments
+for each row
+execute function public.trigger_create_repos_on_release();

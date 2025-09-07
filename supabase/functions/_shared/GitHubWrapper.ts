@@ -1058,7 +1058,10 @@ export async function syncRepoPermissions(
   }
 }
 async function updateUserRolesForGithubOrg({ github_username, org }: { github_username: string; org: string }) {
-  const adminSupabase = createAdminClient<Database>();
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
 
   // First, find the user by github_username
   const { data: userData } = await adminSupabase
