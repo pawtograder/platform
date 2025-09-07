@@ -759,7 +759,9 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
       // This catches users who might need section updates, not just those in SIS-enabled sections
       const { data: allExistingUserRoles } = await adminSupabase
         .from("user_roles")
-        .select("id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)")
+        .select(
+          "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id), invitations(sis_managed)"
+        )
         .eq("class_id", classData.id)
         .not("users.sis_user_id", "is", null)
         .eq("disabled", false)
@@ -1356,7 +1358,12 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
       // Only disable users who were originally from SIS (have canvas_id set to their nuid)
       const enrolledUsersToDisable = Array.from(allExistingEnrollmentsBySIS.values()).filter(
         (enr) =>
-          enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(Number(enr.users.sis_user_id)) && !enr.disabled // Don't re-disable already disabled users
+          enr.users.sis_user_id &&
+          enr.canvas_id &&
+          !sisUserIds.has(Number(enr.users.sis_user_id)) &&
+          !enr.disabled && // Don't re-disable already disabled users
+          enr.invitations !== null && //Only disable users who have an invitation
+          enr.invitations.sis_managed !== false //Only disable users who were originally from SIS
       );
 
       if (enrolledUsersToDisable.length > 0) {
@@ -1377,6 +1384,9 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
         } else {
           disabledUsersCount = count || 0;
         }
+        console.log("Enrolled users to disable", enrolledUsersToDisable);
+      } else {
+        console.log("No enrolled users to disable");
       }
 
       // 7c. Re-enable users who are back in SIS (were disabled but now present again)
@@ -1395,7 +1405,7 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
             "canvas_id",
             usersToReenable.map((enr) => enr.canvas_id)
           )
-          .eq("disabled", true); // Only re-enable currently disabled users
+          .eq("disabled", false); // Only re-enable currently disabled users
 
         if (reenableError) {
           Sentry.captureException(reenableError, scope);
