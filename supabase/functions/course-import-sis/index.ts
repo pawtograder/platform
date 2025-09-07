@@ -1042,24 +1042,23 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
           }
         }
 
-        // Check if user already has any pending invitation
+        // Check if user already has any invitation
         const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
         if (existingInvitation) {
-          // Check if section assignments need to be updated
+          // Only update pending invitations; accepted ones are handled by user_roles flow
           const needsSectionUpdate =
             existingInvitation.class_section_id !== classSectionId ||
             existingInvitation.lab_section_id !== labSectionId ||
             existingInvitation.role !== userData.role;
 
-          if (needsSectionUpdate) {
-            // Update the existing invitation instead of creating a new one
+          if (existingInvitation.status === "pending" && needsSectionUpdate) {
+            // Update the existing pending invitation instead of creating a new one
             const { error: updateError } = await adminSupabase
               .from("invitations")
               .update({
                 role: userData.role,
                 class_section_id: classSectionId,
                 lab_section_id: labSectionId,
-                status: "pending",
                 updated_at: new Date().toISOString()
               })
               .eq("id", existingInvitation.id);
