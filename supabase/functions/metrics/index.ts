@@ -112,10 +112,23 @@ async function generatePrometheusMetrics(): Promise<Response> {
     );
 
     // Get all class metrics, assignment metrics, and tags breakdown in parallel
-    const [classMetricsResult, assignmentMetricsResult, tagsMetricsResult] = await Promise.all([
+    const [
+      classMetricsResult,
+      assignmentMetricsResult,
+      tagsMetricsResult,
+      breakerEventsResult,
+      apiRecentMetricsResult
+    ] = await Promise.all([
       supabase.rpc("get_all_class_metrics"),
       supabase.rpc("get_assignment_llm_metrics"),
-      supabase.rpc("get_llm_tags_breakdown")
+      supabase.rpc("get_llm_tags_breakdown"),
+      // Circuit breaker events last 24h grouped by scope/key
+      supabase
+        .from("github_circuit_breaker_events")
+        .select("scope,key,reason,opened_at")
+        .gte("opened_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+      // Recent API metrics last hour
+      supabase.rpc("get_github_api_metrics_recent", { p_window_seconds: 3600 })
     ]);
 
     const { data: metricsData, error: metricsError } = classMetricsResult as unknown as {
@@ -130,6 +143,14 @@ async function generatePrometheusMetrics(): Promise<Response> {
 
     const { data: tagsData } = tagsMetricsResult as unknown as {
       data: unknown[];
+      error: Error;
+    };
+    const { data: breakerEvents } = breakerEventsResult as unknown as {
+      data: Array<{ scope: string; key: string; reason?: string; opened_at: string }>;
+      error: Error;
+    };
+    const { data: apiRecent } = apiRecentMetricsResult as unknown as {
+      data: Array<{ class_id: number; method: string; status_code: number; calls: number; avg_latency_ms: number }>;
       error: Error;
     };
 
@@ -243,7 +264,13 @@ async function generatePrometheusMetrics(): Promise<Response> {
     }));
 
     // Generate comprehensive Prometheus metrics format
-    const prometheusOutput = generatePrometheusOutput(metrics, assignmentData, tagsData);
+    const prometheusOutput = generatePrometheusOutput(
+      metrics,
+      assignmentData,
+      tagsData,
+      breakerEvents || [],
+      apiRecent || []
+    );
 
     return new Response(prometheusOutput, {
       headers: {
@@ -262,7 +289,13 @@ async function generatePrometheusMetrics(): Promise<Response> {
   }
 }
 
-function generatePrometheusOutput(metrics: ClassMetrics[], assignmentData?: unknown[], tagsData?: unknown[]): string {
+function generatePrometheusOutput(
+  metrics: ClassMetrics[],
+  assignmentData?: unknown[],
+  tagsData?: unknown[],
+  breakerEvents?: Array<{ scope: string; key: string; reason?: string; opened_at: string }>,
+  apiRecent?: Array<{ class_id: number; method: string; status_code: number; calls: number; avg_latency_ms: number }>
+): string {
   const timestamp = Math.floor(Date.now()); // Use milliseconds since epoch
 
   let output = `# HELP pawtograder_info Information about Pawtograder instance
@@ -758,6 +791,42 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
       const fullLabels = tagLabels ? `${baseLabels},${tagLabels}` : baseLabels;
 
       output += `pawtograder_llm_output_tokens_by_tags{${fullLabels}} ${tagRecord.output_tokens || 0} ${timestamp}\n`;
+    }
+    output += "\n";
+  }
+
+  // === CIRCUIT BREAKER METRICS ===
+  if (breakerEvents && breakerEvents.length > 0) {
+    output += `# HELP pawtograder_github_circuit_breaker_trips_total Number of circuit breaker trips (last 24h)
+# TYPE pawtograder_github_circuit_breaker_trips_total counter
+`;
+    const grouped: Record<string, number> = {};
+    for (const evt of breakerEvents) {
+      const key = `${evt.scope}|${evt.key}|${evt.reason ?? "unspecified"}`;
+      grouped[key] = (grouped[key] || 0) + 1;
+    }
+    for (const [k, count] of Object.entries(grouped)) {
+      const [scope, breakerKey, reason] = k.split("|");
+      output += `pawtograder_github_circuit_breaker_trips_total{scope="${escapeLabel(scope)}",key="${escapeLabel(breakerKey)}",reason="${escapeLabel(reason)}"} ${count} ${timestamp}\n`;
+    }
+    output += "\n";
+  }
+
+  // === ASYNC GITHUB API RECENT METRICS (last hour) ===
+  if (apiRecent && apiRecent.length > 0) {
+    output += `# HELP pawtograder_github_api_calls_recent Number of API calls in the last hour per class/method/status
+# TYPE pawtograder_github_api_calls_recent counter
+`;
+    for (const row of apiRecent) {
+      output += `pawtograder_github_api_calls_recent{class_id="${row.class_id}",method="${escapeLabel(row.method)}",status_code="${row.status_code}"} ${row.calls} ${timestamp}\n`;
+    }
+    output += "\n";
+
+    output += `# HELP pawtograder_github_api_avg_latency_ms_recent Average latency in ms for API calls in the last hour per class/method/status
+# TYPE pawtograder_github_api_avg_latency_ms_recent gauge
+`;
+    for (const row of apiRecent) {
+      output += `pawtograder_github_api_avg_latency_ms_recent{class_id="${row.class_id}",method="${escapeLabel(row.method)}",status_code="${row.status_code}"} ${row.avg_latency_ms ?? 0} ${timestamp}\n`;
     }
     output += "\n";
   }

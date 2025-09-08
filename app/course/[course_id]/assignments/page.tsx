@@ -31,6 +31,7 @@ type AssignmentUnit = {
   due_date_component: JSX.Element;
   due_date_link?: string;
   repo: string;
+  is_repo_ready: boolean;
   name_link: string;
   submission_text: string;
   submission_link?: string;
@@ -130,6 +131,7 @@ export default function StudentPage() {
         ),
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
+        is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
         submission_text: !assignment.submission_id
           ? "Have not submitted yet"
@@ -151,6 +153,7 @@ export default function StudentPage() {
           due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
+          is_repo_ready: assignment.is_github_ready ?? false,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_submission_id}/files?review_assignment_id=${assignment.review_assignment_id}`,
           submission_text: assignment.submission_review_completed_at ? "Submitted" : "Not Submitted",
           group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
