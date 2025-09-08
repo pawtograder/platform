@@ -487,7 +487,8 @@ async function processEnvelope(
     console.error("error caaught ->>>", error);
     const rt = detectRateLimitType(error);
     console.log("rt", rt.type);
-    console.log("Opening breaker for org");
+    scope.setTag("rate_limit_type", rt.type);
+    Sentry.captureException(error, scope);
     try {
       if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
         const retryAfter = rt.retryAfter;
