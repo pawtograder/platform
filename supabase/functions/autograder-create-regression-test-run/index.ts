@@ -15,11 +15,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const url = req.url;
   const lastURLPart = url.split("/").pop();
   if (!lastURLPart) {
-    throw new UserVisibleError("Invalid regression test ID");
+    throw new UserVisibleError("Invalid regression test ID", 404);
   }
   const regression_test_id = parseInt(lastURLPart);
   if (isNaN(regression_test_id)) {
-    throw new UserVisibleError("Invalid regression test ID");
+    throw new UserVisibleError("Invalid regression test ID", 400);
   }
   scope?.setTag("regression_test_id", regression_test_id.toString());
   const decoded = await validateOIDCToken(req.headers.get("Authorization")!);
