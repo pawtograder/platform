@@ -414,21 +414,44 @@ async function processEnvelope(
       case "create_repo": {
         const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
           envelope.args as CreateRepoArgs;
-        await github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope);
+        const headSha = await github.createRepo(
+          org,
+          repoName,
+          templateRepo,
+          { is_template_repo: isTemplateRepo },
+          scope
+        );
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
-        // Mark repository as ready if we can resolve the database record (idempotent best-effort)
+
+        // Update repository record using the repo_id if provided (preferred method)
         try {
-          if (envelope.class_id) {
-            // repository naming convention used earlier in enqueue: org / repoName
+          if (envelope.repo_id) {
+            // Direct update using repo_id (more efficient and reliable)
+            await adminSupabase
+              .from("repositories")
+              .update({
+                is_github_ready: true,
+                synced_repo_sha: headSha
+              })
+              .eq("id", envelope.repo_id);
+          } else if (envelope.class_id) {
+            // Fallback to old method for backward compatibility
             const fullName = `${org}/${repoName}`;
             await adminSupabase
               .from("repositories")
-              .update({ is_github_ready: true })
+              .update({
+                is_github_ready: true,
+                synced_repo_sha: headSha
+              })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);
           }
         } catch (e) {
-          scope.setContext("repo_ready_update_error", { error_message: e instanceof Error ? e.message : String(e) });
+          scope.setContext("repo_ready_update_error", {
+            error_message: e instanceof Error ? e.message : String(e),
+            repo_id: envelope.repo_id,
+            class_id: envelope.class_id
+          });
           Sentry.captureException(e, scope);
         }
         recordMetric(

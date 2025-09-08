@@ -8954,16 +8954,31 @@ export type Database = {
         Returns: number;
       };
       enqueue_github_create_repo: {
-        Args: {
-          p_class_id: number;
-          p_course_slug: string;
-          p_debug_id?: string;
-          p_github_usernames: string[];
-          p_is_template_repo?: boolean;
-          p_org: string;
-          p_repo_name: string;
-          p_template_repo: string;
-        };
+        Args:
+          | {
+              p_assignment_group_id?: number;
+              p_assignment_id?: number;
+              p_class_id: number;
+              p_course_slug: string;
+              p_debug_id?: string;
+              p_github_usernames: string[];
+              p_is_template_repo?: boolean;
+              p_latest_template_sha?: string;
+              p_org: string;
+              p_profile_id?: string;
+              p_repo_name: string;
+              p_template_repo: string;
+            }
+          | {
+              p_class_id: number;
+              p_course_slug: string;
+              p_debug_id?: string;
+              p_github_usernames: string[];
+              p_is_template_repo?: boolean;
+              p_org: string;
+              p_repo_name: string;
+              p_template_repo: string;
+            };
         Returns: number;
       };
       enqueue_github_sync_repo_permissions: {
@@ -9259,11 +9274,11 @@ export type Database = {
         Returns: undefined;
       };
       sync_staff_github_team: {
-        Args: { class_id: number };
+        Args: { class_id: number } | { class_id: number; user_id?: string };
         Returns: undefined;
       };
       sync_student_github_team: {
-        Args: { class_id: number };
+        Args: { class_id: number } | { class_id: number; user_id?: string };
         Returns: undefined;
       };
       test_discussion_thread_insert_performance: {

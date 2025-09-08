@@ -76,5 +76,6 @@ export type GitHubAsyncEnvelope = {
   class_id?: number;
   debug_id?: string;
   log_id?: number;
+  repo_id?: number; // Repository ID for create_repo operations
   retry_count?: number;
 };
