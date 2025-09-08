@@ -248,7 +248,13 @@ declare
   v_deleted_ids bigint[] := '{}';
   v_message_data jsonb;
   v_class_id_in_message bigint;
+  v_delete_success boolean;
 begin
+  -- Validate input
+  if p_class_id is null or p_class_id <= 0 then
+    raise exception 'Invalid class_id: %', p_class_id;
+  end if;
+
   -- Query all messages from the async_calls queue
   -- PGMQ stores messages in pgmq.q_async_calls table
   for v_message_record in 
@@ -256,22 +262,36 @@ begin
     from pgmq.q_async_calls 
     where vt <= now() -- Only get messages that are not currently being processed (visibility timeout expired)
   loop
-    -- Extract class_id from the message JSON
-    v_message_data := v_message_record.message;
-    
-    -- Check if this message has a class_id that matches our target
-    if v_message_data ? 'class_id' then
-      v_class_id_in_message := (v_message_data->>'class_id')::bigint;
+    begin
+      -- Extract class_id from the message JSON
+      v_message_data := v_message_record.message;
       
-      if v_class_id_in_message = p_class_id then
-        -- Delete this message using PGMQ delete function
-        perform pgmq_public.delete('async_calls', v_message_record.msg_id);
+      -- Check if this message has a class_id that matches our target
+      if v_message_data ? 'class_id' then
+        -- Safely convert class_id to bigint
+        begin
+          v_class_id_in_message := (v_message_data->>'class_id')::bigint;
+        exception when others then
+          -- Skip messages with invalid class_id format
+          continue;
+        end;
         
-        -- Track the deletion
-        v_deleted_count := v_deleted_count + 1;
-        v_deleted_ids := array_append(v_deleted_ids, v_message_record.msg_id);
+        if v_class_id_in_message = p_class_id then
+          -- Delete this message using PGMQ delete function
+          select pgmq_public.delete('async_calls', v_message_record.msg_id) into v_delete_success;
+          
+          if v_delete_success then
+            -- Track the deletion
+            v_deleted_count := v_deleted_count + 1;
+            v_deleted_ids := array_append(v_deleted_ids, v_message_record.msg_id);
+          end if;
+        end if;
       end if;
-    end if;
+    exception when others then
+      -- Log error but continue processing other messages
+      raise warning 'Error processing message %: %', v_message_record.msg_id, SQLERRM;
+      continue;
+    end;
   end loop;
   
   -- Return the results
@@ -281,6 +301,25 @@ begin
 end;
 $$;
 
+-- Simpler function that just returns the count
+create or replace function public.delete_queued_messages_for_class_simple(
+  p_class_id bigint
+) returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_result record;
+begin
+  select * from public.delete_queued_messages_for_class(p_class_id) into v_result;
+  return v_result.deleted_count;
+end;
+$$;
+
 -- Grant execute permission to service_role
 revoke all on function public.delete_queued_messages_for_class(bigint) from public;
 grant execute on function public.delete_queued_messages_for_class(bigint) to service_role;
+
+revoke all on function public.delete_queued_messages_for_class_simple(bigint) from public;
+grant execute on function public.delete_queued_messages_for_class_simple(bigint) to service_role;
