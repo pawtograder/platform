@@ -12,7 +12,7 @@ import type {
   SyncRepoPermissionsArgs,
   ArchiveRepoAndLockArgs
 } from "../_shared/GitHubAsyncTypes.ts";
-import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
+import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -283,7 +283,7 @@ async function processEnvelope(
               .from("user_roles")
               .select("github_org_confirmed, users(github_username)")
               .eq("class_id", envelope.class_id || 0)
-              .or("role.eq.student")
+              .eq("role", "student")
               .limit(1000);
             if (error) throw error;
             return (data || [])
