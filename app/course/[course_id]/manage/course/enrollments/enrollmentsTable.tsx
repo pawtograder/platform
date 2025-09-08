@@ -534,7 +534,8 @@ export default function EnrollmentsTable() {
           if (row.original.type === "invitation") {
             return "N/A";
           }
-          return row.original.users?.github_username || "N/A";
+          const name = row.original.users?.github_username || "N/A";
+          return name;
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
@@ -548,6 +549,48 @@ export default function EnrollmentsTable() {
             return values.includes("N/A");
           }
           return values.includes(username);
+        }
+      },
+      {
+        id: "github_org_confirmed",
+        header: "GitHub Org Status",
+        cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return (
+              <Text color="gray.400" fontSize="sm">
+                N/A
+              </Text>
+            );
+          }
+          if (row.original.github_org_confirmed) {
+            return (
+              <Flex alignItems="center" gap={2}>
+                <Icon as={CheckIcon} color="green.600" />
+                <Text color="green.600" fontWeight="medium" fontSize="sm">
+                  Joined
+                </Text>
+              </Flex>
+            );
+          }
+          return (
+            <Flex alignItems="center" gap={2}>
+              <Icon as={FaTimes} color="red.600" />
+              <Text color="red.600" fontWeight="medium" fontSize="sm">
+                Not joined
+              </Text>
+            </Flex>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+
+          if (row.original.type === "invitation") {
+            return values.includes("N/A");
+          }
+
+          const status = row.original.github_org_confirmed ? "Joined" : "Not joined";
+          return values.includes(status);
         }
       },
       {
@@ -829,6 +872,7 @@ export default function EnrollmentsTable() {
       "Class Section",
       "Lab Section",
       "GitHub Username",
+      "GitHub Org Status",
       "SIS User ID",
       "SIS Linked",
       "Tags"
@@ -889,6 +933,10 @@ export default function EnrollmentsTable() {
       // Get GitHub username
       const githubUsername = original.type === "invitation" ? "N/A" : original.users?.github_username || "N/A";
 
+      // Get GitHub org status
+      const githubOrgStatus =
+        original.type === "invitation" ? "N/A" : original.github_org_confirmed ? "Joined" : "Not joined";
+
       // Get SIS User ID
       const sisUserId =
         original.type === "invitation"
@@ -909,7 +957,19 @@ export default function EnrollmentsTable() {
         tags = profileTags.length > 0 ? profileTags.join("; ") : "No tags";
       }
 
-      return [status, name, email, role, classSection, labSection, githubUsername, sisUserId, sisLinked, tags];
+      return [
+        status,
+        name,
+        email,
+        role,
+        classSection,
+        labSection,
+        githubUsername,
+        githubOrgStatus,
+        sisUserId,
+        sisLinked,
+        tags
+      ];
     });
 
     // Create CSV content
@@ -1157,6 +1217,23 @@ export default function EnrollmentsTable() {
                                     .values()
                                 ).map((username) => ({ label: username, value: username }))}
                                 placeholder="Filter by GitHub username..."
+                              />
+                            )}
+                            {header.id === "github_org_confirmed" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                  checkboxClear();
+                                }}
+                                options={[
+                                  { label: "Joined", value: "Joined" },
+                                  { label: "Not joined", value: "Not joined" },
+                                  { label: "N/A", value: "N/A" }
+                                ]}
+                                placeholder="Filter by GitHub org status..."
                               />
                             )}
                             {header.id === "tags" && (
