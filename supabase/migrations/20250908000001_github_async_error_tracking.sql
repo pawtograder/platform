@@ -233,3 +233,54 @@ select cron.schedule(
   '0 2 * * *', -- Daily at 2 AM
   'select public.cleanup_github_async_errors();'
 );
+
+-- Function to delete all queued pending messages for a given class
+create or replace function public.delete_queued_messages_for_class(
+  p_class_id bigint
+) returns table(deleted_count bigint, deleted_message_ids bigint[])
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_message_record record;
+  v_deleted_count bigint := 0;
+  v_deleted_ids bigint[] := '{}';
+  v_message_data jsonb;
+  v_class_id_in_message bigint;
+begin
+  -- Query all messages from the async_calls queue
+  -- PGMQ stores messages in pgmq.q_async_calls table
+  for v_message_record in 
+    select msg_id, message 
+    from pgmq.q_async_calls 
+    where vt <= now() -- Only get messages that are not currently being processed (visibility timeout expired)
+  loop
+    -- Extract class_id from the message JSON
+    v_message_data := v_message_record.message;
+    
+    -- Check if this message has a class_id that matches our target
+    if v_message_data ? 'class_id' then
+      v_class_id_in_message := (v_message_data->>'class_id')::bigint;
+      
+      if v_class_id_in_message = p_class_id then
+        -- Delete this message using PGMQ delete function
+        perform pgmq_public.delete('async_calls', v_message_record.msg_id);
+        
+        -- Track the deletion
+        v_deleted_count := v_deleted_count + 1;
+        v_deleted_ids := array_append(v_deleted_ids, v_message_record.msg_id);
+      end if;
+    end if;
+  end loop;
+  
+  -- Return the results
+  deleted_count := v_deleted_count;
+  deleted_message_ids := v_deleted_ids;
+  return next;
+end;
+$$;
+
+-- Grant execute permission to service_role
+revoke all on function public.delete_queued_messages_for_class(bigint) from public;
+grant execute on function public.delete_queued_messages_for_class(bigint) to service_role;

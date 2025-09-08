@@ -145,18 +145,13 @@ function detectRateLimitType(error: unknown): {
   type: "secondary" | "primary" | "extreme" | null;
   retryAfter?: number;
 } {
-  console.log("detectRateLimitType error", error);
   if (isSecondaryRateLimit(error)) return { type: "secondary", retryAfter: parseRetryAfterSeconds(error) };
   if (isPrimaryRateLimit(error)) return { type: "primary", retryAfter: parseRetryAfterSeconds(error) };
-  console.log("detectRateLimitType error is not a rate limit error");
   const err = error as { status?: number; message?: string };
   const status = typeof err?.status === "number" ? err.status : undefined;
   const headers = getHeaders(error);
   const retryAfter = headers ? parseInt(headers["retry-after"] || "", 10) : NaN;
   const remaining = headers ? parseInt(headers["x-ratelimit-remaining"] || "", 10) : NaN;
-  console.log("detectRateLimitType headers", headers);
-  console.log("detectRateLimitType retryAfter", retryAfter);
-  console.log("detectRateLimitType remaining", remaining);
   const msg = (err?.message || "").toLowerCase();
   console.log("detectRateLimitType msg", msg);
   console.log("detectRateLimitType status", status);
