@@ -164,14 +164,16 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     resource: "submissions",
     meta: {
       select:
-        "*, submission_reviews!submission_reviews_submission_id_fkey(*), review_assignments!review_assignments_submission_id_fkey(*, review_assignment_rubric_parts!review_assignment_rubric_parts_review_assignment_id_fkey(*)), assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id))"
+        "*, submission_reviews!submission_reviews_submission_id_fkey(*), review_assignments!review_assignments_submission_id_fkey(*, review_assignment_rubric_parts!review_assignment_rubric_parts_review_assignment_id_fkey(*)), assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)), user_roles!inner(disabled)"
     },
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
       { field: "assignment_id", operator: "eq", value: assignment_id },
       { field: "is_active", operator: "eq", value: true },
       { field: "submission_reviews.rubric_id", operator: "eq", value: selectedRubric?.id },
-      { field: "review_assignments.rubric_id", operator: "eq", value: selectedRubric?.id }
+      { field: "review_assignments.rubric_id", operator: "eq", value: selectedRubric?.id },
+      { field: "user_roles.role", operator: "eq", value: "student" },
+      { field: "user_roles.disabled", operator: "eq", value: false }
     ],
     queryOptions: {
       enabled: !!selectedRubric && !!assignment_id && !!course_id

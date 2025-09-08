@@ -216,7 +216,7 @@ async function processInvitation(
     });
 
     if (invitationError) {
-      const localScope = scope?.clone();
+      const localScope = new Sentry.Scope();
       localScope?.setTag("sis_user_id", invitation.sis_user_id);
       localScope?.setTag("role", invitation.role);
       localScope?.setTag("class_id", courseId);
@@ -254,7 +254,7 @@ async function processInvitation(
       .single();
 
     if (fetchError) {
-      const localScope = scope?.clone();
+      const localScope = new Sentry.Scope();
       localScope?.setTag("sis_user_id", invitation.sis_user_id);
       localScope?.setTag("role", invitation.role);
       localScope?.setTag("class_id", courseId);
