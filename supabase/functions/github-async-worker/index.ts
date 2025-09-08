@@ -259,8 +259,19 @@ async function processEnvelope(
             .eq("role", "student")
             .single();
           if (error) throw error;
-          if (data && data.invitation_date === null && data.users?.github_username && data.classes?.github_org && data.classes?.slug) {
-            await github.reinviteToOrgTeam(data.classes.github_org, `${data.classes.slug}-students`, data.users.github_username, scope);
+          if (
+            data &&
+            data.invitation_date === null &&
+            data.users?.github_username &&
+            data.classes?.github_org &&
+            data.classes?.slug
+          ) {
+            await github.reinviteToOrgTeam(
+              data.classes.github_org,
+              `${data.classes.slug}-students`,
+              data.users.github_username,
+              scope
+            );
           }
         }
 
@@ -332,8 +343,19 @@ async function processEnvelope(
             .eq("role", "instructor")
             .single();
           if (error) throw error;
-          if (data && data.invitation_date === null && data.users?.github_username && data.classes?.github_org && data.classes?.slug) {
-            await github.reinviteToOrgTeam(data.classes.github_org, `${data.classes.slug}-staff`, data.users.github_username, scope);
+          if (
+            data &&
+            data.invitation_date === null &&
+            data.users?.github_username &&
+            data.classes?.github_org &&
+            data.classes?.slug
+          ) {
+            await github.reinviteToOrgTeam(
+              data.classes.github_org,
+              `${data.classes.slug}-staff`,
+              data.users.github_username,
+              scope
+            );
           }
         }
         await github.syncStaffTeam(
