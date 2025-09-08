@@ -204,6 +204,95 @@ async function requeueWithDelay(
   }
 }
 
+async function recordGitHubAsyncError(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  method: GitHubAsyncMethod,
+  error: unknown,
+  scope: Sentry.Scope
+) {
+  try {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorData = {
+      method,
+      error_message: errorMessage,
+      error_type: error instanceof Error ? error.constructor.name : "Unknown"
+    };
+
+    await adminSupabase.schema("public").rpc("record_github_async_error", {
+      p_org: org,
+      p_method: method,
+      p_error_data: errorData as unknown as Json
+    });
+  } catch (e) {
+    scope.setContext("error_recording_failed", {
+      original_error: error instanceof Error ? error.message : String(error),
+      recording_error: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+  }
+}
+
+async function checkAndTripErrorCircuitBreaker(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  try {
+    const result = await adminSupabase.schema("public").rpc("check_github_error_threshold", {
+      p_org: org,
+      p_threshold: 5,
+      p_window_minutes: 5
+    });
+
+    if (result.error) {
+      Sentry.captureException(result.error, scope);
+      return false;
+    }
+
+    const errorCount = result.data as number;
+    if (errorCount >= 5) {
+      // Trip the circuit breaker for 8 hours
+      const tripResult = await adminSupabase.schema("public").rpc("open_github_circuit", {
+        p_scope: "org",
+        p_key: org,
+        p_event: "error_threshold",
+        p_retry_after_seconds: 28800, // 8 hours
+        p_reason: `Error threshold exceeded: ${errorCount} errors in 5 minutes`
+      });
+
+      if (!tripResult.error) {
+        // Log special error to Sentry
+        scope.setTag("circuit_breaker_reason", "error_threshold");
+        scope.setContext("error_threshold_breach", {
+          org,
+          error_count: errorCount,
+          window_minutes: 5,
+          circuit_duration_hours: 8
+        });
+
+        Sentry.captureMessage(
+          `GitHub async worker circuit breaker tripped for org ${org}: ${errorCount} errors in 5 minutes. Circuit open for 8 hours.`,
+          {
+            level: "error"
+          }
+        );
+
+        return true;
+      }
+    }
+
+    return false;
+  } catch (e) {
+    scope.setContext("circuit_check_error", {
+      org,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+    return false;
+  }
+}
+
 async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
@@ -512,6 +601,17 @@ async function processEnvelope(
     console.log("rt", rt.type);
     scope.setTag("rate_limit_type", rt.type);
     Sentry.captureException(error, scope);
+
+    // Extract org for error tracking and circuit breaker logic
+    const org = ((): string | undefined => {
+      if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
+      if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
+        return (envelope.args as SyncTeamArgs).org;
+      if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
+        return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
+      return undefined;
+    })();
+
     try {
       if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
         const retryAfter = rt.retryAfter;
@@ -543,14 +643,6 @@ async function processEnvelope(
         );
         // Open circuit for this org to mass-slowdown (shorter for primary)
         try {
-          const org = ((): string | undefined => {
-            if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
-            if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
-              return (envelope.args as SyncTeamArgs).org;
-            if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
-              return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
-            return undefined;
-          })();
           if (org) {
             const { data: tripCountResult, error: tripErr } = await adminSupabase
               .schema("public")
@@ -585,6 +677,49 @@ async function processEnvelope(
         await archiveMessage(adminSupabase, meta.msg_id, scope);
         return false;
       }
+
+      // For non-rate-limit errors, record the error and check if we should trip the circuit breaker
+      if (org) {
+        // Record the error for tracking
+        await recordGitHubAsyncError(adminSupabase, org, envelope.method, error, scope);
+
+        // Immediately open circuit breaker for 30 seconds on any error
+        try {
+          await adminSupabase.schema("public").rpc("open_github_circuit", {
+            p_scope: "org",
+            p_key: org,
+            p_event: "immediate_error",
+            p_retry_after_seconds: 30,
+            p_reason: `Immediate circuit breaker: ${envelope.method} error - ${error instanceof Error ? error.message : String(error)}`
+          });
+
+          scope.setTag("immediate_circuit_breaker", "30s");
+          scope.setContext("immediate_circuit_detail", {
+            org,
+            method: envelope.method,
+            duration_seconds: 30,
+            error_message: error instanceof Error ? error.message : String(error)
+          });
+        } catch (e) {
+          console.error("Failed to open immediate circuit breaker:", e);
+          Sentry.captureException(e, scope);
+        }
+
+        // Check if we should trip the circuit breaker due to error threshold (8 hours)
+        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+        if (circuitTripped) {
+          // If circuit was tripped, requeue with 8-hour delay
+          await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          return false;
+        }
+
+        // For immediate circuit breaker, requeue with 30-second delay
+        await requeueWithDelay(adminSupabase, envelope, 30, scope); // 30 seconds
+        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        return false;
+      }
+
       const status = ((): number => {
         if (typeof error === "object" && error !== null && "status" in error) {
           const val = (error as { status?: unknown }).status;
@@ -599,7 +734,8 @@ async function processEnvelope(
           status_code: status || 500,
           class_id: envelope.class_id,
           debug_id: envelope.debug_id,
-          enqueued_at: meta.enqueued_at
+          enqueued_at: meta.enqueued_at,
+          log_id: envelope.log_id
         },
         scope
       );
