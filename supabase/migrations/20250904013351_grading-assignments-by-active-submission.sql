@@ -5,6 +5,7 @@
 CREATE OR REPLACE FUNCTION "public"."update_review_assignments_on_submission_deactivation"()
 RETURNS "trigger"
 LANGUAGE "plpgsql" SECURITY DEFINER
+SET search_path TO public,pg_temp
 AS $$
 DECLARE
     new_active_submission_id bigint;
@@ -17,7 +18,7 @@ BEGIN
         IF OLD.assignment_group_id IS NOT NULL THEN
             -- Group submission: find active submission for the same assignment_group_id
             SELECT id INTO new_active_submission_id
-            FROM submissions
+            FROM public.submissions
             WHERE assignment_id = OLD.assignment_id
               AND assignment_group_id = OLD.assignment_group_id
               AND is_active = true
@@ -26,7 +27,7 @@ BEGIN
         ELSE
             -- Individual submission: find active submission for the same profile_id
             SELECT id INTO new_active_submission_id
-            FROM submissions
+            FROM public.submissions
             WHERE assignment_id = OLD.assignment_id
               AND profile_id = OLD.profile_id
               AND assignment_group_id IS NULL
@@ -37,7 +38,7 @@ BEGIN
         
         -- If we found a new active submission, update review assignments
         IF new_active_submission_id IS NOT NULL THEN
-            UPDATE review_assignments
+            UPDATE public.review_assignments
             SET submission_id = new_active_submission_id
             WHERE submission_id = OLD.id;
             
@@ -57,8 +58,9 @@ END;
 $$;
 
 -- Create the trigger
-CREATE OR REPLACE TRIGGER "trigger_update_review_assignments_on_submission_deactivation"
+CREATE CONSTRAINT TRIGGER "trigger_update_review_assignments_on_submission_deactivation"
     AFTER UPDATE OF "is_active" ON "public"."submissions"
+    DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW
     EXECUTE FUNCTION "public"."update_review_assignments_on_submission_deactivation"();
 
@@ -73,6 +75,7 @@ COMMENT ON TRIGGER "trigger_update_review_assignments_on_submission_deactivation
 -- Only allow changes before the effective due date (with extensions) OR if user has grader authorization
 CREATE OR REPLACE FUNCTION "public"."submission_set_active"("_submission_id" bigint) RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path TO public,pg_temp
     AS $$
 DECLARE
     submission_record RECORD;
@@ -81,7 +84,7 @@ DECLARE
 BEGIN
     -- Get the submission details
     SELECT * INTO submission_record 
-    FROM submissions 
+    FROM public.submissions 
     WHERE id = _submission_id;
     
     -- Check if submission exists
@@ -114,17 +117,19 @@ BEGIN
         END IF;
     END IF;
     
-    -- Set all other submissions for this assignment/student to inactive
-    UPDATE submissions 
-    SET is_active = false 
-    WHERE assignment_id = submission_record.assignment_id 
-    AND (profile_id = submission_record.profile_id OR assignment_group_id = submission_record.assignment_group_id)
-    AND id != _submission_id;
-    
-    -- Set this submission as active
-    UPDATE submissions 
-    SET is_active = true 
-    WHERE id = _submission_id;
+    -- Atomically set this submission as active and all others as inactive
+    -- Use CTE with row locking and null-safe equality for nullable comparisons
+    WITH locked_submissions AS (
+        SELECT id
+        FROM public.submissions 
+        WHERE assignment_id = submission_record.assignment_id 
+        AND (profile_id IS NOT DISTINCT FROM submission_record.profile_id 
+             OR assignment_group_id IS NOT DISTINCT FROM submission_record.assignment_group_id)
+        FOR UPDATE
+    )
+    UPDATE public.submissions 
+    SET is_active = (id = _submission_id)
+    WHERE id IN (SELECT id FROM locked_submissions);
     
     RETURN TRUE;
 END;
