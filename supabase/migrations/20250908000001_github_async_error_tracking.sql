@@ -114,7 +114,14 @@ declare
   v_row public.github_circuit_breakers%rowtype;
   v_base_seconds integer;
   v_trip_count integer;
+  v_advisory_lock_key bigint;
 begin
+  -- Create a stable hash from scope+key for advisory locking to prevent race conditions
+  v_advisory_lock_key := ('x' || substr(md5(p_scope || '|' || p_key), 1, 16))::bit(64)::bigint;
+  
+  -- Acquire advisory lock to serialize creation of circuit breakers for the same scope+key
+  perform pg_advisory_xact_lock(v_advisory_lock_key);
+  
   select * into v_row from public.github_circuit_breakers where scope = p_scope and key = p_key for update;
 
   -- Determine base seconds by event type
@@ -146,14 +153,14 @@ begin
           case when p_event = 'error_threshold' then 28800 else 30 end); -- Keep original duration
         -- For immediate_error, only extend if current window is shorter
         if p_event = 'immediate_error' then
-          v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_base_seconds));
+          v_row.open_until := greatest(coalesce(v_row.open_until, now()), now() + make_interval(secs => v_base_seconds));
         else
           -- For error_threshold, extend the window
-          v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_base_seconds));
+          v_row.open_until := greatest(coalesce(v_row.open_until, now()), now() + make_interval(secs => v_base_seconds));
         end if;
       else
         v_base_seconds := least(43200, cast(v_base_seconds * power(2, v_trip_count - 1) as integer)); -- extend window but don't escalate count
-        v_row.open_until := greatest(v_row.open_until, now() + make_interval(secs => v_base_seconds));
+        v_row.open_until := greatest(coalesce(v_row.open_until, now()), now() + make_interval(secs => v_base_seconds));
       end if;
       update public.github_circuit_breakers
         set open_until = v_row.open_until,
@@ -255,37 +262,23 @@ begin
     raise exception 'Invalid class_id: %', p_class_id;
   end if;
 
-  -- Query all messages from the async_calls queue
+  -- Query messages from the async_calls queue filtered by class_id
   -- PGMQ stores messages in pgmq.q_async_calls table
   for v_message_record in 
     select msg_id, message 
     from pgmq.q_async_calls 
     where vt <= now() -- Only get messages that are not currently being processed (visibility timeout expired)
+      and message ? 'class_id' -- Ensure message has class_id field
+      and (message->>'class_id')::bigint = p_class_id -- Filter by class_id at database level
   loop
     begin
-      -- Extract class_id from the message JSON
-      v_message_data := v_message_record.message;
+      -- Delete this message using PGMQ delete function
+      select pgmq_public.delete('async_calls', v_message_record.msg_id) into v_delete_success;
       
-      -- Check if this message has a class_id that matches our target
-      if v_message_data ? 'class_id' then
-        -- Safely convert class_id to bigint
-        begin
-          v_class_id_in_message := (v_message_data->>'class_id')::bigint;
-        exception when others then
-          -- Skip messages with invalid class_id format
-          continue;
-        end;
-        
-        if v_class_id_in_message = p_class_id then
-          -- Delete this message using PGMQ delete function
-          select pgmq_public.delete('async_calls', v_message_record.msg_id) into v_delete_success;
-          
-          if v_delete_success then
-            -- Track the deletion
-            v_deleted_count := v_deleted_count + 1;
-            v_deleted_ids := array_append(v_deleted_ids, v_message_record.msg_id);
-          end if;
-        end if;
+      if v_delete_success then
+        -- Track the deletion
+        v_deleted_count := v_deleted_count + 1;
+        v_deleted_ids := array_append(v_deleted_ids, v_message_record.msg_id);
       end if;
     exception when others then
       -- Log error but continue processing other messages

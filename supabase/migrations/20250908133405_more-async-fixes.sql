@@ -43,6 +43,11 @@ begin
         raise exception 'Access denied: Only instructors can force-create repos for class %', class_id;
       end if;
     end if;
+    else 
+      if auth.uid() is not null and auth.uid() <> v_user_id then
+        raise exception 'Access denied: Only service role or target user can create repos for class %', class_id;
+      end if;
+    end if;
   end if;
 
   for r_assignment_id, r_assignment_slug, r_template_repo, r_course_id, r_course_slug, r_github_org, r_latest_template_sha, r_profile_id in
@@ -51,6 +56,7 @@ begin
     join public.classes c on c.id = a.class_id
     join public.user_roles ur on ur.class_id = c.id
     where ur.user_id = v_user_id
+      and ur.private_profile_id is not null
       and (v_class_id is null or c.id = v_class_id)
       and a.template_repo is not null and a.template_repo <> ''
       and a.group_config <> 'groups'

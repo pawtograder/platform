@@ -288,7 +288,7 @@ async function checkAndTripErrorCircuitBreaker(
   }
 }
 
-async function processEnvelope(
+export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   meta: { msg_id: number; enqueued_at: string },
@@ -341,7 +341,7 @@ async function processEnvelope(
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .eq("role", "student")
-            .single();
+            .maybeSingle();
           if (error) throw error;
           if (
             data &&
@@ -417,15 +417,16 @@ async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
+        console.log("sync_staff_team args", args);
         if (args.userId) {
+          scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
             .from("user_roles")
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
-            .eq("role", "instructor")
-            .single();
+            .maybeSingle();
           if (error) throw error;
           if (
             data &&
@@ -498,6 +499,9 @@ async function processEnvelope(
       case "create_repo": {
         const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
           envelope.args as CreateRepoArgs;
+        if (org === "pawtograder-playground" && (repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))) {
+          return true;
+        }
         const headSha = await github.createRepo(
           org,
           repoName,
@@ -591,7 +595,7 @@ async function processEnvelope(
     }
   } catch (error) {
     // Handle GitHub rate limits by re-queueing with a visibility delay
-    console.error("error caaught ->>>", error);
+    console.trace(error);
     const rt = detectRateLimitType(error);
     console.log("rt", rt.type);
     scope.setTag("rate_limit_type", rt.type);
@@ -668,6 +672,31 @@ async function processEnvelope(
           console.error("error", e);
           Sentry.captureException(e, scope);
         }
+        // Check if we should trip the circuit breaker due to error threshold (8 hours)
+        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+        if (circuitTripped) {
+          // If circuit was tripped, requeue with 8-hour delay
+          await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          return false;
+        }
+
+        // For immediate circuit breaker, requeue with 30-second delay
+        // Update API log/metrics for this failure
+        const status =
+          typeof (error as { status?: number })?.status === "number" ? (error as { status?: number }).status! : 500;
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: status,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
         await requeueWithDelay(adminSupabase, envelope, delay, scope);
         await archiveMessage(adminSupabase, meta.msg_id, scope);
         return false;
@@ -734,16 +763,23 @@ async function processEnvelope(
         },
         scope
       );
-      // On failure, do NOT archive so the message becomes visible again after VT
+
+      // For any error, requeue with 2-minute delay to prevent immediate retry
       scope.setContext("async_error", {
         method: envelope.method,
         status_code: status,
-        error_message: error instanceof Error ? error.message : String(error)
+        error_message: error instanceof Error ? error.message : String(error),
+        requeue_delay_seconds: 120
       });
       Sentry.captureException(error, scope);
+
+      // Requeue with 2-minute delay and archive the current message
+      await requeueWithDelay(adminSupabase, envelope, 120, scope); // 2 minutes
+      await archiveMessage(adminSupabase, meta.msg_id, scope);
       return false;
     } catch (e) {
       console.error("error", e);
+      Sentry.captureMessage("Error occurred when processing an error!", scope);
       Sentry.captureException(e, scope);
       return false;
     }
