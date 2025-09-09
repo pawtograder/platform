@@ -883,11 +883,6 @@ begin
         raise exception 'Access denied: Only instructors can force-create repos for class %', class_id;
       end if;
     end if;
-  else 
-    -- If we're NOT forcing, we must be the service role or the target user
-    if auth.uid() is not null and auth.uid() <> v_user_id then
-      raise exception 'Access denied: Only service role or target user can create repos for class %', class_id;
-    end if;
   end if;
 
   for r_assignment_id, r_assignment_slug, r_template_repo, r_course_id, r_course_slug, r_github_org in
