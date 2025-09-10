@@ -47,7 +47,7 @@ function parseRetryAfter(retryAfterValue: string): number | null {
 /**
  * Fetch with retry and exponential backoff for SIS API calls
  */
-async function fetchWithRetry(
+export async function fetchWithRetry(
   url: string,
   options: RequestInit = {},
   maxRetries: number = 3,
@@ -181,11 +181,11 @@ async function fetchWithRetry(
 }
 
 // SIS API Types
-interface SISCRNResponse {
+export interface SISCRNResponse {
   [courseCode: string]: number[];
 }
 
-interface SISRosterResponse {
+export interface SISRosterResponse {
   [crn: string]: {
     section_meta: {
       course: string;
@@ -504,10 +504,9 @@ interface CourseImportResponse {
 /**
  * Sync existing SIS-linked classes with latest enrollment data
  */
-async function syncSISClasses(supabase: SupabaseClient<Database>, classId: number | null, scope: Sentry.Scope) {
+export async function syncSISClasses(supabase: SupabaseClient<Database>, classId: number | null, scope: Sentry.Scope) {
   scope?.setTag("function", "sis-sync");
 
-  console.log("Syncing SIS classes");
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -551,7 +550,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
     return { synced: 0, errors: 0 };
   }
 
-  console.log("SIS Linked Classes", sisLinkedClasses);
   scope?.setTag("classes_to_sync", sisLinkedClasses.length.toString());
 
   let syncedCount = 0;
@@ -567,7 +565,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         .eq("course_id", classData.id)
         .limit(1000);
 
-      console.log("Sync Status", syncStatus);
       // Get enabled sections only
       const enabledClassSections = classData.class_sections.filter((s) => {
         const status = syncStatus?.find((ss) => ss.course_section_id === s.id);
@@ -733,15 +730,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         enrollmentFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
       }
 
-      // Debug logging for section filtering
-      console.log("=== SECTION FILTERING DEBUG ===");
-      console.log(`Total enabled class sections: ${enabledClassSections.length}`);
-      console.log(`Class sections with SIS CRN: ${enabledClassSectionsWithSIS.length}`);
-      console.log(`Total enabled lab sections: ${enabledLabSections.length}`);
-      console.log(`Lab sections with SIS CRN: ${enabledLabSectionsWithSIS.length}`);
-      console.log(`Invitation filters: ${invitationFilters}`);
-      console.log("==============================");
-
       // Only fetch if we have any enabled sections
       if (invitationFilters.length > 0) {
         const { data: invitations } = await adminSupabase
@@ -767,11 +755,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       const currentEnrollmentsBySIS = new Map(currentEnrollments.map((enr) => [enr.users.sis_user_id, enr]));
 
-      // CRITICAL: Also check for ANY existing user roles in this class (regardless of sections)
-      // This catches instructors/users who might not have specific section assignments
+      // CRITICAL: Get ALL existing user roles in this class (regardless of sections)
+      // This catches users who might need section updates, not just those in SIS-enabled sections
       const { data: allExistingUserRoles } = await adminSupabase
         .from("user_roles")
-        .select("users!inner(sis_user_id)")
+        .select(
+          "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id), invitations(sis_managed)"
+        )
         .eq("class_id", classData.id)
         .not("users.sis_user_id", "is", null)
         .eq("disabled", false)
@@ -781,11 +771,10 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         (allExistingUserRoles || []).map((enr) => enr.users.sis_user_id).filter((id) => id !== null)
       );
 
-      console.log("=== EXISTING USERS DEBUG ===");
-      console.log(`Existing users from SIS-enabled sections: ${currentEnrollmentsBySIS.size}`);
-      console.log(`ALL existing users in class: ${allExistingUsersBySIS.size}`);
-      console.log(`Difference: ${allExistingUsersBySIS.size - currentEnrollmentsBySIS.size}`);
-      console.log("============================");
+      // Create a comprehensive map of ALL existing enrollments (not just SIS-enabled sections)
+      const allExistingEnrollmentsBySIS = new Map(
+        (allExistingUserRoles || []).map((enr) => [enr.users.sis_user_id, enr])
+      );
 
       // Step 4: Collect all SIS users across all sections for this class
       const allSISUsers = new Map<
@@ -917,17 +906,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           }))
       };
 
-      // Console logging for immediate visibility during testing
-      console.log("=== SIS USERS SUMMARY ===");
-      console.log(`Class: ${debugSummary.className} (ID: ${debugSummary.classId})`);
-      console.log(`Total Users: ${debugSummary.totalUsers}`);
-      console.log(`Users by Role:`, debugSummary.usersByRole);
-      console.log(`Users with BOTH sections: ${debugSummary.usersWithBothSections}`);
-      console.log(`Users with ONLY class: ${debugSummary.usersWithOnlyClass}`);
-      console.log(`Users with ONLY lab: ${debugSummary.usersWithOnlyLab}`);
-      console.log(`Sample Users:`, debugSummary.sampleUsers);
-      console.log("========================");
-
       scope?.addBreadcrumb({
         message: `SIS Users Summary for class ${classData.name}`,
         category: "debug",
@@ -939,6 +917,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       let disabledUsersCount = 0;
       let reenabledUsersCount = 0;
       let updatedMetadataCount = 0;
+      let updatedSectionAssignmentsCount = 0;
 
       // Pre-fetch all class and lab sections by CRN for efficient lookup across multiple steps
       const classSectionsByCRN = new Map<number, number>();
@@ -1011,23 +990,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // Step 5: Create invitations for new SIS users
       const newInvitations: InvitationRequest[] = [];
 
-      console.log("=== INVITATION CREATION DEBUG ===");
-      console.log(`Total SIS users to process: ${allSISUsers.size}`);
-
       for (const [sisUserId, userData] of allSISUsers) {
         // Skip if user is already enrolled (check ALL user roles, not just section-specific ones)
         if (allExistingUsersBySIS.has(sisUserId)) {
-          console.log(`Skipping invitation for user ${sisUserId} - already has user role in class`);
-          continue;
-        }
-
-        // Skip if user already has a pending invitation with the same role
-        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
-        if (
-          existingInvitation &&
-          existingInvitation.status === "pending" &&
-          existingInvitation.role === userData.role
-        ) {
           continue;
         }
 
@@ -1077,6 +1042,40 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           }
         }
 
+        // Check if user already has any invitation
+        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
+        if (existingInvitation) {
+          // Only update pending invitations; accepted ones are handled by user_roles flow
+          const needsSectionUpdate =
+            existingInvitation.class_section_id !== classSectionId ||
+            existingInvitation.lab_section_id !== labSectionId ||
+            existingInvitation.role !== userData.role;
+
+          if (existingInvitation.status === "pending" && needsSectionUpdate) {
+            // Update the existing pending invitation instead of creating a new one
+            const { error: updateError } = await adminSupabase
+              .from("invitations")
+              .update({
+                role: userData.role,
+                class_section_id: classSectionId,
+                lab_section_id: labSectionId,
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", existingInvitation.id);
+
+            if (updateError) {
+              scope?.addBreadcrumb({
+                message: `Failed to update existing invitation for user ${sisUserId}`,
+                category: "error",
+                data: { error: updateError, classId: classData.id }
+              });
+            } else {
+              updatedSectionAssignmentsCount++;
+            }
+          }
+          continue;
+        }
+
         newInvitations.push({
           sis_user_id: sisUserId,
           role: userData.role,
@@ -1085,17 +1084,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           lab_section_id: labSectionId || undefined
         });
       }
-
-      console.log(`=== INVITATION SUMMARY ===`);
-      console.log(`Total SIS users: ${allSISUsers.size}`);
-      console.log(`New invitations to create: ${newInvitations.length}`);
-      console.log(
-        `Users skipped (already enrolled): ${Array.from(allSISUsers.keys()).filter((id) => allExistingUsersBySIS.has(id)).length}`
-      );
-      console.log(
-        `Users with pending invitations: ${Array.from(allSISUsers.keys()).filter((id) => currentInvitationsBySIS.has(id) && currentInvitationsBySIS.get(id)?.status === "pending").length}`
-      );
-      console.log(`==========================`);
 
       // Create new invitations in bulk using shared utility (no limit on count)
       if (newInvitations.length > 0) {
@@ -1178,7 +1166,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       }
 
       // Step 6: Update section assignments for existing users (if they've moved between sections)
-      let updatedSectionAssignmentsCount = 0;
 
       for (const [sisUserId, userData] of allSISUsers) {
         // Get the correct section IDs for this user based on their current SIS assignment using cached data
@@ -1265,8 +1252,8 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         }
 
         // Check if user has an existing enrollment that needs section updates
-        // Only update if they're in the section-filtered enrollments (they have specific section assignments)
-        const existingEnrollment = currentEnrollmentsBySIS.get(Number(sisUserId));
+        // Use the comprehensive enrollment map to catch ALL existing users, not just those in SIS-enabled sections
+        const existingEnrollment = allExistingEnrollmentsBySIS.get(Number(sisUserId));
         if (existingEnrollment && !existingEnrollment.disabled) {
           const needsUpdate =
             existingEnrollment.class_section_id !== correctClassSectionId ||
@@ -1277,8 +1264,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
               .from("user_roles")
               .update({
                 class_section_id: correctClassSectionId,
-                lab_section_id: correctLabSectionId,
-                updated_at: new Date().toISOString()
+                lab_section_id: correctLabSectionId
               })
               .eq("id", existingEnrollment.id);
 
@@ -1318,35 +1304,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // 7a. Mark invitations as expired for users no longer in SIS
       // IMPORTANT: Only expire SIS-managed invitations, never expire manually created ones
       const invitationsToExpire = currentInvitations.filter(
-        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id)) && inv.sis_managed !== false // Only expire SIS-managed invitations
+        (inv) =>
+          (inv.status === "pending" || inv.status === "accepted") &&
+          !sisUserIds.has(Number(inv.sis_user_id)) &&
+          inv.sis_managed !== false // Expire both pending and accepted SIS-managed invitations
       );
 
-      // Debug logging for expiration logic
-      const manualInvitations = currentInvitations.filter((inv) => inv.sis_managed === false);
-      const sisInvitations = currentInvitations.filter((inv) => inv.sis_managed !== false);
-
-      console.log("=== INVITATIONS TO EXPIRE DEBUG ===");
-      console.log(`Total current invitations: ${currentInvitations.length}`);
-      console.log(`SIS-managed invitations: ${sisInvitations.length}`);
-      console.log(`Manual invitations (protected): ${manualInvitations.length}`);
-      console.log(`Total SIS users: ${sisUserIds.size}`);
-      console.log(`Invitations to expire: ${invitationsToExpire.length}`);
-      console.log("====================================");
-
       if (invitationsToExpire.length > 0) {
-        invitationsToExpire.slice(0, 5).forEach((inv) => {
-          console.log(`Expiring invitation:`, {
-            id: inv.id,
-            sisUserId: inv.sis_user_id,
-            role: inv.role,
-            status: inv.status,
-            classSectionId: inv.class_section_id,
-            labSectionId: inv.lab_section_id,
-            isInSISUsers: sisUserIds.has(Number(inv.sis_user_id))
-          });
-        });
-        console.log("==================================");
-
         scope?.addBreadcrumb({
           message: `About to expire ${invitationsToExpire.length} invitations`,
           category: "warning",
@@ -1387,19 +1351,31 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         }
       }
 
-      // 6b. Disable user_roles for enrolled users no longer in SIS (using canvas_id as nuid tracker)
+      // Build quick-lookup sets of SIS-managed section IDs for membership checks
+      const sisManagedClassSectionIds = new Set(enabledClassSectionsWithSIS.map((s) => s.id));
+      const sisManagedLabSectionIds = new Set(enabledLabSectionsWithSIS.map((s) => s.id));
+
+      // 7b. Disable user_roles for enrolled users no longer in THIS CLASS's SIS data
+      // Use the comprehensive enrollment map to catch ALL users, not just those in SIS-enabled sections
       // Only disable users who were originally from SIS (have canvas_id set to their nuid)
-      const enrolledUsersToDisable = currentEnrollments.filter(
+      const enrolledUsersToDisable = Array.from(allExistingEnrollmentsBySIS.values()).filter(
         (enr) =>
-          enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(Number(enr.users.sis_user_id)) && !enr.disabled // Don't re-disable already disabled users
+          enr.users.sis_user_id &&
+          enr.canvas_id &&
+          !sisUserIds.has(Number(enr.users.sis_user_id)) &&
+          !enr.disabled && // Don't re-disable already disabled users
+          enr.invitations !== null && //Only disable users who have an invitation
+          enr.invitations.sis_managed !== false && //Only disable users who were originally from SIS
+          // Don't disable users who are notin a SIS-managed section
+          (enr.class_section_id === null || sisManagedClassSectionIds.has(enr.class_section_id)) &&
+          (enr.lab_section_id === null || sisManagedLabSectionIds.has(enr.lab_section_id))
       );
 
       if (enrolledUsersToDisable.length > 0) {
         const { error: disableError, count } = await adminSupabase
           .from("user_roles")
           .update({
-            disabled: true,
-            updated_at: new Date().toISOString()
+            disabled: true
           })
           .eq("class_id", classData.id)
           .in(
@@ -1409,18 +1385,17 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           .eq("disabled", false); // Only disable currently active users
 
         if (disableError) {
-          scope?.addBreadcrumb({
-            message: `Failed to disable ${enrolledUsersToDisable.length} dropped users`,
-            category: "error",
-            data: { classId: classData.id, error: disableError }
-          });
+          Sentry.captureException(disableError, scope);
         } else {
           disabledUsersCount = count || 0;
         }
+        console.log("Enrolled users to disable", enrolledUsersToDisable);
+      } else {
+        console.log("No enrolled users to disable");
       }
 
-      // 6c. Re-enable users who are back in SIS (were disabled but now present again)
-      const usersToReenable = currentEnrollments.filter(
+      // 7c. Re-enable users who are back in SIS (were disabled but now present again)
+      const usersToReenable = Array.from(allExistingEnrollmentsBySIS.values()).filter(
         (enr) => enr.users.sis_user_id && enr.canvas_id && sisUserIds.has(enr.users.sis_user_id) && enr.disabled // Only re-enable currently disabled users
       );
 
@@ -1428,8 +1403,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         const { error: reenableError, count } = await adminSupabase
           .from("user_roles")
           .update({
-            disabled: false,
-            updated_at: new Date().toISOString()
+            disabled: false
           })
           .eq("class_id", classData.id)
           .in(
@@ -1439,11 +1413,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           .eq("disabled", true); // Only re-enable currently disabled users
 
         if (reenableError) {
-          scope?.addBreadcrumb({
-            message: `Failed to re-enable ${usersToReenable.length} returning users`,
-            category: "error",
-            data: { classId: classData.id, error: reenableError }
-          });
+          Sentry.captureException(reenableError, scope);
         } else {
           reenabledUsersCount = count || 0;
         }
@@ -1505,11 +1475,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
               }
             });
           } else {
-            scope?.addBreadcrumb({
-              message: `Failed to update lab section ${crn}`,
-              category: "error",
-              data: { crn, error: updateError, classId: classData.id }
-            });
+            Sentry.captureException(updateError, scope);
           }
         }
       }
@@ -1583,11 +1549,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             p_sync_message: errorMessage
           });
         } catch (statusError) {
-          scope?.addBreadcrumb({
-            message: `Failed to update error status for class section ${section.id}`,
-            category: "warning",
-            data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
-          });
+          Sentry.captureException(statusError, scope);
           errorCount++;
         }
       }
@@ -1602,11 +1564,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             p_sync_message: errorMessage
           });
         } catch (statusError) {
-          scope?.addBreadcrumb({
-            message: `Failed to update error status for lab section ${section.id}`,
-            category: "warning",
-            data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
-          });
+          Sentry.captureException(statusError, scope);
           errorCount++;
         }
       }
@@ -1633,6 +1591,20 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
     totalClasses: sisLinkedClasses.length,
     message: `Synced ${syncedCount} classes (${errorCount} errors)`
   };
+}
+
+/**
+ * Helper function to create a simplified Sentry scope for manual operations
+ */
+export function createMockScope(): Sentry.Scope {
+  return {
+    addBreadcrumb: () => {},
+    setTag: () => {},
+    setContext: () => {},
+    setUser: () => {},
+    captureException: (error: unknown) => console.error(`[Exception]`, error),
+    captureMessage: () => {}
+  } as Sentry.Scope;
 }
 
 // function constructSemesterCode(term: string, year: number): string {

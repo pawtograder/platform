@@ -154,7 +154,9 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       { field: "assignment_id", operator: "eq", value: assignment_id },
       { field: "is_active", operator: "eq", value: true },
       { field: "submission_reviews.rubric_id", operator: "eq", value: selectedRubric?.id },
-      { field: "review_assignments.rubric_id", operator: "eq", value: selectedRubric?.id }
+      { field: "review_assignments.rubric_id", operator: "eq", value: selectedRubric?.id },
+      { field: "user_roles.role", operator: "eq", value: "student" },
+      { field: "user_roles.disabled", operator: "eq", value: false }
     ],
     queryOptions: {
       enabled: !!selectedRubric && !!assignment_id && !!course_id

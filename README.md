@@ -43,10 +43,15 @@ For development work that requires changes to the database schema or backend fun
 2. Start Supabase locally: `npx supabase start` - This will start all Supabase services in Docker containers.
 3. Reset the database: `npx supabase db reset` - This applies all database migrations and seeds the database with initial data.
 4. Update your `.env.local` file: After running `npx supabase start`, you'll see output with local service URLs and keys. Update your `.env.local` file with these values:
-   - `SUPABASE_URL` - Set to the local API URL (typically `http://127.0.0.1:54321`)
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Set to the "anon key" from the output
-   - `SUPABASE_SERVICE_ROLE_KEY` - Set to the "service_role key" (required for e2e tests)
-   - `NEXT_PUBLIC_SUPABASE_URL` - Should match `SUPABASE_URL`
+
+   - `SUPABASE_URL` - Local API URL (typically `http://127.0.0.1:54321`)
+   - `NEXT_PUBLIC_SUPABASE_URL` - Same as `SUPABASE_URL` for client-side SDKs
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - The "anon key" from the output
+   - `SUPABASE_SERVICE_ROLE_KEY` - The "service_role key" (server-side only; used by admin scripts/e2e)
+   - (Optional) `ENABLE_SIGNUPS=true` - If you want to easily create new users using the UI for local dev
+
+   > Security: Never expose `SUPABASE_SERVICE_ROLE_KEY` to the browser or commit it. Keep it in server-only code and CI secrets.
+
 5. Build the application: `npm run build`
 6. Start Supabase Edge Functions: `npx supabase functions serve`
 7. Start the development server: `npm start`

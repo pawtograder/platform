@@ -46,8 +46,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       grader_repo: `${solutionRepoOrg}/${solutionRepoName}`
     })
     .eq("id", assignment_id);
-  await createRepo(solutionRepoOrg, solutionRepoName, TEMPLATE_SOLUTION_REPO_NAME);
-  await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, []);
+  await createRepo(solutionRepoOrg, solutionRepoName, TEMPLATE_SOLUTION_REPO_NAME, {}, scope);
+  await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
   const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");
   const asObj = (await parse(graderConfig.content)) as Json;
   await adminSupabase

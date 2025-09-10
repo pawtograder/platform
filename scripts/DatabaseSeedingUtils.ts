@@ -98,6 +98,15 @@ export interface SeedingConfiguration {
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
 }
 
+// Type for submission data items used in grading
+export type SubmissionDataItem = {
+  submission_id: number;
+  assignment: { id: number; due_date: string };
+  student?: TestingUser;
+  group?: { id: number; name: string; memberCount: number; members: string[] };
+  repository_id?: number;
+};
+
 // ============================
 // USER RECYCLING CONFIGURATION
 // ============================
@@ -652,12 +661,16 @@ export class DatabaseSeeder {
       const assignments = await this.createAssignments(config, class_id, students);
       const submissionData = await this.createSubmissions(assignments, students, class_id);
 
-      // Create workflow events and errors
+      // Create workflow events and errors for ALL submissions
       await this.createWorkflowEvents(submissionData, class_id);
       await this.createWorkflowErrors(submissionData, class_id);
 
-      // Grade submissions
-      await this.gradeSubmissions(submissionData, graders, students);
+      // Grade only the latest submission per assignment per student/group
+      const latestSubmissions = this.filterToLatestSubmissions(submissionData);
+      console.log(
+        `   Filtered from ${submissionData.length} to ${latestSubmissions.length} latest submissions for grading`
+      );
+      await this.gradeSubmissions(latestSubmissions, graders, students);
 
       // const class_id = 208;
       // const { data: testClassData } = await supabase.from("classes").select("*").eq("id", class_id);
@@ -1803,25 +1816,31 @@ export class DatabaseSeeder {
       const isRecentlyDue = new Date(assignment.due_date) < now;
 
       if (assignment.groups && assignment.groups.length > 0) {
-        // Group assignment - 75% chance to create a group submission
+        // Group assignment - 75% chance to create 1-3 submissions per assignment
         assignment.groups.forEach((group) => {
           if (Math.random() < 0.75) {
-            submissionsToCreate.push({
-              assignment: { ...assignment },
-              group,
-              isRecentlyDue
-            });
+            const numSubmissions = Math.floor(Math.random() * 3) + 1; // 1-3 submissions
+            for (let i = 0; i < numSubmissions; i++) {
+              submissionsToCreate.push({
+                assignment: { ...assignment },
+                group,
+                isRecentlyDue
+              });
+            }
           }
         });
       } else {
-        // Individual assignment - 95% chance student submitted
+        // Individual assignment - 95% chance each student submits, with 1-4 submissions per student
         students.forEach((student) => {
           if (Math.random() < 0.95) {
-            submissionsToCreate.push({
-              assignment: { ...assignment },
-              student,
-              isRecentlyDue
-            });
+            const numSubmissions = Math.floor(Math.random() * 4) + 1; // 1-4 submissions per student
+            for (let i = 0; i < numSubmissions; i++) {
+              submissionsToCreate.push({
+                assignment: { ...assignment },
+                student,
+                isRecentlyDue
+              });
+            }
           }
         });
       }
@@ -1836,16 +1855,7 @@ export class DatabaseSeeder {
     return createdSubmissions;
   }
 
-  protected async createWorkflowEvents(
-    submissionData: Array<{
-      submission_id: number;
-      assignment: { id: number; due_date: string };
-      student?: TestingUser;
-      group?: { id: number; name: string; memberCount: number; members: string[] };
-      repository_id?: number;
-    }>,
-    class_id: number
-  ) {
+  protected async createWorkflowEvents(submissionData: Array<SubmissionDataItem>, class_id: number) {
     console.log("\n⚡ Creating workflow events...");
 
     if (submissionData.length === 0) {
@@ -2313,14 +2323,48 @@ export class DatabaseSeeder {
     return results;
   }
 
-  protected async gradeSubmissions(
-    submissionData: Array<{
+  /**
+   * Filters submission data to only include the latest submission per assignment per student/group.
+   * This ensures we only grade the most recent submission for each assignment.
+   */
+  protected filterToLatestSubmissions(submissionData: Array<SubmissionDataItem>): Array<SubmissionDataItem> {
+    // Group submissions by assignment and student/group
+    const submissionsByAssignmentAndProfile = new Map<string, Array<SubmissionDataItem>>();
+
+    submissionData.forEach((submission) => {
+      // Create a unique key for each assignment + student/group combination
+      const profileKey = submission.group
+        ? `assignment_${submission.assignment.id}_group_${submission.group.id}`
+        : `assignment_${submission.assignment.id}_profile_${submission.student?.private_profile_id}`;
+
+      if (!submissionsByAssignmentAndProfile.has(profileKey)) {
+        submissionsByAssignmentAndProfile.set(profileKey, []);
+      }
+      submissionsByAssignmentAndProfile.get(profileKey)!.push(submission);
+    });
+
+    // For each group, keep only the submission with the highest submission_id (latest)
+    const latestSubmissions: Array<{
       submission_id: number;
       assignment: { id: number; due_date: string };
       student?: TestingUser;
       group?: { id: number; name: string; memberCount: number; members: string[] };
       repository_id?: number;
-    }>,
+    }> = [];
+
+    submissionsByAssignmentAndProfile.forEach((submissions) => {
+      if (submissions.length > 0) {
+        // Sort by submission_id in descending order and take the first (highest ID = latest)
+        const latestSubmission = submissions.sort((a, b) => b.submission_id - a.submission_id)[0];
+        latestSubmissions.push(latestSubmission);
+      }
+    });
+
+    return latestSubmissions;
+  }
+
+  protected async gradeSubmissions(
+    submissionData: Array<SubmissionDataItem>,
     graders: TestingUser[],
     _students: TestingUser[]
   ) {
@@ -2329,7 +2373,7 @@ export class DatabaseSeeder {
     if (submissionData.length === 0) return;
 
     // Get all submission review IDs (batched to avoid query length limits)
-    const submissionIds = submissionData.map((s) => s.submission_id);
+    const submissionIds = submissionData.map((s: SubmissionDataItem) => s.submission_id);
     const submissionReviews = await this.batchQuerySubmissions(submissionIds);
 
     const reviewsToProcess = submissionReviews?.filter((s) => s.grading_review_id) || [];
@@ -3832,7 +3876,7 @@ public class Entrypoint {
   }
 }`;
 
-        const submissionFileInserts = submissionData.map((submission, index) => ({
+        const submissionFileInserts = submissionData.map((submission: any, index) => ({
           name: "sample.java",
           contents: sampleJavaCode,
           class_id: class_id,
@@ -3855,7 +3899,7 @@ public class Entrypoint {
         }
 
         // Prepare grader results for this chunk
-        const graderResultInserts = submissionData.map((submission, index) => ({
+        const graderResultInserts = submissionData.map((submission: any, index) => ({
           submission_id: submission.id,
           score: 5,
           class_id: class_id,
@@ -3880,8 +3924,8 @@ public class Entrypoint {
           );
         }
 
-        // Prepare grader result tests (2 per submission) for this chunk
-        const graderResultTestInserts = graderResultData.flatMap((graderResult, index) => [
+        // Prepare grader result tests (5 per submission: 2 regular + 3 with LLM hints) for this chunk
+        const graderResultTestInserts = graderResultData.flatMap((graderResult: any, index) => [
           {
             score: 5,
             max_score: 5,
@@ -3907,6 +3951,79 @@ public class Entrypoint {
             assignment_group_id: chunk[index].group?.id,
             grader_result_id: graderResult.id,
             is_released: true
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "OpenAI test",
+            name_format: "text",
+            output: "This test uses OpenAI for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                type: "v1",
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "gpt-4o-mini",
+                account: "e2e_test",
+                provider: "openai",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "Azure test",
+            name_format: "text",
+            output: "This test uses Azure for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "gpt-4o-mini",
+                account: "e2e_test",
+                provider: "azure",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "Anthropic test",
+            name_format: "text",
+            output: "This test uses Anthropic for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "claude-3-haiku-20240307",
+                account: "e2e_test",
+                provider: "anthropic",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
           }
         ]);
 
@@ -3925,7 +4042,7 @@ public class Entrypoint {
 
         // Return the results for this chunk
         return chunk.map((item, index) => ({
-          submission_id: submissionData[index].id,
+          submission_id: (submissionData[index] as any).id,
           assignment: { id: item.assignment.id, due_date: item.assignment.due_date },
           student: item.student,
           group: item.group,

@@ -5,6 +5,7 @@ import { Page } from "@playwright/test";
 import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
+import { createClient } from "@supabase/supabase-js";
 dotenv.config({ path: ".env.local" });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
@@ -120,6 +121,34 @@ export async function updateClassSettings({
       .eq("id", class_id)
       .select("id")
   );
+}
+
+// Helper function to get auth token for a user
+export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
+  // Create a separate Supabase client for the user (using anon key)
+  const userSupabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+
+  // Generate magic link using admin client (same as TestingUtils.ts does)
+  const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
+    email: testingUser.email,
+    type: "magiclink"
+  });
+
+  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
+  }
+
+  // Verify the OTP to get a session
+  const { data, error } = await userSupabase.auth.verifyOtp({
+    token_hash: magicLinkData.properties.hashed_token,
+    type: "magiclink"
+  });
+
+  if (error || !data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  }
+
+  return data.session.access_token;
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
   await page.goto("/");
@@ -771,6 +800,7 @@ public class Entrypoint {
     .eq("id", submission_id)
     .single();
   if (submissionWithReviewIdError) {
+    // eslint-disable-next-line no-console
     console.error(submissionWithReviewIdError);
     throw new Error("Failed to get submission with review id");
   }
