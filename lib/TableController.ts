@@ -1130,7 +1130,7 @@ export default class TableController<
     if (id === null) {
       throw new Error("Null ID is not a valid ID, ever.");
     }
-    if(id === "") {
+    if (id === "") {
       throw new Error("Empty string ID is not a valid ID, ever.");
     }
 
