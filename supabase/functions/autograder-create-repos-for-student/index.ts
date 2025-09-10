@@ -20,7 +20,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   let githubUsername: string | null;
   let classId: number | undefined;
   let assignmentId: number | undefined;
-  let syncAllPermissions = false;
+  let syncAllPermissions = true;
 
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
@@ -32,7 +32,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const assignment_id_param = url.searchParams.get("assignment_id");
     assignmentId = assignment_id_param ? Number.parseInt(assignment_id_param) : undefined;
     console.log("assignment_id", assignmentId);
-    syncAllPermissions = url.searchParams.get("sync_all_permissions") === "true";
+    // syncAllPermissions = url.searchParams.get("sync_all_permissions") === "true";
     console.log("sync_all_permissions", syncAllPermissions);
 
     // Edge function secret authentication - get user_id from request body
@@ -69,7 +69,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.log("No request body or invalid JSON, using defaults");
       }
     }
-    syncAllPermissions = requestBody.sync_all_permissions || false;
+    // syncAllPermissions = requestBody.sync_all_permissions || false;
     classId = requestBody.class_id;
     assignmentId = requestBody.assignment_id;
     console.log("sync_all_permissions", syncAllPermissions);
@@ -117,8 +117,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      "class_id, github_org_confirmed, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
+    .eq("disabled", false)
     .eq("user_id", userId); //.eq("role", "student");
 
   // If class_id is provided, filter to only that class
@@ -142,7 +143,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
 
-  console.log(classes.map((c) => c.class_id));
+  console.log(classes.map((c) => c.classes.github_org + ", Confirmed: " + c.github_org_confirmed));
+  scope?.setTag(
+    "github_org_confirmed",
+    classes.map((c) => c.classes.github_org + ", Confirmed: " + c.github_org_confirmed).join(", ")
+  );
   const { data: allAssignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
     .select(
@@ -168,6 +173,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       (assignmentId === undefined || a.id === assignmentId)
   );
 
+  console.log(`Assignments: ${JSON.stringify(assignments, null, 2)}`);
   const errorMessages: string[] = [];
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(
@@ -243,7 +249,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             group.assignment_groups_members
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
               .filter((m) => m.user_roles.users.github_username)
-              .map((m) => m.user_roles.users.github_username!)
+              .map((m) => m.user_roles.users.github_username!),
+            scope
           );
         } catch (e) {
           console.log(`Error syncing repo permissions: ${repoName}`);
@@ -302,7 +309,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       try {
         const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
         console.log(`courseSlug: ${courseSlug}`);
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername]);
+        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
         await adminSupabase
           .from("repositories")
           .update({
@@ -335,7 +342,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const [orgName, repoName] = repo.repository.split("/");
           const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
           if (classSlug) {
-            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername]);
+            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], scope);
             console.log(`Synced permissions for individual repo: ${repo.repository}`);
           }
         } catch (e) {
@@ -366,7 +373,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .filter((m) => m.user_roles && m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!);
 
-            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames);
+            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, scope);
             console.log(`Synced permissions for group repo: ${repo.repository}`);
           }
         } catch (e) {

@@ -671,11 +671,15 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
     const { data: userData, error: userError } = await adminSupabase
       .from("users")
       .select("user_id")
-      .eq("github_username", memberGithubUsername)
+      .ilike("github_username", memberGithubUsername)
       .single();
 
     if (userError || !userData) {
-      Sentry.captureMessage(`User not found for GitHub username ${memberGithubUsername}:`, scope);
+      scope?.setTag("github_username", memberGithubUsername);
+      if (userError) {
+        Sentry.captureException(userError, scope);
+      }
+      Sentry.captureMessage(`User not found for GitHub username`, scope);
       return;
     }
 
@@ -759,7 +763,11 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
     }
 
     // Find the user by GitHub username
-    const result = await adminSupabase.from("users").select("user_id").eq("github_username", invitedUserLogin).single();
+    const result = await adminSupabase
+      .from("users")
+      .select("user_id")
+      .ilike("github_username", invitedUserLogin)
+      .single();
 
     const userData = result.data;
     const userError = result.error;
@@ -771,7 +779,8 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
       if (userError) {
         Sentry.captureException(userError, scope);
       }
-      Sentry.captureMessage(`User not found for GitHub username ${invitedUserLogin}:`, scope);
+      scope?.setTag("github_username", invitedUserLogin);
+      Sentry.captureMessage(`User not found for GitHub username`, scope);
       return;
     }
 

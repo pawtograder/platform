@@ -11,6 +11,7 @@ import {
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { useAssignmentController, useRegradeRequest } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useProfileRole } from "@/hooks/useCourseController";
 import { useSubmission, useSubmissionController, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
@@ -26,7 +27,6 @@ import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
-import { useProfileRole } from "@/hooks/useCourseController";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -160,7 +160,9 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <Box borderRadius="sm" p={1} m={-1}>
+                <Markdown>{comment.comment}</Markdown>
+              </Box>
             )}
           </Box>
         </VStack>

@@ -180,9 +180,13 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     .eq("assignment_group_id", newGroup.id);
 
   if (profile.users.github_username) {
-    await syncRepoPermissions(profile.classes!.github_org!, repoName, profile.classes!.slug!, [
-      profile.users.github_username!
-    ]);
+    await syncRepoPermissions(
+      profile.classes!.github_org!,
+      repoName,
+      profile.classes!.slug!,
+      [profile.users.github_username!],
+      scope
+    );
   }
   return {
     message: `Group #${newGroup.id} created successfully`

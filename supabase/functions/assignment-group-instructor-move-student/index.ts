@@ -59,7 +59,8 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         currentGroup.classes!.slug!,
         remaining_members
           .filter((m) => m.profiles!.user_roles!.users!.github_username)
-          .map((m) => m.profiles!.user_roles!.users!.github_username!)
+          .map((m) => m.profiles!.user_roles!.users!.github_username!),
+        scope
       );
     }
   }
@@ -116,7 +117,8 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         newGroup.classes!.slug!,
         remaining_members
           .filter((m) => m.profiles!.user_roles!.users!.github_username)
-          .map((m) => m.profiles!.user_roles!.users!.github_username!)
+          .map((m) => m.profiles!.user_roles!.users!.github_username!),
+        scope
       );
     }
   }

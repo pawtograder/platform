@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
+import Bottleneck from "npm:bottleneck";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
@@ -18,6 +19,12 @@ type RepoToCreate = {
   profile_id?: string;
   student_github_usernames: string[];
 };
+
+// Rate limiter to ensure no more than 20 concurrent operations
+const rateLimiter = new Bottleneck({
+  maxConcurrent: 30,
+  minTime: 0 // No minimum time between requests
+});
 
 async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: string; scope: Sentry.Scope }) {
   let repoExists = false;
@@ -48,7 +55,83 @@ async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: stri
   }
 }
 
-async function createAllRepos(courseId: number, assignmentId: number, scope: Sentry.Scope) {
+async function ensureExistingRepoCreated({
+  repo,
+  assignment,
+  adminSupabase,
+  courseId,
+  assignmentId,
+  scope
+}: {
+  repo: any;
+  assignment: any;
+  adminSupabase: any;
+  courseId: number;
+  assignmentId: number;
+  scope: Sentry.Scope;
+}) {
+  const [org, repoName] = repo.repository.split("/");
+
+  try {
+    // Check if the repository exists in GitHub
+    await github.getRepo(org, repoName, scope);
+    console.log(`Repository ${repo.repository} exists in GitHub`);
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("Not Found")) {
+      console.log(`Repository ${repo.repository} does not exist in GitHub, creating it...`);
+
+      // Get student GitHub usernames for this repo
+      let student_github_usernames: (string | null | undefined)[] = [];
+      if (repo.assignment_groups?.assignment_groups_members) {
+        student_github_usernames = repo.assignment_groups.assignment_groups_members
+          .map((member: any) => member.user_roles.users.github_username)
+          .filter((username: string | null | undefined) => username);
+      } else if (repo.profiles?.user_roles?.users.github_username) {
+        student_github_usernames = [repo.profiles.user_roles.users.github_username];
+      }
+
+      // Filter out falsy values and deduplicate
+      const uniqueUsernames = [
+        ...new Set(student_github_usernames.filter((username): username is string => Boolean(username)))
+      ];
+
+      if (uniqueUsernames.length === 0) {
+        console.log(`No valid GitHub usernames found for repo ${repo.repository}, skipping creation`);
+        return;
+      }
+
+      try {
+        // Create the repository using the existing createRepo logic
+        const headSha = await github.createRepo(org, repoName, assignment.template_repo, {}, scope);
+
+        // Sync repository permissions
+        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
+
+        // Update the database with the new head SHA
+        await adminSupabase
+          .from("repositories")
+          .update({
+            synced_repo_sha: headSha
+          })
+          .eq("id", repo.id);
+
+        console.log(`Successfully created repository ${repo.repository} with head SHA ${headSha}`);
+      } catch (createError) {
+        console.error(`Error creating repository ${repo.repository}:`, createError);
+        scope?.setTag("repo_creation_error", "failed_to_create_missing_repo");
+        scope?.setTag("repository", repo.repository);
+        // Don't throw here - we want to continue processing other repos
+      }
+    } else {
+      // Some other error occurred while checking repo existence
+      console.error(`Error checking repository ${repo.repository}:`, e);
+      scope?.setTag("repo_check_error", "failed_to_check_repo_existence");
+      scope?.setTag("repository", repo.repository);
+    }
+  }
+}
+
+export async function createAllRepos(courseId: number, assignmentId: number, scope: Sentry.Scope) {
   scope.setTag("assignment_id", assignmentId.toString());
   scope.setTag("course_id", courseId.toString());
 
@@ -62,7 +145,7 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
   const { data: assignment, error: assignmentError } = await adminSupabase
     .from("assignments")
     .select(
-      "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
+      "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username), disabled, profiles!private_profile_id(id, name, sortable_name)))"
     ) // , classes(canvas_id), user_roles(user_id)')
     .eq("id", assignmentId)
     .lte("release_date", TZDate.tz(timeZone || "America/New_York").toISOString())
@@ -86,9 +169,11 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
   const { data: existingRepos } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignment_groups(assignment_groups_members(*,user_roles(users(github_username)))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username)))"
+      "*, assignment_groups(assignment_groups_members(*,user_roles(users(github_username), github_org_confirmed))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username), github_org_confirmed))"
     )
-    .eq("assignment_id", assignmentId);
+    .eq("assignment_id", assignmentId)
+    .limit(1000);
+  console.log(`Found ${existingRepos?.length} existing repos`);
 
   const studentsInAGroup = assignment.assignment_groups?.flatMap((group) =>
     group.assignment_groups_members.map((member) => member.profile_id)
@@ -100,6 +185,7 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
       (userRole) =>
         userRole.users.github_username &&
         !studentsInAGroup?.includes(userRole.profiles!.id) &&
+        !userRole.disabled &&
         !existingRepos?.find((repo) => repo.profile_id === userRole.profiles!.id)
     );
     reposToCreate.push(
@@ -130,6 +216,25 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
 
   //Before creating repos, check to make sure template repo exists in GitHub, wait for it to exist
   await ensureRepoCreated({ org: assignment.classes!.github_org!, repo: assignment.template_repo!, scope });
+
+  //Check that all existing repos in DB actually exist in GitHub, create them if they don't
+  if (existingRepos && existingRepos.length > 0) {
+    console.log(`Checking ${existingRepos.length} existing repositories in GitHub...`);
+    await Promise.allSettled(
+      existingRepos.map((repo) =>
+        rateLimiter.schedule(() =>
+          ensureExistingRepoCreated({
+            repo,
+            assignment,
+            adminSupabase,
+            courseId,
+            assignmentId,
+            scope
+          })
+        )
+      )
+    );
+  }
 
   const createRepo = async (
     name: string,
@@ -184,7 +289,8 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
       await adminSupabase
         .from("repositories")
         .update({
-          synced_repo_sha: headSha
+          synced_repo_sha: headSha,
+          is_github_ready: true
         })
         .eq("id", dbRepo.id);
     } catch (e) {
@@ -194,32 +300,60 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
       throw new UserVisibleError(`Error creating repo: ${e}`);
     }
   };
-  await Promise.all(
-    reposToCreate.map(async (repo) =>
-      createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
+  await Promise.allSettled(
+    reposToCreate.map((repo) =>
+      rateLimiter.schedule(() =>
+        createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
+      )
     )
   );
   if (existingRepos) {
-    await Promise.all(
-      existingRepos.map(async (repo) => {
-        const [org, repoName] = repo.repository.split("/");
-        let student_github_usernames = [];
-        if (repo.assignment_groups?.assignment_groups_members) {
-          student_github_usernames = repo.assignment_groups.assignment_groups_members.map(
-            (member) => member.user_roles.users.github_username!
-          );
-        } else {
-          const github_username = repo.profiles?.user_roles?.users.github_username;
-          if (!github_username) {
-            console.log(`No github username for repo ${repo.repository}`);
+    await Promise.allSettled(
+      existingRepos.map((repo) =>
+        rateLimiter.schedule(async () => {
+          const [org, repoName] = repo.repository.split("/");
+          let student_github_usernames: (string | null | undefined)[] = [];
+          if (repo.assignment_groups?.assignment_groups_members) {
+            student_github_usernames = repo.assignment_groups.assignment_groups_members
+              .filter((member) => member.user_roles.github_org_confirmed)
+              .map((member) => member.user_roles.users.github_username)
+              .filter((username) => username); // Filter out falsy values
+          } else {
+            const github_username = repo.profiles?.user_roles?.users.github_username;
+            if (github_username && repo.profiles?.user_roles?.github_org_confirmed) {
+              student_github_usernames = [github_username];
+            }
+          }
+
+          // Deduplicate and filter out any remaining falsy values
+          const uniqueUsernames = [
+            ...new Set(student_github_usernames.filter((username): username is string => Boolean(username)))
+          ];
+
+          // Skip if no valid usernames
+          if (uniqueUsernames.length === 0) {
+            console.log(`No valid github usernames for repo ${repo.repository}`);
+            await adminSupabase
+              .from("repositories")
+              .update({
+                is_github_ready: false
+              })
+              .eq("id", repo.id);
             return;
           }
-          student_github_usernames = [github_username];
-        }
-        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, student_github_usernames, scope);
-      })
+
+          await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
+          await adminSupabase
+            .from("repositories")
+            .update({
+              is_github_ready: true
+            })
+            .eq("id", repo.id);
+        })
+      )
     );
   }
+  console.log("All repos created + synced");
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {

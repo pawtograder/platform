@@ -477,7 +477,6 @@ function ReviewAssignmentActions() {
 
   const rubric = useRubricById(activeReviewAssignment?.rubric_id);
   const { time_zone } = useCourse();
-  console.log("assignedRubricParts", assignedRubricParts);
   const rubricPartsAdvice = useMemo(() => {
     return assignedRubricParts
       .map((part) => rubric?.rubric_parts.find((p) => p.id === part.rubric_part_id)?.name)

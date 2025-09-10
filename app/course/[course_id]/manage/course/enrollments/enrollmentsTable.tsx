@@ -80,9 +80,9 @@ export default function EnrollmentsTable() {
   const labSections = useLabSections();
   const classSections = useClassSections();
 
-  const deleteUserRole = useCallback(
+  const disableUserRole = useCallback(
     async (userRoleId: string) => {
-      const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
+      const { error } = await supabase.from("user_roles").update({ disabled: true }).eq("id", parseInt(userRoleId));
       if (error) throw error;
     },
     [supabase]
@@ -123,7 +123,7 @@ export default function EnrollmentsTable() {
     async (userRoleIdToRemove: string) => {
       setIsDeletingUserRole(true);
       try {
-        await deleteUserRole(userRoleIdToRemove);
+        await disableUserRole(userRoleIdToRemove);
         toaster.create({
           title: "User Removed",
           description: `${removingStudentData?.userName || "User"} has been removed from the course.`,
@@ -141,7 +141,7 @@ export default function EnrollmentsTable() {
         setIsDeletingUserRole(false);
       }
     },
-    [deleteUserRole, removingStudentData?.userName, closeRemoveStudentModal]
+    [disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
 
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
@@ -174,6 +174,8 @@ export default function EnrollmentsTable() {
         .from("invitations")
         .select("*")
         .eq("class_id", parseInt(course_id as string))
+        .neq("status", "accepted")
+        .neq("status", "expired")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -284,10 +286,20 @@ export default function EnrollmentsTable() {
               </Flex>
             );
           }
+          if (row.original.disabled) {
+            return (
+              <Flex alignItems="center" gap={2}>
+                <Icon as={FaTimes} color="gray.fg" />
+                <Text color="gray.fg" fontWeight="medium">
+                  Dropped
+                </Text>
+              </Flex>
+            );
+          }
           return (
             <Flex alignItems="center" gap={2}>
-              <Icon as={CheckIcon} color="green.500" />
-              <Text color="green.500" fontWeight="medium">
+              <Icon as={CheckIcon} color="green.fg" />
+              <Text color="green.fg" fontWeight="medium">
                 Enrolled
               </Text>
             </Flex>
@@ -302,6 +314,9 @@ export default function EnrollmentsTable() {
             const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
             const status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
             return values.includes(status);
+          }
+          if (row.original.disabled) {
+            return values.includes("Dropped");
           }
           return values.includes("Enrolled");
         }
@@ -519,7 +534,8 @@ export default function EnrollmentsTable() {
           if (row.original.type === "invitation") {
             return "N/A";
           }
-          return row.original.users?.github_username || "N/A";
+          const name = row.original.users?.github_username || "N/A";
+          return name;
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
@@ -533,6 +549,48 @@ export default function EnrollmentsTable() {
             return values.includes("N/A");
           }
           return values.includes(username);
+        }
+      },
+      {
+        id: "github_org_confirmed",
+        header: "GitHub Org Status",
+        cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return (
+              <Text color="gray.400" fontSize="sm">
+                N/A
+              </Text>
+            );
+          }
+          if (row.original.github_org_confirmed) {
+            return (
+              <Flex alignItems="center" gap={2}>
+                <Icon as={CheckIcon} color="green.600" />
+                <Text color="green.600" fontWeight="medium" fontSize="sm">
+                  Joined
+                </Text>
+              </Flex>
+            );
+          }
+          return (
+            <Flex alignItems="center" gap={2}>
+              <Icon as={FaTimes} color="red.600" />
+              <Text color="red.600" fontWeight="medium" fontSize="sm">
+                Not joined
+              </Text>
+            </Flex>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+
+          if (row.original.type === "invitation") {
+            return values.includes("N/A");
+          }
+
+          const status = row.original.github_org_confirmed ? "Joined" : "Not joined";
+          return values.includes(status);
         }
       },
       {
@@ -814,6 +872,7 @@ export default function EnrollmentsTable() {
       "Class Section",
       "Lab Section",
       "GitHub Username",
+      "GitHub Org Status",
       "SIS User ID",
       "SIS Linked",
       "Tags"
@@ -874,6 +933,10 @@ export default function EnrollmentsTable() {
       // Get GitHub username
       const githubUsername = original.type === "invitation" ? "N/A" : original.users?.github_username || "N/A";
 
+      // Get GitHub org status
+      const githubOrgStatus =
+        original.type === "invitation" ? "N/A" : original.github_org_confirmed ? "Joined" : "Not joined";
+
       // Get SIS User ID
       const sisUserId =
         original.type === "invitation"
@@ -894,7 +957,19 @@ export default function EnrollmentsTable() {
         tags = profileTags.length > 0 ? profileTags.join("; ") : "No tags";
       }
 
-      return [status, name, email, role, classSection, labSection, githubUsername, sisUserId, sisLinked, tags];
+      return [
+        status,
+        name,
+        email,
+        role,
+        classSection,
+        labSection,
+        githubUsername,
+        githubOrgStatus,
+        sisUserId,
+        sisLinked,
+        tags
+      ];
     });
 
     // Create CSV content
@@ -989,7 +1064,8 @@ export default function EnrollmentsTable() {
                                   { label: "Pending", value: "pending" },
                                   { label: "Accepted", value: "accepted" },
                                   { label: "Cancelled", value: "cancelled" },
-                                  { label: "Expired", value: "Expired" }
+                                  { label: "Expired", value: "Expired" },
+                                  { label: "Dropped", value: "Dropped" }
                                 ]}
                                 placeholder="Filter by status..."
                               />
@@ -1141,6 +1217,23 @@ export default function EnrollmentsTable() {
                                     .values()
                                 ).map((username) => ({ label: username, value: username }))}
                                 placeholder="Filter by GitHub username..."
+                              />
+                            )}
+                            {header.id === "github_org_confirmed" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                  checkboxClear();
+                                }}
+                                options={[
+                                  { label: "Joined", value: "Joined" },
+                                  { label: "Not joined", value: "Not joined" },
+                                  { label: "N/A", value: "N/A" }
+                                ]}
+                                placeholder="Filter by GitHub org status..."
                               />
                             )}
                             {header.id === "tags" && (
