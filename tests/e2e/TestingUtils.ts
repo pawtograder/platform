@@ -236,7 +236,6 @@ export async function createUserInClass({
   if (userError) {
     // Check if error is due to user already existing
     if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
-
       // Try to get the user by email using getUserByEmail (if available)
       try {
         const { data: existingUserData, error: getUserError } = await supabase

@@ -280,7 +280,6 @@ export class RealtimeChannelManager {
         const createPromise = (async () => {
           await this._refreshSessionIfNeeded(client);
           const channel = client.channel(topic, { config: { private: true } });
-          console.log("RCM subscribe", topic);
 
           const newManaged: ManagedChannel = {
             channel,
@@ -294,13 +293,11 @@ export class RealtimeChannelManager {
 
           // Set up broadcast message handler
           channel.on("broadcast", { event: "broadcast" }, (message) => {
-            console.log("on broadcast", topic, message);
             this._routeMessage(topic, message.payload as BroadcastMessage);
           });
 
           // Subscribe to the channel (this should only happen once per topic)
           channel.subscribe(async (status, err) => {
-            console.log("on subscribe", topic, status, err);
             this._handleSubscriptionStateEvent(topic, status, err, channel);
           });
 
@@ -439,15 +436,6 @@ export class RealtimeChannelManager {
     }
     if (client.realtime.accessTokenValue !== data.session.access_token) {
       await client.realtime.setAuth(data.session.access_token);
-    }
-    // Debug current JWT subject to ensure expected identity is used for channel auth
-    try {
-      const userResp = await client.auth.getUser();
-      if (userResp?.data?.user?.id) {
-        console.log("Realtime auth user id:", userResp.data.user.id);
-      }
-    } catch {
-      // ignore
     }
   }
 

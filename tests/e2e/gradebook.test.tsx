@@ -381,7 +381,6 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByRole("button", { name: "Add Column" })).toBeVisible();
 
     // Check that Student 1's assignments are showing grades, final grade is calculated
-
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 1 (Group)");
       expect(after).not.toBeNaN();

@@ -249,6 +249,10 @@ async function processEnvelope(
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
         console.log(`Syncing student team for user ${args.userId}`);
+        if (args.org === "pawtograder-playground" && args.courseSlug.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
@@ -333,6 +337,10 @@ async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
+        if (args.org === "pawtograder-playground" && args.courseSlug.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
@@ -414,6 +422,10 @@ async function processEnvelope(
       case "create_repo": {
         const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
           envelope.args as CreateRepoArgs;
+        if (org === "pawtograder-playground" && courseSlug.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         const headSha = await github.createRepo(
           org,
           repoName,
@@ -470,6 +482,10 @@ async function processEnvelope(
       }
       case "sync_repo_permissions": {
         const { org, repo, courseSlug, githubUsernames } = envelope.args as SyncRepoPermissionsArgs;
+        if (org === "pawtograder-playground" && courseSlug.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         await github.syncRepoPermissions(org, repo, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
@@ -487,6 +503,10 @@ async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
+        if (org === "pawtograder-playground" && repo.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         await github.archiveRepoAndLock(org, repo, scope);
         recordMetric(
           adminSupabase,
