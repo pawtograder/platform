@@ -11,9 +11,10 @@ DECLARE
     help_queue_id BIGINT;
     class_id BIGINT;
     row_id BIGINT;
+    is_private_request BOOLEAN;
     queue_payload JSONB;
 BEGIN
-    -- Get help_queue_id and class_id based on the table
+    -- Get help_queue_id, class_id, and privacy context
     IF TG_TABLE_NAME = 'help_queues' THEN
         IF TG_OP = 'INSERT' THEN
             help_queue_id := NEW.id;
@@ -43,25 +44,26 @@ BEGIN
             row_id := OLD.id;
         END IF;
     ELSIF TG_TABLE_NAME = 'help_requests' THEN
-        -- For help requests, we also need to update the help queue status
         IF TG_OP = 'INSERT' THEN
             help_queue_id := NEW.help_queue;
             class_id := NEW.class_id;
             row_id := NEW.id;
+            is_private_request := NEW.is_private;
         ELSIF TG_OP = 'UPDATE' THEN
             help_queue_id := COALESCE(NEW.help_queue, OLD.help_queue);
             class_id := COALESCE(NEW.class_id, OLD.class_id);
             row_id := NEW.id;
+            is_private_request := COALESCE(NEW.is_private, OLD.is_private);
         ELSIF TG_OP = 'DELETE' THEN
             help_queue_id := OLD.help_queue;
             class_id := OLD.class_id;
             row_id := OLD.id;
+            is_private_request := OLD.is_private;
         END IF;
     END IF;
 
     -- Only broadcast if we have valid help_queue_id and class_id
     IF help_queue_id IS NOT NULL AND class_id IS NOT NULL THEN
-        -- Create payload with help queue specific information
         queue_payload := jsonb_build_object(
             'type', 'queue_change',
             'operation', TG_OP,
@@ -76,24 +78,32 @@ BEGIN
             'timestamp', NOW()
         );
 
-        -- Broadcast to individual help queue channel
-        PERFORM realtime.send(
-            queue_payload,
-            'broadcast',
-            'help_queue:' || help_queue_id,
-            true
-        );
+        -- If the change came from a PRIVATE help request, route to office-hours staff only
+        IF TG_TABLE_NAME = 'help_requests' AND is_private_request IS TRUE THEN
+            PERFORM realtime.send(
+                queue_payload,
+                'broadcast',
+                'help_queues:' || class_id || ':staff',
+                true
+            );
+        ELSE
+            -- Normal case: send to queue-specific and class-scoped aggregators
+            PERFORM realtime.send(
+                queue_payload,
+                'broadcast',
+                'help_queue:' || help_queue_id,
+                true
+            );
 
-        -- Broadcast to class-scoped help_queues aggregator (no global topic)
-        PERFORM realtime.send(
-            queue_payload,
-            'broadcast',
-            'help_queues:' || class_id,
-            true
-        );
+            PERFORM realtime.send(
+                queue_payload,
+                'broadcast',
+                'help_queues:' || class_id,
+                true
+            );
+        END IF;
     END IF;
 
-    -- Return the appropriate record
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
     ELSE
@@ -141,7 +151,7 @@ END;
 $$;
 
 
--- 3) Route private help request data to class:<class_id>:staff; keep public on per-request topic
+-- 3) Route private help request data to help_queues:<class_id>:staff; keep public on per-request topic
 CREATE OR REPLACE FUNCTION public.broadcast_help_request_data_change()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -233,11 +243,11 @@ BEGIN
         );
 
         IF is_private THEN
-            -- Route all private help request data to class staff channel
+            -- Route all private help request data to office-hours staff channel
             PERFORM realtime.send(
                 main_payload,
                 'broadcast',
-                'class:' || class_id || ':staff',
+                'help_queues:' || class_id || ':staff',
                 true
             );
         ELSE
@@ -261,7 +271,7 @@ END;
 $$;
 
 
--- 4) Staff data always to class staff, remove per-request staff broadcasts
+-- 4) Staff data always to office-hours staff, remove per-request staff broadcasts
 CREATE OR REPLACE FUNCTION public.broadcast_help_request_staff_data_change()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -338,12 +348,12 @@ BEGIN
         'timestamp', NOW()
     );
 
-    -- Always broadcast to class-level staff channel
+    -- Always broadcast to office-hours staff channel
     IF class_id IS NOT NULL THEN
         PERFORM realtime.send(
             staff_payload,
             'broadcast',
-            'class:' || class_id || ':staff',
+            'help_queues:' || class_id || ':staff',
             true
         );
     END IF;
@@ -388,9 +398,9 @@ begin
         return public.check_gradebook_realtime_authorization(topic_text);
     end if;
 
-    -- Class-scoped help_queues aggregator: help_queues:<class_id>
+    -- Class-scoped help_queues channels: help_queues:<class_id> and help_queues:<class_id>:staff
     if topic_type = 'help_queues' then
-        if array_length(topic_parts, 1) != 2 then
+        if array_length(topic_parts, 1) < 2 then
             return false;
         end if;
         class_id_text := topic_parts[2];
@@ -399,7 +409,15 @@ begin
         exception when others then
             return false;
         end;
-        return public.authorizeforclass(class_id_bigint);
+        -- Staff variant (graders/instructors only)
+        if array_length(topic_parts, 1) = 3 and topic_parts[3] = 'staff' then
+            return public.authorizeforclassgrader(class_id_bigint);
+        end if;
+        -- Aggregator variant (all class members)
+        if array_length(topic_parts, 1) = 2 then
+            return public.authorizeforclass(class_id_bigint);
+        end if;
+        return false;
     end if;
 
     -- help_request channels (help_request:<id>)
@@ -483,7 +501,7 @@ END;
 $$;
 
 
--- 6) Do not pre-create per-request staff channels (we will only use class staff)
+-- 6) Do not pre-create per-request staff channels (we will only use office-hours staff)
 CREATE OR REPLACE FUNCTION public.create_help_request_channels()
 RETURNS trigger
 LANGUAGE plpgsql

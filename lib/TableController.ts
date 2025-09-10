@@ -265,14 +265,14 @@ export function useTableControllerValueById<
   >
 >(controller: TableController<T, Query, IDType, ResultType>, id: IDType | undefined | null) {
   const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined | null>(() => {
-    if (id === undefined || id === null) {
+    if (id === undefined || id === null || id === "") {
       return undefined;
     }
     return controller.getById(id as IDType).data;
   });
 
   useEffect(() => {
-    if (id === undefined || id === null) {
+    if (id === undefined || id === null || id === "") {
       return;
     }
     const { unsubscribe, data } = controller.getById(id as IDType, (data) => {
@@ -1129,6 +1129,9 @@ export default class TableController<
     }
     if (id === null) {
       throw new Error("Null ID is not a valid ID, ever.");
+    }
+    if(id === "") {
+      throw new Error("Empty string ID is not a valid ID, ever.");
     }
 
     // First try to find the data

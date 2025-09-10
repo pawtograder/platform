@@ -113,6 +113,7 @@ export class OfficeHoursRealTimeController {
       `help_queues:${this._classId}`,
       this._client,
       (message: OfficeHoursBroadcastMessage) => {
+        console.log(`help_queues:${this._classId} message`, message);
         this._handleBroadcastMessage(message);
       },
       async () => {
@@ -122,14 +123,15 @@ export class OfficeHoursRealTimeController {
 
     this._channelUnsubscribers.set(`help_queues:${this._classId}`, helpQueuesUnsubscriber);
 
-    // Initialize class-level staff channel if user is staff
+    // Initialize office-hours staff channel if user is staff
     // This channel receives broadcasts for student_karma_notes and help_request_moderation
     if (this._isStaff) {
-      const staffChannelTopic = `class:${this._classId}:staff`;
+      const staffChannelTopic = `help_queues:${this._classId}:staff`;
       const staffUnsubscriber = await this._channelManager.subscribe(
         staffChannelTopic,
         this._client,
         (message: OfficeHoursBroadcastMessage) => {
+          console.log(`help_queues:${this._classId}:staff message`, message);
           this._handleBroadcastMessage(message);
         },
         async () => {
@@ -156,6 +158,7 @@ export class OfficeHoursRealTimeController {
         mainChannelName,
         this._client,
         (message: OfficeHoursBroadcastMessage) => {
+          console.log(`help_request:${helpRequestId} message`, message);
           this._handleBroadcastMessage(message);
         },
         async () => {
@@ -183,6 +186,7 @@ export class OfficeHoursRealTimeController {
         channelName,
         this._client,
         (message: OfficeHoursBroadcastMessage) => {
+          console.log(`help_queue:${helpQueueId} message`, message);
           this._handleBroadcastMessage(message);
         },
         async () => {
@@ -343,7 +347,7 @@ export class OfficeHoursRealTimeController {
       // Check if this channel is relevant to this controller
       if (topic === `help_queues:${this._classId}`) {
         type = "help_queues";
-      } else if (topic === `class:${this._classId}:staff` && this._isStaff) {
+      } else if (topic === `help_queues:${this._classId}:staff` && this._isStaff) {
         type = "class_staff";
       } else if (topic.startsWith("help_request:") && !topic.includes(":staff")) {
         type = "help_request";
