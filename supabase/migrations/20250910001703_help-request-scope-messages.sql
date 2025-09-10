@@ -242,23 +242,13 @@ BEGIN
             'timestamp', NOW()
         );
 
-        IF is_private THEN
-            -- Route all private help request data to office-hours staff channel
-            PERFORM realtime.send(
-                main_payload,
-                'broadcast',
-                'help_queues:' || class_id || ':staff',
-                true
-            );
-        ELSE
-            -- Public help request changes go to per-request channel
-            PERFORM realtime.send(
-                main_payload,
-                'broadcast',
-                'help_request:' || help_request_id,
-                true
-            );
-        END IF;
+        -- Each help request channel has its own RLS
+        PERFORM realtime.send(
+            main_payload,
+            'broadcast',
+            'help_request:' || help_request_id,
+            true
+        );
     END IF;
 
     -- Return appropriate record
@@ -431,20 +421,7 @@ begin
         exception when others then
             return false;
         end;
-        -- Find class and privacy flag
-        select hr.class_id, hr.is_private into class_id_bigint, is_private_request
-        from public.help_requests hr
-        where hr.id = help_request_id_bigint;
-        if class_id_bigint is null then
-            return false;
-        end if;
-        if is_private_request then
-            -- Private help requests: only graders/instructors can subscribe
-            return public.authorizeforclassgrader(class_id_bigint);
-        else
-            -- Public requests: existing access
-            return public.can_access_help_request(help_request_id_bigint);
-        end if;
+        return public.can_access_help_request(help_request_id_bigint);
     end if;
 
     -- help_queue channels (help_queue:<id>)
