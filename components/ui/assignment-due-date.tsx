@@ -14,6 +14,7 @@ import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
 import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
+import { useTimeZonePreference } from "@/hooks/useTimeZonePreference";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
@@ -174,8 +175,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                     description: "The late token has been consumed and the due date has been extended by 24 hours.",
                     type: "success"
                   });
-                } catch (err) {
-                  console.error(err);
+                } catch {
                   toaster.create({
                     title: "Error consuming late token",
                     description:
@@ -196,18 +196,19 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 export function AssignmentDueDate({
   assignment,
   showLateTokenButton = false,
-  showTimeZone = false,
   showDue = false
 }: {
   assignment: Assignment;
   showLateTokenButton?: boolean;
-  showTimeZone?: boolean;
   showDue?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, {
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id
   });
+  const { role } = useClassProfiles();
+  const courseTz = role.classes.time_zone || "America/New_York";
+  const { displayTimeZone } = useTimeZonePreference(role.class_id, courseTz);
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
@@ -216,13 +217,11 @@ export function AssignmentDueDate({
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
         <Text minWidth={0} data-visual-test="blackout">
-          {formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa")}
+          {formatInTimeZone(new TZDate(dueDate, displayTimeZone), displayTimeZone, "MMM d h:mm aaa")}
         </Text>
-        {showTimeZone && (
-          <Text fontSize="sm" flexShrink={0}>
-            ({time_zone})
-          </Text>
-        )}
+        <Text fontSize="sm" flexShrink={0}>
+          ({displayTimeZone})
+        </Text>
         {hoursExtended > 0 && (
           <Text>
             ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
@@ -234,17 +233,14 @@ export function AssignmentDueDate({
   );
 }
 
-export function SelfReviewDueDate({
-  assignment,
-  showTimeZone = false
-}: {
-  assignment: AssignmentsForStudentDashboard;
-  showTimeZone?: boolean;
-}) {
+export function SelfReviewDueDate({ assignment }: { assignment: AssignmentsForStudentDashboard }) {
   const { private_profile_id } = useClassProfiles();
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
+  const { dueDate, originalDueDate } = useAssignmentDueDate(assignment as Assignment, {
     studentPrivateProfileId: private_profile_id
   });
+  const { role } = useClassProfiles();
+  const courseTz = role.classes.time_zone || "America/New_York";
+  const { displayTimeZone } = useTimeZonePreference(role.class_id, courseTz);
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
@@ -253,11 +249,11 @@ export function SelfReviewDueDate({
       <Text>
         {formatInTimeZone(
           new TZDate(addHours(dueDate, assignment.self_review_deadline_offset ?? 0)),
-          time_zone || "America/New_York",
+          displayTimeZone,
           "MMM d h:mm aaa"
         )}
       </Text>
-      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
+      <Text fontSize="sm">({displayTimeZone})</Text>
     </HStack>
   );
 }

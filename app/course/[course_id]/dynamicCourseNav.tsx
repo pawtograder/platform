@@ -1,6 +1,5 @@
 "use client";
 
-import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import {
   DrawerBackdrop,
@@ -16,11 +15,11 @@ import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, Dialog } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
-import React, { Fragment, useEffect, useRef, useState } from "react";
+import React, { Fragment, useEffect, useRef } from "react";
 import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
@@ -37,6 +36,9 @@ import {
 import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
+import { useTimeZonePreference } from "@/hooks/useTimeZonePreference";
+import type { TimeZonePreference } from "@/hooks/useTimeZonePreference";
+import useModalManager from "@/hooks/useModalManager";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -159,26 +161,105 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
   );
 }
 
-function TimeZoneWarning({ courseTz }: { courseTz: string }) {
-  const [dismissed, setDismissed] = useState(false);
-  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (courseTz === browserTz || dismissed) {
-    return <></>;
-  }
+function TimeZonePreferenceModal({
+  courseId,
+  courseTz,
+  initialPreference
+}: {
+  courseId: number;
+  courseTz: string;
+  initialPreference?: TimeZonePreference;
+}) {
+  const { isOpen, openModal, closeModal } = useModalManager();
+  const { shouldPrompt, browserTimeZone, setPreferenceChoice } = useTimeZonePreference(
+    courseId,
+    courseTz,
+    initialPreference
+  );
+
+  useEffect(() => {
+    if (shouldPrompt) {
+      openModal();
+    }
+  }, [shouldPrompt, openModal]);
+
   return (
-    <Alert
-      status="warning"
-      w={{ base: "100%", md: "fit-content" }}
-      size="sm"
-      closable
-      onClose={() => setDismissed(true)}
-    >
-      Warning: This course is in {courseTz} but your computer appears to be in {browserTz}
-    </Alert>
+    <Dialog.Root open={isOpen} onOpenChange={(e) => (e.open ? openModal() : closeModal())}>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content>
+            <Dialog.Header>
+              <Dialog.Title>Select your time zone preference</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <VStack alignItems="flex-start">
+                <Text>
+                  Your browser time zone (<b>{browserTimeZone}</b>) differs from this course&apos;s time zone (
+                  <b>{courseTz}</b>).
+                </Text>
+                <Text>Choose how you want due dates to be displayed:</Text>
+              </VStack>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <HStack width="100%" justifyContent="space-between">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setPreferenceChoice("course");
+                    closeModal();
+                  }}
+                >
+                  Use course time zone ({courseTz})
+                </Button>
+                <Button
+                  colorPalette="green"
+                  onClick={() => {
+                    setPreferenceChoice("browser");
+                    closeModal();
+                  }}
+                >
+                  Use my browser time zone ({browserTimeZone})
+                </Button>
+              </HStack>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
   );
 }
 
-export default function DynamicCourseNav() {
+/**
+ * Renders a one-line message indicating the effective time zone used for displaying times.
+ * Internally uses `useTimeZonePreference` to resolve the display zone.
+ */
+function TimeZoneDisplay({
+  courseId,
+  courseTz,
+  fontSize,
+  prefix,
+  initialPreference
+}: {
+  courseId: number;
+  courseTz: string;
+  fontSize: "xs" | "sm";
+  prefix: string;
+  initialPreference?: TimeZonePreference;
+}) {
+  const { displayTimeZone } = useTimeZonePreference(courseId, courseTz, initialPreference);
+  return (
+    <Text fontSize={fontSize} color="fg.muted">
+      {prefix} {displayTimeZone}
+    </Text>
+  );
+}
+
+export default function DynamicCourseNav({
+  initialTimeZonePreference
+}: {
+  initialTimeZonePreference?: TimeZonePreference;
+}) {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
@@ -319,8 +400,13 @@ export default function DynamicCourseNav() {
             </HStack>
           </Box>
 
-          {/* Timezone warning */}
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <TimeZoneDisplay
+            courseId={enrollment.class_id}
+            courseTz={course.time_zone || "America/New_York"}
+            fontSize="xs"
+            prefix="Displaying times in"
+            initialPreference={initialTimeZonePreference}
+          />
         </VStack>
       </Box>
 
@@ -403,10 +489,21 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <TimeZoneDisplay
+            courseId={enrollment.class_id}
+            courseTz={course.time_zone || "America/New_York"}
+            fontSize="sm"
+            prefix="Times shown in"
+            initialPreference={initialTimeZonePreference}
+          />
           <UserMenu />
         </Flex>
       </Box>
+      <TimeZonePreferenceModal
+        courseId={enrollment.class_id}
+        courseTz={course.time_zone || "America/New_York"}
+        initialPreference={initialTimeZonePreference}
+      />
     </Box>
   );
 }
