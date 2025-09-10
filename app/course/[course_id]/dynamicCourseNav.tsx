@@ -68,8 +68,20 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/office-hours`,
     feature_flag: "office-hours"
   },
-  { name: "Gradebook", icon: FiBookOpen, student_only: true, target: `/course/${courseID}/gradebook` },
-  { name: "Gradebook", icon: FiBookOpen, instructor_only: true, target: `/course/${courseID}/manage/gradebook` },
+  {
+    name: "Gradebook",
+    icon: FiBookOpen,
+    student_only: true,
+    target: `/course/${courseID}/gradebook`,
+    feature_flag: "gradebook"
+  },
+  {
+    name: "Gradebook",
+    icon: FiBookOpen,
+    instructor_only: true,
+    target: `/course/${courseID}/manage/gradebook`,
+    feature_flag: "gradebook"
+  },
   {
     name: "Course Settings",
     icon: FiSettings,
