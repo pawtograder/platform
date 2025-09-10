@@ -40,7 +40,7 @@ export async function createClass({
       .from("classes")
       .insert({
         name: className,
-        slug: className.toLowerCase().replace(/ /g, "-"),
+        slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
         github_org: "pawtograder-playground",
         start_date: addDays(new Date(), -30).toISOString(),
         end_date: addDays(new Date(), 180).toISOString(),
@@ -207,8 +207,6 @@ export async function createUserInClass({
   if (userError) {
     // Check if error is due to user already existing
     if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
-      // eslint-disable-next-line no-console
-      console.log(`User with email ${resolvedEmail} already exists, attempting to retrieve...`);
 
       // Try to get the user by email using getUserByEmail (if available)
       try {
@@ -221,8 +219,6 @@ export async function createUserInClass({
           throw new Error(`Failed to get existing user: ${getUserError.message}`);
         }
         userId = existingUserData.user_id;
-        // eslint-disable-next-line no-console
-        console.log(`Successfully retrieved existing user: ${resolvedEmail}`);
       } catch {
         // If getUserByEmail doesn't work, fall back to listing users
         const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
@@ -233,7 +229,6 @@ export async function createUserInClass({
         if (existingUser) {
           userId = existingUser.id;
           // eslint-disable-next-line no-console
-          console.log(`Found existing user via list: ${resolvedEmail}`);
         } else {
           throw new Error(`User creation failed and couldn't find existing user: ${userError.message}`);
         }
@@ -268,8 +263,6 @@ export async function createUserInClass({
 
   if (existingRole.length > 0 && !roleCheckError) {
     // User already enrolled in class, get existing profile data
-    // eslint-disable-next-line no-console
-    console.log(`User already enrolled in class ${class_id}, using existing profiles`);
     publicProfileData = { id: existingRole[0].public_profile_id };
     privateProfileData = { id: existingRole[0].private_profile_id };
   } else if (class_id !== 1) {
@@ -471,8 +464,6 @@ export async function createUsersInClass(
 
     if (existingRole.length > 0 && !roleCheckError) {
       // User already enrolled in class, get existing profile data
-      // eslint-disable-next-line no-console
-      console.log(`User already enrolled in class ${class_id}, using existing profiles`);
       publicProfileData = { id: existingRole[0].public_profile_id };
       privateProfileData = { id: existingRole[0].private_profile_id };
     } else if (class_id !== 1) {
@@ -1917,7 +1908,7 @@ export async function createAssignmentsAndGradebookColumns({
           title: title,
           description: `Test assignment ${assignmentIndex + 1} with rubric`,
           due_date: due_date,
-          template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+          template_repo: "pawtograder-playground/test-e2e-java-handout",
           autograder_points: 100,
           total_points: 100,
           max_late_tokens: 10,
@@ -2274,7 +2265,6 @@ export async function createAssignmentsAndGradebookColumns({
     .eq("class_id", class_id)
     .eq("role", "student")
     .order("users(email)", { ascending: true });
-  console.log(students);
 
   if (students && students.length > 0) {
     // Transform the data to match TestingUser structure

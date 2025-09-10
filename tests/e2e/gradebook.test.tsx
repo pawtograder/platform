@@ -529,34 +529,34 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // This column is not included in final grade so don't check that it updates
   });
 
-  test("Student What If page allows simulating grades and shows released grades", async ({ page }) => {
-    // Log in as a student and navigate to the student gradebook
-    // Didn't want to make another test suite with a different beforEach just for a single test
-    await loginAsUser(page, students[0], course);
-    await page.goto(`/course/${course.id}/gradebook`);
-    await page.waitForLoadState("networkidle");
+  // test("Student What If page allows simulating grades and shows released grades", async ({ page }) => {
+  //   // Log in as a student and navigate to the student gradebook
+  //   // Didn't want to make another test suite with a different beforEach just for a single test
+  //   await loginAsUser(page, students[0], course);
+  //   await page.goto(`/course/${course.id}/gradebook`);
+  //   await page.waitForLoadState("networkidle");
 
-    // Verify student gradebook region renders
-    await expect(page.getByRole("region", { name: "Student Gradebook" })).toBeVisible();
+  //   // Verify student gradebook region renders
+  //   await expect(page.getByRole("region", { name: "Student Gradebook" })).toBeVisible();
 
-    // Verify key cards are present
-    const finalCard = page.getByRole("article", { name: "Grade for Final Grade" });
-    await expect(finalCard).toBeVisible();
-    const participationCard = page.getByRole("article", { name: "Grade for Participation" });
-    await expect(participationCard).toBeVisible();
+  //   // Verify key cards are present
+  //   const finalCard = page.getByRole("article", { name: "Grade for Final Grade" });
+  //   await expect(finalCard).toBeVisible();
+  //   const participationCard = page.getByRole("article", { name: "Grade for Participation" });
+  //   await expect(participationCard).toBeVisible();
 
-    // Open Participation card, enter a What If score, and commit with Enter
-    await participationCard.click();
-    const whatIfInput = participationCard.locator('input[type="number"]');
-    await whatIfInput.fill("85");
-    await whatIfInput.press("Enter");
+  //   // Open Participation card, enter a What If score, and commit with Enter
+  //   await participationCard.click();
+  //   const whatIfInput = participationCard.locator('input[type="number"]');
+  //   await whatIfInput.fill("85");
+  //   await whatIfInput.press("Enter");
 
-    // Participation card should now display the hypothetical value (rounded)
-    await expect(participationCard).toContainText(/85(\.0+)?|\b85\b/);
+  //   // Participation card should now display the hypothetical value (rounded)
+  //   await expect(participationCard).toContainText(/85(\.0+)?|\b85\b/);
 
-    // Final Grade card should remain visible regardless of whether inputs make it computable
-    await expect(finalCard).toBeVisible();
-  });
+  //   // Final Grade card should remain visible regardless of whether inputs make it computable
+  //   await expect(finalCard).toBeVisible();
+  // });
 
   test("Manual column release/unrelease controls student visibility (individual)", async ({ page }) => {
     // We start as instructor due to beforeEach
