@@ -373,6 +373,9 @@ declare
     profile_id_uuid uuid;
     help_request_id_bigint bigint;
     help_queue_id_bigint bigint;
+    is_class_grader boolean;
+    is_submission_authorized boolean;
+    is_profile_owner boolean;
     is_private_request boolean;
     channel_type text;
 begin
@@ -443,37 +446,113 @@ begin
         end if;
     end if;
 
-    -- class-level channels
+      -- Handle class-level channels (for review_assignments, etc.)
     if topic_type = 'class' then
-        if array_length(topic_parts, 1) < 3 then
-            return false;
-        end if;
         class_id_text := topic_parts[2];
         channel_type := topic_parts[3];
+        
+        -- Convert class_id to bigint
         begin
             class_id_bigint := class_id_text::bigint;
         exception when others then
             return false;
         end;
+        
+        -- Handle staff channel
         if channel_type = 'staff' then
             return public.authorizeforclassgrader(class_id_bigint);
+        
+        -- Handle user channel
         elsif channel_type = 'user' then
+            -- Must have 4 parts for user channel
             if array_length(topic_parts, 1) != 4 then
                 return false;
             end if;
+            
             profile_id_text := topic_parts[4];
+            
+            -- Convert profile_id to uuid
             begin
                 profile_id_uuid := profile_id_text::uuid;
             exception when others then
                 return false;
             end;
-            return public.authorizeforclassgrader(class_id_bigint) or public.authorizeforprofile(profile_id_uuid);
+            
+            -- Check if user is grader/instructor OR is the profile owner
+            is_class_grader := public.authorizeforclassgrader(class_id_bigint);
+            is_profile_owner := public.authorizeforprofile(profile_id_uuid);
+            
+            return is_class_grader or is_profile_owner;
+        
         else
             return false;
         end if;
+    
+    -- Handle submission-level channels (for submission comments, etc.)
+    elsif topic_type = 'submission' then
+        submission_id_text := topic_parts[2];
+        channel_type := topic_parts[3];
+        
+        -- Convert submission_id to bigint
+        begin
+            submission_id_bigint := submission_id_text::bigint;
+        exception when others then
+            return false;
+        end;
+        
+        -- Handle graders channel
+        if channel_type = 'graders' then
+            -- Get class_id from submission to check grader authorization
+            select s.class_id into class_id_bigint
+            from public.submissions s
+            where s.id = submission_id_bigint;
+            
+            if class_id_bigint is null then
+                return false;
+            end if;
+            
+            return public.authorizeforclassgrader(class_id_bigint);
+        
+        -- Handle profile_id channel
+        elsif channel_type = 'profile_id' then
+            -- Must have 4 parts for profile_id channel
+            if array_length(topic_parts, 1) != 4 then
+                return false;
+            end if;
+            
+            profile_id_text := topic_parts[4];
+            
+            -- Convert profile_id to uuid
+            begin
+                profile_id_uuid := profile_id_text::uuid;
+            exception when others then
+                return false;
+            end;
+            
+            -- Check if user has access to the submission OR is the profile owner
+            is_submission_authorized := public.authorize_for_submission(submission_id_bigint);
+            is_profile_owner := public.authorizeforprofile(profile_id_uuid);
+            
+            -- Also check if user is a grader for the class (for extra access)
+            select s.class_id into class_id_bigint
+            from public.submissions s
+            where s.id = submission_id_bigint;
+            
+            if class_id_bigint is not null then
+                is_class_grader := public.authorizeforclassgrader(class_id_bigint);
+            else
+                is_class_grader := false;
+            end if;
+            
+            return is_class_grader or is_submission_authorized or is_profile_owner;
+        
+        else
+            return false;
+        end if;
+    
+    else
+        return false;
     end if;
-
-    return false;
 END;
 $$;
 

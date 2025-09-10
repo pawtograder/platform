@@ -113,7 +113,6 @@ export class OfficeHoursRealTimeController {
       `help_queues:${this._classId}`,
       this._client,
       (message: OfficeHoursBroadcastMessage) => {
-        console.log(`help_queues:${this._classId} message`, message);
         this._handleBroadcastMessage(message);
       },
       async () => {
@@ -131,7 +130,6 @@ export class OfficeHoursRealTimeController {
         staffChannelTopic,
         this._client,
         (message: OfficeHoursBroadcastMessage) => {
-          console.log(`help_queues:${this._classId}:staff message`, message);
           this._handleBroadcastMessage(message);
         },
         async () => {
@@ -158,7 +156,6 @@ export class OfficeHoursRealTimeController {
         mainChannelName,
         this._client,
         (message: OfficeHoursBroadcastMessage) => {
-          console.log(`help_request:${helpRequestId} message`, message);
           this._handleBroadcastMessage(message);
         },
         async () => {
@@ -186,7 +183,6 @@ export class OfficeHoursRealTimeController {
         channelName,
         this._client,
         (message: OfficeHoursBroadcastMessage) => {
-          console.log(`help_queue:${helpQueueId} message`, message);
           this._handleBroadcastMessage(message);
         },
         async () => {
