@@ -85,3 +85,57 @@ begin
   end loop;
 end;
 $$;
+
+
+-- 9) Background invoker and cron schedule for the GitHub async worker
+create or replace function public.invoke_github_async_worker_background_task()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  queue_size integer;
+  worker_count integer;
+  i integer;
+  message_count integer;
+  open_circuits integer;
+begin
+  -- Check if there are at least 50 messages by reading 50 with 0 expiration
+  -- Messages automatically become available again immediately with 0 expiration
+  select count(*)::integer into message_count from pgmq_public.read('async_calls', 0, 50);
+  
+  -- Determine number of workers based on queue size
+  if queue_size >= 20 then
+    worker_count := 10;
+    raise notice 'High queue load detected (% messages), starting % workers', queue_size, worker_count;
+  else
+    worker_count := 2;
+    raise notice 'Normal queue load (% messages), starting % workers', queue_size, worker_count;
+  end if;
+  
+  -- If any circuit is OPEN, cap worker count to 1 to mass-slowdown
+  select count(*)::integer into open_circuits
+  from public.github_circuit_breakers
+  where state = 'open' and (open_until is null or open_until > now());
+  if open_circuits > 0 then
+    worker_count := 1;
+    raise notice 'Circuit breaker active (% open). Capping workers to %', open_circuits, worker_count;
+  end if;
+  
+  -- Start workers dynamically
+  for i in 1..worker_count loop
+    perform public.call_edge_function_internal(
+      '/functions/v1/github-async-worker',
+      'POST',
+      '{"Content-type":"application/json","x-supabase-webhook-source":"github-async-worker"}'::jsonb,
+      '{}'::jsonb,
+      3000,
+      null, null, null, null, null
+    );
+  end loop;
+end;
+$$;
+
+revoke all on function public.invoke_github_async_worker_background_task() from public;
+grant execute on function public.invoke_github_async_worker_background_task() to service_role;

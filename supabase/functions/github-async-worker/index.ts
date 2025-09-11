@@ -661,7 +661,7 @@ export async function processEnvelope(
             if (tripCount) {
               Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
               scope.setTag("circuit_trip_count", String(tripCount));
-              if (tripCount >= 3) {
+              if (tripCount >= 5) {
                 Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
                   level: "error"
                 });
