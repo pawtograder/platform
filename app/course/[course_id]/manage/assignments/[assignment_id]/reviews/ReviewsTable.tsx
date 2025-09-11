@@ -720,7 +720,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     initialState: {
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 1000
       }
     }
   });

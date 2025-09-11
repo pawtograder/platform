@@ -891,7 +891,7 @@ export function RubricCheckGlobal({
     reviewForThisRubric &&
     (criteria.max_checks_per_submission === null ||
       criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
-  const showOptions = gradingIsPermitted && hasOptions;
+  const showOptions = (gradingIsPermitted || isPreviewMode) && hasOptions;
 
   const isApplied = rubricCheckComments.length > 0;
   const isReleased = reviewForThisRubric?.released || false;

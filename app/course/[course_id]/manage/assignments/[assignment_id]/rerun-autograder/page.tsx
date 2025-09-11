@@ -176,7 +176,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 1000
       },
       sorting: [{ id: "name", desc: false }]
     },
