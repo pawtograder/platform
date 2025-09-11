@@ -706,3 +706,13 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/github-async-worker/deno.json"
 entrypoint = "./functions/github-async-worker/index.ts"
+[functions.gradebook-column-inserted]
+enabled = true
+verify_jwt = false
+import_map = "./functions/gradebook-column-inseted/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/gradebook-column-inserted/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/gradebook-column-inserted/*.html" ]

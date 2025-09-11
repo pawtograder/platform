@@ -28,6 +28,131 @@ export type QueueMessage<T> = {
 };
 
 /**
+ * Process a subset of queue messages that all belong to the same class.
+ * Performs the same logic as the batch processor but scoped to a single class.
+ */
+async function processMessagesForClass(
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  scope: Sentry.Scope,
+  queueMessages: QueueMessage<{
+    gradebook_column_id: number;
+    student_id: string;
+    gradebook_column_student_id: number;
+    is_private: boolean;
+  }>[],
+  classId: number
+): Promise<boolean> {
+  const classScope = scope.clone();
+  classScope.setTag("class_id", classId);
+
+  // Filter cells to separate those that can be processed now vs those that need to wait
+  const cellMessages = queueMessages.map((msg) => msg.message);
+  const { readyToProcess: readyCells, waitingForDependencies: waitingCells } = await filterCellsByDependencyStatus(
+    cellMessages,
+    adminSupabase,
+    classScope
+  );
+
+  // Map back to queue messages
+  const readyToProcess = queueMessages.filter((msg) =>
+    readyCells.some(
+      (cell) =>
+        cell.gradebook_column_id === msg.message.gradebook_column_id &&
+        cell.student_id === msg.message.student_id &&
+        cell.is_private === msg.message.is_private
+    )
+  );
+
+  const waitingForDependencies = queueMessages.filter((msg) =>
+    waitingCells.some(
+      (cell) =>
+        cell.gradebook_column_id === msg.message.gradebook_column_id &&
+        cell.student_id === msg.message.student_id &&
+        cell.is_private === msg.message.is_private
+    )
+  );
+
+  console.log(
+    `Class ${classId} — Ready cells: ${readyToProcess.map((cell) => `${cell.message.gradebook_column_id}:${cell.message.student_id}:${cell.message.is_private}`)}`
+  );
+  console.log(
+    `Class ${classId} — Waiting cells: ${waitingForDependencies.map((cell) => `${cell.message.gradebook_column_id}:${cell.message.student_id}:${cell.message.is_private}`)}`
+  );
+
+  classScope.setTag("ready_to_process", readyToProcess.length);
+  classScope.setTag("waiting_for_dependencies", waitingForDependencies.length);
+
+  // Re-queue cells that are waiting for dependencies
+  if (waitingForDependencies.length > 0) {
+    console.log(`Class ${classId} — Re-queuing ${waitingForDependencies.length} cells waiting for dependencies`);
+
+    // Archive the original messages and send new ones
+    const requeuePromises = waitingForDependencies.map(async (msg) => {
+      const { error: archiveError } = await adminSupabase
+        .schema("pgmq_public")
+        .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: msg.msg_id });
+
+      if (archiveError) {
+        const newScope = classScope.clone();
+        newScope.setContext("message_id", { id: msg.msg_id });
+        newScope.setContext("message", msg.message);
+        Sentry.captureException(archiveError, newScope);
+        console.error("Error archiving message during requeue:", archiveError);
+        return;
+      }
+
+      const { error: sendError } = await adminSupabase.schema("pgmq_public").rpc("send", {
+        queue_name: "gradebook_column_recalculate",
+        message: msg.message
+      });
+
+      if (sendError) {
+        const newScope = classScope.clone();
+        newScope.setContext("message", msg.message);
+        Sentry.captureException(sendError, newScope);
+        console.error("Error re-queuing message:", sendError);
+      }
+    });
+
+    await Promise.all(requeuePromises);
+  }
+
+  // Process only the cells that are ready
+  if (readyToProcess.length > 0) {
+    const studentColumns = readyToProcess.map((s) => ({
+      gradebook_column_id: s.message.gradebook_column_id,
+      student_id: s.message.student_id,
+      gradebook_column_student_id: s.message.gradebook_column_student_id,
+      is_private: s.message.is_private,
+      onComplete: async () => {
+        const { error: archiveError } = await adminSupabase
+          .schema("pgmq_public")
+          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
+
+        if (archiveError) {
+          const newScope = classScope.clone();
+          newScope.setContext("message_id", { id: s.msg_id });
+          newScope.setContext("message", s.message);
+          Sentry.captureException(archiveError, newScope);
+          console.error("Error archiving completed message:", archiveError);
+        }
+      }
+    }));
+
+    try {
+      await processGradebookCellCalculation(studentColumns, adminSupabase, classScope);
+      return true;
+    } catch (e) {
+      Sentry.captureException(e, classScope);
+      return false;
+    }
+  } else {
+    console.log(`Class ${classId} — No cells ready to process - all are waiting for dependencies`);
+    return false;
+  }
+}
+
+/**
  * Batch check which cells have dependencies that are currently being recalculated
  */
 async function filterCellsByDependencyStatus(
@@ -167,109 +292,43 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       gradebook_column_student_id: number;
       is_private: boolean;
     }>[];
+    // Build a map of gradebook_column_id -> class_id to group by class
+    const columnIds = Array.from(new Set(queueMessages.map((m) => m.message.gradebook_column_id)));
+    const { data: columnClassRows, error: columnClassError } = await adminSupabase
+      .from("gradebook_columns")
+      .select("id, class_id")
+      .in("id", columnIds);
 
-    // Filter cells to separate those that can be processed now vs those that need to wait
-    const cellMessages = queueMessages.map((msg) => msg.message);
-    const { readyToProcess: readyCells, waitingForDependencies: waitingCells } = await filterCellsByDependencyStatus(
-      cellMessages,
-      adminSupabase,
-      scope
-    );
-
-    // Map back to queue messages
-    const readyToProcess = queueMessages.filter((msg) =>
-      readyCells.some(
-        (cell) =>
-          cell.gradebook_column_id === msg.message.gradebook_column_id &&
-          cell.student_id === msg.message.student_id &&
-          cell.is_private === msg.message.is_private
-      )
-    );
-
-    const waitingForDependencies = queueMessages.filter((msg) =>
-      waitingCells.some(
-        (cell) =>
-          cell.gradebook_column_id === msg.message.gradebook_column_id &&
-          cell.student_id === msg.message.student_id &&
-          cell.is_private === msg.message.is_private
-      )
-    );
-
-    scope.setTag("ready_to_process", readyToProcess.length);
-    scope.setTag("waiting_for_dependencies", waitingForDependencies.length);
-
-    // Re-queue cells that are waiting for dependencies
-    if (waitingForDependencies.length > 0) {
-      console.log(`Re-queuing ${waitingForDependencies.length} cells waiting for dependencies`);
-
-      // Archive the original messages and send new ones with a delay
-      const requeuePromises = waitingForDependencies.map(async (msg) => {
-        // Archive the original message
-        const { error: archiveError } = await adminSupabase
-          .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: msg.msg_id });
-
-        if (archiveError) {
-          const newScope = scope.clone();
-          newScope.setContext("message_id", { id: msg.msg_id });
-          newScope.setContext("message", msg.message);
-          Sentry.captureException(archiveError, newScope);
-          console.error("Error archiving message during requeue:", archiveError);
-          return;
-        }
-
-        // Re-queue with a 5-second delay to avoid immediate re-processing
-        // Note: pgmq doesn't support delay_seconds in send, so we'll just re-queue immediately
-        // The worker polling interval should prevent immediate re-processing
-        const { error: sendError } = await adminSupabase.schema("pgmq_public").rpc("send", {
-          queue_name: "gradebook_column_recalculate",
-          message: msg.message
-        });
-
-        if (sendError) {
-          const newScope = scope.clone();
-          newScope.setContext("message", msg.message);
-          Sentry.captureException(sendError, newScope);
-          console.error("Error re-queuing message:", sendError);
-        }
-      });
-
-      await Promise.all(requeuePromises);
+    if (columnClassError || !columnClassRows) {
+      const newScope = scope.clone();
+      newScope.setContext("column_ids", { ids: columnIds });
+      Sentry.captureException(columnClassError || new Error("Missing column class rows"), newScope);
+      console.error("Error fetching class ids for columns, falling back to ungrouped processing:", columnClassError);
+      // Fallback: process all messages as one group
+      return await processMessagesForClass(adminSupabase, scope, queueMessages, -1);
     }
 
-    // Process only the cells that are ready
-    if (readyToProcess.length > 0) {
-      const studentColumns = readyToProcess.map((s) => ({
-        gradebook_column_id: s.message.gradebook_column_id,
-        student_id: s.message.student_id,
-        gradebook_column_student_id: s.message.gradebook_column_student_id,
-        is_private: s.message.is_private,
-        onComplete: async () => {
-          const { error: archiveError } = await adminSupabase
-            .schema("pgmq_public")
-            .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
-
-          if (archiveError) {
-            const newScope = scope.clone();
-            newScope.setContext("message_id", { id: s.msg_id });
-            newScope.setContext("message", s.message);
-            Sentry.captureException(archiveError, newScope);
-            console.error("Error archiving completed message:", archiveError);
-          }
-        }
-      }));
-
-      try {
-        await processGradebookCellCalculation(studentColumns, adminSupabase, scope);
-        return true;
-      } catch (e) {
-        Sentry.captureException(e, scope);
-        return false;
-      }
-    } else {
-      console.log("No cells ready to process - all are waiting for dependencies");
-      return false;
+    const columnIdToClassId = new Map<number, number>();
+    for (const row of columnClassRows) {
+      columnIdToClassId.set(row.id as unknown as number, row.class_id as unknown as number);
     }
+
+    const classIdToMessages = new Map<number, typeof queueMessages>();
+    for (const msg of queueMessages) {
+      const classId = columnIdToClassId.get(msg.message.gradebook_column_id);
+      if (classId === undefined) continue;
+      const arr = classIdToMessages.get(classId) ?? [];
+      arr.push(msg);
+      classIdToMessages.set(classId, arr);
+    }
+
+    let processedAny = false;
+    for (const [classId, messages] of classIdToMessages.entries()) {
+      const didWork = await processMessagesForClass(adminSupabase, scope, messages, classId);
+      processedAny = processedAny || didWork;
+    }
+
+    return processedAny;
   } else {
     // console.log("No messages in queue");
     return false;

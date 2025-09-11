@@ -338,6 +338,60 @@ test.describe("Gradebook Page - Comprehensive", () => {
         released: true
       })
       .eq("id", submissionCodeWalkReview.data!.id);
+    const { data: gradebookColumn, error: gradebookColumnError } = await supabase
+      .from("gradebook_columns")
+      .select("*")
+      .eq("class_id", course.id)
+      .eq("slug", "assignment-assignment-1-code-walk")
+      .single();
+    if (gradebookColumnError) {
+      throw new Error(`Failed to get gradebook column: ${gradebookColumnError.message}`);
+    }
+
+    //Wait for gradebook to finish updating with the assignment code walk grades before starting the test
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", course.id)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("gradebook_column_id", gradebookColumn!.id)
+        .eq("is_private", true)
+        .single();
+      if (error) {
+        console.log(`Error getting gradebook column student data: ${error.message}`);
+        throw new Error(`Failed to get gradebook column student data: ${error.message}`);
+      }
+      expect(data?.score).toBe(90);
+    }).toPass();
+
+    //ALSO check for the final grade
+    const {data: finalGradebookColumn, error: finalGradebookColumnError} = await supabase
+      .from("gradebook_columns")
+      .select("*")
+      .eq("class_id", course.id)
+      .eq("slug", "final-grade")
+      .single();
+    if (finalGradebookColumnError) {
+      throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
+    }
+
+    //Wait for gradebook to finish updating with the final grade
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", course.id)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("gradebook_column_id", finalGradebookColumn!.id)
+        .eq("is_private", true)
+        .single();
+      if (error) {
+        throw new Error(`Failed to get gradebook column student data: ${error.message}`);
+      }
+      console.log(`Final gradebook column student data: ${JSON.stringify(data)}`);
+      expect(data?.score).toBe(33.2);
+    }).toPass();
   });
 
   test.beforeEach(async ({ page }) => {
@@ -499,7 +553,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await page.getByRole("button", { name: "Confirm Import" }).click();
 
     // After import, the dialog closes and a new column should exist (name contains "Imported Quiz")
-    await expect(page.getByText(/Imported Quiz/)).toBeVisible();
+    const importedQuizHeaders = page.getByText(/Imported Quiz/);
+    await expect(importedQuizHeaders.first()).toBeVisible();
 
     // Validate at least one student's imported score shows up in the new column
     await expect(page.getByRole("gridcell", { name: /Grade cell for Imported Quiz.*:\s*95(\.0+)?/ })).toBeVisible();
@@ -592,6 +647,25 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await tableRegion2.locator('button[aria-label="Column options"]').last().click();
     const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
     await unreleaseItem.click();
+    //Wait for the column to unrelease
+    const { data: participationColumn, error: participationColumnError } = await supabase.from("gradebook_columns").select("*").eq("class_id", course.id).eq("slug", "participation").single();
+    if (participationColumnError) {
+      throw new Error(`Failed to get participation column: ${participationColumnError.message}`);
+    }
+    await expect(async () => {
+      const { data, error: gradebookColumnStudentError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", course.id)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("gradebook_column_id", participationColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (gradebookColumnStudentError) {
+        throw new Error(`Failed to get gradebook column student: ${gradebookColumnStudentError.message}`);
+      }
+      expect(data?.released).toBe(false);
+    }).toPass();
 
     // Student should still see the Participation card, but it should show "In Progress"
     await loginAsUser(page, students[0], course);

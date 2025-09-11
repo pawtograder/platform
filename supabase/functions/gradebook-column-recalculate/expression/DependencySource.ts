@@ -18,6 +18,7 @@ export type ExpressionContext = {
   incomplete_values: IncompleteValuesAdvice | null;
   incomplete_values_policy: "assume_max" | "assume_zero" | "report_only";
   scope: Sentry.Scope;
+  class_id: number;
 };
 //TODO: Move this to a shared file
 //See also in hooks/useGradebookWhatIf.tsx
@@ -321,6 +322,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
         is_private: false
       });
     }
+    console.log(`AssignmentResults: ${JSON.stringify(results)}`);
 
     return results;
   }
@@ -481,7 +483,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
-    return allGradebookColumnStudents
+    const ret= allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
         key: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown",
@@ -496,6 +498,8 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         class_id: studentRecord.class_id,
         is_private: studentRecord.is_private
       }));
+    console.log(`GradebookColumnStudentsResults: ${JSON.stringify(ret)}`);
+    return ret;
   }
   expandKey({ key, class_id }: { key: string; class_id: number }): string[] {
     const matchingColumns = Array.from(this.gradebookColumnMap.values()).filter(
@@ -559,7 +563,7 @@ export async function addDependencySourceFunctions({
           function_name: functionName,
           context,
           key,
-          class_id: keys[0].class_id,
+          class_id: context.class_id,
           args: rest
         });
       };

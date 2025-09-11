@@ -150,11 +150,11 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
 
   return data.session.access_token;
 }
-export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
-  await page.goto("/");
 
-  // Generate magic link on-demand for authentication
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
+
+    // Generate magic link on-demand for authentication
     const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
       email: testingUser.email,
       type: "magiclink"
@@ -168,17 +168,35 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     // Use magic link for login
     await page.goto(magicLink);
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
-  } catch (error) {
-    // Fall back to password-based login if magic link generation fails
-    // eslint-disable-next-line no-console
-    console.warn(`Failed to generate magic link for ${testingUser.email}, falling back to password:`, error);
+    await page.waitForLoadState("networkidle");
 
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
-    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
-    await page.getByRole("button", { name: "Sign in with email" }).click();
+    const currentUrl = page.url();
+    const isSuccessful = currentUrl.includes('/course');
+    // Check to see if we got the magic link expired notice
+    if (!isSuccessful) {
+      // Magic link expired, retry if we have retries remaining
+      if (retriesRemaining > 0) {
+        return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
+      } else {
+        throw new Error("Magic link expired and no retries remaining");
+      }
+    }
+
+    if (!isSuccessful) {
+      throw new Error("Failed to sign in - neither success nor expired state detected");
+    }
+
+  } catch (error) {
+    if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
+      console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
+      return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
+    }
+    throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
   }
+}
+export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
+  await page.goto("/");
+  await signInWithMagicLinkAndRetry(page, testingUser);
 
   if (course) {
     await page.waitForLoadState("networkidle");
@@ -227,53 +245,61 @@ export async function createUserInClass({
   const tempPassword = useMagicLink
     ? Math.random().toString(36).substring(2, 34)
     : process.env.TEST_PASSWORD || "change-it";
-  const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser({
-    email: resolvedEmail,
-    password: tempPassword,
-    email_confirm: true
-  });
+  try {
+    const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser({
+      email: resolvedEmail,
+      password: tempPassword,
+      email_confirm: true
+    });
 
-  if (userError) {
-    // Check if error is due to user already existing
-    if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
-      // Try to get the user by email using getUserByEmail (if available)
-      try {
-        const { data: existingUserData, error: getUserError } = await supabase
-          .from("users")
-          .select("*")
-          .eq("email", resolvedEmail)
-          .single();
-        if (getUserError) {
-          throw new Error(`Failed to get existing user: ${getUserError.message}`);
+    if (userError) {
+      // Check if error is due to user already existing
+      if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
+        // Try to get the user by email using getUserByEmail (if available)
+        try {
+          const { data: existingUserData, error: getUserError } = await supabase
+            .from("users")
+            .select("*")
+            .eq("email", resolvedEmail)
+            .single();
+          if (getUserError) {
+            throw new Error(`Failed to get existing user: ${getUserError.message}`);
+          }
+          userId = existingUserData.user_id;
+        } catch {
+          // If getUserByEmail doesn't work, fall back to listing users
+          const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
+          if (listError) {
+            throw new Error(`Failed to list users and retrieve existing user: ${listError.message}`);
+          }
+          const existingUser = existingUsers.users.find((user) => user.email === resolvedEmail);
+          if (existingUser) {
+            userId = existingUser.id;
+          } else {
+            throw new Error(`User creation failed and couldn't find existing user: ${userError.message}`);
+          }
         }
-        userId = existingUserData.user_id;
-      } catch {
-        // If getUserByEmail doesn't work, fall back to listing users
-        const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
-        if (listError) {
-          throw new Error(`Failed to list users and retrieve existing user: ${listError.message}`);
-        }
-        const existingUser = existingUsers.users.find((user) => user.email === resolvedEmail);
-        if (existingUser) {
-          userId = existingUser.id;
-          // eslint-disable-next-line no-console
-        } else {
-          throw new Error(`User creation failed and couldn't find existing user: ${userError.message}`);
-        }
+      } else {
+        // eslint-disable-next-line no-console
+        console.error(userError);
+        throw new Error(`Failed to create user: ${userError.message}`);
       }
-    } else {
-      // eslint-disable-next-line no-console
-      console.error(userError);
-      throw new Error(`Failed to create user: ${userError.message}`);
     }
-  } else {
-    // Handle both possible return structures from createUser
-    if (newUserData && "user" in newUserData && newUserData.user) {
-      userId = newUserData.user.id;
-    } else if (newUserData && "id" in newUserData) {
-      userId = (newUserData as unknown as { id: string }).id;
+  } catch (e) {
+    const error = e as Error;
+    if (error.message.includes("A user with this email address has already been registered")) {
+      //Refetch, we had a race
+      const { data: existingUserData, error: getUserError } = await supabase
+        .from("users")
+        .select("*")
+        .eq("email", resolvedEmail)
+        .single();
+      if (getUserError) {
+        throw new Error(`Failed to get existing user: ${getUserError.message}`);
+      }
+      userId = existingUserData.user_id;
     } else {
-      throw new Error("Failed to extract user ID from created user data");
+      throw e;
     }
   }
   // Check if user already has a role in this class
@@ -455,25 +481,42 @@ export async function createUsersInClass(
       const tempPassword = useMagicLink
         ? Math.random().toString(36).substring(2, 34)
         : process.env.TEST_PASSWORD || "change-it";
-      const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser(
-        {
-          email: resolvedEmail,
-          password: tempPassword,
-          email_confirm: true
+      try {
+        const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser(
+          {
+            email: resolvedEmail,
+            password: tempPassword,
+            email_confirm: true
+          }
+        );
+
+        if (userError) {
+          throw new Error(`Failed to create user ${resolvedEmail}: ${userError.message}`);
         }
-      );
 
-      if (userError) {
-        throw new Error(`Failed to create user ${resolvedEmail}: ${userError.message}`);
-      }
-
-      // Handle both possible return structures from createUser
-      if (newUserData && "user" in newUserData && newUserData.user) {
-        userId = newUserData.user.id;
-      } else if (newUserData && "id" in newUserData) {
-        userId = (newUserData as unknown as { id: string }).id;
-      } else {
-        throw new Error("Failed to extract user ID from created user data");
+        // Handle both possible return structures from createUser
+        if (newUserData && "user" in newUserData && newUserData.user) {
+          userId = newUserData.user.id;
+        } else if (newUserData && "id" in newUserData) {
+          userId = (newUserData as unknown as { id: string }).id;
+        } else {
+          throw new Error("Failed to extract user ID from created user data");
+        }
+      } catch (e) {
+        if ((e as Error).message.includes("email address has already")) {
+          //Refetch, we had a race
+          const { data: existingUserData, error: getUserError } = await supabase
+            .from("users")
+            .select("*")
+            .eq("email", resolvedEmail)
+            .single();
+          if (getUserError) {
+            throw new Error(`Failed to get existing user: ${getUserError.message}`);
+          }
+          userId = existingUserData.user_id;
+        } else {
+          throw new Error(`Failed to create user ${resolvedEmail}: ${(e as Error).message}`);
+        }
       }
     }
 
@@ -1532,8 +1575,8 @@ export async function createAssignmentsAndGradebookColumns({
     slug: string;
     due_date: string;
     group_config: string;
-    rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
-    rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+    rubricChecks: Array<{ id: number; name: string; points: number;[key: string]: unknown }>;
+    rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
     [key: string]: unknown;
   }>;
   gradebookColumns: Array<{
@@ -1902,8 +1945,8 @@ export async function createAssignmentsAndGradebookColumns({
     slug: string;
     due_date: string;
     group_config: string;
-    rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean; [key: string]: unknown }>;
-    rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+    rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean;[key: string]: unknown }>;
+    rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
     [key: string]: unknown;
   }> {
     const title = `Test Assignment ${assignmentIndex + 1}${groupConfig !== "individual" ? " (Group)" : ""}`;
@@ -2117,8 +2160,8 @@ export async function createAssignmentsAndGradebookColumns({
       slug: string;
       due_date: string;
       group_config: string;
-      rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean; [key: string]: unknown }>;
-      rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+      rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean;[key: string]: unknown }>;
+      rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
       [key: string]: unknown;
     };
   }

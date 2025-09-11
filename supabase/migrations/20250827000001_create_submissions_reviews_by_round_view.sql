@@ -114,3 +114,37 @@ comment on view public.submissions_with_reviews_by_round_for_assignment is
 'One row per student per assignment with per-review_round score maps. Private map includes all reviews; public map only includes released reviews.';
 
 
+
+
+-- Restore the original recalculate_new_gradebook_column_students function
+CREATE OR REPLACE FUNCTION public.recalculate_new_gradebook_column_students()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    messages jsonb[];
+BEGIN
+    -- Build messages for all newly inserted gradebook column students
+    -- Only for columns that have a non-null score_expression
+    SELECT array_agg(
+        jsonb_build_object(
+            'gradebook_column_id', gcs.gradebook_column_id,
+            'student_id', gcs.student_id,
+            'gradebook_column_student_id', gcs.id,
+            'is_private', gcs.is_private,
+            'reason', 'gradebook_column_student_new_gradebook_column_students',
+            'trigger_id', NEW.id
+        )
+    )
+    INTO messages
+    FROM new_table gcs
+    JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
+    WHERE gc.score_expression IS NOT NULL;
+
+    -- Send messages using helper function
+    PERFORM public.send_gradebook_recalculation_messages(messages);
+
+    RETURN NULL;
+END;
+$$;

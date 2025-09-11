@@ -201,6 +201,8 @@ export async function processGradebookCellCalculation(
     scope.setTag("batch_size", batch.length);
 
     console.log(`Processing dependency batch ${batchIndex + 1}/${cellBatches.length} with ${batch.length} cells`);
+    const uniqueColumns = new Set(batch.map((b) => b.gradebook_column_id));
+    console.log(`Columns included: ${Array.from(uniqueColumns).map((c) => columnMap.get(c)?.class_id + ":" + columnMap.get(c)?.slug).join(", ")}`);
 
     // Process this batch (cells within a batch can be processed in parallel)
     await processCellBatch(batch, columnMap, allColumns.data ?? [], adminSupabase, scope);
@@ -342,7 +344,8 @@ async function processCellBatch(
         incomplete_values: {},
         is_private_calculation: cell.is_private,
         incomplete_values_policy: "report_only",
-        scope: scope
+        scope: scope,
+        class_id: column.class_id
       };
       const compiled = gradebookColumnToScoreExpression.get(column.id);
       if (compiled) {
@@ -404,6 +407,7 @@ async function processCellBatch(
             console.error("Error updating gradebook cell:", updateError);
           }
 
+          console.log(`Cell ${cell.gradebook_column_id} ${cell.student_id} completed, now ${score}`);
           await cell.onComplete();
         } catch (e) {
           const newScope = scope.clone();
