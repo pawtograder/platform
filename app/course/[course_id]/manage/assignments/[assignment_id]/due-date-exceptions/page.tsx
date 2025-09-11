@@ -122,7 +122,9 @@ function AdjustDueDateDialog({
   return (
     <Dialog.Root size="xl">
       <Dialog.Trigger asChild>
-        <Button>Adjust Due Date</Button>
+        <Button size="xs" colorPalette="green" variant="subtle">
+          Adjust Due Date
+        </Button>
       </Dialog.Trigger>
       <Dialog.Backdrop />
       <Dialog.Positioner>
@@ -765,7 +767,7 @@ export default function DueDateExceptions() {
                   .getVisibleCells()
                   .filter((c) => c.column.id !== "assignment_id")
                   .map((cell) => (
-                    <Table.Cell key={cell.id} p={4}>
+                    <Table.Cell key={cell.id} p={0}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </Table.Cell>
                   ))}
