@@ -882,7 +882,6 @@ export function RubricCheckGlobal({
 
   const points = check.points === 0 ? "" : criteria.is_additive ? `+${check.points}` : `-${check.points}`;
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
-  const showOptions = isGrader && hasOptions;
   const gradingIsRequired = reviewForThisRubric && check.is_required && rubricCheckComments.length == 0;
   const gradingIsPermitted =
     (isGrader ||
@@ -892,6 +891,7 @@ export function RubricCheckGlobal({
     reviewForThisRubric &&
     (criteria.max_checks_per_submission === null ||
       criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
+  const showOptions = gradingIsPermitted && hasOptions;
 
   const isApplied = rubricCheckComments.length > 0;
   const isReleased = reviewForThisRubric?.released || false;
