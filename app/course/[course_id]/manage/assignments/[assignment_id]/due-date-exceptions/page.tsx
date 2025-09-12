@@ -3,17 +3,19 @@ import { Field } from "@/components/ui/field";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourseController, useStudentRoster } from "@/hooks/useCourseController";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
-import { createClient } from "@/utils/supabase/client";
+import { 
+  useAssignmentDueDate, 
+  useCourseController, 
+  useStudentRoster,
+  useCourse
+} from "@/hooks/useCourseController";
+import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
 import {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroup,
-  AssignmentGroupMembersWithGroup,
-  Course,
   UserProfile
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -26,88 +28,117 @@ import {
   HStack,
   Icon,
   Input,
-  NativeSelect,
   Skeleton,
-  Spinner,
   Table,
   Text,
   Textarea,
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
-import { useDelete, useList, useOne } from "@refinedev/core";
-import { useForm } from "@refinedev/react-hook-form";
+import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { addHours, addMinutes } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 import { FaSort, FaSortDown, FaSortUp, FaTrash } from "react-icons/fa";
-import { Select } from "chakra-react-select";
 
-// Type for the assignments_for_student_dashboard view data
-type StudentDueDateRow = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
+// Simplified data structure for student due date information
+type StudentDueDateRow = {
+  student: UserProfile;
+  group: AssignmentGroup | null;
+  effectiveDueDate: Date | null;
+  finalDueDate: Date | null;
+  hoursExtended: number;
+  minutesExtended: number;
+  extensions: AssignmentDueDateException[];
+};
 
+type AdjustDueDateInsert = Database["public"]["Tables"]["assignment_due_date_exceptions"]["Insert"];
 function AdjustDueDateDialog({
-  student,
+  student_id,
   group,
   assignment,
-  course,
-  extensions
 }: {
-  student: UserProfile;
+  student_id: string;
   group?: AssignmentGroup;
   assignment: Assignment;
-  course: Course;
-  extensions: AssignmentDueDateException[];
 }) {
+  const [open, setOpen] = useState(false);
   const studentOrGroup = group ? "group" : "student";
-  const dueDateFor = group ? `Group: ${group.name}` : `Student: ${student.name}`;
 
-  // Calculate lab-based effective due date using the hook
-  const dueDateInfo = useAssignmentDueDate(assignment, { studentPrivateProfileId: student.id });
+  // Only load data when dialog is open (lazy mounting)
+  const dueDateInfo = useAssignmentDueDate(assignment, { 
+    studentPrivateProfileId: open ? student_id : undefined 
+  });
   const originalDueDate = new TZDate(assignment.due_date!);
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
+  const { assignmentDueDateExceptions } = useCourseController();
+  
+  const predicate = useMemo(() => {
+    if (!open) return () => false; // Don't load extensions until dialog is open
+    return (exception: AssignmentDueDateException) => {
+      return exception.assignment_id === assignment.id && (
+        (exception.student_id === student_id && group === null)
+        || (exception.assignment_group_id === group?.id && group !== null));
+    };
+  }, [assignment.id, student_id, group, open]);
+  
+  const extensions = useListTableControllerValues(assignmentDueDateExceptions, predicate);
 
   // Calculate final due date with extensions
   const hoursExtended = extensions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
   const minutesExtended = extensions?.reduce((acc, exception) => acc + exception.minutes, 0) || 0;
   const finalDueDate = addMinutes(addHours(labBasedDueDate, hoursExtended), minutesExtended);
 
-  const { mutateAsync: deleteException } = useDelete();
   const {
     handleSubmit,
-    setValue,
     register,
     watch,
-    formState: { errors, isSubmitting },
-    refineCore
-  } = useForm({ refineCoreProps: { resource: "assignment_due_date_exceptions", action: "create" } });
+    reset,
+    formState: { errors, isSubmitting }
+  } = useForm<AdjustDueDateInsert>();
   const { private_profile_id } = useClassProfiles();
 
-  const onSubmit = useCallback(
-    (e: React.FormEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      async function populate() {
-        setValue("class_id", student.class_id);
-        setValue("student_id", group ? null : student.id);
-        setValue("assignment_id", assignment.id);
-        setValue("assignment_group_id", group?.id);
-        setValue("creator_id", private_profile_id!);
-        handleSubmit(refineCore.onFinish)();
+  const onSubmitCallback = useCallback(
+    async (values: AdjustDueDateInsert) => {
+      const data: AdjustDueDateInsert = {
+        ...values,
+        class_id: assignment.class_id,
+        student_id: group ? null : student_id,
+        assignment_id: assignment.id,
+        assignment_group_id: group?.id,
+        creator_id: private_profile_id!
+      };
+      try{
+        await assignmentDueDateExceptions.create(data);
+        toaster.create({
+          title: "Due date exception added",
+          description: "The due date exception has been added.",
+          type: "success"
+        });
+        // Close dialog and reset form after successful submission
+        setOpen(false);
+        reset();
+      } catch {
+        toaster.error({
+          title: "Error adding due date exception",
+          description: "An error occurred while adding the due date exception.",
+          type: "error"
+        });
       }
-      populate();
     },
     [
-      handleSubmit,
-      refineCore.onFinish,
-      private_profile_id,
       assignment.id,
       group,
-      student.id,
-      setValue,
-      student.class_id
+      student_id,
+      assignment.class_id,
+      assignmentDueDateExceptions,
+      private_profile_id,
+      reset
     ]
   );
+
+  const onSubmit = handleSubmit(onSubmitCallback);
 
   const toHoursDays = (hours: number) => {
     const days = Math.floor(hours / 24);
@@ -119,8 +150,16 @@ function AdjustDueDateDialog({
   const hasLabScheduling = assignment.minutes_due_after_lab !== null;
   const newDueDate = addMinutes(addHours(finalDueDate, watch("hours", 0) || 0), watch("minutes", 0) || 0);
 
+  const handleOpenChange = useCallback((details: { open: boolean }) => {
+    setOpen(details.open);
+    if (!details.open) {
+      // Reset form when dialog is closed
+      reset();
+    }
+  }, [reset]);
+
   return (
-    <Dialog.Root size="xl">
+    <Dialog.Root size="xl" open={open} onOpenChange={handleOpenChange} lazyMount>
       <Dialog.Trigger asChild>
         <Button size="xs" colorPalette="green" variant="subtle">
           Adjust Due Date
@@ -129,7 +168,10 @@ function AdjustDueDateDialog({
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content p={4}>
-          <Dialog.Title>Adjust Due Date for {dueDateFor}</Dialog.Title>
+          <Dialog.Header>
+            <Dialog.Title>Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />}</Dialog.Title>
+            <Dialog.CloseTrigger />
+          </Dialog.Header>
           <Dialog.Description>
             {hasLabScheduling ? (
               <>
@@ -164,7 +206,7 @@ function AdjustDueDateDialog({
           </Dialog.Description>
           <Dialog.Body>
             <Heading size="md">Add an Exception</Heading>
-            <form onSubmit={onSubmit}>
+            <form id="due-date-form" onSubmit={onSubmit}>
               <Fieldset.Root bg="surface">
                 <Fieldset.Content w="xl">
                   <Field
@@ -209,9 +251,6 @@ function AdjustDueDateDialog({
                   <Text>
                     <strong>New Due Date:</strong> {newDueDate.toLocaleString()}
                   </Text>
-                  <Button type="submit" loading={isSubmitting} colorPalette="green">
-                    Add Due Date Exception
-                  </Button>
                 </Fieldset.Content>
               </Fieldset.Root>
             </form>
@@ -233,7 +272,7 @@ function AdjustDueDateDialog({
                     {extensions.map((extension) => (
                       <Table.Row key={extension.id}>
                         <Table.Cell>
-                          {new TZDate(extension.created_at, course.time_zone || "America/New_York").toLocaleString()}
+                          {new TZDate(extension.created_at, "America/New_York").toLocaleString()}
                         </Table.Cell>
                         <Table.Cell>
                           {extension.hours}
@@ -248,7 +287,7 @@ function AdjustDueDateDialog({
                               confirmHeader="Delete extension"
                               confirmText="Are you sure you want to delete this extension?"
                               onConfirm={async () => {
-                                await deleteException({ id: extension.id, resource: "assignment_due_date_exceptions" });
+                                await assignmentDueDateExceptions.hardDelete(extension.id);
                               }}
                             />
                           }
@@ -268,6 +307,22 @@ function AdjustDueDateDialog({
               <Text>No extensions have been granted for this {studentOrGroup}.</Text>
             )}
           </Dialog.Body>
+          <Dialog.Footer>
+            <Dialog.ActionTrigger asChild>
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+            </Dialog.ActionTrigger>
+            <Button 
+              onClick={onSubmit} 
+              loading={isSubmitting} 
+              colorPalette="green"
+              type="submit"
+              form="due-date-form"
+            >
+              Add Due Date Exception
+            </Button>
+          </Dialog.Footer>
         </Dialog.Content>
       </Dialog.Positioner>
     </Dialog.Root>
@@ -275,123 +330,116 @@ function AdjustDueDateDialog({
 }
 
 export default function DueDateExceptions() {
-  const { role } = useClassProfiles();
-  const course = role.classes;
+  const course = useCourse();
   const { assignment_id } = useParams();
-  const { classRealTimeController } = useCourseController();
-  const supabase = createClient();
+  const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
+  
+  // Get assignment data
+  const assignment = useTableControllerValueById(assignments, Number.parseInt(assignment_id as string));
+  
+  // Get groups for this assignment
+  const groupPredicate = useMemo(() => {
+    return (group: AssignmentGroup) => {
+      return group.assignment_id === Number.parseInt(assignment_id as string);
+    };
+  }, [assignment_id]);
+  const groups = useListTableControllerValues(assignmentGroupsWithMembers, groupPredicate);
 
-  const { data: assignment } = useOne<Assignment>({
-    resource: "assignments",
-    id: Number.parseInt(assignment_id as string)
-  });
+  // Get all extensions for this assignment
+  const extensionPredicate = useMemo(() => {
+    return (exception: AssignmentDueDateException) => {
+      return exception.assignment_id === Number.parseInt(assignment_id as string);
+    };
+  }, [assignment_id]);
+  const allExtensions = useListTableControllerValues(assignmentDueDateExceptions, extensionPredicate);
 
-  const { data: groups } = useList<AssignmentGroupMembersWithGroup>({
-    resource: "assignment_groups_members",
-    queryOptions: { enabled: !!assignment },
-    meta: { select: "*, assignment_groups(*)" },
-    pagination: { pageSize: 1000 },
-    filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }]
-  });
-
-  const hasLabScheduling = assignment?.data.minutes_due_after_lab !== null;
-  const originalDueDate = useMemo(() => {
-    return assignment?.data.due_date
-      ? new TZDate(assignment.data.due_date, course.time_zone || "America/New_York")
-      : null;
-  }, [assignment?.data.due_date, course.time_zone]);
-
-  // Get student roster to map profile IDs to names
+  // Get student roster
   const studentRoster = useStudentRoster();
 
-  // Create a mapping of profile ID to student name
-  const studentNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    if (studentRoster) {
-      studentRoster.forEach((student) => {
-        if (student.id && student.name) {
-          map.set(student.id, student.name);
-        }
+  const hasLabScheduling = assignment?.minutes_due_after_lab !== null;
+  const originalDueDate = useMemo(() => {
+    return assignment?.due_date
+      ? new TZDate(assignment.due_date, course.time_zone || "America/New_York")
+      : null;
+  }, [assignment?.due_date, course.time_zone]);
+
+  // Process student data with extensions and due dates
+  const studentData = useMemo(() => {
+    if (!studentRoster || !assignment) return [];
+
+    return studentRoster.map((student): StudentDueDateRow => {
+      // Find group for this student
+      const group = groups?.find((g) => 
+        g.assignment_groups_members.some((m) => m.profile_id === student.id)
+      ) || null;
+
+      // Find extensions for this student or their group
+      const extensions = allExtensions.filter((ext) => {
+        if (group && ext.assignment_group_id === group.id) return true;
+        if (!group && ext.student_id === student.id) return true;
+        return false;
       });
-    }
-    return map;
-  }, [studentRoster]);
+
+      // Calculate effective due date (lab-based if applicable)
+      let effectiveDueDate = originalDueDate;
+      if (hasLabScheduling && originalDueDate) {
+        // For now, use original due date - we can enhance this later with lab scheduling logic
+        effectiveDueDate = originalDueDate;
+      }
+      
+      // Calculate total extensions
+      const hoursExtended = extensions.reduce((acc, ext) => acc + ext.hours, 0);
+      const minutesExtended = extensions.reduce((acc, ext) => acc + (ext.minutes || 0), 0);
+
+      // Calculate final due date with extensions
+      const finalDueDate = effectiveDueDate ? 
+        addMinutes(addHours(effectiveDueDate, hoursExtended), minutesExtended) : 
+        null;
+
+      return {
+        student,
+        group,
+        effectiveDueDate,
+        finalDueDate,
+        hoursExtended,
+        minutesExtended,
+        extensions
+      };
+    });
+  }, [studentRoster, assignment, groups, allExtensions, originalDueDate, hasLabScheduling]);
 
   // Set up columns for the table
-  const columns = useMemo<ColumnDef<StudentDueDateRow>[]>(
-    () => [
-      {
-        id: "assignment_id",
-        accessorKey: "id",
-        header: "Assignment ID",
-        filterFn: (row, id, filterValue) => {
-          return String(row.original.id) === String(filterValue);
-        }
-      },
-      {
+  const columns = useMemo(() => {
+    const columnHelper = createColumnHelper<StudentDueDateRow>();
+    return [
+      columnHelper.accessor("student", {
         id: "student_name",
-        accessorFn: (row) => {
-          // Get student name from the name map
-          return studentNameMap.get(row.student_profile_id || "") || "Unknown Student";
-        },
         header: "Student",
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const studentName = studentNameMap.get(row.original.student_profile_id || "");
-          if (!studentName) return values.includes("Unknown Student");
-          return values.some((val) => studentName.toLowerCase().includes(val.toLowerCase()));
-        },
-        cell: ({ row }) => <PersonName uid={row.original.student_profile_id!} showAvatar={false} />
-      },
-      {
-        id: "group_name",
-        accessorFn: (row) => {
-          // Find group for this student
-          const group = groups?.data?.find((g) => g.profile_id === row.student_profile_id);
-          return group?.assignment_groups.name || "";
-        },
-        header: "Group",
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const group = groups?.data?.find((g) => g.profile_id === row.original.student_profile_id);
-          const groupName = group?.assignment_groups.name;
-          if (!groupName) return values.includes("No group");
-          return values.some((val) => groupName.toLowerCase().includes(val.toLowerCase()));
-        },
         cell: ({ getValue }) => {
-          const groupName = getValue() as string;
-          return groupName || <Text color="fg.muted">No group</Text>;
+          const student = getValue();
+          return <PersonName uid={student.id} showAvatar={false} />;
         }
-      },
-      {
-        id: "lab_due_date",
-        accessorKey: "due_date",
-        header: "Lab-Based Due Date",
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const dueDate = row.original.due_date;
-          if (!dueDate) return values.includes("No due date");
-
-          const labDueDate = new TZDate(dueDate, course.time_zone || "America/New_York");
-          const formattedDate = labDueDate.toLocaleDateString();
-          return values.some((val) => formattedDate.includes(val));
-        },
+      }),
+      columnHelper.accessor("group", {
+        id: "group_name",
+        header: "Group",
         cell: ({ getValue }) => {
-          const dueDate = getValue() as string | null;
-          if (!dueDate || !hasLabScheduling) return <Text></Text>;
+          const group = getValue();
+          return group?.name || <Text color="fg.muted">No group</Text>;
+        }
+      }),
+      columnHelper.accessor("effectiveDueDate", {
+        id: "lab_due_date",
+        header: "Lab-Based Due Date",
+        cell: ({ getValue }) => {
+          const effectiveDueDate = getValue();
+          if (!effectiveDueDate || !hasLabScheduling) return <Text></Text>;
 
-          const labDueDate = new TZDate(dueDate, course.time_zone || "America/New_York");
-          const isDifferentFromOriginal = originalDueDate && labDueDate.getTime() !== originalDueDate.getTime();
+          const isDifferentFromOriginal = originalDueDate && effectiveDueDate.getTime() !== originalDueDate.getTime();
 
           return (
             <VStack align="start" gap={1}>
-              <Text>{labDueDate.toLocaleString()}</Text>
+              <Text>{effectiveDueDate.toLocaleString()}</Text>
               {isDifferentFromOriginal && (
                 <Text fontSize="xs" color="blue.500">
                   (lab-adjusted)
@@ -400,27 +448,15 @@ export default function DueDateExceptions() {
             </VStack>
           );
         }
-      },
-      {
+      }),
+      columnHelper.accessor("finalDueDate", {
         id: "final_due_date",
-        accessorFn: (row) => {
-          const baseDueDate = row.due_date ? new TZDate(row.due_date) : originalDueDate || new Date();
-          const hoursExtended = row.exception_hours || 0;
-          const minutesExtended = row.exception_minutes || 0;
-
-          if (hoursExtended === 0 && minutesExtended === 0) {
-            return null;
-          }
-
-          return addMinutes(addHours(baseDueDate, hoursExtended), minutesExtended);
-        },
         header: "Final Due Date",
         cell: ({ getValue, row }) => {
-          const finalDate = getValue() as Date | null;
-          const hoursExtended = row.original.exception_hours || 0;
-          const minutesExtended = row.original.exception_minutes || 0;
+          const finalDate = getValue();
+          const { hoursExtended, minutesExtended } = row.original;
 
-          if (!finalDate) return <Text></Text>;
+          if (!finalDate || (hoursExtended === 0 && minutesExtended === 0)) return <Text></Text>;
 
           return (
             <VStack align="start" gap={1}>
@@ -431,131 +467,51 @@ export default function DueDateExceptions() {
             </VStack>
           );
         }
-      },
-      {
+      }),
+      columnHelper.display({
         id: "hours_extended",
-        accessorFn: (row) => {
-          const hours = row.exception_hours || 0;
-          const minutes = row.exception_minutes || 0;
-          return hours > 0 || minutes > 0 ? `${hours}h ${minutes}m` : "";
-        },
         header: "Hours Extended",
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const hours = row.original.exception_hours || 0;
-          const minutes = row.original.exception_minutes || 0;
-          const hasExtension = hours > 0 || minutes > 0;
-          const extensionText = hasExtension ? `${hours}h ${minutes}m` : "";
+        cell: ({ row }) => {
+          const { hoursExtended, minutesExtended, extensions } = row.original;
+          if (hoursExtended === 0 && minutesExtended === 0) return <Text></Text>;
 
-          if (!hasExtension) return values.includes("No extension");
-          return values.some((val) => extensionText.includes(val));
-        },
-        cell: ({ getValue, row }) => {
-          const extension = getValue() as string;
-          if (!extension) return <Text></Text>;
+          const extensionText = `${hoursExtended}h ${minutesExtended}m`;
+          const mostRecentExtension = extensions[extensions.length - 1];
 
-          // Show avatar of who granted the extension
           return (
             <HStack>
-              <Text>{extension}</Text>
-              {row.original.exception_creator_id && <PersonAvatar uid={row.original.exception_creator_id} size="2xs" />}
+              <Text>{extensionText}</Text>
+              {mostRecentExtension && <PersonAvatar uid={mostRecentExtension.creator_id} size="2xs" />}
             </HStack>
           );
         }
-      },
-      {
+      }),
+      columnHelper.display({
         id: "actions",
         header: "Actions",
         cell: ({ row }) => {
-          // We need to reconstruct student and group objects for the dialog
-          const studentId = row.original.student_profile_id!;
-          const group = groups?.data?.find((g) => g.profile_id === studentId);
-
-          // Create a minimal student object
-          const student = {
-            id: studentId,
-            name: studentId, // PersonName component will handle the actual name lookup
-            class_id: row.original.class_id!
-          } as UserProfile;
-
-          // Get all exceptions for this student
-          const exceptions: AssignmentDueDateException[] = [];
-          if (row.original.due_date_exception_id) {
-            exceptions.push({
-              id: row.original.due_date_exception_id,
-              created_at: row.original.exception_created_at!,
-              hours: row.original.exception_hours!,
-              minutes: row.original.exception_minutes || 0,
-              tokens_consumed: row.original.exception_tokens_consumed || 0,
-              creator_id: row.original.exception_creator_id!,
-              note: row.original.exception_note || "",
-              class_id: row.original.class_id!,
-              assignment_id: row.original.id!,
-              student_id: studentId,
-              assignment_group_id: group?.assignment_groups.id || null
-            });
-          }
-
+          const { student, group } = row.original;
+          
           return assignment ? (
             <AdjustDueDateDialog
-              student={student}
-              group={group?.assignment_groups}
-              assignment={assignment.data}
-              course={course}
-              extensions={exceptions}
+              student_id={student.id}
+              group={group || undefined}
+              assignment={assignment}
             />
           ) : null;
         }
-      }
-    ],
-    [hasLabScheduling, originalDueDate, course, groups, assignment, studentNameMap]
-  );
+      })
+    ];
+  }, [hasLabScheduling, originalDueDate, assignment]);
 
-  // Set up TableController
-  const tableController = useMemo(() => {
-    const query = supabase
-      .from("assignments_for_student_dashboard")
-      .select("*")
-      .eq("id", Number.parseInt(assignment_id as string));
-
-    return new TableController({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      query: query as any,
-      client: supabase,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "assignments_for_student_dashboard" as any,
-      classRealTimeController
-    });
-  }, [supabase, assignment_id, classRealTimeController]);
-
-  const {
-    getHeaderGroups,
-    getRowModel,
-    getState,
-    getRowCount,
-    setPageIndex,
-    getCanPreviousPage,
-    getPageCount,
-    getCanNextPage,
-    nextPage,
-    previousPage,
-    setPageSize,
-    isLoading
-  } = useTableControllerTable({
+  // Set up React Table
+  const table = useReactTable({
+    data: studentData,
     columns,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tableController: tableController as any,
+    getCoreRowModel: getCoreRowModel(),
     initialState: {
-      columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
-      pagination: {
-        pageIndex: 0,
-        pageSize: 1000
-      },
       sorting: [{ id: "student_name", desc: false }],
       columnVisibility: {
-        assignment_id: false,
         lab_due_date: hasLabScheduling
       }
     }
@@ -579,12 +535,12 @@ export default function DueDateExceptions() {
           {hasLabScheduling && (
             <Text mb={2} color="blue.600">
               <strong>Lab-Based Scheduling:</strong> This assignment uses lab-based due dates. Each student&apos;s
-              effective due date is calculated as {assignment.data.minutes_due_after_lab} minutes after their most
+              effective due date is calculated as {assignment.minutes_due_after_lab} minutes after their most
               recent lab meeting before the original due date.
             </Text>
           )}
           <Text fontSize="sm" color="fg.muted">
-            This assignment allows students to use up to {assignment.data.max_late_tokens} late tokens to extend the due
+            This assignment allows students to use up to {assignment.max_late_tokens} late tokens to extend the due
             date. Each late token extends the due date by 24 hours. Students in the course are given a total of{" "}
             {course.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each student
             below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
@@ -596,238 +552,59 @@ export default function DueDateExceptions() {
       <Box w="100%" overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto">
         <Table.Root minW="0" w="100%">
           <Table.Header>
-            {getHeaderGroups().map((headerGroup) => (
+            {table.getHeaderGroups().map((headerGroup) => (
               <Table.Row key={headerGroup.id}>
-                {headerGroup.headers
-                  .filter((h) => h.id !== "assignment_id")
-                  .map((header) => (
-                    <Table.ColumnHeader
-                      key={header.id}
-                      bg="bg.muted"
-                      style={{
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 20
-                      }}
-                    >
-                      {header.isPlaceholder ? null : (
-                        <>
-                          <Text onClick={header.column.getToggleSortingHandler()}>
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            {{
-                              asc: (
-                                <Icon size="md">
-                                  <FaSortUp />
-                                </Icon>
-                              ),
-                              desc: (
-                                <Icon size="md">
-                                  <FaSortDown />
-                                </Icon>
-                              )
-                            }[header.column.getIsSorted() as string] ?? (
-                              <Icon size="md">
-                                <FaSort />
-                              </Icon>
-                            )}
-                          </Text>
-                          {header.id === "student_name" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                ...Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const studentName = studentNameMap.get(row.original.student_profile_id || "");
-                                      if (studentName && !map.has(studentName)) {
-                                        map.set(studentName, studentName);
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((name) => ({ label: name, value: name })),
-                                { label: "Unknown Student", value: "Unknown Student" }
-                              ]}
-                              placeholder="Filter by student..."
-                            />
-                          )}
-                          {header.id === "group_name" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                ...Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const group = groups?.data?.find(
-                                        (g) => g.profile_id === row.original.student_profile_id
-                                      );
-                                      const groupName = group?.assignment_groups.name;
-                                      if (groupName && !map.has(groupName)) {
-                                        map.set(groupName, groupName);
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((name) => ({ label: name, value: name })),
-                                { label: "No group", value: "No group" }
-                              ]}
-                              placeholder="Filter by group..."
-                            />
-                          )}
-                          {header.id === "lab_due_date" && hasLabScheduling && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                ...Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const dueDate = row.original.due_date;
-                                      if (dueDate) {
-                                        const labDueDate = new TZDate(dueDate, course.time_zone || "America/New_York");
-                                        const formattedDate = labDueDate.toLocaleDateString();
-                                        if (!map.has(formattedDate)) {
-                                          map.set(formattedDate, formattedDate);
-                                        }
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((date) => ({ label: date, value: date })),
-                                { label: "No due date", value: "No due date" }
-                              ]}
-                              placeholder="Filter by lab due date..."
-                            />
-                          )}
-                          {header.id === "hours_extended" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                ...Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const hours = row.original.exception_hours || 0;
-                                      const minutes = row.original.exception_minutes || 0;
-                                      const hasExtension = hours > 0 || minutes > 0;
-                                      if (hasExtension) {
-                                        const extensionText = `${hours}h ${minutes}m`;
-                                        if (!map.has(extensionText)) {
-                                          map.set(extensionText, extensionText);
-                                        }
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((extension) => ({ label: extension, value: extension })),
-                                { label: "No extension", value: "No extension" }
-                              ]}
-                              placeholder="Filter by extension..."
-                            />
-                          )}
-                        </>
-                      )}
-                    </Table.ColumnHeader>
-                  ))}
+                {headerGroup.headers.map((header) => (
+                  <Table.ColumnHeader
+                    key={header.id}
+                    bg="bg.muted"
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 20
+                    }}
+                  >
+                    {header.isPlaceholder ? null : (
+                      <Text onClick={header.column.getToggleSortingHandler()}>
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {{
+                          asc: (
+                            <Icon size="md">
+                              <FaSortUp />
+                            </Icon>
+                          ),
+                          desc: (
+                            <Icon size="md">
+                              <FaSortDown />
+                            </Icon>
+                          )
+                        }[header.column.getIsSorted() as string] ?? (
+                          <Icon size="md">
+                            <FaSort />
+                          </Icon>
+                        )}
+                      </Text>
+                    )}
+                  </Table.ColumnHeader>
+                ))}
               </Table.Row>
             ))}
           </Table.Header>
           <Table.Body>
-            {isLoading && (
-              <Table.Row>
-                <Table.Cell colSpan={getHeaderGroups()[0]?.headers.length || 6} bg="bg.subtle">
-                  <VStack w="100%" alignItems="center" justifyContent="center" h="100%" p={12}>
-                    <Spinner size="lg" />
-                    <Text>Loading...</Text>
-                  </VStack>
-                </Table.Cell>
-              </Table.Row>
-            )}
-            {getRowModel().rows.map((row, idx) => (
+            {table.getRowModel().rows.map((row, idx) => (
               <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined}>
-                {row
-                  .getVisibleCells()
-                  .filter((c) => c.column.id !== "assignment_id")
-                  .map((cell) => (
-                    <Table.Cell key={cell.id} p={0}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </Table.Cell>
-                  ))}
+                {row.getVisibleCells().map((cell) => (
+                  <Table.Cell key={cell.id} p={2}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </Table.Cell>
+                ))}
               </Table.Row>
             ))}
           </Table.Body>
         </Table.Root>
       </Box>
 
-      {/* Pagination */}
-      <HStack>
-        <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
-          {"<<"}
-        </Button>
-        <Button onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
-          {"<"}
-        </Button>
-        <Button onClick={() => nextPage()} disabled={!getCanNextPage()}>
-          {">"}
-        </Button>
-        <Button onClick={() => setPageIndex(getPageCount() - 1)} disabled={!getCanNextPage()}>
-          {">>"}
-        </Button>
-        <VStack>
-          <Text>Page</Text>
-          <Text>
-            {getState().pagination.pageIndex + 1} of {getPageCount()}
-          </Text>
-        </VStack>
-        <VStack>
-          | Go to page:
-          <input
-            title="Go to page"
-            type="number"
-            defaultValue={getState().pagination.pageIndex + 1}
-            onChange={(e) => {
-              const page = e.target.value ? Number(e.target.value) - 1 : 0;
-              setPageIndex(page);
-            }}
-          />
-        </VStack>
-        <VStack>
-          <Text>Show</Text>
-          <NativeSelect.Root title="Select page size">
-            <NativeSelect.Field
-              value={"" + getState().pagination.pageSize}
-              onChange={(event) => {
-                setPageSize(Number(event.target.value));
-              }}
-            >
-              {[25, 50, 100, 200, 500, 1000].map((pageSize) => (
-                <option key={pageSize} value={pageSize}>
-                  Show {pageSize}
-                </option>
-              ))}
-            </NativeSelect.Field>
-          </NativeSelect.Root>
-        </VStack>
-      </HStack>
-      <div>{getRowCount()} Students</div>
+      <Text>{studentData.length} Students</Text>
     </VStack>
   );
 }

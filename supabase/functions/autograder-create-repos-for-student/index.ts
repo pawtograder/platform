@@ -37,7 +37,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Edge function secret authentication - get user_id from request body
     if (!user_id) {
-      throw new UserVisibleError("user_id is required when using edge function secret authentication");
+      throw new UserVisibleError("user_id is required when using edge function secret authentication", 400);
     }
 
     userId = user_id;
@@ -108,7 +108,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("user_id", userId);
   scope?.setTag("github_username", githubUsername);
   if (!githubUsername) {
-    throw new UserVisibleError(`User ${userId} has no Github username linked`);
+    throw new UserVisibleError(`User ${userId} has no Github username linked`, 400);
   }
 
   //Must use adminSupabase because students can't see each others' github usernames
@@ -133,7 +133,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Error fetching classes");
   }
   if (!classes) {
-    throw new UserVisibleError("User is not a student");
+    throw new UserVisibleError("User is not a student", 400);
   }
 
   const existingIndividualRepos = classes.flatMap((c) => c!.profiles!.repositories);

@@ -217,7 +217,7 @@ export async function wrapRequestHandler(
       return new Response(
         JSON.stringify({
           error: {
-            recoverable: false,
+            recoverable: e.status >= 500,
             message: "Internal Server Error",
             details: e.details
           }
@@ -231,7 +231,7 @@ export async function wrapRequestHandler(
       return new Response(
         JSON.stringify({
           error: {
-            recoverable: true,
+            recoverable: false,
             message: "Not Found",
             details: "The requested resource was not found"
           }
@@ -258,7 +258,7 @@ export async function wrapRequestHandler(
     return new Response(
       JSON.stringify({
         error: {
-          recoverable: false,
+          recoverable: true,
           message: "Internal Server Error",
           details: "An unknown error occurred"
         }
@@ -280,10 +280,11 @@ export class SecurityError extends Error {
 
 export class UserVisibleError extends Error {
   details: string;
-  status: number = 500;
-  constructor(details: string) {
+  status: number;
+  constructor(details: string, status: number = 500) {
     super(details);
     this.details = details;
+    this.status = status;
   }
 }
 

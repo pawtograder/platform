@@ -105,7 +105,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-submission");
   const token = req.headers.get("Authorization");
   if (!token) {
-    throw new UserVisibleError("No token provided");
+    throw new UserVisibleError("No token provided", 400);
   }
   // Check if this is part of an
   const decoded = await validateOIDCTokenOrAllowE2E(token);
@@ -447,10 +447,44 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               });
             }
             throw new UserVisibleError(
-              "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension."
+              "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.",
+              400
             );
           } else {
             //Fail the check run
+
+            //For usability, we should check to see if the user finalized their submission early, and if so, show THAT message
+            let query = adminSupabase
+              .from("assignment_due_date_exceptions")
+              .select("*")
+              .eq("assignment_id", repoData.assignment_id);
+            if (repoData.assignment_group_id) {
+              query = query.eq("assignment_group_id", repoData.assignment_group_id);
+            } else if (repoData.profile_id) {
+              query = query.eq("student_id", repoData.profile_id!);
+            } else {
+              throw new UserVisibleError("No assignment group or profile ID found for submission.");
+            }
+            const { data: negativeDueDateExceptions, error: negativeDueDateExceptionsError } = await query.limit(1000);
+            if (negativeDueDateExceptionsError) {
+              throw new UserVisibleError(
+                `Internal error: Failed to find negative due date exceptions: ${negativeDueDateExceptionsError.message}`
+              );
+            }
+            let checkRunMessage = `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`;
+            let checkRunSummary = "You cannot submit after the due date.";
+            let errorMessage = `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`;
+            if (negativeDueDateExceptions && negativeDueDateExceptions.length > 0) {
+              const hasNegativeException = negativeDueDateExceptions.some(
+                (exception) => exception.hours < 0 || exception.minutes < 0
+              );
+              if (hasNegativeException) {
+                checkRunMessage = `You have already finalized your submission for this assignment by clicking the "Finalize Submission Early" button. You cannot submit additional code after finalization.`;
+                checkRunSummary = "You have already finalized your submission for this assignment.";
+                errorMessage =
+                  "You have already finalized your submission for this assignment. You cannot submit additional code after finalization.";
+              }
+            }
             if (!isE2ERun) {
               await updateCheckRun({
                 owner: repository.split("/")[0],
@@ -460,14 +494,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 conclusion: "failure",
                 output: {
                   title: "Submission failed",
-                  summary: "You cannot submit after the due date.",
-                  text: `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
+                  summary: checkRunSummary,
+                  text: checkRunMessage
                 }
               });
             }
-            throw new UserVisibleError(
-              `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`
-            );
+            throw new UserVisibleError(errorMessage, 400);
           }
         }
         // Check the max submissions per-time
@@ -529,7 +561,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               });
             }
             throw new UserVisibleError(
-              `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`
+              `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
+              400
             );
           }
         }
@@ -604,7 +637,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const contents = await workflowFile?.buffer();
         if (!contents) {
           throw new UserVisibleError(
-            "Failed to read workflow file in repository. Instructor: please be sure that the .github/workflows/grade.yml file is present and readable."
+            "Failed to read workflow file in repository. Instructor: please be sure that the .github/workflows/grade.yml file is present and readable.",
+            400
           );
         }
         const contentsStr = contents.toString("utf-8");
@@ -642,12 +676,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
         if (!pawtograderConfig) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
+            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`,
+            400
           );
         }
         if (!pawtograderConfig.submissionFiles) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
+            400
           );
         }
         const expectedFiles = [
@@ -657,7 +693,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (expectedFiles.length === 0) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
+            400
           );
         }
         const submittedFiles = zip.files.filter(
@@ -672,7 +709,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
         if (!allNonGlobFilesPresent) {
           throw new UserVisibleError(
-            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`,
+            400
           );
         }
 
@@ -705,7 +743,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
         if (!config.grader_repo) {
           throw new UserVisibleError(
-            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
+            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment.",
+            400
           );
         }
         const { download_link: grader_url, sha: grader_sha } = await getRepoTarballURL(config.grader_repo!);
