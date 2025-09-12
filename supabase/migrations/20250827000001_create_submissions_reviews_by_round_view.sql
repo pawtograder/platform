@@ -148,3 +148,102 @@ BEGIN
     RETURN NULL;
 END;
 $$;
+
+DROP TRIGGER IF EXISTS trigger_recalculate_dependent_columns_on_review ON public.submission_reviews;
+
+CREATE CONSTRAINT TRIGGER trigger_recalculate_dependent_columns_on_review
+  AFTER INSERT OR UPDATE ON public.submission_reviews
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION public.submission_review_recalculate_dependent_columns();
+
+CREATE OR REPLACE FUNCTION "public"."call_edge_function_internal_post_payload"("url_path" "text", "headers" "jsonb" DEFAULT '{}'::"jsonb", "payload" "jsonb" DEFAULT '{}'::"jsonb", "timeout_ms" integer DEFAULT 1000) RETURNS "void"
+    LANGUAGE "plpgsql"
+    AS $$
+  DECLARE
+    request_id bigint;
+    supabase_project_url text;
+    full_url text;
+    edge_function_secret text;
+    merged_headers jsonb;
+  BEGIN
+    IF url_path IS NULL OR url_path = 'null' THEN
+      RAISE EXCEPTION 'url_path argument is missing';
+    END IF;
+
+    -- Retrieve the base URL from the Vault
+    SELECT decrypted_secret INTO supabase_project_url 
+    FROM vault.decrypted_secrets 
+    WHERE name = 'supabase_project_url';
+
+    IF supabase_project_url IS NULL OR supabase_project_url = 'null' THEN
+      RAISE EXCEPTION 'supabase_project_url secret is missing or invalid';
+    END IF;
+
+    full_url := supabase_project_url || url_path;
+
+    -- Retrieve the edge function secret from the Vault
+    SELECT decrypted_secret INTO edge_function_secret
+    FROM vault.decrypted_secrets
+    WHERE name = 'edge-function-secret';
+
+    IF edge_function_secret IS NULL OR edge_function_secret = 'null' THEN
+      RAISE EXCEPTION 'edge-function-secret is missing or invalid';
+    END IF;
+
+    -- Merge the secret into the headers
+    merged_headers := headers || jsonb_build_object('x-edge-function-secret', edge_function_secret);
+
+      SELECT http_post INTO request_id FROM net.http_post(
+        full_url,
+        payload,
+        '{}'::jsonb,
+        merged_headers,
+        timeout_ms
+      );
+
+  END;
+$$;
+
+
+-- purpose: call edge function to recompute dependencies for other gradebook columns
+--          when a new gradebook column is inserted
+-- notes: uses public.call_edge_function_internal which injects the edge secret
+
+CREATE OR REPLACE FUNCTION public.on_gradebook_column_inserted()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  -- Invoke edge function with context to recompute dependencies in same gradebook
+  PERFORM public.call_edge_function_internal_post_payload(
+    '/functions/v1/gradebook-column-inserted',
+    '{"Content-type":"application/json"}'::jsonb,
+    jsonb_build_object(
+      'class_id', NEW.class_id,
+      'gradebook_id', NEW.gradebook_id,
+      'new_column_id', NEW.id
+    ),
+    5000
+  );
+  RETURN NEW;
+END;
+$$;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_on_gradebook_column_inserted'
+  ) THEN
+    DROP TRIGGER trg_on_gradebook_column_inserted ON public.gradebook_columns;
+  END IF;
+END$$;
+
+CREATE TRIGGER trg_on_gradebook_column_inserted
+AFTER INSERT ON public.gradebook_columns
+FOR EACH ROW
+EXECUTE FUNCTION public.on_gradebook_column_inserted();
+
+COMMENT ON FUNCTION public.on_gradebook_column_inserted() IS 'After-insert hook for gradebook_columns: calls edge function to recompute dependencies for other columns in the same gradebook.';
