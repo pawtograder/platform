@@ -141,8 +141,6 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     };
   }, [comments, rubric, assignedRubricPartIds]);
 
-  console.log(missing_required_criteria);
-
   return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
 }
 
@@ -222,12 +220,12 @@ function CompleteReviewAssignmentDialog({
               </List.Root>
             </VStack>
           )}
-          {missing_required_checks.length > 0 && (
+          {(missing_required_checks.length > 0 || missing_required_criteria.length > 0) && (
             <Text fontSize="sm" color="fg.error">
               You must complete all required checks and criteria before marking this review assignment as complete.
             </Text>
           )}
-          {missing_required_checks.length == 0 && (
+          {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
             <Button
               variant="solid"
               colorPalette="green"
@@ -362,9 +360,9 @@ export function CompleteReviewButton() {
           </Popover.Arrow>
           <Popover.Body
             bg={
-              missing_required_checks.length > 0
+              missing_required_checks.length > 0 || missing_required_criteria.length > 0
                 ? "bg.error"
-                : missing_optional_checks.length > 0
+                : missing_optional_checks.length > 0 || missing_optional_criteria.length > 0
                   ? "bg.warning"
                   : "bg.success"
             }
@@ -373,14 +371,14 @@ export function CompleteReviewButton() {
             <VStack align="start">
               <Box w="100%">
                 <Heading size="md">
-                  {missing_required_checks.length > 0
+                  {missing_required_checks.length > 0 || missing_required_criteria.length > 0
                     ? "Required Checks Missing"
-                    : missing_optional_checks.length > 0
+                    : missing_optional_checks.length > 0 || missing_optional_criteria.length > 0
                       ? "Confirm that you have carefully reviewed the submission"
                       : "Complete Review"}
                 </Heading>
               </Box>
-              {missing_required_checks.length > 0 && (
+              {(missing_required_checks.length > 0 || missing_required_criteria.length > 0) && (
                 <Box>
                   <Heading size="sm">
                     These checks are required. Please apply them before marking the review as done.
@@ -397,7 +395,7 @@ export function CompleteReviewButton() {
                   </List.Root>
                 </Box>
               )}
-              {missing_optional_checks.length > 0 && (
+              {(missing_optional_checks.length > 0 || missing_optional_criteria.length > 0) && (
                 <Box>
                   <Heading size="sm">
                     These checks were not applied, but not required. Please take a quick look to make sure that you did
@@ -418,7 +416,7 @@ export function CompleteReviewButton() {
               {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
               )}
-              {missing_required_checks.length == 0 && (
+              {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Button
                   variant="solid"
                   colorPalette="green"
