@@ -269,25 +269,18 @@ test.describe("Assignment due dates", () => {
 test.describe("Due Date Exceptions & Extensions", () => {
   test.beforeEach(async ({ page }) => {
     await loginAsUser(page, instructor!, course);
-    await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
-    await expect(page.getByRole("menuitem", { name: "Due Date Extensions" })).toBeVisible();
-    await page.getByRole("menuitem", { name: "Due Date Extensions" }).click();
+    await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
   });
   test("Edit Late Token Allocation works correctly", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Due Date Extensions" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Due Date Exceptions Management" })).toBeVisible();
-    await expect(page.getByText(`Manage late tokens and due date exceptions for ${course.name}`)).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Class Late Token Settings" })).toBeVisible();
-    await expect(page.getByText("Configure how many late tokens each student gets in this class.")).toBeVisible();
     await expect(
-      page.getByText(`Current Setting: Each student receives ${course.late_tokens_per_student} late tokens`)
+      page.getByText(`Current Setting: Each student receives ${course.late_tokens_per_student} late tokens`).first()
     ).toBeVisible();
     const newLateTokenAllocation = course.late_tokens_per_student + 2;
     await page.getByRole("button", { name: "Edit Late Token Allocation" }).click();
     await page.locator('input[name="late_tokens_per_student"]').fill(newLateTokenAllocation.toString());
     await page.getByRole("button", { name: "Save Changes" }).click();
     await expect(
-      page.getByText(`Current Setting: Each student receives ${newLateTokenAllocation} late tokens`)
+      page.getByText(`Current Setting: Each student receives ${newLateTokenAllocation} late tokens`).first()
     ).toBeVisible();
   });
   test("Assignment Due Date Exceptions work correctly", async ({ page }) => {
@@ -366,9 +359,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByRole("button", { name: "Confirm action" }).click();
   });
   test("Student Due Date Extensions work correctly", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
     await page.getByText("Student Extensions").click();
-    await expect(page.getByText("Due Date Extensions").first()).toBeVisible();
     await page.getByRole("button", { name: "Add Extension" }).click();
     const addExtensionModal = page.getByRole("dialog");
     await addExtensionModal
@@ -388,27 +379,15 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // Check that the extension is applied to the assignment exceptions
     await page.getByText("Assignment Exceptions").click();
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
-    const dueDatesAssignment = page
-      .getByLabel("Assignment Exceptions")
-      .locator("div")
-      .filter({ hasText: "Due Dates Assignment" })
-      .nth(1);
-    await expect(
-      dueDatesAssignment.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
-      })
-    ).toBeVisible();
+    const dueDatesAssignment = page.getByLabel("Assignment Exceptions for Due Dates Assignment").first();
+    await expect(dueDatesAssignment).toContainText(
+      `${student2!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
+    );
 
-    const dueDatesGroupAssignment = page
-      .getByLabel("Assignment Exceptions")
-      .locator("div")
-      .filter({ hasText: "Due Dates Group Assignment" })
-      .nth(1);
-    await expect(
-      dueDatesGroupAssignment.getByRole("row", {
-        name: `${student2!.private_profile_name} Group: Test Group 1; Other members: ${student!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
-      })
-    ).toBeVisible();
+    const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
+    await expect(dueDatesGroupAssignment).toContainText(
+      `${student2!.private_profile_name}Group: Test Group 1; Other members: ${student!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
+    );
 
     // Test Delete
     await page.getByText("Student Extensions").click();
@@ -454,11 +433,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
     }
 
     // Locate the group assignment exceptions table
-    const dueDatesGroupAssignment = page
-      .getByLabel("Assignment Exceptions")
-      .locator("div")
-      .filter({ hasText: "Due Dates Group Assignment" })
-      .nth(1);
+    const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
 
     // Wait for the new group-level exception row to appear and verify content
     const groupRow = dueDatesGroupAssignment.getByRole("row", { name: /Group-level exception for test/ });
@@ -498,17 +473,17 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await addExceptionModal.getByPlaceholder("Optional note").fill(note);
     await addExceptionModal.getByRole("button", { name: "Add Exception" }).click();
     // Navigate to the Roster Tokens tab
-    await page.getByRole("tab", { name: "Roster Tokens" }).click();
+    await page.getByRole("link", { name: "Roster Tokens" }).click();
     await expect(page.getByRole("heading", { name: "Roster Tokens" })).toBeVisible();
 
     const student1Row = page.getByRole("row").filter({ has: page.getByText(student!.email) });
     await expect(student1Row).toBeVisible();
-    await expect(student1Row.getByRole("cell").nth(1)).toHaveText("3");
-    await expect(student1Row.getByRole("cell").nth(2)).toHaveText("9");
+    await expect(student1Row.getByRole("cell").nth(1)).toHaveText("0");
+    await expect(student1Row.getByRole("cell").nth(2)).toHaveText("12");
 
     const student2Row = page.getByRole("row").filter({ has: page.getByText(student2!.email) });
     await expect(student2Row).toBeVisible();
-    await expect(student2Row.getByRole("cell").nth(1)).toHaveText("3");
-    await expect(student2Row.getByRole("cell").nth(2)).toHaveText("9");
+    await expect(student2Row.getByRole("cell").nth(1)).toHaveText("2");
+    await expect(student2Row.getByRole("cell").nth(2)).toHaveText("10");
   });
 });

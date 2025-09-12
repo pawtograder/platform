@@ -27,6 +27,7 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { addHours, addMinutes } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -59,10 +60,10 @@ function AdjustDueDateDialogContent({
 }) {
   const studentOrGroup = group ? "group" : "student";
 
-  // Only load data when dialog is open (lazy mounting)
   const dueDateInfo = useAssignmentDueDate(assignment, {
-    studentPrivateProfileId: open ? student_id : undefined
+    studentPrivateProfileId: student_id
   });
+  const { time_zone } = useCourse();
   const originalDueDate = new TZDate(assignment.due_date!);
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
   const { assignmentDueDateExceptions } = useCourseController();
@@ -131,7 +132,16 @@ function AdjustDueDateDialogContent({
         });
       }
     },
-    [assignment.id, group, student_id, assignment.class_id, assignmentDueDateExceptions, private_profile_id, reset]
+    [
+      assignment.id,
+      group,
+      student_id,
+      assignment.class_id,
+      assignmentDueDateExceptions,
+      private_profile_id,
+      reset,
+      setOpen
+    ]
   );
 
   const onSubmit = handleSubmit(onSubmitCallback);
@@ -158,10 +168,11 @@ function AdjustDueDateDialogContent({
         {hasLabScheduling ? (
           <>
             <Text mb={2}>
-              <strong>Original Assignment Due Date:</strong> {originalDueDate.toLocaleString()}
+              <strong>Original Assignment Due Date:</strong>{" "}
+              {formatInTimeZone(originalDueDate, time_zone, "MMM d h:mm aaa")}
             </Text>
             <Text mb={2}>
-              <strong>Lab-Based Due Date:</strong> {labBasedDueDate.toLocaleString()}
+              <strong>Lab-Based Due Date:</strong> {formatInTimeZone(labBasedDueDate, time_zone, "MMM d h:mm aaa")}
               {labBasedDueDate.getTime() !== originalDueDate.getTime() && (
                 <Text as="span" color="blue.500" ml={2}>
                   (adjusted for lab scheduling)
@@ -169,7 +180,7 @@ function AdjustDueDateDialogContent({
               )}
             </Text>
             <Text mb={4}>
-              <strong>Current Final Due Date:</strong> {new TZDate(finalDueDate).toLocaleString()}
+              <strong>Current Final Due Date:</strong> {formatInTimeZone(finalDueDate, time_zone, "MMM d h:mm aaa")}
               {hoursExtended > 0 && (
                 <Text as="span" color="orange.500" ml={2}>
                   (with {formattedDuration} extension)
@@ -179,7 +190,8 @@ function AdjustDueDateDialogContent({
           </>
         ) : (
           <Text mb={4}>
-            The current due date for this {studentOrGroup} is {new TZDate(finalDueDate).toLocaleString()}
+            The current due date for this {studentOrGroup} is{" "}
+            {formatInTimeZone(finalDueDate, time_zone, "MMM d h:mm aaa")}
             {hoursExtended > 0 && ` (an extension of ${formattedDuration})`}.
           </Text>
         )}
@@ -231,7 +243,7 @@ function AdjustDueDateDialogContent({
                 <Textarea {...register("note")} />
               </Field>
               <Text>
-                <strong>New Due Date:</strong> {newDueDate.toLocaleString()}
+                <strong>New Due Date:</strong> {formatInTimeZone(newDueDate, time_zone, "MMM d h:mm aaa")}
               </Text>
             </Fieldset.Content>
           </Fieldset.Root>
@@ -253,7 +265,7 @@ function AdjustDueDateDialogContent({
               <Table.Body>
                 {extensions.map((extension) => (
                   <Table.Row key={extension.id}>
-                    <Table.Cell>{new TZDate(extension.created_at, "America/New_York").toLocaleString()}</Table.Cell>
+                    <Table.Cell>{formatInTimeZone(extension.created_at, time_zone, "MMM d h:mm aaa")}</Table.Cell>
                     <Table.Cell>
                       {extension.hours}
                       {
@@ -410,6 +422,7 @@ export default function DueDateExceptions() {
       };
     });
   }, [studentRoster, assignment, groups, allExtensions, originalDueDate, hasLabScheduling]);
+  const { time_zone } = useCourse();
 
   // Set up columns for the table
   const columns = useMemo(() => {
@@ -442,7 +455,7 @@ export default function DueDateExceptions() {
 
           return (
             <VStack align="start" gap={1}>
-              <Text>{effectiveDueDate.toLocaleString()}</Text>
+              <Text>{formatInTimeZone(effectiveDueDate, time_zone, "MMM d h:mm aaa")}</Text>
               {isDifferentFromOriginal && (
                 <Text fontSize="xs" color="blue.500">
                   (lab-adjusted)
@@ -463,7 +476,7 @@ export default function DueDateExceptions() {
 
           return (
             <VStack align="start" gap={1}>
-              <Text>{finalDate.toLocaleString()}</Text>
+              <Text>{formatInTimeZone(finalDate, time_zone, "MMM d h:mm aaa")}</Text>
               <Text fontSize="xs" color="orange.500">
                 (+{hoursExtended}h {minutesExtended}m)
               </Text>
@@ -501,7 +514,7 @@ export default function DueDateExceptions() {
         }
       })
     ];
-  }, [hasLabScheduling, originalDueDate, assignment]);
+  }, [hasLabScheduling, originalDueDate, assignment, time_zone]);
 
   // Set up React Table
   const table = useReactTable({
@@ -529,10 +542,11 @@ export default function DueDateExceptions() {
             Assignment Due Date Information
           </Heading>
           <Text mb={2}>
-            <strong>Original Assignment Due Date:</strong> {originalDueDate?.toLocaleString() || "No due date"}
+            <strong>Original Assignment Due Date:</strong>{" "}
+            {originalDueDate ? formatInTimeZone(originalDueDate, time_zone, "MMM d h:mm aaa") : "No due date"}
           </Text>
           {hasLabScheduling && (
-            <Text mb={2} color="blue.600">
+            <Text mb={2} color="fg.info">
               <strong>Lab-Based Scheduling:</strong> This assignment uses lab-based due dates. Each student&apos;s
               effective due date is calculated as {assignment.minutes_due_after_lab} minutes after their most recent lab
               meeting before the original due date.

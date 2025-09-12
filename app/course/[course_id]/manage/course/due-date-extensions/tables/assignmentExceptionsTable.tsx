@@ -96,7 +96,12 @@ export default function AssignmentExceptionsTable({
   const studentName = (id: string | null | undefined) => students.find((s) => s.id === id)?.name || id;
 
   return (
-    <Box borderWidth="1px" borderRadius="md" p={3}>
+    <Box
+      borderWidth="1px"
+      borderRadius="md"
+      p={3}
+      aria-label={`Assignment Exceptions for ${assignment.title || `Assignment #${assignment.id}`}`}
+    >
       <HStack justifyContent="space-between" mb={2}>
         <VStack align="flex-start">
           <Heading size="sm">{assignment.title || `Assignment #${assignment.id}`}</Heading>
