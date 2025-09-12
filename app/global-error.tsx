@@ -109,8 +109,9 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               <p style={{ fontSize: "1rem", color: "#4a5568", marginBottom: "1.5rem", lineHeight: "1.6" }}>
                 If you continue to experience this error, please{" "}
                 <a
-                  href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md}`}
+                  href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md`}
                   target="_blank"
+                  rel="noopener noreferrer"
                 >
                   report it on our issue tracker
                 </a>
