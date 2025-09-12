@@ -5,19 +5,9 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { 
-  useAssignmentDueDate, 
-  useCourseController, 
-  useStudentRoster,
-  useCourse
-} from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourseController, useStudentRoster, useCourse } from "@/hooks/useCourseController";
 import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
-import {
-  Assignment,
-  AssignmentDueDateException,
-  AssignmentGroup,
-  UserProfile
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
@@ -38,7 +28,7 @@ import { TZDate } from "@date-fns/tz";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { addHours, addMinutes } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaSort, FaSortDown, FaSortUp, FaTrash } from "react-icons/fa";
 
@@ -54,35 +44,39 @@ type StudentDueDateRow = {
 };
 
 type AdjustDueDateInsert = Database["public"]["Tables"]["assignment_due_date_exceptions"]["Insert"];
-function AdjustDueDateDialog({
+function AdjustDueDateDialogContent({
   student_id,
   group,
   assignment,
+  open,
+  setOpen
 }: {
   student_id: string;
   group?: AssignmentGroup;
   assignment: Assignment;
+  open: boolean;
+  setOpen: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const studentOrGroup = group ? "group" : "student";
 
   // Only load data when dialog is open (lazy mounting)
-  const dueDateInfo = useAssignmentDueDate(assignment, { 
-    studentPrivateProfileId: open ? student_id : undefined 
+  const dueDateInfo = useAssignmentDueDate(assignment, {
+    studentPrivateProfileId: open ? student_id : undefined
   });
   const originalDueDate = new TZDate(assignment.due_date!);
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
   const { assignmentDueDateExceptions } = useCourseController();
-  
-  const predicate = useMemo(() => {
-    if (!open) return () => false; // Don't load extensions until dialog is open
-    return (exception: AssignmentDueDateException) => {
-      return exception.assignment_id === assignment.id && (
-        (exception.student_id === student_id && group === null)
-        || (exception.assignment_group_id === group?.id && group !== null));
-    };
-  }, [assignment.id, student_id, group, open]);
-  
+
+  const predicate = useCallback(
+    (exception: AssignmentDueDateException) => {
+      return (
+        exception.assignment_id === assignment.id &&
+        ((exception.student_id === student_id && !group) || (exception.assignment_group_id === group?.id && !!group))
+      );
+    },
+    [assignment.id, student_id, group]
+  );
+
   const extensions = useListTableControllerValues(assignmentDueDateExceptions, predicate);
 
   // Calculate final due date with extensions
@@ -97,19 +91,29 @@ function AdjustDueDateDialog({
     reset,
     formState: { errors, isSubmitting }
   } = useForm<AdjustDueDateInsert>();
+
+  useEffect(() => {
+    if (!open) {
+      reset();
+    }
+  }, [open, reset]);
+
   const { private_profile_id } = useClassProfiles();
 
   const onSubmitCallback = useCallback(
     async (values: AdjustDueDateInsert) => {
       const data: AdjustDueDateInsert = {
         ...values,
+        hours: Number.parseInt(values.hours.toString()),
+        minutes: Number.parseInt(values.minutes?.toString() || "0"),
+        tokens_consumed: Number.parseInt(values.tokens_consumed?.toString() || "0"),
         class_id: assignment.class_id,
         student_id: group ? null : student_id,
         assignment_id: assignment.id,
         assignment_group_id: group?.id,
         creator_id: private_profile_id!
       };
-      try{
+      try {
         await assignmentDueDateExceptions.create(data);
         toaster.create({
           title: "Due date exception added",
@@ -127,15 +131,7 @@ function AdjustDueDateDialog({
         });
       }
     },
-    [
-      assignment.id,
-      group,
-      student_id,
-      assignment.class_id,
-      assignmentDueDateExceptions,
-      private_profile_id,
-      reset
-    ]
+    [assignment.id, group, student_id, assignment.class_id, assignmentDueDateExceptions, private_profile_id, reset]
   );
 
   const onSubmit = handleSubmit(onSubmitCallback);
@@ -150,13 +146,174 @@ function AdjustDueDateDialog({
   const hasLabScheduling = assignment.minutes_due_after_lab !== null;
   const newDueDate = addMinutes(addHours(finalDueDate, watch("hours", 0) || 0), watch("minutes", 0) || 0);
 
+  return (
+    <Dialog.Content p={4}>
+      <Dialog.Header>
+        <Dialog.Title>
+          Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />}
+        </Dialog.Title>
+        <Dialog.CloseTrigger />
+      </Dialog.Header>
+      <Dialog.Description>
+        {hasLabScheduling ? (
+          <>
+            <Text mb={2}>
+              <strong>Original Assignment Due Date:</strong> {originalDueDate.toLocaleString()}
+            </Text>
+            <Text mb={2}>
+              <strong>Lab-Based Due Date:</strong> {labBasedDueDate.toLocaleString()}
+              {labBasedDueDate.getTime() !== originalDueDate.getTime() && (
+                <Text as="span" color="blue.500" ml={2}>
+                  (adjusted for lab scheduling)
+                </Text>
+              )}
+            </Text>
+            <Text mb={4}>
+              <strong>Current Final Due Date:</strong> {new TZDate(finalDueDate).toLocaleString()}
+              {hoursExtended > 0 && (
+                <Text as="span" color="orange.500" ml={2}>
+                  (with {formattedDuration} extension)
+                </Text>
+              )}
+            </Text>
+          </>
+        ) : (
+          <Text mb={4}>
+            The current due date for this {studentOrGroup} is {new TZDate(finalDueDate).toLocaleString()}
+            {hoursExtended > 0 && ` (an extension of ${formattedDuration})`}.
+          </Text>
+        )}
+        You can manually adjust the due date for this {studentOrGroup} below, in increments of hours and minutes.
+        Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
+      </Dialog.Description>
+      <Dialog.Body>
+        <Heading size="md">Add an Exception</Heading>
+        <form id="due-date-form" onSubmit={onSubmit}>
+          <Fieldset.Root bg="surface">
+            <Fieldset.Content w="xl">
+              <Field
+                label="Hours Extended"
+                errorText={errors.hours?.message?.toString()}
+                invalid={errors.hours ? true : false}
+              >
+                <Input type="number" {...register("hours", { min: 0, required: "Hours extended is required" })} />
+              </Field>
+              <Field
+                label="Minutes Extended"
+                errorText={errors.minutes?.message?.toString()}
+                invalid={errors.minutes ? true : false}
+                helperText="Additional minutes to extend the due date."
+              >
+                <Input type="number" {...register("minutes", { min: 0, max: 59 })} defaultValue={0} />
+              </Field>
+              <Field
+                label="Tokens to Consume"
+                errorText={errors.tokens_consumed?.message?.toString()}
+                invalid={errors.tokens_consumed ? true : false}
+                helperText="The number of late tokens to consume when granting this extension. Leave at 0 to not consume any of the student's tokens."
+                defaultValue={0}
+              >
+                <Input
+                  type="number"
+                  {...register("tokens_consumed", {
+                    valueAsNumber: true,
+                    min: 0,
+                    required: "Tokens consumed is required"
+                  })}
+                />
+              </Field>
+              <Field
+                label="Notes"
+                errorText={errors.note?.message?.toString()}
+                invalid={errors.note ? true : false}
+                helperText="Any additional notes about this extension."
+              >
+                <Textarea {...register("note")} />
+              </Field>
+              <Text>
+                <strong>New Due Date:</strong> {newDueDate.toLocaleString()}
+              </Text>
+            </Fieldset.Content>
+          </Fieldset.Root>
+        </form>
+        <Heading size="md">Extension History</Heading>
+        {extensions.length > 0 ? (
+          <Box maxH="400px" overflowY="auto">
+            <Table.Root maxW="2xl">
+              <Table.Header>
+                <Table.Row>
+                  <Table.ColumnHeader>Date Applied</Table.ColumnHeader>
+                  <Table.ColumnHeader>Hours Extended</Table.ColumnHeader>
+                  <Table.ColumnHeader>Minutes Extended</Table.ColumnHeader>
+                  <Table.ColumnHeader>Tokens Consumed</Table.ColumnHeader>
+                  <Table.ColumnHeader>Grantor</Table.ColumnHeader>
+                  <Table.ColumnHeader>Notes</Table.ColumnHeader>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {extensions.map((extension) => (
+                  <Table.Row key={extension.id}>
+                    <Table.Cell>{new TZDate(extension.created_at, "America/New_York").toLocaleString()}</Table.Cell>
+                    <Table.Cell>
+                      {extension.hours}
+                      {
+                        <PopConfirm
+                          triggerLabel="Delete"
+                          trigger={
+                            <Button size="xs" variant="ghost" colorPalette="red">
+                              <Icon as={FaTrash} />
+                            </Button>
+                          }
+                          confirmHeader="Delete extension"
+                          confirmText="Are you sure you want to delete this extension?"
+                          onConfirm={async () => {
+                            await assignmentDueDateExceptions.hardDelete(extension.id);
+                          }}
+                        />
+                      }
+                    </Table.Cell>
+                    <Table.Cell>{extension.minutes || 0}</Table.Cell>
+                    <Table.Cell>{extension.tokens_consumed}</Table.Cell>
+                    <Table.Cell>
+                      <PersonName uid={extension.creator_id} />
+                    </Table.Cell>
+                    <Table.Cell>{extension.note}</Table.Cell>
+                  </Table.Row>
+                ))}
+              </Table.Body>
+            </Table.Root>
+          </Box>
+        ) : (
+          <Text>No extensions have been granted for this {studentOrGroup}.</Text>
+        )}
+      </Dialog.Body>
+      <Dialog.Footer>
+        <Dialog.ActionTrigger asChild>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+        </Dialog.ActionTrigger>
+        <Button onClick={onSubmit} loading={isSubmitting} colorPalette="green" type="submit" form="due-date-form">
+          Add Due Date Exception
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  );
+}
+function AdjustDueDateDialog({
+  student_id,
+  group,
+  assignment
+}: {
+  student_id: string;
+  group?: AssignmentGroup;
+  assignment: Assignment;
+}) {
+  const [open, setOpen] = useState(false);
+
   const handleOpenChange = useCallback((details: { open: boolean }) => {
     setOpen(details.open);
-    if (!details.open) {
-      // Reset form when dialog is closed
-      reset();
-    }
-  }, [reset]);
+  }, []);
 
   return (
     <Dialog.Root size="xl" open={open} onOpenChange={handleOpenChange} lazyMount>
@@ -167,163 +324,13 @@ function AdjustDueDateDialog({
       </Dialog.Trigger>
       <Dialog.Backdrop />
       <Dialog.Positioner>
-        <Dialog.Content p={4}>
-          <Dialog.Header>
-            <Dialog.Title>Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />}</Dialog.Title>
-            <Dialog.CloseTrigger />
-          </Dialog.Header>
-          <Dialog.Description>
-            {hasLabScheduling ? (
-              <>
-                <Text mb={2}>
-                  <strong>Original Assignment Due Date:</strong> {originalDueDate.toLocaleString()}
-                </Text>
-                <Text mb={2}>
-                  <strong>Lab-Based Due Date:</strong> {labBasedDueDate.toLocaleString()}
-                  {labBasedDueDate.getTime() !== originalDueDate.getTime() && (
-                    <Text as="span" color="blue.500" ml={2}>
-                      (adjusted for lab scheduling)
-                    </Text>
-                  )}
-                </Text>
-                <Text mb={4}>
-                  <strong>Current Final Due Date:</strong> {new TZDate(finalDueDate).toLocaleString()}
-                  {hoursExtended > 0 && (
-                    <Text as="span" color="orange.500" ml={2}>
-                      (with {formattedDuration} extension)
-                    </Text>
-                  )}
-                </Text>
-              </>
-            ) : (
-              <Text mb={4}>
-                The current due date for this {studentOrGroup} is {new TZDate(finalDueDate).toLocaleString()}
-                {hoursExtended > 0 && ` (an extension of ${formattedDuration})`}.
-              </Text>
-            )}
-            You can manually adjust the due date for this {studentOrGroup} below, in increments of hours and minutes.
-            Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
-          </Dialog.Description>
-          <Dialog.Body>
-            <Heading size="md">Add an Exception</Heading>
-            <form id="due-date-form" onSubmit={onSubmit}>
-              <Fieldset.Root bg="surface">
-                <Fieldset.Content w="xl">
-                  <Field
-                    label="Hours Extended"
-                    errorText={errors.hours?.message?.toString()}
-                    invalid={errors.hours ? true : false}
-                  >
-                    <Input type="number" {...register("hours", { min: 0, required: "Hours extended is required" })} />
-                  </Field>
-                  <Field
-                    label="Minutes Extended"
-                    errorText={errors.minutes?.message?.toString()}
-                    invalid={errors.minutes ? true : false}
-                    helperText="Additional minutes to extend the due date."
-                  >
-                    <Input type="number" {...register("minutes", { min: 0, max: 59 })} defaultValue={0} />
-                  </Field>
-                  <Field
-                    label="Tokens to Consume"
-                    errorText={errors.tokens_consumed?.message?.toString()}
-                    invalid={errors.tokens_consumed ? true : false}
-                    helperText="The number of late tokens to consume when granting this extension. Leave at 0 to not consume any of the student's tokens."
-                    defaultValue={0}
-                  >
-                    <Input
-                      type="number"
-                      {...register("tokens_consumed", {
-                        valueAsNumber: true,
-                        min: 0,
-                        required: "Tokens consumed is required"
-                      })}
-                    />
-                  </Field>
-                  <Field
-                    label="Notes"
-                    errorText={errors.note?.message?.toString()}
-                    invalid={errors.note ? true : false}
-                    helperText="Any additional notes about this extension."
-                  >
-                    <Textarea {...register("note")} />
-                  </Field>
-                  <Text>
-                    <strong>New Due Date:</strong> {newDueDate.toLocaleString()}
-                  </Text>
-                </Fieldset.Content>
-              </Fieldset.Root>
-            </form>
-            <Heading size="md">Extension History</Heading>
-            {extensions.length > 0 ? (
-              <Box maxH="400px" overflowY="auto">
-                <Table.Root maxW="2xl">
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.ColumnHeader>Date Applied</Table.ColumnHeader>
-                      <Table.ColumnHeader>Hours Extended</Table.ColumnHeader>
-                      <Table.ColumnHeader>Minutes Extended</Table.ColumnHeader>
-                      <Table.ColumnHeader>Tokens Consumed</Table.ColumnHeader>
-                      <Table.ColumnHeader>Grantor</Table.ColumnHeader>
-                      <Table.ColumnHeader>Notes</Table.ColumnHeader>
-                    </Table.Row>
-                  </Table.Header>
-                  <Table.Body>
-                    {extensions.map((extension) => (
-                      <Table.Row key={extension.id}>
-                        <Table.Cell>
-                          {new TZDate(extension.created_at, "America/New_York").toLocaleString()}
-                        </Table.Cell>
-                        <Table.Cell>
-                          {extension.hours}
-                          {
-                            <PopConfirm
-                              triggerLabel="Delete"
-                              trigger={
-                                <Button size="xs" variant="ghost" colorPalette="red">
-                                  <Icon as={FaTrash} />
-                                </Button>
-                              }
-                              confirmHeader="Delete extension"
-                              confirmText="Are you sure you want to delete this extension?"
-                              onConfirm={async () => {
-                                await assignmentDueDateExceptions.hardDelete(extension.id);
-                              }}
-                            />
-                          }
-                        </Table.Cell>
-                        <Table.Cell>{extension.minutes || 0}</Table.Cell>
-                        <Table.Cell>{extension.tokens_consumed}</Table.Cell>
-                        <Table.Cell>
-                          <PersonName uid={extension.creator_id} />
-                        </Table.Cell>
-                        <Table.Cell>{extension.note}</Table.Cell>
-                      </Table.Row>
-                    ))}
-                  </Table.Body>
-                </Table.Root>
-              </Box>
-            ) : (
-              <Text>No extensions have been granted for this {studentOrGroup}.</Text>
-            )}
-          </Dialog.Body>
-          <Dialog.Footer>
-            <Dialog.ActionTrigger asChild>
-              <Button variant="outline" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-            </Dialog.ActionTrigger>
-            <Button 
-              onClick={onSubmit} 
-              loading={isSubmitting} 
-              colorPalette="green"
-              type="submit"
-              form="due-date-form"
-            >
-              Add Due Date Exception
-            </Button>
-          </Dialog.Footer>
-        </Dialog.Content>
+        <AdjustDueDateDialogContent
+          student_id={student_id}
+          group={group || undefined}
+          assignment={assignment}
+          open={open}
+          setOpen={setOpen}
+        />
       </Dialog.Positioner>
     </Dialog.Root>
   );
@@ -333,10 +340,10 @@ export default function DueDateExceptions() {
   const course = useCourse();
   const { assignment_id } = useParams();
   const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
-  
+
   // Get assignment data
   const assignment = useTableControllerValueById(assignments, Number.parseInt(assignment_id as string));
-  
+
   // Get groups for this assignment
   const groupPredicate = useMemo(() => {
     return (group: AssignmentGroup) => {
@@ -358,9 +365,7 @@ export default function DueDateExceptions() {
 
   const hasLabScheduling = assignment?.minutes_due_after_lab !== null;
   const originalDueDate = useMemo(() => {
-    return assignment?.due_date
-      ? new TZDate(assignment.due_date, course.time_zone || "America/New_York")
-      : null;
+    return assignment?.due_date ? new TZDate(assignment.due_date, course.time_zone || "America/New_York") : null;
   }, [assignment?.due_date, course.time_zone]);
 
   // Process student data with extensions and due dates
@@ -369,9 +374,7 @@ export default function DueDateExceptions() {
 
     return studentRoster.map((student): StudentDueDateRow => {
       // Find group for this student
-      const group = groups?.find((g) => 
-        g.assignment_groups_members.some((m) => m.profile_id === student.id)
-      ) || null;
+      const group = groups?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === student.id)) || null;
 
       // Find extensions for this student or their group
       const extensions = allExtensions.filter((ext) => {
@@ -386,15 +389,15 @@ export default function DueDateExceptions() {
         // For now, use original due date - we can enhance this later with lab scheduling logic
         effectiveDueDate = originalDueDate;
       }
-      
+
       // Calculate total extensions
       const hoursExtended = extensions.reduce((acc, ext) => acc + ext.hours, 0);
       const minutesExtended = extensions.reduce((acc, ext) => acc + (ext.minutes || 0), 0);
 
       // Calculate final due date with extensions
-      const finalDueDate = effectiveDueDate ? 
-        addMinutes(addHours(effectiveDueDate, hoursExtended), minutesExtended) : 
-        null;
+      const finalDueDate = effectiveDueDate
+        ? addMinutes(addHours(effectiveDueDate, hoursExtended), minutesExtended)
+        : null;
 
       return {
         student,
@@ -491,13 +494,9 @@ export default function DueDateExceptions() {
         header: "Actions",
         cell: ({ row }) => {
           const { student, group } = row.original;
-          
+
           return assignment ? (
-            <AdjustDueDateDialog
-              student_id={student.id}
-              group={group || undefined}
-              assignment={assignment}
-            />
+            <AdjustDueDateDialog student_id={student.id} group={group || undefined} assignment={assignment} />
           ) : null;
         }
       })
@@ -535,8 +534,8 @@ export default function DueDateExceptions() {
           {hasLabScheduling && (
             <Text mb={2} color="blue.600">
               <strong>Lab-Based Scheduling:</strong> This assignment uses lab-based due dates. Each student&apos;s
-              effective due date is calculated as {assignment.minutes_due_after_lab} minutes after their most
-              recent lab meeting before the original due date.
+              effective due date is calculated as {assignment.minutes_due_after_lab} minutes after their most recent lab
+              meeting before the original due date.
             </Text>
           )}
           <Text fontSize="sm" color="fg.muted">

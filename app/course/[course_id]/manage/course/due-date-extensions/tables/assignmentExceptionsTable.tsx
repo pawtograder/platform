@@ -13,7 +13,6 @@ import { formatInTimeZone } from "date-fns-tz";
 import { useMemo } from "react";
 import { FaPlus, FaTrash } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
-import { useLogIfChanged } from "@/app/course/[course_id]/discussion/discussion_thread";
 
 interface AssignmentExceptionsTableProps {
   assignment: Assignment;
@@ -38,17 +37,10 @@ export default function AssignmentExceptionsTable({
   studentFilter,
   tokenFilter
 }: AssignmentExceptionsTableProps) {
-  useLogIfChanged("assignment", assignment);
-  useLogIfChanged("assignmentFilter", assignmentFilter);
-  useLogIfChanged("studentFilter", studentFilter);
-  useLogIfChanged("tokenFilter", tokenFilter);
   const course = useCourse();
   const { assignmentDueDateExceptions } = useCourseController();
-  useLogIfChanged("course", course);
-  useLogIfChanged("assignmentDueDateExceptions", assignmentDueDateExceptions);
   // // Load assignment groups with their members for this assignment
   const assignmentGroups = useAssignmentGroupsWithMembers(assignment.id);
-  useLogIfChanged("assignmentGroups", assignmentGroups);
   const groupIdToMemberIds = useMemo(() => {
     const map = new Map<number, string[]>();
     for (const group of assignmentGroups) {
@@ -102,7 +94,6 @@ export default function AssignmentExceptionsTable({
   const addOpen = useModalManager<AddExtensionDefaults>();
 
   const studentName = (id: string | null | undefined) => students.find((s) => s.id === id)?.name || id;
-  console.log(`Render table for assignment ${assignment.id}`);
 
   return (
     <Box borderWidth="1px" borderRadius="md" p={3}>
