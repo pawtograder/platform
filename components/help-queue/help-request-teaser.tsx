@@ -5,7 +5,7 @@ import { Avatar, AvatarGroup, Badge, Box, HStack, Icon, Stack, Text } from "@cha
 import { formatRelative } from "date-fns";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
-
+import excerpt from "@stefanprobst/remark-excerpt";
 interface MessageData {
   user: string;
   updatedAt: string;
@@ -165,7 +165,25 @@ export const HelpRequestTeaser = (props: Props) => {
           </HStack>
         </HStack>
         <Box truncate>
-          <Markdown>{message}</Markdown>
+          <Markdown
+            components={{
+              a: ({ children }) => children,
+              img: () => (
+                <Text as="span" color="gray.500">
+                  [image]
+                </Text>
+              ),
+              code: ({ children }) => children,
+              pre: ({ children }) => children,
+              blockquote: ({ children }) => children,
+              h1: ({ children }) => children,
+              h2: ({ children }) => children,
+              h3: ({ children }) => children
+            }}
+            remarkPlugins={[[excerpt, { maxLength: 100 }]]}
+          >
+            {message}
+          </Markdown>
         </Box>
       </Stack>
     </HStack>
