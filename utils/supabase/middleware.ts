@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
-
+import * as Sentry from "@sentry/nextjs";
 export const updateSession = async (request: NextRequest) => {
   // This `try/catch` block is only here for the interactive tutorial.
   // Feel free to remove once you have Supabase connected.
@@ -34,6 +34,14 @@ export const updateSession = async (request: NextRequest) => {
     // This will refresh session if expired - required for Server Components
     // https://supabase.com/docs/guides/auth/server-side/nextjs
     const user = await supabase.auth.getUser();
+    if (user && user.data.user) {
+      Sentry.setUser({
+        id: user.data.user.id,
+        email: user.data.user.email
+      });
+    } else {
+      Sentry.setUser(null);
+    }
 
     // protected routes
     if (request.nextUrl.pathname.startsWith("/course") && user.error) {
