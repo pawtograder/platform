@@ -307,18 +307,18 @@ export default function EnrollmentsTable() {
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const values = (Array.isArray(filterValue) ? filterValue : [filterValue]).map((value) => value.toLowerCase());
 
           if (row.original.type === "invitation") {
             const invitation = row.original;
             const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
             const status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
-            return values.includes(status);
+            return values.includes(status.toLowerCase());
           }
           if (row.original.disabled) {
-            return values.includes("Dropped");
+            return values.includes("dropped");
           }
-          return values.includes("Enrolled");
+          return values.includes("enrolled");
         }
       },
       {
@@ -826,7 +826,7 @@ export default function EnrollmentsTable() {
       sorting: [{ id: "profiles.name", desc: false }],
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 1000
       }
     }
   });

@@ -99,7 +99,7 @@ export class OfficeHoursRealTimeController {
   }
 
   /**
-   * Initialize global channels (help_queues and class staff channel)
+   * Initialize class-scoped channels (help_queues:<class_id> and class staff channel)
    */
   private async _initializeGlobalChannels() {
     if (this._closed) {
@@ -108,9 +108,9 @@ export class OfficeHoursRealTimeController {
 
     // Session refresh is now handled by the channel manager
 
-    // Initialize global help_queues channel
+    // Initialize class-scoped help_queues aggregator channel
     const helpQueuesUnsubscriber = await this._channelManager.subscribe(
-      "help_queues",
+      `help_queues:${this._classId}`,
       this._client,
       (message: OfficeHoursBroadcastMessage) => {
         this._handleBroadcastMessage(message);
@@ -120,12 +120,12 @@ export class OfficeHoursRealTimeController {
       }
     );
 
-    this._channelUnsubscribers.set("help_queues", helpQueuesUnsubscriber);
+    this._channelUnsubscribers.set(`help_queues:${this._classId}`, helpQueuesUnsubscriber);
 
-    // Initialize class-level staff channel if user is staff
+    // Initialize office-hours staff channel if user is staff
     // This channel receives broadcasts for student_karma_notes and help_request_moderation
     if (this._isStaff) {
-      const staffChannelTopic = `class:${this._classId}:staff`;
+      const staffChannelTopic = `help_queues:${this._classId}:staff`;
       const staffUnsubscriber = await this._channelManager.subscribe(
         staffChannelTopic,
         this._client,
@@ -166,24 +166,7 @@ export class OfficeHoursRealTimeController {
       this._channelUnsubscribers.set(mainChannelName, mainUnsubscriber);
     }
 
-    // Create staff channel if user is staff and doesn't exist
-    if (this._isStaff) {
-      const staffChannelName = `help_request:${helpRequestId}:staff`;
-      if (!this._channelUnsubscribers.has(staffChannelName)) {
-        const staffUnsubscriber = await this._channelManager.subscribe(
-          staffChannelName,
-          this._client,
-          (message: OfficeHoursBroadcastMessage) => {
-            this._handleBroadcastMessage(message);
-          },
-          async () => {
-            this._notifyStatusChange();
-          }
-        );
-
-        this._channelUnsubscribers.set(staffChannelName, staffUnsubscriber);
-      }
-    }
+    // Staff data for help requests is delivered via class:<class_id>:staff channel, which is initialized above
   }
 
   /**
@@ -358,13 +341,10 @@ export class OfficeHoursRealTimeController {
       let help_queue_id: number | undefined;
 
       // Check if this channel is relevant to this controller
-      if (topic === "help_queues") {
+      if (topic === `help_queues:${this._classId}`) {
         type = "help_queues";
-      } else if (topic === `class:${this._classId}:staff` && this._isStaff) {
+      } else if (topic === `help_queues:${this._classId}:staff` && this._isStaff) {
         type = "class_staff";
-      } else if (topic.startsWith("help_request:") && topic.includes(":staff") && this._isStaff) {
-        type = "help_request_staff";
-        help_request_id = parseInt(topic.split(":")[1]);
       } else if (topic.startsWith("help_request:") && !topic.includes(":staff")) {
         type = "help_request";
         help_request_id = parseInt(topic.split(":")[1]);

@@ -104,28 +104,40 @@ export class OfficeHoursController {
       client,
       table: "help_requests",
       query: client.from("help_requests").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     this.helpQueues = new TableController({
       client,
       table: "help_queues",
       query: client.from("help_queues").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     this.helpRequestStudents = new TableController({
       client,
       table: "help_request_students",
       query: client.from("help_request_students").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     this.helpQueueAssignments = new TableController({
       client,
       table: "help_queue_assignments",
       query: client.from("help_queue_assignments").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     this.studentKarmaNotes = new TableController({
@@ -139,7 +151,10 @@ export class OfficeHoursController {
       client,
       table: "help_request_templates",
       query: client.from("help_request_templates").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     this.helpRequestModeration = new TableController({
@@ -167,14 +182,20 @@ export class OfficeHoursController {
       client,
       table: "help_request_file_references",
       query: client.from("help_request_file_references").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     this.videoMeetingSessions = new TableController({
       client,
       table: "video_meeting_sessions",
       query: client.from("video_meeting_sessions").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      officeHoursRealTimeController,
+      realtimeFilter: {
+        class_id: classId
+      }
     });
 
     // Subscribe to broadcast messages and integrate with remaining data maps

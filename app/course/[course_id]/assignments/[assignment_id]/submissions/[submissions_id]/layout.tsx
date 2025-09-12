@@ -271,7 +271,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       }
     ],
     pagination: {
-      pageSize: 500
+      pageSize: 1000
     }
   });
   useList<Submission>({

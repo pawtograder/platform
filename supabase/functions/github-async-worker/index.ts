@@ -340,7 +340,7 @@ async function processEnvelope(
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
-            .eq("role", "instructor")
+            .in("role", ["instructor", "grader"])
             .single();
           if (error) throw error;
           if (
@@ -366,7 +366,8 @@ async function processEnvelope(
               .from("user_roles")
               .select("users(github_username)")
               .eq("class_id", envelope.class_id || 0)
-              .or("role.eq.instructor,role.eq.grader")
+              .in("role", ["instructor", "grader"])
+              .eq("github_org_confirmed", true)
               .limit(5000);
             if (error) throw error;
             return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
