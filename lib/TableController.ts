@@ -68,7 +68,7 @@ export function useListTableControllerValues<
 
   // Effect to subscribe to the list and detect matching items
   useEffect(() => {
-    const { unsubscribe } = controller.list((data) => {
+    const handleDataUpdate = (data: ResultType[]) => {
       // Find all rows that match the predicate
       const matchingRows = data.filter((row) => predicate(row as PossiblyTentativeResult<ResultType>));
       const newMatchingIds = new Set(matchingRows.map((row) => (row as { id: ExtractIdType<T> }).id));
@@ -95,7 +95,12 @@ export function useListTableControllerValues<
 
         return newValues;
       });
-    });
+    };
+
+    const { unsubscribe, data } = controller.list(handleDataUpdate);
+
+    // Handle initial data
+    handleDataUpdate(data);
 
     return unsubscribe;
   }, [controller, predicate]);

@@ -59,7 +59,7 @@ function ActiveReviewPicker() {
   }
   return (
     <HStack gap={2}>
-      <Text>Select a review to work on:</Text>
+      <Text minW="fit-content">Select a review to work on:</Text>
       <SegmentGroup.Root
         value={activeSubmissionReviewId?.toString() ?? ""}
         onValueChange={(value) => {
@@ -115,12 +115,12 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   }, [rubricChecksForAssignedParts, comments]);
 
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    if (!rubric || assignedRubricPartIds.length === 0) {
+    if (!rubric) {
       return { missing_required_criteria: [], missing_optional_criteria: [] };
     }
 
     const assignedCriteria = rubric.rubric_parts
-      .filter((part) => assignedRubricPartIds.includes(part.id))
+      .filter((part) => assignedRubricPartIds.includes(part.id) || assignedRubricPartIds.length === 0)
       .flatMap((part) => part.rubric_criteria);
 
     const criteriaEvaluation = assignedCriteria?.map((criteria) => ({
@@ -220,12 +220,12 @@ function CompleteReviewAssignmentDialog({
               </List.Root>
             </VStack>
           )}
-          {missing_required_checks.length > 0 && (
+          {(missing_required_checks.length > 0 || missing_required_criteria.length > 0) && (
             <Text fontSize="sm" color="fg.error">
               You must complete all required checks and criteria before marking this review assignment as complete.
             </Text>
           )}
-          {missing_required_checks.length == 0 && (
+          {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
             <Button
               variant="solid"
               colorPalette="green"
@@ -360,9 +360,9 @@ export function CompleteReviewButton() {
           </Popover.Arrow>
           <Popover.Body
             bg={
-              missing_required_checks.length > 0
+              missing_required_checks.length > 0 || missing_required_criteria.length > 0
                 ? "bg.error"
-                : missing_optional_checks.length > 0
+                : missing_optional_checks.length > 0 || missing_optional_criteria.length > 0
                   ? "bg.warning"
                   : "bg.success"
             }
@@ -371,14 +371,14 @@ export function CompleteReviewButton() {
             <VStack align="start">
               <Box w="100%">
                 <Heading size="md">
-                  {missing_required_checks.length > 0
+                  {missing_required_checks.length > 0 || missing_required_criteria.length > 0
                     ? "Required Checks Missing"
-                    : missing_optional_checks.length > 0
+                    : missing_optional_checks.length > 0 || missing_optional_criteria.length > 0
                       ? "Confirm that you have carefully reviewed the submission"
                       : "Complete Review"}
                 </Heading>
               </Box>
-              {missing_required_checks.length > 0 && (
+              {(missing_required_checks.length > 0 || missing_required_criteria.length > 0) && (
                 <Box>
                   <Heading size="sm">
                     These checks are required. Please apply them before marking the review as done.
@@ -395,7 +395,7 @@ export function CompleteReviewButton() {
                   </List.Root>
                 </Box>
               )}
-              {missing_optional_checks.length > 0 && (
+              {(missing_optional_checks.length > 0 || missing_optional_criteria.length > 0) && (
                 <Box>
                   <Heading size="sm">
                     These checks were not applied, but not required. Please take a quick look to make sure that you did
@@ -416,7 +416,7 @@ export function CompleteReviewButton() {
               {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
               )}
-              {missing_required_checks.length == 0 && (
+              {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Button
                   variant="solid"
                   colorPalette="green"
@@ -504,7 +504,7 @@ function ReviewAssignmentActions() {
 
   return (
     <HStack w="100%" alignItems="center" justifyContent="space-between">
-      {activeReviewAssignment && (
+      {activeReviewAssignment && !activeReviewAssignment.completed_at && (
         <Box>
           <Text textAlign="left">
             Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} is required on this
@@ -526,6 +526,15 @@ function ReviewAssignmentActions() {
           )}
         </Box>
       )}
+      {activeReviewAssignment && activeReviewAssignment.completed_at && activeReviewAssignment.completed_by && (
+        <Text textAlign="left" fontSize="sm" color="fg.muted">
+          Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} was completed on{" "}
+          <span data-visual-test="blackout">
+            {formatDate(activeReviewAssignment.completed_at, "MM/dd/yyyy hh:mm a")}
+          </span>{" "}
+          by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
+        </Text>
+      )}
       <HStack gap={2}>
         {activeReviewAssignment && rubricPartsAdvice && !ignoreAssignedReview && (
           <Button variant="ghost" colorPalette="gray" onClick={leaveReviewAssignment}>
@@ -537,9 +546,10 @@ function ReviewAssignmentActions() {
             Return to Assigned Review
           </Button>
         )}
-        {activeSubmissionReview && !ignoreAssignedReview && activeReviewAssignment && (
-          <CompleteReviewAssignmentButton />
-        )}
+        {activeSubmissionReview &&
+          !ignoreAssignedReview &&
+          activeReviewAssignment &&
+          !activeReviewAssignment.completed_at && <CompleteReviewAssignmentButton />}
       </HStack>
     </HStack>
   );
@@ -603,10 +613,10 @@ export default function SubmissionReviewToolbar() {
   return (
     <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
       <SelfReviewDueDateInformation />
-      <HStack w="100%" justifyContent="space-between">
+      <VStack w="100%" alignItems="flex-start" gap={2}>
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
         <ReviewAssignmentActions />
-      </HStack>
+      </VStack>
       {/* Only show completed history when NOT actively working on another review */}
       {!hasActiveIncompleteReview && <CompletedReviewHistory />}
     </Box>
