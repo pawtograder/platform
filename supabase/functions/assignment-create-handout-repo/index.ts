@@ -33,15 +33,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .single();
 
   if (!assignment) {
-    throw new UserVisibleError("Assignment not found");
+    throw new UserVisibleError("Assignment not found", 400);
   }
   if (!assignment.classes.slug) {
-    throw new UserVisibleError("Class does not have a slug");
+    throw new UserVisibleError("Class does not have a slug", 400);
   }
   const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   const handoutRepoOrg = assignment.classes.github_org;
   if (!handoutRepoOrg) {
-    throw new UserVisibleError("Class does not have a GitHub organization");
+    throw new UserVisibleError("Class does not have a GitHub organization", 400);
   }
   await adminSupabase
     .from("assignments")
