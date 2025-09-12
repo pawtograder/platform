@@ -451,6 +451,39 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             );
           } else {
             //Fail the check run
+
+            //For usability, we should check to see if the user finalized their submission early, and if so, show THAT message
+            let query = adminSupabase
+              .from("assignment_due_date_exceptions")
+              .select("*")
+              .eq("assignment_id", repoData.assignment_id);
+            if (repoData.assignment_group_id) {
+              query = query.eq("assignment_group_id", repoData.assignment_group_id);
+            } else if (repoData.profile_id) {
+              query = query.eq("student_id", repoData.profile_id!);
+            } else {
+              throw new UserVisibleError("No assignment group or profile ID found for submission.");
+            }
+            const { data: negativeDueDateExceptions, error: negativeDueDateExceptionsError } = await query.limit(1000);
+            if (negativeDueDateExceptionsError) {
+              throw new UserVisibleError(
+                `Internal error: Failed to find negative due date exceptions: ${negativeDueDateExceptionsError.message}`
+              );
+            }
+            let checkRunMessage = `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`;
+            let checkRunSummary = "You cannot submit after the due date.";
+            let errorMessage = `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`;
+            if (negativeDueDateExceptions && negativeDueDateExceptions.length > 0) {
+              const hasNegativeException = negativeDueDateExceptions.some(
+                (exception) => exception.hours < 0 || exception.minutes < 0
+              );
+              if (hasNegativeException) {
+                checkRunMessage = `You have already finalized your submission for this assignment by clicking the "Finalize Submission Early" button. You cannot submit additional code after finalization.`;
+                checkRunSummary = "You have already finalized your submission for this assignment.";
+                errorMessage =
+                  "You have already finalized your submission for this assignment. You cannot submit additional code after finalization.";
+              }
+            }
             if (!isE2ERun) {
               await updateCheckRun({
                 owner: repository.split("/")[0],
@@ -460,14 +493,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 conclusion: "failure",
                 output: {
                   title: "Submission failed",
-                  summary: "You cannot submit after the due date.",
-                  text: `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
+                  summary: checkRunSummary,
+                  text: checkRunMessage
                 }
               });
             }
-            throw new UserVisibleError(
-              `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`
-            );
+            throw new UserVisibleError(errorMessage);
           }
         }
         // Check the max submissions per-time

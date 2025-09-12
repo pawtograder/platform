@@ -59,7 +59,7 @@ function ActiveReviewPicker() {
   }
   return (
     <HStack gap={2}>
-      <Text>Select a review to work on:</Text>
+      <Text minW="fit-content">Select a review to work on:</Text>
       <SegmentGroup.Root
         value={activeSubmissionReviewId?.toString() ?? ""}
         onValueChange={(value) => {
@@ -115,12 +115,12 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   }, [rubricChecksForAssignedParts, comments]);
 
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    if (!rubric || assignedRubricPartIds.length === 0) {
+    if (!rubric) {
       return { missing_required_criteria: [], missing_optional_criteria: [] };
     }
 
     const assignedCriteria = rubric.rubric_parts
-      .filter((part) => assignedRubricPartIds.includes(part.id))
+      .filter((part) => assignedRubricPartIds.includes(part.id) || assignedRubricPartIds.length === 0)
       .flatMap((part) => part.rubric_criteria);
 
     const criteriaEvaluation = assignedCriteria?.map((criteria) => ({
@@ -140,6 +140,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
       )
     };
   }, [comments, rubric, assignedRubricPartIds]);
+
+  console.log(missing_required_criteria);
 
   return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
 }
@@ -504,7 +506,7 @@ function ReviewAssignmentActions() {
 
   return (
     <HStack w="100%" alignItems="center" justifyContent="space-between">
-      {activeReviewAssignment && (
+      {activeReviewAssignment && !activeReviewAssignment.completed_at && (
         <Box>
           <Text textAlign="left">
             Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} is required on this
@@ -526,6 +528,15 @@ function ReviewAssignmentActions() {
           )}
         </Box>
       )}
+      {activeReviewAssignment && activeReviewAssignment.completed_at && activeReviewAssignment.completed_by && (
+        <Text textAlign="left" fontSize="sm" color="fg.muted">
+          Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} was completed on{" "}
+          <span data-visual-test="blackout">
+            {formatDate(activeReviewAssignment.completed_at, "MM/dd/yyyy hh:mm a")}
+          </span>{" "}
+          by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
+        </Text>
+      )}
       <HStack gap={2}>
         {activeReviewAssignment && rubricPartsAdvice && !ignoreAssignedReview && (
           <Button variant="ghost" colorPalette="gray" onClick={leaveReviewAssignment}>
@@ -537,9 +548,10 @@ function ReviewAssignmentActions() {
             Return to Assigned Review
           </Button>
         )}
-        {activeSubmissionReview && !ignoreAssignedReview && activeReviewAssignment && (
-          <CompleteReviewAssignmentButton />
-        )}
+        {activeSubmissionReview &&
+          !ignoreAssignedReview &&
+          activeReviewAssignment &&
+          !activeReviewAssignment.completed_at && <CompleteReviewAssignmentButton />}
       </HStack>
     </HStack>
   );
@@ -603,10 +615,10 @@ export default function SubmissionReviewToolbar() {
   return (
     <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
       <SelfReviewDueDateInformation />
-      <HStack w="100%" justifyContent="space-between">
+      <VStack w="100%" alignItems="flex-start" gap={2}>
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
         <ReviewAssignmentActions />
-      </HStack>
+      </VStack>
       {/* Only show completed history when NOT actively working on another review */}
       {!hasActiveIncompleteReview && <CompletedReviewHistory />}
     </Box>
