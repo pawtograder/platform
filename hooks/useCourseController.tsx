@@ -115,7 +115,7 @@ export function useAllStudentRoles() {
 export function useStudentRoster() {
   const { userRolesWithProfiles: controller } = useCourseController();
   const studentRoles = useListTableControllerValues(controller, (r) => r.role === "student");
-  const [roster, setRoster] = useState<UserProfile[] | undefined>(undefined);
+  const [roster, setRoster] = useState<UserProfile[] | undefined>(() => studentRoles.map((r) => r.profiles));
   useEffect(() => {
     setRoster(studentRoles.map((r) => r.profiles));
   }, [studentRoles]);
