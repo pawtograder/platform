@@ -91,7 +91,13 @@ function AdjustDueDateDialogContent({
     watch,
     reset,
     formState: { errors, isSubmitting }
-  } = useForm<AdjustDueDateInsert>();
+  } = useForm<AdjustDueDateInsert>({
+    defaultValues: {
+      hours: 0,
+      minutes: 0,
+      tokens_consumed: 0
+    }
+  });
 
   useEffect(() => {
     if (!open) {
@@ -208,7 +214,11 @@ function AdjustDueDateDialogContent({
                 errorText={errors.hours?.message?.toString()}
                 invalid={errors.hours ? true : false}
               >
-                <Input type="number" {...register("hours", { min: 0, required: "Hours extended is required" })} />
+                <Input
+                  type="number"
+                  {...register("hours", { valueAsNumber: true, min: 0, required: "Hours extended is required" })}
+                  defaultValue={0}
+                />
               </Field>
               <Field
                 label="Minutes Extended"
@@ -216,7 +226,11 @@ function AdjustDueDateDialogContent({
                 invalid={errors.minutes ? true : false}
                 helperText="Additional minutes to extend the due date."
               >
-                <Input type="number" {...register("minutes", { min: 0, max: 59 })} defaultValue={0} />
+                <Input
+                  type="number"
+                  {...register("minutes", { valueAsNumber: true, min: 0, max: 59 })}
+                  defaultValue={0}
+                />
               </Field>
               <Field
                 label="Tokens to Consume"
@@ -305,7 +319,7 @@ function AdjustDueDateDialogContent({
             Cancel
           </Button>
         </Dialog.ActionTrigger>
-        <Button onClick={onSubmit} loading={isSubmitting} colorPalette="green" type="submit" form="due-date-form">
+        <Button loading={isSubmitting} colorPalette="green" type="submit" form="due-date-form">
           Add Due Date Exception
         </Button>
       </Dialog.Footer>
@@ -352,6 +366,7 @@ export default function DueDateExceptions() {
   const course = useCourse();
   const { assignment_id } = useParams();
   const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
+  const controller = useCourseController();
 
   // Get assignment data
   const assignment = useTableControllerValueById(assignments, Number.parseInt(assignment_id as string));
@@ -397,9 +412,16 @@ export default function DueDateExceptions() {
 
       // Calculate effective due date (lab-based if applicable)
       let effectiveDueDate = originalDueDate;
-      if (hasLabScheduling && originalDueDate) {
-        // For now, use original due date - we can enhance this later with lab scheduling logic
-        effectiveDueDate = originalDueDate;
+      if (hasLabScheduling && originalDueDate && assignment) {
+        try {
+          const calculatedDate = controller.calculateEffectiveDueDate(assignment, {
+            studentPrivateProfileId: student.id
+          });
+          effectiveDueDate = new TZDate(calculatedDate, course.time_zone || "America/New_York");
+        } catch {
+          // Fallback to original due date if calculation fails
+          effectiveDueDate = originalDueDate;
+        }
       }
 
       // Calculate total extensions
@@ -421,7 +443,16 @@ export default function DueDateExceptions() {
         extensions
       };
     });
-  }, [studentRoster, assignment, groups, allExtensions, originalDueDate, hasLabScheduling]);
+  }, [
+    studentRoster,
+    assignment,
+    groups,
+    allExtensions,
+    originalDueDate,
+    hasLabScheduling,
+    controller,
+    course.time_zone
+  ]);
   const { time_zone } = useCourse();
 
   // Set up columns for the table

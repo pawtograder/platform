@@ -6,12 +6,18 @@ DECLARE
     affected_student_ids UUID[];
 BEGIN
     -- Only process positive extensions (ignore negative extensions that shorten deadlines)
-    IF NEW.hours < 0 OR NEW.minutes < 0 THEN
+    -- Use COALESCE to handle NULL values safely
+    IF COALESCE(NEW.hours, 0) < 0 OR COALESCE(NEW.minutes, 0) < 0 THEN
         RETURN NEW;
     END IF;
     
-    -- Calculate the extension interval from hours and minutes
-    extension_interval := (NEW.hours || ' hours')::INTERVAL + (NEW.minutes || ' minutes')::INTERVAL;
+    -- Skip if both hours and minutes are zero (no extension to apply)
+    IF COALESCE(NEW.hours, 0) = 0 AND COALESCE(NEW.minutes, 0) = 0 THEN
+        RETURN NEW;
+    END IF;
+    
+    -- Calculate the extension interval using make_interval for null-safe construction
+    extension_interval := make_interval(hours => COALESCE(NEW.hours, 0), mins => COALESCE(NEW.minutes, 0));
     
     -- Determine which students are affected by this exception
     IF NEW.student_id IS NOT NULL THEN
