@@ -6,7 +6,7 @@
 -- Recreate the function to work with AFTER INSERT (where invitation ID exists)
 CREATE OR REPLACE FUNCTION "public"."auto_accept_invitation_if_user_exists"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO 'public'
+    SET "search_path" TO 'public, pg_temp'
     AS $$
 DECLARE
   v_user_id uuid;
