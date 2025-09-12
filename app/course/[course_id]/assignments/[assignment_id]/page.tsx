@@ -63,7 +63,7 @@ export default function AssignmentPage() {
       order: "created_at, { ascending: false }"
     },
     pagination: {
-      pageSize: 500
+      pageSize: 1000
     },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
     sorters: [

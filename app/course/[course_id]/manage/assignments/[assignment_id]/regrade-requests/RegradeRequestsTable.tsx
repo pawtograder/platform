@@ -401,7 +401,7 @@ export default function RegradeRequestsTable() {
     initialState: {
       pagination: {
         pageIndex: 0,
-        pageSize: 500
+        pageSize: 1000
       },
       sorting: [{ id: "created_at", desc: false }]
     }

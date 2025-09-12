@@ -80,7 +80,7 @@ CREATE OR REPLACE FUNCTION "public"."submission_set_active"("_submission_id" big
 DECLARE
     submission_record RECORD;
     effective_due_date_with_extensions timestamp with time zone;
-    current_time timestamp with time zone;
+    current_timestamp_value timestamp with time zone;
 BEGIN
     -- Get the submission details
     SELECT * INTO submission_record 
@@ -98,7 +98,7 @@ BEGIN
     END IF;
     
     -- Get current time
-    current_time := NOW();
+    current_timestamp_value := NOW();
     
     -- Calculate effective due date with extensions for this submission
     effective_due_date_with_extensions := public.calculate_final_due_date(
@@ -108,7 +108,7 @@ BEGIN
     );
     
     -- Check authorization: allow if before due date OR user has grader permissions
-    IF current_time > effective_due_date_with_extensions THEN
+    IF current_timestamp_value > effective_due_date_with_extensions THEN
         -- Past due date - check if user has grader authorization
         IF NOT public.authorizeforclassgrader(submission_record.class_id) THEN
             -- Not authorized and past due date

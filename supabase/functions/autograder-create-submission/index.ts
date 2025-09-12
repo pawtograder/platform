@@ -406,6 +406,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
 
         const finalDueDate = new TZDate(finalDueDateResult);
+        //Convert to course time zone for display purposes
+        const finalDueDateInCourseTimeZone = new TZDate(finalDueDateResult, timeZone);
+        console.log(`Final due date in course time zone: ${finalDueDateInCourseTimeZone.toLocaleString()}`);
         const currentDate = TZDate.tz(timeZone);
 
         if (isAfter(currentDate, finalDueDate)) {
@@ -459,12 +462,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 output: {
                   title: "Submission failed",
                   summary: "You cannot submit after the due date.",
-                  text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
+                  text: `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
                 }
               });
             }
             throw new UserVisibleError(
-              `You cannot submit after the due date. Your due date: ${finalDueDate.toLocaleString()}, current time: ${currentDate.toLocaleString()}`,
+              `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`,
               400
             );
           }
