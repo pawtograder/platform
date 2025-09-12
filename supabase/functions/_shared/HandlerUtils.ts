@@ -209,8 +209,7 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -224,8 +223,7 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -239,8 +237,7 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -254,8 +251,7 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -268,8 +264,7 @@ export async function wrapRequestHandler(
         }
       }),
       {
-        headers: genericErrorHeaders,
-        status: 500
+        headers: genericErrorHeaders
       }
     );
   }
