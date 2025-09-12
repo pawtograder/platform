@@ -107,7 +107,15 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
             </p>
             {errorID && (
               <p style={{ fontSize: "1rem", color: "#4a5568", marginBottom: "1.5rem", lineHeight: "1.6" }}>
-                If you continue to experience this error, please <a href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md}`} target="_blank">report it on our issue tracker</a>, and include the error ID: {errorID}. Any additional information that you can provide about how you reached this error will help us fix it faster.
+                If you continue to experience this error, please{" "}
+                <a
+                  href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md}`}
+                  target="_blank"
+                >
+                  report it on our issue tracker
+                </a>
+                , and include the error ID: {errorID}. Any additional information that you can provide about how you
+                reached this error will help us fix it faster.
               </p>
             )}
             <button type="button" onClick={() => window.location.reload()} className="error-button-primary">
