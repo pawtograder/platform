@@ -83,7 +83,6 @@ export default function ModerationManagement() {
     // No need to refetch - realtime updates will handle this automatically
   }, [createModal]);
 
-
   const handleDeleteModerationAction = async (actionId: number) => {
     await deleteModerationAction(
       {
