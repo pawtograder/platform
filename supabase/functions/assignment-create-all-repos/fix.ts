@@ -22,7 +22,7 @@ async function runOnce() {
     .from("assignments")
     .select("*, classes(name)")
     // .in("class_id", f25Classes.data?.map((c) => c.id) ?? [])
-    .eq("class_id", 7)
+    .eq("class_id", 33)
     .lte("release_date", new Date().toISOString())
     .limit(1000);
   if (assignmentsError) {
