@@ -10,7 +10,7 @@ import * as Sentry from "npm:@sentry/deno";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { email, name, role, courseId, notify } = (await req.json()) as AddEnrollmentRequest;
   if (!courseId) {
-    throw new UserVisibleError("Course ID is required", 400);
+    throw new UserVisibleError("Course ID is required");
   }
   scope?.setTag("function", "enrollments-add");
   scope?.setTag("email", email);

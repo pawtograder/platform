@@ -105,7 +105,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-submission");
   const token = req.headers.get("Authorization");
   if (!token) {
-    throw new UserVisibleError("No token provided", 400);
+    throw new UserVisibleError("No token provided");
   }
   // Check if this is part of an
   const decoded = await validateOIDCTokenOrAllowE2E(token);
@@ -447,8 +447,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               });
             }
             throw new UserVisibleError(
-              "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.",
-              400
+              "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension."
             );
           } else {
             //Fail the check run
@@ -467,8 +466,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               });
             }
             throw new UserVisibleError(
-              `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`,
-              400
+              `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`
             );
           }
         }
@@ -531,8 +529,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               });
             }
             throw new UserVisibleError(
-              `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
-              400
+              `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`
             );
           }
         }
@@ -607,8 +604,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const contents = await workflowFile?.buffer();
         if (!contents) {
           throw new UserVisibleError(
-            "Failed to read workflow file in repository. Instructor: please be sure that the .github/workflows/grade.yml file is present and readable.",
-            400
+            "Failed to read workflow file in repository. Instructor: please be sure that the .github/workflows/grade.yml file is present and readable."
           );
         }
         const contentsStr = contents.toString("utf-8");
@@ -646,14 +642,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
         if (!pawtograderConfig) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`,
-            400
+            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
           );
         }
         if (!pawtograderConfig.submissionFiles) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
-            400
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
           );
         }
         const expectedFiles = [
@@ -663,8 +657,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (expectedFiles.length === 0) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
-            400
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
           );
         }
         const submittedFiles = zip.files.filter(
@@ -679,8 +672,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
         if (!allNonGlobFilesPresent) {
           throw new UserVisibleError(
-            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`,
-            400
+            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
           );
         }
 
@@ -713,8 +705,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
         if (!config.grader_repo) {
           throw new UserVisibleError(
-            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment.",
-            400
+            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
           );
         }
         const { download_link: grader_url, sha: grader_sha } = await getRepoTarballURL(config.grader_repo!);

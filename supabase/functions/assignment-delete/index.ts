@@ -101,8 +101,7 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<{ me
             if (oldestCommit.sha !== templateInitialCommit?.sha && oldestCommit.sha !== repo.synced_handout_sha) {
               throw new UserVisibleError(
                 `Cannot delete assignment: Repository ${repo.repository} has been modified beyond the template. ` +
-                  `Please manually delete modified repositories if you want to proceed.`,
-                400
+                  `Please manually delete modified repositories if you want to proceed.`
               );
             }
           }

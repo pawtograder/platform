@@ -9,7 +9,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("user_id", user_id);
   const { supabase, enrollment } = await assertUserIsInCourse(course_id, req.headers.get("Authorization")!);
   if (enrollment?.user_id !== user_id && enrollment?.role !== "instructor" && enrollment?.role !== "grader") {
-    throw new UserVisibleError("You are not authorized to resend an invitation for this user", 400);
+    throw new UserVisibleError("You are not authorized to resend an invitation for this user");
   }
   const { data: classData, error: classError } = await supabase
     .from("classes")
@@ -32,7 +32,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Error fetching github username");
   }
   if (!githubUsername) {
-    throw new UserVisibleError("No github username found for user", 400);
+    throw new UserVisibleError("No github username found for user");
   }
   const intendedTeam = classData.slug + "-" + (enrollment?.role === "student" ? "students" : "staff");
   const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!);

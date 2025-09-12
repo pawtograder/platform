@@ -209,8 +209,7 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -218,14 +217,13 @@ export async function wrapRequestHandler(
       return new Response(
         JSON.stringify({
           error: {
-            recoverable: e.status >= 500,
+            recoverable: false,
             message: "Internal Server Error",
             details: e.details
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -233,14 +231,13 @@ export async function wrapRequestHandler(
       return new Response(
         JSON.stringify({
           error: {
-            recoverable: false,
+            recoverable: true,
             message: "Not Found",
             details: "The requested resource was not found"
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
@@ -254,22 +251,20 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders,
-          status: e.status
+          headers: genericErrorHeaders
         }
       );
     }
     return new Response(
       JSON.stringify({
         error: {
-          recoverable: true,
+          recoverable: false,
           message: "Internal Server Error",
           details: "An unknown error occurred"
         }
       }),
       {
-        headers: genericErrorHeaders,
-        status: 500
+        headers: genericErrorHeaders
       }
     );
   }
@@ -285,11 +280,10 @@ export class SecurityError extends Error {
 
 export class UserVisibleError extends Error {
   details: string;
-  status: number;
-  constructor(details: string, status: number = 500) {
+  status: number = 500;
+  constructor(details: string) {
     super(details);
     this.details = details;
-    this.status = status;
   }
 }
 
