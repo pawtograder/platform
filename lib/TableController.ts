@@ -1295,9 +1295,7 @@ export default class TableController<
     }
   }
 
-  async create(
-    row: Omit<ResultOne, "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by">
-  ): Promise<ResultOne> {
+  async create(row: Database["public"]["Tables"][RelationName]["Insert"]): Promise<ResultOne> {
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call create(). This indicates a stale reference is being used.`
@@ -1338,6 +1336,35 @@ export default class TableController<
     return data;
   }
 
+  async hardDelete(id: ExtractIdType<RelationName>): Promise<void> {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
+      );
+    }
+    const existingRow = this._rows.find((r) => (r as ResultOne & { id: ExtractIdType<RelationName> }).id === id);
+    if (!existingRow) {
+      throw new Error("Row not found");
+    }
+    if (existingRow.__db_pending) {
+      throw new Error("Row is pending");
+    }
+    this._removeRow(id as IDType);
+    const { error } = await this._client.from(this._table).delete().eq("id", id);
+    if (error) {
+      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      throw error;
+    }
+    return;
+  }
+
+  /**
+   * Most things are soft-deleted (have a deleted_at, we set to NOW)
+   * Use this for those.
+   *
+   * @param id
+   * @returns
+   */
   async delete(id: ExtractIdType<RelationName>): Promise<void> {
     if (this._closed) {
       throw new Error(
