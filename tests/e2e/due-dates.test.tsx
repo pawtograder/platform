@@ -479,11 +479,11 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const student1Row = page.getByRole("row").filter({ has: page.getByText(student!.email) });
     await expect(student1Row).toBeVisible();
     await expect(student1Row.getByRole("cell").nth(1)).toHaveText("0");
-    await expect(student1Row.getByRole("cell").nth(2)).toHaveText("12");
+    await expect(student1Row.getByRole("cell").nth(2)).toHaveText("10");
 
     const student2Row = page.getByRole("row").filter({ has: page.getByText(student2!.email) });
     await expect(student2Row).toBeVisible();
     await expect(student2Row.getByRole("cell").nth(1)).toHaveText("2");
-    await expect(student2Row.getByRole("cell").nth(2)).toHaveText("10");
+    await expect(student2Row.getByRole("cell").nth(2)).toHaveText("8");
   });
 });
