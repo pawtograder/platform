@@ -995,7 +995,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               setPageSize(Number(e.target.value));
             }}
           >
-            {[10, 20, 30, 40, 50, 100].map((pageSizeOption) => (
+            {[10, 20, 30, 40, 50, 100, 1000].map((pageSizeOption) => (
               <option key={pageSizeOption} value={pageSizeOption}>
                 Show {pageSizeOption}
               </option>
