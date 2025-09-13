@@ -39,6 +39,8 @@ type SelectOption = {
   value: string;
 };
 
+//TODO: This is a big mess. We should refactor so that new help requests get made via a Postgres function (doing all work in one transaction)
+// and we use existing table controllers for accessing data instead of refine.dev...
 export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
@@ -105,7 +107,7 @@ export default function HelpRequestForm() {
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
-  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity, helpRequestMessages } =
+  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } =
     controller;
 
   // Get available help queues using individual hook
@@ -323,6 +325,7 @@ export default function HelpRequestForm() {
 
           try {
             const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
+            const helpRequestMessages = controller.loadMessagesForHelpRequest(createdHelpRequest.id);
             // Get current selected students from ref to avoid closure issues
             const currentSelectedStudents = selectedStudentsRef.current;
 
@@ -484,8 +487,8 @@ export default function HelpRequestForm() {
       helpRequestFileReferences,
       helpRequests,
       helpRequestStudents,
-      helpRequestMessages,
       queue_id,
+      controller,
       router,
       reset,
       submissions?.data,
@@ -522,13 +525,13 @@ export default function HelpRequestForm() {
   const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
   const wouldConflict = Boolean(
     selectedHelpQueue &&
-      isCreatingSoloRequest &&
-      userActiveRequests.some(
-        (request) =>
-          Number(request.help_queue) === Number(selectedHelpQueue) &&
-          request.student_count === 1 &&
-          Boolean(request.is_private) === Boolean(is_private)
-      )
+    isCreatingSoloRequest &&
+    userActiveRequests.some(
+      (request) =>
+        Number(request.help_queue) === Number(selectedHelpQueue) &&
+        request.student_count === 1 &&
+        Boolean(request.is_private) === Boolean(is_private)
+    )
   );
 
   return (
@@ -574,9 +577,9 @@ export default function HelpRequestForm() {
                   value={
                     field.value
                       ? ({
-                          label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
-                          value: field.value.toString()
-                        } as SelectOption)
+                        label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
+                        value: field.value.toString()
+                      } as SelectOption)
                       : null
                   }
                   onChange={(option: SelectOption | null) => {
@@ -620,9 +623,9 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
-                            value: field.value.toString()
-                          } as SelectOption)
+                          label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
+                          value: field.value.toString()
+                        } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
@@ -690,9 +693,9 @@ export default function HelpRequestForm() {
               value={
                 selectedAssignmentId
                   ? ({
-                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
-                      value: selectedAssignmentId.toString()
-                    } as SelectOption)
+                    label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
+                    value: selectedAssignmentId.toString()
+                  } as SelectOption)
                   : null
               }
               onChange={(option: SelectOption | null) => {
@@ -732,10 +735,10 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                            label:
-                              submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
-                            value: field.value.toString()
-                          } as SelectOption)
+                          label:
+                            submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
+                          value: field.value.toString()
+                        } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
@@ -908,9 +911,9 @@ export default function HelpRequestForm() {
                   value={
                     field.value
                       ? {
-                          label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
-                          value: field.value
-                        }
+                        label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
+                        value: field.value
+                      }
                       : null
                   }
                   onChange={(option: { label: string; value: string } | null) => {
@@ -943,11 +946,11 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                            label:
-                              userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
-                                "..." || "",
-                            value: field.value.toString()
-                          } as SelectOption)
+                          label:
+                            userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
+                            "..." || "",
+                          value: field.value.toString()
+                        } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {

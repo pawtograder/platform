@@ -5,7 +5,7 @@ import {
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Skeleton, Text } from "@chakra-ui/react";
+import { Box, Skeleton } from "@chakra-ui/react";
 import { useCallback, useState } from "react";
 import { Checkbox } from "./checkbox";
 import MessageInput from "./message-input";
