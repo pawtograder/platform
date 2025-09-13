@@ -5,7 +5,7 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHash } from "node:crypto";
 import { TZDate } from "npm:@date-fns/tz";
 import { addSeconds, format, isAfter } from "npm:date-fns@4";
@@ -19,7 +19,9 @@ import {
   getRepoTarballURL,
   GitHubOIDCToken,
   updateCheckRun,
-  validateOIDCToken
+  validateOIDCToken,
+  PrimaryRateLimitError,
+  SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
@@ -71,6 +73,293 @@ function formatSeconds(seconds: number) {
   return parts.join(" ");
 }
 
+// Circuit breaker utility functions
+function parseRetryAfterSeconds(error: unknown): number | undefined {
+  const err = error as {
+    response?: { headers?: Record<string, string> };
+    headers?: Record<string, string>;
+    message?: string;
+  };
+  const headers = err?.response?.headers || (err as { headers?: Record<string, string> })?.headers;
+  const retryAfter = headers?.["retry-after"] || headers?.["Retry-After"];
+  if (retryAfter) {
+    const seconds = parseInt(String(retryAfter), 10);
+    if (!isNaN(seconds) && seconds >= 0) return seconds;
+  }
+  // If structured SecondaryRateLimitError with retryAfter, use it
+  if (
+    (error instanceof SecondaryRateLimitError || error instanceof PrimaryRateLimitError) &&
+    typeof (error as { retryAfter?: number }).retryAfter === "number"
+  ) {
+    return (error as { retryAfter?: number }).retryAfter;
+  }
+  return undefined;
+}
+
+function isSecondaryRateLimit(error: unknown): boolean {
+  return error instanceof SecondaryRateLimitError;
+}
+
+function isPrimaryRateLimit(error: unknown): boolean {
+  return error instanceof PrimaryRateLimitError;
+}
+
+function getHeaders(error: unknown): Record<string, string> | undefined {
+  const err = error as { response?: { headers?: Record<string, string> } };
+  const h = err?.response?.headers;
+  if (!h) return undefined;
+  const lower: Record<string, string> = {};
+  for (const [k, v] of Object.entries(h)) lower[k.toLowerCase()] = String(v);
+  return lower;
+}
+
+function detectRateLimitType(error: unknown): {
+  type: "secondary" | "primary" | "extreme" | null;
+  retryAfter?: number;
+} {
+  if (isSecondaryRateLimit(error)) return { type: "secondary", retryAfter: parseRetryAfterSeconds(error) };
+  if (isPrimaryRateLimit(error)) return { type: "primary", retryAfter: parseRetryAfterSeconds(error) };
+  const err = error as { status?: number; message?: string };
+  const status = typeof err?.status === "number" ? err.status : undefined;
+  const headers = getHeaders(error);
+  const retryAfter = headers ? parseInt(headers["retry-after"] || "", 10) : NaN;
+  const remaining = headers ? parseInt(headers["x-ratelimit-remaining"] || "", 10) : NaN;
+  const msg = (err?.message || "").toLowerCase();
+  console.log("detectRateLimitType msg", msg);
+  console.log("detectRateLimitType status", status);
+  if (status === 429) return { type: "secondary", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
+  if (status === 403) {
+    if (
+      !isNaN(retryAfter) &&
+      (isNaN(remaining) || remaining > 0 || msg.includes("secondary rate limit") || msg.includes("abuse"))
+    ) {
+      return { type: "secondary", retryAfter };
+    }
+    if (!isNaN(remaining) && remaining === 0) {
+      return { type: "extreme", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
+    }
+  }
+  return { type: null };
+}
+
+function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: number): number {
+  const base = Math.max(5, baseSeconds ?? 60);
+  const exp = Math.min(6, Math.max(0, retryCount));
+  const backoff = Math.min(900, base * Math.pow(2, exp));
+  const jitter = Math.floor(Math.random() * Math.floor(backoff / 4));
+  return backoff + jitter;
+}
+
+async function recordGitHubAsyncError(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  method: string,
+  error: unknown,
+  scope: Sentry.Scope
+) {
+  try {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorData = {
+      method,
+      error_message: errorMessage,
+      error_type: error instanceof Error ? error.constructor.name : "Unknown"
+    };
+
+    await adminSupabase.schema("public").rpc("record_github_async_error", {
+      p_org: org,
+      p_method: method,
+      p_error_data: errorData as unknown as Json
+    });
+  } catch (e) {
+    scope.setContext("error_recording_failed", {
+      original_error: error instanceof Error ? error.message : String(error),
+      recording_error: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+  }
+}
+
+async function checkAndTripErrorCircuitBreaker(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  try {
+    const result = await adminSupabase.schema("public").rpc("check_github_error_threshold", {
+      p_org: org,
+      p_threshold: 5,
+      p_window_minutes: 5
+    });
+
+    if (result.error) {
+      Sentry.captureException(result.error, scope);
+      return false;
+    }
+
+    const errorCount = result.data as number;
+    if (errorCount >= 5) {
+      // Trip the circuit breaker for 8 hours
+      const tripResult = await adminSupabase.schema("public").rpc("open_github_circuit", {
+        p_scope: "org",
+        p_key: org,
+        p_event: "error_threshold",
+        p_retry_after_seconds: 28800, // 8 hours
+        p_reason: `Error threshold exceeded: ${errorCount} errors in 5 minutes`
+      });
+
+      if (!tripResult.error) {
+        // Log special error to Sentry
+        scope.setTag("circuit_breaker_reason", "error_threshold");
+        scope.setContext("error_threshold_breach", {
+          org,
+          error_count: errorCount,
+          window_minutes: 5,
+          circuit_duration_hours: 8
+        });
+
+        Sentry.captureMessage(
+          `Autograder circuit breaker tripped for org ${org}: ${errorCount} errors in 5 minutes. Circuit open for 8 hours.`,
+          {
+            level: "error"
+          }
+        );
+
+        return true;
+      }
+    }
+
+    return false;
+  } catch (e) {
+    scope.setContext("circuit_check_error", {
+      org,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+    return false;
+  }
+}
+
+// Wrapper function to handle GitHub API calls with circuit breaker logic
+async function handleGitHubApiCall<T>(
+  operation: () => Promise<T>,
+  org: string,
+  method: string,
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope,
+  retryCount: number = 0
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    console.trace(error);
+    const rt = detectRateLimitType(error);
+    console.log("rt", rt.type);
+    scope.setTag("rate_limit_type", rt.type);
+    scope.setTag("github_api_method", method);
+    Sentry.captureException(error, scope);
+
+    // Handle rate limits with circuit breaker logic
+    if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
+      const retryAfter = rt.retryAfter;
+      // Defaults: primary=60s, secondary=180s, extreme=43200s (12h)
+      const baseDefault = rt.type === "primary" ? 60 : rt.type === "secondary" ? 180 : 43200;
+      const delay =
+        rt.type === "extreme"
+          ? baseDefault
+          : computeBackoffSeconds(retryAfter ?? baseDefault, retryCount);
+      const type = rt.type;
+      scope.setTag("rate_limit", type);
+      scope.setContext("rate_limit_detail", {
+        type,
+        retry_after: retryAfter,
+        delay_seconds: delay,
+        retry_count: retryCount
+      });
+
+      // Open circuit for this org
+      try {
+        const { data: tripCountResult, error: tripErr } = await adminSupabase
+          .schema("public")
+          .rpc("open_github_circuit", {
+            p_scope: "org",
+            p_key: org,
+            p_event: type,
+            p_retry_after_seconds: retryAfter,
+            p_reason:
+              type === "secondary"
+                ? "secondary_rate_limit"
+                : type === "primary"
+                  ? "primary_rate_limit"
+                  : "extreme_rate_limit"
+          });
+        const tripCount = tripErr ? undefined : tripCountResult;
+        if (tripCount) {
+          Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
+          scope.setTag("circuit_trip_count", String(tripCount));
+          if (tripCount >= 5) {
+            Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
+              level: "error"
+            });
+          }
+        }
+      } catch (e) {
+        console.error("error", e);
+        Sentry.captureException(e, scope);
+      }
+
+      // Check if we should trip the circuit breaker due to error threshold (8 hours)
+      const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+      if (circuitTripped) {
+        throw new UserVisibleError(
+          `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
+        );
+      }
+
+      // Throw rate limit error with user-friendly message
+      const retryTime = new Date(Date.now() + delay * 1000).toLocaleString();
+      throw new UserVisibleError(
+        `GitHub API rate limit reached. Please try again after ${retryTime}. Rate limit type: ${type}`
+      );
+    }
+
+    // For non-rate-limit errors, record the error and check circuit breaker
+    await recordGitHubAsyncError(adminSupabase, org, method, error, scope);
+
+    // Immediately open circuit breaker for 30 seconds on any error
+    try {
+      await adminSupabase.schema("public").rpc("open_github_circuit", {
+        p_scope: "org",
+        p_key: org,
+        p_event: "immediate_error",
+        p_retry_after_seconds: 30,
+        p_reason: `Immediate circuit breaker: ${method} error - ${error instanceof Error ? error.message : String(error)}`
+      });
+
+      scope.setTag("immediate_circuit_breaker", "30s");
+      scope.setContext("immediate_circuit_detail", {
+        org,
+        method: method,
+        duration_seconds: 30,
+        error_message: error instanceof Error ? error.message : String(error)
+      });
+    } catch (e) {
+      console.error("Failed to open immediate circuit breaker:", e);
+      Sentry.captureException(e, scope);
+    }
+
+    // Check if we should trip the circuit breaker due to error threshold (8 hours)
+    const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+    if (circuitTripped) {
+      throw new UserVisibleError(
+        `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
+      );
+    }
+
+    // Re-throw the original error
+    throw error;
+  }
+}
+
 const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
 const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET") || "not-a-secret";
 
@@ -117,13 +406,50 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
   scope?.setTag("is_e2e_run", isE2ERun.toString());
-  // Find the corresponding student and assignment
-  console.log("Creating submission for", repository, sha, workflow_ref);
-  // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
+
+  // Circuit breaker: check if org-level circuit is open for GitHub API calls
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
+  
+  const org = repository.split("/")[0];
+  scope?.setTag("org", org);
+  
+  try {
+    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
+    if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
+      const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
+      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+        scope.setTag("circuit_state", "open");
+        scope.setContext("circuit_breaker_active", {
+          org,
+          reason: row.reason || "Circuit breaker active",
+          open_until: row.open_until
+        });
+        
+        // Circuit breaker is open - fail fast with user-visible error
+        const openUntil = row.open_until ? new Date(row.open_until) : new Date(Date.now() + 3600000); // 1 hour default
+        throw new UserVisibleError(
+          `GitHub operations are temporarily unavailable for organization ${org} due to rate limiting or errors. Please try again after ${openUntil.toLocaleString()}. Reason: ${row.reason || "Circuit breaker active"}`
+        );
+      }
+    }
+  } catch (e) {
+    // If it's already a UserVisibleError from circuit breaker, re-throw it
+    if (e instanceof UserVisibleError) {
+      throw e;
+    }
+    // Circuit check failure should not break processing; log and continue
+    scope.setContext("circuit_check_warning", {
+      org,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+  }
+  // Find the corresponding student and assignment
+  console.log("Creating submission for", repository, sha, workflow_ref);
+  // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
     .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
@@ -253,17 +579,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             message: "CheckRun missing in DB; fetching from GitHub",
             data: { repository, sha }
           });
-          const octokit = await getOctoKit(repository.split("/")[0], scope);
+          const octokit = await handleGitHubApiCall(
+            () => getOctoKit(repository.split("/")[0], scope),
+            org,
+            "getOctoKit",
+            adminSupabase,
+            scope
+          );
           if (!octokit) {
             throw new Error("No octokit found for organization " + repository.split("/")[0]);
           }
           //List check runs for reference from github
-          const fetchedCheckRuns = await octokit.rest.checks.listForRef({
-            owner: repository.split("/")[0],
-            repo: repository.split("/")[1],
-            ref: sha,
-            check_name: "pawtograder"
-          });
+          const fetchedCheckRuns = await handleGitHubApiCall(
+            () => octokit.rest.checks.listForRef({
+              owner: repository.split("/")[0],
+              repo: repository.split("/")[1],
+              ref: sha,
+              check_name: "pawtograder"
+            }),
+            org,
+            "listForRef",
+            adminSupabase,
+            scope
+          );
           if (fetchedCheckRuns.status !== 200) {
             scope?.setTag("check_run_fetch_error", "check_run_not_found");
             throw new Error(`Check run returned error code ${fetchedCheckRuns.status}`);
@@ -294,7 +632,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               data: { repository, sha }
             });
             const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}`;
-            fetchedCheckRun = await createCheckRun(repository, sha, detailsUrl, scope);
+            fetchedCheckRun = await handleGitHubApiCall(
+              () => createCheckRun(repository, sha, detailsUrl, scope),
+              org,
+              "createCheckRun",
+              adminSupabase,
+              scope
+            );
             Sentry.addBreadcrumb({
               category: "fallback",
               level: "info",
@@ -313,11 +657,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             message: "Fetching commit metadata",
             data: { owner, repo: repoNameOnly, sha }
           });
-          const commitResponse = await (await getOctoKit(owner, scope))!.rest.repos.getCommit({
-            owner,
-            repo: repoNameOnly,
-            ref: sha
-          });
+          const commitResponse = await handleGitHubApiCall(
+            async () => {
+              const octokit = await getOctoKit(owner, scope);
+              if (!octokit) throw new Error(`No octokit found for organization ${owner}`);
+              return octokit.rest.repos.getCommit({
+                owner,
+                repo: repoNameOnly,
+                ref: sha
+              });
+            },
+            org,
+            "getCommit",
+            adminSupabase,
+            scope
+          );
           const commitMessage = commitResponse.data.commit.message || "";
           const commitAuthorName =
             commitResponse.data.commit.author?.name || commitResponse.data.commit.committer?.name || "unknown";
@@ -415,33 +769,45 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
             // Update check run to indicate this is a NOT-GRADED submission
             if (!isE2ERun) {
-              await updateCheckRun({
-                owner: repository.split("/")[0],
-                repo: repository.split("/")[1],
-                check_run_id: checkRun.check_run_id,
-                status: "in_progress",
-                output: {
-                  title: "NOT-GRADED submission",
-                  summary: "This submission will not be graded but you can see feedback.",
-                  text: `You submitted with #NOT-GRADED in your commit message. This submission will not be graded and cannot become your active submission, but you can still see autograder feedback.`
-                }
-              });
+              await handleGitHubApiCall(
+                () => updateCheckRun({
+                  owner: repository.split("/")[0],
+                  repo: repository.split("/")[1],
+                  check_run_id: checkRun.check_run_id,
+                  status: "in_progress",
+                  output: {
+                    title: "NOT-GRADED submission",
+                    summary: "This submission will not be graded but you can see feedback.",
+                    text: `You submitted with #NOT-GRADED in your commit message. This submission will not be graded and cannot become your active submission, but you can still see autograder feedback.`
+                  }
+                }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
             }
           } else if (isNotGradedSubmission && !repoData.assignments.allow_not_graded_submissions) {
             // Student tried to use NOT-GRADED but assignment doesn't allow it
             if (!isE2ERun) {
-              await updateCheckRun({
-                owner: repository.split("/")[0],
-                repo: repository.split("/")[1],
-                check_run_id: checkRun.check_run_id,
-                status: "completed",
-                conclusion: "failure",
-                output: {
-                  title: "NOT-GRADED not allowed",
-                  summary: "This assignment does not allow NOT-GRADED submissions.",
-                  text: `You included #NOT-GRADED in your commit message, but this assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.`
-                }
-              });
+              await handleGitHubApiCall(
+                () => updateCheckRun({
+                  owner: repository.split("/")[0],
+                  repo: repository.split("/")[1],
+                  check_run_id: checkRun.check_run_id,
+                  status: "completed",
+                  conclusion: "failure",
+                  output: {
+                    title: "NOT-GRADED not allowed",
+                    summary: "This assignment does not allow NOT-GRADED submissions.",
+                    text: `You included #NOT-GRADED in your commit message, but this assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.`
+                  }
+                }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
             }
             throw new UserVisibleError(
               "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension."
@@ -449,18 +815,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           } else {
             //Fail the check run
             if (!isE2ERun) {
-              await updateCheckRun({
-                owner: repository.split("/")[0],
-                repo: repository.split("/")[1],
-                check_run_id: checkRun.check_run_id,
-                status: "completed",
-                conclusion: "failure",
-                output: {
-                  title: "Submission failed",
-                  summary: "You cannot submit after the due date.",
-                  text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
-                }
-              });
+              await handleGitHubApiCall(
+                () => updateCheckRun({
+                  owner: repository.split("/")[0],
+                  repo: repository.split("/")[1],
+                  check_run_id: checkRun.check_run_id,
+                  status: "completed",
+                  conclusion: "failure",
+                  output: {
+                    title: "Submission failed",
+                    summary: "You cannot submit after the due date.",
+                    text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
+                  }
+                }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
             }
             throw new UserVisibleError(
               `You cannot submit after the due date. Your due date: ${finalDueDate.toLocaleString()}, current time: ${currentDate.toLocaleString()}`
@@ -505,28 +877,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
             //Update the check run status
             if (!isE2ERun) {
-              await updateCheckRun({
-                owner: repository.split("/")[0],
-                repo: repository.split("/")[1],
-                check_run_id: checkRun.check_run_id,
-                status: "completed",
-                conclusion: "failure",
-                output: {
-                  title: "Submission limit reached",
-                  summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
-                  text: `Reached max limit (${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)})`
-                },
-                actions: [
-                  {
-                    label: "Submit",
-                    description: "Try to submit again",
-                    identifier: "submit"
-                  }
-                ]
-              });
+              await handleGitHubApiCall(
+                () => updateCheckRun({
+                  owner: repository.split("/")[0],
+                  repo: repository.split("/")[1],
+                  check_run_id: checkRun.check_run_id,
+                  status: "completed",
+                  conclusion: "failure",
+                  output: {
+                    title: "Submission limit reached",
+                    summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
+                    text: `Reached max limit (${repoData.assignments.autograder!.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder!.max_submissions_period_secs!)})`
+                  },
+                  actions: [
+                    {
+                      label: "Submit",
+                      description: "Try to submit again",
+                      identifier: "submit"
+                    }
+                  ]
+                }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
             }
             throw new UserVisibleError(
-              `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`
+              `Submission limit reached (max ${repoData.assignments.autograder!.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder!.max_submissions_period_secs!)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`
             );
           }
         }
@@ -572,24 +950,36 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
           })
           .eq("id", checkRun.id);
-        await updateCheckRun({
-          owner: repository.split("/")[0],
-          repo: repository.split("/")[1],
-          check_run_id: checkRun.check_run_id,
-          status: "in_progress",
-          details_url: `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}/submissions/${submission_id}`,
-          output: {
-            title: "Grading in progress",
-            summary: "Autograder is running",
-            text: "Details may be available in the 'Submit and Grade Assignment' action."
-          }
-        });
+        await handleGitHubApiCall(
+          () => updateCheckRun({
+            owner: repository.split("/")[0],
+            repo: repository.split("/")[1],
+            check_run_id: checkRun.check_run_id,
+            status: "in_progress",
+            details_url: `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}/submissions/${submission_id}`,
+            output: {
+              title: "Grading in progress",
+              summary: "Autograder is running",
+              text: "Details may be available in the 'Submit and Grade Assignment' action."
+            }
+          }),
+          org,
+          "updateCheckRun",
+          adminSupabase,
+          scope
+        );
       }
 
       try {
         // Clone the repository
         const repoToClone = getRepoToCloneConsideringE2E(repository);
-        const repo = await cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha);
+        const repo = await handleGitHubApiCall(
+          () => cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
+          org,
+          "cloneRepository",
+          adminSupabase,
+          scope
+        );
         const zip = await openZip.buffer(repo);
         const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
 
@@ -705,7 +1095,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
           );
         }
-        const { download_link: grader_url, sha: grader_sha } = await getRepoTarballURL(config.grader_repo!);
+        const { download_link: grader_url, sha: grader_sha } = await handleGitHubApiCall(
+          () => getRepoTarballURL(config.grader_repo!),
+          org,
+          "getRepoTarballURL",
+          adminSupabase,
+          scope
+        );
         //Debug-only hack... TODO cleanup
         const patchedURL = grader_url.replace("http://kong:8000", "https://khoury-classroom-dev.ngrok.pizza");
         return {
