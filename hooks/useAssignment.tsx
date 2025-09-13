@@ -2,7 +2,6 @@
 import {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentGroup,
-  AssignmentGroupMembersWithGroup,
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
   ReviewAssignmentParts,
@@ -12,15 +11,11 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, {
-  useFindTableControllerValue,
-  useListTableControllerValues,
-  useTableControllerValueById
-} from "@/lib/TableController";
+import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { useList, useShow } from "@refinedev/core";
+import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -125,10 +120,30 @@ export function useRubrics() {
 }
 export function useReviewAssignmentRubricParts(review_assignment_id: number | null | undefined) {
   const controller = useAssignmentController();
-  const predicate = useMemo(() => {
-    return (row: ReviewAssignmentParts) => row.review_assignment_id === review_assignment_id;
-  }, [review_assignment_id]);
-  const parts = useListTableControllerValues(controller.reviewAssignmentRubricParts, predicate);
+  const [parts, setParts] = useState<ReviewAssignmentParts[]>([]);
+
+  const partsController = useMemo(() => {
+    if (!review_assignment_id) return null;
+    return controller.getReviewAssignmentRubricPartsController(review_assignment_id);
+  }, [controller, review_assignment_id]);
+
+  useEffect(() => {
+    if (!partsController) {
+      setParts([]);
+      return;
+    }
+    const { unsubscribe, data } = partsController.list((data) => {
+      setParts(data as unknown as ReviewAssignmentParts[]);
+    });
+    setParts(data as unknown as ReviewAssignmentParts[]);
+    return () => {
+      unsubscribe();
+      if (review_assignment_id) {
+        controller.releaseReviewAssignmentRubricPartsController(review_assignment_id);
+      }
+    };
+  }, [partsController, controller, review_assignment_id]);
+
   return parts;
 }
 export function useActiveSubmissions() {
@@ -263,12 +278,18 @@ class AssignmentController {
   private _assignment?: AssignmentWithRubricsAndReferences;
   private _rubrics: AssignmentWithRubricsAndReferences["rubrics"] = [];
   private _submissions: ActiveSubmissionsWithGradesForAssignment[] = [];
+  private _client: SupabaseClient<Database>;
+  private _classRealTimeController: ClassRealTimeController;
 
   readonly reviewAssignments: TableController<"review_assignments">;
-  readonly reviewAssignmentRubricParts: TableController<"review_assignment_rubric_parts">;
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
+  private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
+    number,
+    TableController<"review_assignment_rubric_parts">
+  > = new Map();
+  private _reviewAssignmentRubricPartsRefCount: Map<number, number> = new Map();
 
   rubricCheckById: Map<number, OurRubricCheck> = new Map();
   rubricCriteriaById: Map<
@@ -280,14 +301,14 @@ class AssignmentController {
   constructor({
     client,
     assignment_id,
-    class_id,
     classRealTimeController
   }: {
     client: SupabaseClient<Database>;
     assignment_id: number;
-    class_id: number;
     classRealTimeController: ClassRealTimeController;
   }) {
+    this._client = client;
+    this._classRealTimeController = classRealTimeController;
     this.submissions = new TableController({
       query: client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true),
       client: client,
@@ -306,12 +327,6 @@ class AssignmentController {
       table: "review_assignments",
       classRealTimeController
     });
-    this.reviewAssignmentRubricParts = new TableController({
-      query: client.from("review_assignment_rubric_parts").select("*").eq("class_id", class_id),
-      client: client,
-      table: "review_assignment_rubric_parts",
-      classRealTimeController
-    });
     this.regradeRequests = new TableController({
       query: client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id),
       client: client,
@@ -321,10 +336,13 @@ class AssignmentController {
   }
   close() {
     this.reviewAssignments.close();
-    this.reviewAssignmentRubricParts.close();
     this.regradeRequests.close();
     this.submissions.close();
     this.assignmentGroups.close();
+    for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
+      controller.close();
+    }
+    this._reviewAssignmentRubricPartsByReviewAssignmentId.clear();
   }
   // Assignment
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
@@ -382,6 +400,42 @@ class AssignmentController {
   get isReady() {
     return !!this._assignment && this._rubrics.length > 0;
   }
+
+  getReviewAssignmentRubricPartsController(
+    review_assignment_id: number
+  ): TableController<"review_assignment_rubric_parts"> {
+    let controller = this._reviewAssignmentRubricPartsByReviewAssignmentId.get(review_assignment_id);
+    if (!controller) {
+      controller = new TableController({
+        query: this._client
+          .from("review_assignment_rubric_parts")
+          .select("*")
+          .eq("review_assignment_id", review_assignment_id),
+        client: this._client,
+        table: "review_assignment_rubric_parts",
+        classRealTimeController: this._classRealTimeController,
+        realtimeFilter: { review_assignment_id }
+      });
+      this._reviewAssignmentRubricPartsByReviewAssignmentId.set(review_assignment_id, controller);
+    }
+    const current = this._reviewAssignmentRubricPartsRefCount.get(review_assignment_id) ?? 0;
+    this._reviewAssignmentRubricPartsRefCount.set(review_assignment_id, current + 1);
+    return controller;
+  }
+
+  releaseReviewAssignmentRubricPartsController(review_assignment_id: number) {
+    const current = this._reviewAssignmentRubricPartsRefCount.get(review_assignment_id) ?? 0;
+    if (current <= 1) {
+      const controller = this._reviewAssignmentRubricPartsByReviewAssignmentId.get(review_assignment_id);
+      if (controller) {
+        controller.close();
+      }
+      this._reviewAssignmentRubricPartsByReviewAssignmentId.delete(review_assignment_id);
+      this._reviewAssignmentRubricPartsRefCount.delete(review_assignment_id);
+    } else {
+      this._reviewAssignmentRubricPartsRefCount.set(review_assignment_id, current - 1);
+    }
+  }
 }
 
 // --- Context ---
@@ -415,7 +469,6 @@ export function AssignmentProvider({
     controller.current = new AssignmentController({
       client: createClient(),
       assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      class_id: Number(params.course_id),
       classRealTimeController: courseController.classRealTimeController
     });
     setReady(false);

@@ -209,11 +209,8 @@ function ArtifactAnnotation({
     resource: "submission_artifact_comments"
   });
   const { reviewAssignment, isLoading: reviewAssignmentLoading } = useReviewAssignment(reviewAssignmentId);
-  if (!comment.submission_review_id) {
-    throw new Error("No submission review ID found");
-  }
 
-  if (reviewAssignmentLoading) {
+  if (reviewAssignmentLoading || !comment.submission_review_id) {
     return <Skeleton height="100px" width="100%" />;
   }
 

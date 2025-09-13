@@ -4,6 +4,8 @@ import * as Sentry from "npm:@sentry/deno";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
+import Bottleneck from "https://esm.sh/bottleneck?target=deno";
+import { Redis } from "https://esm.sh/ioredis?target=deno";
 import type {
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
@@ -29,6 +31,47 @@ type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
+
+const createRepoLimiters = new Map<string, Bottleneck>();
+function getCreateRepoLimiter(org: string): Bottleneck {
+  const key = org || "unknown";
+  const existing = createRepoLimiters.get(key);
+  if (existing) return existing;
+  let limiter: Bottleneck;
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+  if (upstashUrl && upstashToken) {
+    console.log("Using Upstash Redis for create_repo rate limiting", upstashUrl);
+    const host = upstashUrl.replace("https://", "");
+    const password = upstashToken;
+    limiter = new Bottleneck({
+      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 60,
+      reservoirRefreshAmount: 60,
+      reservoirRefreshInterval: 60_000,
+      datastore: "ioredis",
+      clearDatastore: false,
+      clientOptions: {
+        host,
+        password,
+        username: "default",
+        tls: {},
+        port: 6379
+      },
+      Redis
+    });
+    limiter.on("error", (err: Error) => console.error(err));
+  } else {
+    limiter = new Bottleneck({
+      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 80,
+      reservoirRefreshAmount: 80,
+      reservoirRefreshInterval: 60_000
+    });
+  }
+  createRepoLimiters.set(key, limiter);
+  return limiter;
+}
 
 function toMsLatency(enqueuedAt: string): number {
   try {
@@ -415,12 +458,9 @@ async function processEnvelope(
       case "create_repo": {
         const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
           envelope.args as CreateRepoArgs;
-        const headSha = await github.createRepo(
-          org,
-          repoName,
-          templateRepo,
-          { is_template_repo: isTemplateRepo },
-          scope
+        const limiter = getCreateRepoLimiter(org);
+        const headSha = await limiter.schedule(() =>
+          github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
 
