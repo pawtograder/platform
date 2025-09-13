@@ -1,0 +1,160 @@
+"use client";
+
+import { Field } from "@/components/ui/field";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignments } from "@/hooks/useCourseController";
+import { createClient } from "@/utils/supabase/client";
+import { Course } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Heading, HStack, Input, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { useForm } from "@refinedev/react-hook-form";
+import { useParams } from "next/navigation";
+import { useState } from "react";
+
+interface ClassLateTokenUpdateFormData {
+  late_tokens_per_student: number;
+}
+
+export default function ClassLateTokenSettings() {
+  const { course_id } = useParams();
+  const { role } = useClassProfiles();
+  const [isEditingTokens, setIsEditingTokens] = useState(false);
+  const [course, setCourse] = useState<Course | undefined>(role.classes);
+
+  // Custom function to update class late tokens using our secure database function
+
+  const {
+    handleSubmit,
+    register,
+    reset,
+    formState: { isSubmitting, errors }
+  } = useForm<ClassLateTokenUpdateFormData>({
+    mode: "onSubmit"
+  });
+
+  const assignments = useAssignments();
+
+  const onSubmitTokens = handleSubmit(async (data) => {
+    try {
+      const supabase = createClient();
+      const courseIdNum = Number.parseInt(course_id as string, 10);
+      if (Number.isNaN(courseIdNum)) {
+        throw new Error("Invalid course id");
+      }
+
+      // Call our SECURITY DEFINER PostgreSQL function directly
+      const { error } = await supabase.rpc("update_class_late_tokens_per_student", {
+        p_class_id: courseIdNum,
+        p_late_tokens_per_student: data.late_tokens_per_student
+      });
+
+      if (error) {
+        throw new Error(error.message || "Failed to update late tokens");
+      }
+
+      const { data: courseData } = await supabase.from("classes").select("*").eq("id", courseIdNum).single();
+      if (courseData) {
+        // Invalidate self
+        setCourse(courseData);
+      }
+
+      setIsEditingTokens(false);
+
+      toaster.success({
+        title: "Success",
+        description: "Late tokens updated successfully"
+      });
+    } catch (err) {
+      // Log the full error for debugging
+      console.error("Error updating late tokens:", err);
+
+      // Surface error to user with RPC error details
+      const errorMessage = err instanceof Error ? err.message : "Failed to update late tokens";
+      toaster.error({
+        title: "Failed to update late tokens",
+        description: errorMessage
+      });
+    }
+  });
+
+  // Verify instructor access
+  if (!role || role.role !== "instructor") {
+    return (
+      <Box p={6}>
+        <Text>Access denied. This page is only available to instructors.</Text>
+      </Box>
+    );
+  }
+
+  if (!course || !assignments) {
+    return <Skeleton height="400px" width="100%" />;
+  }
+
+  return (
+    <Box maxW="6xl">
+      <HStack gap={8} align="stretch">
+        <VStack align="start">
+          <Heading size="md">Class Late Token Settings</Heading>
+          <Text fontSize="sm" color="fg.muted">
+            Configure how many late tokens each student gets in this class.
+          </Text>
+        </VStack>
+        {isEditingTokens ? (
+          <form onSubmit={onSubmitTokens}>
+            <VStack gap={4} align="start">
+              <Field
+                label="Late Tokens Per Student"
+                errorText={errors.late_tokens_per_student?.message?.toString()}
+                invalid={!!errors.late_tokens_per_student}
+                helperText="Number of late tokens each student receives for the entire class"
+              >
+                <Input
+                  type="number"
+                  min="0"
+                  defaultValue={course.late_tokens_per_student}
+                  {...register("late_tokens_per_student", {
+                    required: "Late tokens per student is required",
+                    min: { value: 0, message: "Must be 0 or greater" },
+                    valueAsNumber: true
+                  })}
+                  width="200px"
+                />
+              </Field>
+              <HStack>
+                <Button type="submit" loading={isSubmitting} colorPalette="green">
+                  Save Changes
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setIsEditingTokens(false);
+                    reset();
+                  }}
+                >
+                  Cancel
+                </Button>
+              </HStack>
+            </VStack>
+          </form>
+        ) : (
+          <VStack gap={3} align="start">
+            <Text>
+              <Text as="span" fontWeight="semibold">
+                Current Setting:
+              </Text>{" "}
+              Each student receives{" "}
+              <Text as="span" fontWeight="bold" fontSize="lg">
+                {course.late_tokens_per_student}
+              </Text>{" "}
+              late token{course.late_tokens_per_student !== 1 ? "s" : ""}
+            </Text>
+            <Button size="sm" onClick={() => setIsEditingTokens(true)}>
+              Edit Late Token Allocation
+            </Button>
+          </VStack>
+        )}
+      </HStack>
+    </Box>
+  );
+}
