@@ -366,7 +366,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass();
 
     //ALSO check for the final grade
-    const {data: finalGradebookColumn, error: finalGradebookColumnError} = await supabase
+    const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
       .from("gradebook_columns")
       .select("*")
       .eq("class_id", course.id)
@@ -648,7 +648,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
     await unreleaseItem.click();
     //Wait for the column to unrelease
-    const { data: participationColumn, error: participationColumnError } = await supabase.from("gradebook_columns").select("*").eq("class_id", course.id).eq("slug", "participation").single();
+    const { data: participationColumn, error: participationColumnError } = await supabase
+      .from("gradebook_columns")
+      .select("*")
+      .eq("class_id", course.id)
+      .eq("slug", "participation")
+      .single();
     if (participationColumnError) {
       throw new Error(`Failed to get participation column: ${participationColumnError.message}`);
     }

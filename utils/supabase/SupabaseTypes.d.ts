@@ -2151,6 +2151,36 @@ export type Database = {
           }
         ];
       };
+      gradebook_row_recalc_state: {
+        Row: {
+          class_id: number;
+          dirty: boolean;
+          gradebook_id: number;
+          is_private: boolean;
+          is_recalculating: boolean;
+          student_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          dirty?: boolean;
+          gradebook_id: number;
+          is_private: boolean;
+          is_recalculating?: boolean;
+          student_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          dirty?: boolean;
+          gradebook_id?: number;
+          is_private?: boolean;
+          is_recalculating?: boolean;
+          student_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       gradebooks: {
         Row: {
           class_id: number;
@@ -9050,6 +9080,15 @@ export type Database = {
         };
         Returns: undefined;
       };
+      call_edge_function_internal_post_payload: {
+        Args: {
+          headers?: Json;
+          payload?: Json;
+          timeout_ms?: number;
+          url_path: string;
+        };
+        Returns: undefined;
+      };
       can_access_help_request: {
         Args: { help_request_id: number };
         Returns: boolean;
@@ -9247,6 +9286,17 @@ export type Database = {
           p_org: string;
         };
         Returns: number;
+      };
+      enqueue_gradebook_row_recalculation: {
+        Args: {
+          p_class_id: number;
+          p_gradebook_id: number;
+          p_is_private: boolean;
+          p_reason?: string;
+          p_student_id: string;
+          p_trigger_id?: number;
+        };
+        Returns: undefined;
       };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
@@ -9493,10 +9543,6 @@ export type Database = {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;
       };
-      send_gradebook_recalculation_messages: {
-        Args: { messages: Json[] };
-        Returns: undefined;
-      };
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
@@ -9554,6 +9600,16 @@ export type Database = {
       update_class_late_tokens_per_student: {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
+      };
+      update_gradebook_row: {
+        Args: {
+          p_class_id: number;
+          p_gradebook_id: number;
+          p_is_private: boolean;
+          p_student_id: string;
+          p_updates: Json[];
+        };
+        Returns: number;
       };
       update_regrade_request_points: {
         Args: {

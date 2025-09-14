@@ -153,7 +153,6 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
 
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
-
     // Generate magic link on-demand for authentication
     const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
       email: testingUser.email,
@@ -171,7 +170,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     await page.waitForLoadState("networkidle");
 
     const currentUrl = page.url();
-    const isSuccessful = currentUrl.includes('/course');
+    const isSuccessful = currentUrl.includes("/course");
     // Check to see if we got the magic link expired notice
     if (!isSuccessful) {
       // Magic link expired, retry if we have retries remaining
@@ -185,7 +184,6 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     if (!isSuccessful) {
       throw new Error("Failed to sign in - neither success nor expired state detected");
     }
-
   } catch (error) {
     if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
       console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
@@ -482,13 +480,13 @@ export async function createUsersInClass(
         ? Math.random().toString(36).substring(2, 34)
         : process.env.TEST_PASSWORD || "change-it";
       try {
-        const { data: newUserData, error: userError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).createUser(
-          {
-            email: resolvedEmail,
-            password: tempPassword,
-            email_confirm: true
-          }
-        );
+        const { data: newUserData, error: userError } = await (
+          rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+        ).createUser({
+          email: resolvedEmail,
+          password: tempPassword,
+          email_confirm: true
+        });
 
         if (userError) {
           throw new Error(`Failed to create user ${resolvedEmail}: ${userError.message}`);
@@ -1575,8 +1573,8 @@ export async function createAssignmentsAndGradebookColumns({
     slug: string;
     due_date: string;
     group_config: string;
-    rubricChecks: Array<{ id: number; name: string; points: number;[key: string]: unknown }>;
-    rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
+    rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+    rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
     [key: string]: unknown;
   }>;
   gradebookColumns: Array<{
@@ -1945,8 +1943,8 @@ export async function createAssignmentsAndGradebookColumns({
     slug: string;
     due_date: string;
     group_config: string;
-    rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean;[key: string]: unknown }>;
-    rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
+    rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean; [key: string]: unknown }>;
+    rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
     [key: string]: unknown;
   }> {
     const title = `Test Assignment ${assignmentIndex + 1}${groupConfig !== "individual" ? " (Group)" : ""}`;
@@ -2160,8 +2158,8 @@ export async function createAssignmentsAndGradebookColumns({
       slug: string;
       due_date: string;
       group_config: string;
-      rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean;[key: string]: unknown }>;
-      rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
+      rubricChecks: Array<{ id: number; name: string; points: number; is_annotation: boolean; [key: string]: unknown }>;
+      rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
       [key: string]: unknown;
     };
   }

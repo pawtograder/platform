@@ -98,6 +98,25 @@ export interface DependencySource {
     args?: unknown[];
   }) => unknown;
 }
+
+// Row-level override map for computed gradebook_columns values during per-row recalculation
+// Keyed by `${class_id}:${student_id}:${is_private}` → Map<slug, GradebookColumnStudentWithMaxScore>
+const rowOverrideValues: Map<string, Map<string, GradebookColumnStudentWithMaxScore>> = new Map();
+
+export function setRowOverrideValues(
+  class_id: number,
+  student_id: PrivateProfileId,
+  is_private: boolean,
+  valuesBySlug: Map<string, GradebookColumnStudentWithMaxScore>
+) {
+  const key = `${class_id}:${student_id}:${is_private}`;
+  rowOverrideValues.set(key, valuesBySlug);
+}
+
+export function clearRowOverrideValues(class_id: number, student_id: PrivateProfileId, is_private: boolean) {
+  const key = `${class_id}:${student_id}:${is_private}`;
+  rowOverrideValues.delete(key);
+}
 /**
  * A dependency source is a class that implements the DependencySource interface, simply returning
  * the pre-calculated values for the dependencies.
@@ -223,7 +242,8 @@ class AssignmentsDependencySource extends DependencySourceBase {
     if (Array.isArray(raw)) {
       return raw.map((v) => coerceRoundValue(v));
     }
-    return coerceRoundValue(raw);
+    const ret = coerceRoundValue(raw);
+    return ret;
   }
 
   async _retrieveValues({
@@ -322,7 +342,6 @@ class AssignmentsDependencySource extends DependencySourceBase {
         is_private: false
       });
     }
-    console.log(`AssignmentResults: ${JSON.stringify(results)}`);
 
     return results;
   }
@@ -402,11 +421,51 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     key: string | string[];
     class_id: number;
   }): unknown {
+    // Prefer row-level computed overrides if present
+    const overrideKey = `${class_id}:${context.student_id}:${context.is_private_calculation}`;
+    const overrides = rowOverrideValues.get(overrideKey);
+    // Hybrid approach: use override when present, otherwise fall back to base values
+    if (overrides) {
+      const readOverride = (slug: string) => overrides.get(slug);
+      const readBase = (slug: string) =>
+        super.execute({ function_name, context, key: slug, class_id }) as
+          | GradebookColumnStudentWithMaxScore
+          | undefined;
+      if (typeof key === "object") {
+        if (Array.isArray(key)) {
+          const values = key.map((k) => {
+            if (typeof k !== "string") return undefined;
+            return readOverride(k) ?? readBase(k);
+          });
+          this._pushMissingIfNeeded(
+            context,
+            values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
+          );
+          return values;
+        }
+        if (isDenseMatrix(key)) {
+          const values = (key as Matrix<string>)
+            .toArray()
+            .map((k) => (typeof k === "string" ? (readOverride(k) ?? readBase(k)) : undefined));
+          this._pushMissingIfNeeded(
+            context,
+            values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
+          );
+          return values;
+        }
+      } else if (typeof key === "string") {
+        const value = readOverride(key) ?? readBase(key);
+        if (value) {
+          this._pushMissingIfNeeded(context, value);
+          return value;
+        }
+      }
+    }
+
     const ret = super.execute({ function_name, context, key, class_id }) as
       | GradebookColumnStudentWithMaxScore
       | GradebookColumnStudentWithMaxScore[];
     this._pushMissingIfNeeded(context, ret);
-    console.log(context.incomplete_values);
 
     return ret;
   }
@@ -483,7 +542,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
-    const ret= allGradebookColumnStudents
+    const ret = allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
         key: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown",
@@ -498,7 +557,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         class_id: studentRecord.class_id,
         is_private: studentRecord.is_private
       }));
-    console.log(`GradebookColumnStudentsResults: ${JSON.stringify(ret)}`);
     return ret;
   }
   expandKey({ key, class_id }: { key: string; class_id: number }): string[] {
@@ -551,8 +609,8 @@ export async function addDependencySourceFunctions({
     )
   );
 
-  //eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const imports: Record<string, (...args: any[]) => unknown> = {};
+  type UnknownFn = (...args: unknown[]) => unknown;
+  const imports: Record<string, UnknownFn> = {};
   for (const dependencySourceProvider of Object.values(batchDependencySourceMap)) {
     const functionNames = dependencySourceProvider.getFunctionNames();
     for (const functionName of functionNames) {
@@ -762,6 +820,7 @@ export async function addDependencySourceFunctions({
           if (!v.released && !v.is_private) {
             return undefined;
           } else if (v.is_missing) {
+            console.log("missing", v);
             if (v.is_excused) {
               return { score: undefined, max_score: v.max_score };
             }
@@ -776,6 +835,7 @@ export async function addDependencySourceFunctions({
           `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value. Got: ${JSON.stringify(v, null, 2)}`
         );
       });
+      console.log("valuesToAverage", valuesToAverage);
       const validValues = valuesToAverage.filter(
         (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
       );
