@@ -38,14 +38,27 @@ export async function runHandler() {
     gcsRows
   });
 
-  const { data: updatedCount, error: rpcError } = await adminSupabase.rpc("update_gradebook_row", {
+  // Fetch current version for optimistic update
+  const { data: versionRow } = await adminSupabase
+    .from("gradebook_row_recalc_state")
+    .select("version")
+    .eq("class_id", class_id)
+    .eq("gradebook_id", gradebook_id)
+    .eq("student_id", student_id)
+    .eq("is_private", is_private)
+    .single();
+  const expectedVersion = ((versionRow as unknown as { version?: number } | null)?.version ?? 0) as number;
+
+  const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
     p_class_id: class_id,
     p_gradebook_id: gradebook_id,
     p_student_id: student_id,
     p_is_private: is_private,
-    p_updates: updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"]
-  });
-  console.log("Updated cells:", updatedCount ?? null, rpcError ?? null);
+    p_updates: updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
+    p_expected_version: expectedVersion
+  };
+  const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
+  console.log("Updated cells error:", rpcError ?? null);
 }
 
 runHandler();

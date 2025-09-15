@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.gradebook_row_recalc_state (
   is_private boolean NOT NULL,
   dirty boolean NOT NULL DEFAULT false,
   is_recalculating boolean NOT NULL DEFAULT false,
+  version bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (class_id, gradebook_id, student_id, is_private)
 );
@@ -102,11 +103,11 @@ BEGIN
     message := row_message
   );
 
-  -- Mark row-state dirty and set recalculating (upsert)
-  INSERT INTO public.gradebook_row_recalc_state (class_id, gradebook_id, student_id, is_private, dirty, is_recalculating)
-  VALUES (p_class_id, p_gradebook_id, p_student_id, p_is_private, true, true)
+  -- Mark row-state dirty and set recalculating (upsert), bump version to invalidate older workers
+  INSERT INTO public.gradebook_row_recalc_state (class_id, gradebook_id, student_id, is_private, dirty, is_recalculating, version)
+  VALUES (p_class_id, p_gradebook_id, p_student_id, p_is_private, true, true, 1)
   ON CONFLICT (class_id, gradebook_id, student_id, is_private)
-  DO UPDATE SET dirty = true, is_recalculating = true, updated_at = now();
+  DO UPDATE SET dirty = true, is_recalculating = true, version = public.gradebook_row_recalc_state.version + 1, updated_at = now();
 END;
 $$;
 
@@ -122,7 +123,8 @@ CREATE OR REPLACE FUNCTION public.update_gradebook_row(
   p_gradebook_id bigint,
   p_student_id uuid,
   p_is_private boolean,
-  p_updates jsonb[]
+  p_updates jsonb[],
+  p_expected_version bigint
 ) RETURNS integer
     LANGUAGE plpgsql
     SECURITY DEFINER
@@ -174,6 +176,11 @@ BEGIN
       AND g.student_id = p_student_id
       AND g.is_private = p_is_private
       AND g.gradebook_column_id = up.gradebook_column_id
+      AND EXISTS (
+        SELECT 1 FROM public.gradebook_row_recalc_state rs
+        WHERE rs.class_id = p_class_id AND rs.gradebook_id = p_gradebook_id AND rs.student_id = p_student_id AND rs.is_private = p_is_private
+          AND rs.version = p_expected_version
+      )
       AND (
         (up.has_score AND up.score IS DISTINCT FROM g.score) OR
         (up.has_score_override AND up.score_override IS DISTINCT FROM g.score_override) OR
@@ -555,3 +562,24 @@ CREATE OR REPLACE TRIGGER broadcast_gradebook_row_recalc_state
   EXECUTE FUNCTION public.broadcast_gradebook_row_state_change();
 
 DROP FUNCTION IF EXISTS public.send_gradebook_recalculation_messages(jsonb[]);
+
+-- Drop down to a single worker
+
+CREATE OR REPLACE FUNCTION "public"."invoke_gradebook_recalculation_background_task"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+BEGIN
+    PERFORM public.call_edge_function_internal(
+        '/functions/v1/gradebook-column-recalculate', 
+        'POST', 
+        '{"Content-type":"application/json","x-supabase-webhook-source":"gradebook_column_recalculate"}', 
+        '{}', 
+        5000,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+    );
+END;
+$$;

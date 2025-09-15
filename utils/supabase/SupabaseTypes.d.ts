@@ -2160,6 +2160,7 @@ export type Database = {
           is_recalculating: boolean;
           student_id: string;
           updated_at: string;
+          version: number;
         };
         Insert: {
           class_id: number;
@@ -2169,6 +2170,7 @@ export type Database = {
           is_recalculating?: boolean;
           student_id: string;
           updated_at?: string;
+          version?: number;
         };
         Update: {
           class_id?: number;
@@ -2178,6 +2180,7 @@ export type Database = {
           is_recalculating?: boolean;
           student_id?: string;
           updated_at?: string;
+          version?: number;
         };
         Relationships: [];
       };
@@ -9604,6 +9607,7 @@ export type Database = {
       update_gradebook_row: {
         Args: {
           p_class_id: number;
+          p_expected_version: number;
           p_gradebook_id: number;
           p_is_private: boolean;
           p_student_id: string;

@@ -411,7 +411,7 @@ export async function processGradebookRowCalculation(
       is_missing: boolean;
       is_private: boolean;
       released: boolean;
-      score: number;
+      score: number | null;
       score_override: number | null;
       score_override_note: string | null;
       student_id: string;
@@ -492,9 +492,7 @@ export async function processGradebookRowCalculation(
       continue;
     }
 
-    // Apply score_override if present (always use override when set)
     const overrideScore = (current?.score_override as number | null) ?? null;
-    const finalScore = overrideScore !== null ? overrideScore : nextScore;
     if (overrideScore !== null) {
       isMissing = false;
     }
@@ -505,14 +503,14 @@ export async function processGradebookRowCalculation(
     const curReleased = (current?.released as boolean) ?? false;
     const curIncomplete = current?.incomplete_values ?? null;
     const changed =
-      !nearlyEqual(finalScore, curScore) ||
+      !nearlyEqual(nextScore, curScore) ||
       isMissing !== curMissing ||
       nextReleased !== curReleased ||
       !deepEqualJson(nextIncomplete, curIncomplete);
     if (changed) {
       updates.push({
         gradebook_column_id: columnId,
-        score: finalScore,
+        score: nextScore,
         is_missing: isMissing,
         released: nextReleased,
         incomplete_values: nextIncomplete
@@ -534,7 +532,8 @@ export async function processGradebookRowCalculation(
       is_missing: isMissing,
       is_private,
       released: nextReleased,
-      score: finalScore,
+      score:
+        current?.score_override !== null && current?.score_override !== undefined ? current?.score_override : nextScore,
       score_override: (current?.score_override as number | null) ?? null,
       score_override_note: (current?.score_override_note as string | null) ?? null,
       student_id,
@@ -675,7 +674,7 @@ export async function processGradebookRowsCalculation(
         is_missing: boolean;
         is_private: boolean;
         released: boolean;
-        score: number;
+        score: number | null;
         score_override: number | null;
         score_override_note: string | null;
         student_id: string;
@@ -754,7 +753,6 @@ export async function processGradebookRowsCalculation(
       }
 
       const overrideScore = (current?.score_override as number | null) ?? null;
-      const finalScore = overrideScore !== null ? overrideScore : nextScore;
       if (overrideScore !== null) {
         isMissing = false;
       }
@@ -764,14 +762,14 @@ export async function processGradebookRowsCalculation(
       const curReleased = (current?.released as boolean) ?? false;
       const curIncomplete = current?.incomplete_values ?? null;
       const changed =
-        !nearlyEqual(finalScore, curScore) ||
+        !nearlyEqual(nextScore, curScore) ||
         isMissing !== curMissing ||
         nextReleased !== curReleased ||
         !deepEqualJson(nextIncomplete, curIncomplete);
       if (changed) {
         updates.push({
           gradebook_column_id: columnId,
-          score: finalScore,
+          score: nextScore,
           is_missing: isMissing,
           released: nextReleased,
           incomplete_values: nextIncomplete
@@ -785,13 +783,17 @@ export async function processGradebookRowsCalculation(
         gradebook_column_id: columnId,
         gradebook_id,
         id: (gcsByColumnId.get(columnId)?.id as number) ?? 0,
-        incomplete_values: nextIncomplete,
+        incomplete_values:
+          nextIncomplete as unknown as Database["public"]["Tables"]["gradebook_column_students"]["Row"]["incomplete_values"],
         is_droppable: (current?.is_droppable as boolean) ?? false,
         is_excused: (current?.is_excused as boolean) ?? false,
         is_missing: isMissing,
         is_private,
         released: nextReleased,
-        score: nextScore ?? 0,
+        score:
+          current?.score_override !== null && current?.score_override !== undefined
+            ? current?.score_override
+            : nextScore,
         score_override: (current?.score_override as number | null) ?? null,
         score_override_note: (current?.score_override_note as string | null) ?? null,
         student_id,
