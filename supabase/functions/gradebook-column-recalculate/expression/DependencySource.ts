@@ -117,6 +117,20 @@ export function clearRowOverrideValues(class_id: number, student_id: PrivateProf
   const key = `${class_id}:${student_id}:${is_private}`;
   rowOverrideValues.delete(key);
 }
+
+export function mergeRowOverrideValues(
+  class_id: number,
+  student_id: PrivateProfileId,
+  is_private: boolean,
+  valuesBySlug: Map<string, GradebookColumnStudentWithMaxScore>
+) {
+  const key = `${class_id}:${student_id}:${is_private}`;
+  const existing = rowOverrideValues.get(key) ?? new Map<string, GradebookColumnStudentWithMaxScore>();
+  valuesBySlug.forEach((value, slug) => {
+    existing.set(slug, value);
+  });
+  rowOverrideValues.set(key, existing);
+}
 /**
  * A dependency source is a class that implements the DependencySource interface, simply returning
  * the pre-calculated values for the dependencies.
@@ -429,8 +443,8 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
       const readOverride = (slug: string) => overrides.get(slug);
       const readBase = (slug: string) =>
         super.execute({ function_name, context, key: slug, class_id }) as
-        | GradebookColumnStudentWithMaxScore
-        | undefined;
+          | GradebookColumnStudentWithMaxScore
+          | undefined;
       if (typeof key === "object") {
         if (Array.isArray(key)) {
           const values = key.map((k) => {

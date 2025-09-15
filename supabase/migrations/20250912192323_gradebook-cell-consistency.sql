@@ -52,13 +52,17 @@ CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation(
 ) RETURNS void
     LANGUAGE plpgsql
     SECURITY DEFINER
+    SET search_path = public, pg_temp
     AS $$
 DECLARE
   row_message jsonb;
 BEGIN
   -- Per-row advisory lock to avoid duplicate enqueues under concurrency
   PERFORM pg_advisory_xact_lock(
-    hashtext(p_class_id::text || ':' || p_gradebook_id::text || ':' || p_student_id::text || ':' || p_is_private::text)::bigint
+    hashtextextended(
+      p_class_id::text || ':' || p_gradebook_id::text || ':' || p_student_id::text || ':' || p_is_private::text,
+      42
+    )::bigint
   );
 
   -- Gating rules against row-state table:
@@ -211,70 +215,8 @@ CREATE POLICY "student views non-private only (row state)" ON public.gradebook_r
   FOR SELECT TO authenticated
   USING (public.authorizeforprofile(student_id) AND is_private = false);
 
--- 5) Update the existing helper to also set dirty=true when enqueuing
--- Keep setting is_recalculating=true here to preserve current dependency coordination until workers are refactored.
-CREATE OR REPLACE FUNCTION public.send_gradebook_recalculation_messages(messages jsonb[]) RETURNS void
-    LANGUAGE plpgsql
-    SECURITY DEFINER
-    AS $$
-DECLARE
-  -- Distinct row targets derived from per-cell messages
-  _row_messages jsonb[];
-BEGIN
-  IF messages IS NULL THEN
-    RETURN;
-  END IF;
 
-  -- Build one row-level message per distinct (class_id, gradebook_id, student_id, is_private)
-  WITH targets AS (
-    SELECT DISTINCT gcs.class_id, gcs.gradebook_id, gcs.student_id, gcs.is_private
-    FROM unnest(messages) AS msg
-    JOIN public.gradebook_column_students gcs
-      ON gcs.id = (msg->>'gradebook_column_student_id')::bigint
-  )
-  SELECT array_agg(
-    jsonb_build_object(
-      'class_id', t.class_id,
-      'gradebook_id', t.gradebook_id,
-      'student_id', t.student_id,
-      'is_private', t.is_private
-    )
-  )
-  INTO _row_messages
-  FROM targets t;
-
-  IF _row_messages IS NULL THEN
-    RETURN;
-  END IF;
-
-  -- Send to the new row-level queue
-  PERFORM pgmq_public.send_batch(
-    queue_name := 'gradebook_row_recalculate',
-    messages := _row_messages
-  );
-
-  -- Mark entire rows dirty and set recalculating to coordinate workers
-  WITH targets AS (
-    SELECT DISTINCT gcs.class_id, gcs.gradebook_id, gcs.student_id, gcs.is_private
-    FROM unnest(messages) AS msg
-    JOIN public.gradebook_column_students gcs
-      ON gcs.id = (msg->>'gradebook_column_student_id')::bigint
-  )
-  UPDATE public.gradebook_column_students g
-  SET dirty = true,
-      is_recalculating = true
-  FROM targets t
-  WHERE g.class_id = t.class_id
-    AND g.gradebook_id = t.gradebook_id
-    AND g.student_id = t.student_id
-    AND g.is_private = t.is_private;
-END;
-$$;
-
-COMMENT ON FUNCTION public.send_gradebook_recalculation_messages(jsonb[])
-  IS 'Converts per-cell triggers to per-row messages and enqueues to gradebook_row_recalculate; marks entire rows dirty and sets is_recalculating.';
-
--- 6) Attempt to drop the old per-cell queue, if the drop function exists (safe no-op if not)
+-- 5) Attempt to drop the old per-cell queue, if the drop function exists (safe no-op if not)
 DO $$
 BEGIN
   PERFORM pgmq.drop_queue('gradebook_column_recalculate');
@@ -287,7 +229,7 @@ EXCEPTION
     NULL;
 END $$;
 
--- 7) Ensure the new row-level queue exists (safe attempt)
+-- 6) Ensure the new row-level queue exists (safe attempt)
 DO $$
 BEGIN
   PERFORM pgmq.create('gradebook_row_recalculate');
@@ -305,8 +247,8 @@ EXCEPTION
     NULL;
 END $$;
 
--- 8) Replace legacy per-cell enqueueing functions to call row-level enqueue directly
--- 8a) Column score_expression changed: enqueue all rows for that column
+-- 7) Replace legacy per-cell enqueueing functions to call row-level enqueue directly
+-- 7a) Column score_expression changed: enqueue all rows for that column
 CREATE OR REPLACE FUNCTION public.recalculate_gradebook_column_for_all_students_statement() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
@@ -326,7 +268,7 @@ BEGIN
 END;
 $$;
 
--- 8c) New gradebook_column_students rows: enqueue rows only for columns with expressions
+-- 7c) New gradebook_column_students rows: enqueue rows only for columns with expressions
 CREATE OR REPLACE FUNCTION public.recalculate_new_gradebook_column_students() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
@@ -345,7 +287,7 @@ BEGIN
 END;
 $$;
 
--- 8d) When a submission review changes scores/released, enqueue dependent rows
+-- 7d) When a submission review changes scores/released, enqueue dependent rows
 CREATE OR REPLACE FUNCTION public.submission_review_recalculate_dependent_columns_statement() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
@@ -421,7 +363,7 @@ BEGIN
 END;
 $$;
 
--- 8e) Cell changes that affect dependent columns: enqueue dependent rows for same student/privacy
+-- 7e) Cell changes that affect dependent columns: enqueue dependent rows for same student/privacy
 CREATE OR REPLACE FUNCTION public.gradebook_column_student_recalculate_dependents() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
@@ -490,34 +432,9 @@ BEGIN
 END;
 $$;
 
--- 9) Remove the legacy helper
-DROP FUNCTION IF EXISTS public.send_gradebook_recalculation_messages(jsonb[]);
 
--- 9b) Remove per-cell dirty artifacts added earlier
-DO $$
-BEGIN
-  -- Drop indexes created earlier in this migration that reference per-cell dirty
-  PERFORM 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_gradebook_column_students_class_student_privacy_covering';
-  IF FOUND THEN
-    EXECUTE 'DROP INDEX IF EXISTS public.idx_gradebook_column_students_class_student_privacy_covering';
-  END IF;
-  EXECUTE 'DROP INDEX IF EXISTS public.idx_gradebook_column_students_dirty_true';
-EXCEPTION WHEN OTHERS THEN
-  NULL;
-END $$;
 
--- Optionally drop the per-cell dirty column if it exists
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_schema = 'public' AND table_name = 'gradebook_column_students' AND column_name = 'dirty'
-  ) THEN
-    EXECUTE 'ALTER TABLE public.gradebook_column_students DROP COLUMN dirty';
-  END IF;
-END $$;
-
--- 10) Update triggers to use statement-level variants
+-- 8) Update triggers to use statement-level variants
 -- Drop old per-row trigger on gradebook_columns and recreate as statement-level
 DO $$
 BEGIN
@@ -570,7 +487,7 @@ DROP FUNCTION IF EXISTS public.recalculate_gradebook_column_for_all_students();
 DROP FUNCTION IF EXISTS public.submission_review_recalculate_dependent_columns();
 
 
--- 11) Broadcast row-level recalculation state changes (use existing class:* topics)
+-- 9) Broadcast row-level recalculation state changes (use existing class:* topics)
 CREATE OR REPLACE FUNCTION public.broadcast_gradebook_row_state_change()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -637,3 +554,4 @@ CREATE OR REPLACE TRIGGER broadcast_gradebook_row_recalc_state
   FOR EACH ROW
   EXECUTE FUNCTION public.broadcast_gradebook_row_state_change();
 
+DROP FUNCTION IF EXISTS public.send_gradebook_recalculation_messages(jsonb[]);

@@ -68,8 +68,6 @@ Deno.serve(async (req) => {
   const headers = req.headers;
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
-  console.log("secret", secret);
-  console.log("expectedSecret", expectedSecret);
   if (secret !== expectedSecret) {
     return new Response(JSON.stringify({ error: "Invalid secret" }), {
       headers: { "Content-Type": "application/json" },
@@ -90,7 +88,6 @@ Deno.serve(async (req) => {
   let gradebookId = body.gradebook_id as number | undefined;
   const excludeColumnId = body.exclude_column_id ?? body.new_column_id;
 
-  console.log("body", JSON.stringify(body, null, 2));
   if (!classId || !gradebookId) {
     if (body.new_column_id) {
       const { data: col, error } = await admin
@@ -141,7 +138,6 @@ Deno.serve(async (req) => {
     (c) => c.score_expression !== null && c.id !== (excludeColumnId as unknown as number)
   );
 
-  console.log(validAssignments, validColumns);
   let updated = 0;
   for (const col of targetColumns) {
     const expr = col.score_expression as string;

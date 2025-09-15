@@ -397,7 +397,34 @@ export async function processGradebookRowCalculation(
   for (const r of gcsRows as GradebookColumnRow[]) gcsByColumnId.set(r.gradebook_column_id as unknown as number, r);
 
   // Override map to expose computed results to subsequent columns
-  setRowOverrideValues(class_id, student_id, is_private, new Map());
+  const rowOverrideMap = new Map<
+    string,
+    {
+      class_id: number;
+      created_at: string;
+      gradebook_column_id: number;
+      gradebook_id: number;
+      id: number;
+      incomplete_values: Database["public"]["Tables"]["gradebook_column_students"]["Row"]["incomplete_values"];
+      is_droppable: boolean;
+      is_excused: boolean;
+      is_missing: boolean;
+      is_private: boolean;
+      released: boolean;
+      score: number;
+      score_override: number | null;
+      score_override_note: string | null;
+      student_id: string;
+      column_slug: string;
+      max_score: number;
+    }
+  >();
+  setRowOverrideValues(
+    class_id,
+    student_id,
+    is_private,
+    rowOverrideMap as unknown as Map<string, import("./expression/types.d.ts").GradebookColumnStudentWithMaxScore>
+  );
 
   const order = topoSortColumns(columns as unknown as ColumnWithPrefix[]);
   const updates: RowUpdate[] = [];
@@ -514,15 +541,7 @@ export async function processGradebookRowCalculation(
       column_slug: slug,
       max_score: maxScore
     };
-    const map = new Map<string, typeof valueForSlug>();
-    map.set(slug, valueForSlug);
-    // We trust the runtime cast here to provide row-level overrides during this evaluation pass
-    setRowOverrideValues(
-      class_id,
-      student_id,
-      is_private,
-      map as unknown as Map<string, import("./expression/types.d.ts").GradebookColumnStudentWithMaxScore>
-    );
+    rowOverrideMap.set(slug, valueForSlug);
   }
 
   clearRowOverrideValues(class_id, student_id, is_private);
@@ -642,7 +661,34 @@ export async function processGradebookRowsCalculation(
     for (const r of gcsRows) {
       gcsByColumnId.set(r.gradebook_column_id, r);
     }
-    setRowOverrideValues(class_id, student_id, is_private, new Map());
+    const studentOverrideMap = new Map<
+      string,
+      {
+        class_id: number;
+        created_at: string;
+        gradebook_column_id: number;
+        gradebook_id: number;
+        id: number;
+        incomplete_values: Database["public"]["Tables"]["gradebook_column_students"]["Row"]["incomplete_values"];
+        is_droppable: boolean;
+        is_excused: boolean;
+        is_missing: boolean;
+        is_private: boolean;
+        released: boolean;
+        score: number;
+        score_override: number | null;
+        score_override_note: string | null;
+        student_id: string;
+        column_slug: string;
+        max_score: number;
+      }
+    >();
+    setRowOverrideValues(
+      class_id,
+      student_id,
+      is_private,
+      studentOverrideMap as unknown as Map<string, import("./expression/types.d.ts").GradebookColumnStudentWithMaxScore>
+    );
 
     const updates: RowUpdate[] = [];
     for (const columnId of order) {
@@ -707,19 +753,25 @@ export async function processGradebookRowsCalculation(
         continue;
       }
 
+      const overrideScore = (current?.score_override as number | null) ?? null;
+      const finalScore = overrideScore !== null ? overrideScore : nextScore;
+      if (overrideScore !== null) {
+        isMissing = false;
+      }
       const curScore = (current?.score as number | null) ?? null;
+
       const curMissing = (current?.is_missing as boolean) ?? false;
       const curReleased = (current?.released as boolean) ?? false;
       const curIncomplete = current?.incomplete_values ?? null;
       const changed =
-        !nearlyEqual(nextScore, curScore) ||
+        !nearlyEqual(finalScore, curScore) ||
         isMissing !== curMissing ||
         nextReleased !== curReleased ||
         !deepEqualJson(nextIncomplete, curIncomplete);
       if (changed) {
         updates.push({
           gradebook_column_id: columnId,
-          score: nextScore,
+          score: finalScore,
           is_missing: isMissing,
           released: nextReleased,
           incomplete_values: nextIncomplete
@@ -746,14 +798,7 @@ export async function processGradebookRowsCalculation(
         column_slug: slug,
         max_score: maxScore
       };
-      const map = new Map<string, typeof valueForSlug>();
-      map.set(slug, valueForSlug);
-      setRowOverrideValues(
-        class_id,
-        student_id,
-        is_private,
-        map as unknown as Map<string, import("./expression/types.d.ts").GradebookColumnStudentWithMaxScore>
-      );
+      studentOverrideMap.set(slug, valueForSlug);
     }
 
     clearRowOverrideValues(class_id, student_id, is_private);
