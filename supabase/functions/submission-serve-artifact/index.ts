@@ -133,7 +133,7 @@ const parseJWTUrl = (url: string): { jwt: string; filePath: string } => {
   const pathParts = urlPath.split("/").filter((part) => part.length > 0);
 
   if (pathParts.length < 2) {
-    throw new UserVisibleError("Invalid URL format. Expected: /submission-serve-artifact/jwt/path/to/file");
+    throw new UserVisibleError("Invalid URL format. Expected: /submission-serve-artifact/jwt/path/to/file", 400);
   }
 
   const jwt = pathParts[1];
@@ -165,7 +165,7 @@ const handleAuthRequest = async (req: Request): Promise<Response> => {
   }
   const submission = await supabase.from("submissions").select("*").eq("id", submissionId).single();
   if (!submission) {
-    throw new UserVisibleError("Submission not found");
+    throw new UserVisibleError("Submission not found", 404);
   }
 
   // Create access token for this specific submission

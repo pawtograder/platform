@@ -22,6 +22,7 @@ import {
   Notification,
   Tag,
   UserProfile,
+  UserRole,
   UserRoleWithPrivateProfileAndUser,
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
@@ -114,8 +115,9 @@ export function useAllStudentRoles() {
 }
 export function useStudentRoster() {
   const { userRolesWithProfiles: controller } = useCourseController();
-  const studentRoles = useListTableControllerValues(controller, (r) => r.role === "student");
-  const [roster, setRoster] = useState<UserProfile[] | undefined>(undefined);
+  const predicate = useCallback((r: UserRole) => r.role === "student", []);
+  const studentRoles = useListTableControllerValues(controller, predicate);
+  const [roster, setRoster] = useState<UserProfile[] | undefined>(() => studentRoles.map((r) => r.profiles));
   useEffect(() => {
     setRoster(studentRoles.map((r) => r.profiles));
   }, [studentRoles]);

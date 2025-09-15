@@ -179,7 +179,7 @@ export default function ReviewAssignmentsTable() {
       columnFilters: [{ id: "assignment_id_filter", value: assignment_id as string }],
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 1000
       },
       sorting: [{ id: "due_date", desc: false }]
     }

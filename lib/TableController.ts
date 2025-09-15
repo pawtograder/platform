@@ -68,7 +68,7 @@ export function useListTableControllerValues<
 
   // Effect to subscribe to the list and detect matching items
   useEffect(() => {
-    const { unsubscribe } = controller.list((data) => {
+    const handleDataUpdate = (data: ResultType[]) => {
       // Find all rows that match the predicate
       const matchingRows = data.filter((row) => predicate(row as PossiblyTentativeResult<ResultType>));
       const newMatchingIds = new Set(matchingRows.map((row) => (row as { id: ExtractIdType<T> }).id));
@@ -95,7 +95,12 @@ export function useListTableControllerValues<
 
         return newValues;
       });
-    });
+    };
+
+    const { unsubscribe, data } = controller.list(handleDataUpdate);
+
+    // Handle initial data
+    handleDataUpdate(data);
 
     return unsubscribe;
   }, [controller, predicate]);
@@ -265,14 +270,14 @@ export function useTableControllerValueById<
   >
 >(controller: TableController<T, Query, IDType, ResultType>, id: IDType | undefined | null) {
   const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined | null>(() => {
-    if (id === undefined || id === null) {
+    if (id === undefined || id === null || id === "") {
       return undefined;
     }
     return controller.getById(id as IDType).data;
   });
 
   useEffect(() => {
-    if (id === undefined || id === null) {
+    if (id === undefined || id === null || id === "") {
       return;
     }
     const { unsubscribe, data } = controller.getById(id as IDType, (data) => {
@@ -1129,6 +1134,9 @@ export default class TableController<
     }
     if (id === null) {
       throw new Error("Null ID is not a valid ID, ever.");
+    }
+    if (id === "") {
+      throw new Error("Empty string ID is not a valid ID, ever.");
     }
 
     // First try to find the data

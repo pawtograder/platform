@@ -197,7 +197,7 @@ export default function RepositoriesPage() {
     initialState: {
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 1000
       }
     }
   });
@@ -363,7 +363,7 @@ export default function RepositoriesPage() {
                 setPageSize(Number(e.target.value));
               }}
             >
-              {[25, 50, 100, 200, 500].map((pageSizeOption) => (
+              {[25, 50, 100, 200, 500, 1000].map((pageSizeOption) => (
                 <option key={pageSizeOption} value={pageSizeOption}>
                   Show {pageSizeOption}
                 </option>

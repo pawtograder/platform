@@ -42,7 +42,8 @@ async function insertComments({
         if (profileError) {
           console.error(profileError);
           throw new UserVisibleError(
-            `Failed to find profile for comment: ${comment.author.name}, ${profileError.message}`
+            `Failed to find profile for comment: ${comment.author.name}, ${profileError.message}`,
+            400
           );
         }
         if (profile) {
@@ -191,7 +192,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     : undefined;
 
   if (!token) {
-    throw new UserVisibleError("No token provided");
+    throw new UserVisibleError("No token provided", 400);
   }
   const decoded = await validateOIDCToken(token);
   // Find the corresponding submission
@@ -254,7 +255,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     }
     if (!regressionTestRun.autograder.assignments.class_id) {
       throw new UserVisibleError(
-        `Regression test class ID not found: ${autograder_regression_test_id}, grader repo: ${repository}`
+        `Regression test class ID not found: ${autograder_regression_test_id}, grader repo: ${repository}`,
+        400
       );
     }
     class_id = regressionTestRun.autograder.assignments.class_id;

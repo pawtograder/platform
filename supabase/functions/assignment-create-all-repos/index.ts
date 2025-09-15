@@ -158,7 +158,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   }
   if (!assignment) {
     scope.setTag("assignment_error", "not_found_or_not_released");
-    throw new UserVisibleError("Assignment not found. Please be sure that the release date has passed.");
+    throw new UserVisibleError("Assignment not found. Please be sure that the release date has passed.", 400);
   }
 
   scope.setTag("assignment_slug", assignment.slug || "unknown");
