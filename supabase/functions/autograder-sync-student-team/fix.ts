@@ -9,7 +9,7 @@ async function main() {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
-  const f25Classes = await adminSupabase.from("classes").select("*").eq("slug", "f25").limit(1000);
+  const f25Classes = await adminSupabase.from("classes").select("*").eq("slug", "f25").eq("id", 33).limit(1000);
   if (f25Classes.error) {
     throw new Error("Error fetching f25 classes");
   }
