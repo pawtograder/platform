@@ -662,7 +662,7 @@ export class RealtimeChannelManager {
         subscription.statusCallback(managedChannel.channel, status, err);
       } catch (error) {
         console.error("Error handling reconnection status event for subscription:", error);
-         this._breadcrumb("reconnect", "status_callback_error", { topic }, "error");
+        this._breadcrumb("reconnect", "status_callback_error", { topic }, "error");
       }
     }
   }
