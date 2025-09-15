@@ -546,6 +546,16 @@ export class GradebookCellController {
       this._handleGradebookColumnChange(message);
     });
     this._unsubscribes.push(unsubscribeColumns);
+
+    // Subscribe to row-level recalculation state changes
+    const unsubscribeRowState = this._classRealTimeController.subscribeToTable(
+      "gradebook_row_recalc_state",
+      (message) => {
+        if (this._closed) return;
+        this._handleRowRecalcStateChange(message);
+      }
+    );
+    this._unsubscribes.push(unsubscribeRowState);
   }
 
   private _handleGradebookColumnStudentChange(message: BroadcastMessage): void {
@@ -574,6 +584,51 @@ export class GradebookCellController {
     // we could implement specific handling here or trigger a full refresh
     // For now, let's just trigger a refresh to keep things simple
     this._refreshData();
+  }
+
+  private _handleRowRecalcStateChange(message: BroadcastMessage): void {
+    if (message.table !== "gradebook_row_recalc_state") return;
+
+    const payload = (message.data || {}) as Record<string, unknown>;
+    const classId = payload["class_id"] as number | undefined;
+    const studentId = payload["student_id"] as string | undefined;
+    const isPrivate = payload["is_private"] as boolean | undefined;
+    const isRecalculating = payload["is_recalculating"] as boolean | undefined;
+
+    if (classId !== this._class_id || !studentId || typeof isPrivate !== "boolean") {
+      return;
+    }
+
+    // Determine new recalculating state based on operation
+    let newState: boolean | undefined = isRecalculating;
+    if (message.operation === "DELETE") {
+      // Treat deletion as recalculation finished
+      newState = false;
+    }
+
+    if (typeof newState !== "boolean") return;
+
+    // Update all entries for this student and privacy
+    const studentRecord = this._data.find((s) => s.private_profile_id === studentId);
+    if (!studentRecord) return;
+
+    let changed = false;
+    for (let i = 0; i < studentRecord.entries.length; i++) {
+      const entry = studentRecord.entries[i];
+      if (entry.is_private === isPrivate && entry.is_recalculating !== newState) {
+        studentRecord.entries[i] = { ...entry, is_recalculating: newState };
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      // Notify listeners for overall data and the specific student
+      this._dataListeners.forEach((listener) => listener(this._data));
+      const studentListeners = this._studentListeners.get(studentId);
+      if (studentListeners) {
+        studentListeners.forEach((listener) => listener(studentRecord));
+      }
+    }
   }
 
   private _updateStudentEntry(columnStudent: GradebookColumnStudent): void {

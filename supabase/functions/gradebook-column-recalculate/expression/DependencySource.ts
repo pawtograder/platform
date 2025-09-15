@@ -429,8 +429,8 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
       const readOverride = (slug: string) => overrides.get(slug);
       const readBase = (slug: string) =>
         super.execute({ function_name, context, key: slug, class_id }) as
-          | GradebookColumnStudentWithMaxScore
-          | undefined;
+        | GradebookColumnStudentWithMaxScore
+        | undefined;
       if (typeof key === "object") {
         if (Array.isArray(key)) {
           const values = key.map((k) => {
@@ -820,7 +820,6 @@ export async function addDependencySourceFunctions({
           if (!v.released && !v.is_private) {
             return undefined;
           } else if (v.is_missing) {
-            console.log("missing", v);
             if (v.is_excused) {
               return { score: undefined, max_score: v.max_score };
             }
@@ -835,7 +834,6 @@ export async function addDependencySourceFunctions({
           `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value. Got: ${JSON.stringify(v, null, 2)}`
         );
       });
-      console.log("valuesToAverage", valuesToAverage);
       const validValues = valuesToAverage.filter(
         (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
       );

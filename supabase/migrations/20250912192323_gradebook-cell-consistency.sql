@@ -570,3 +570,70 @@ DROP FUNCTION IF EXISTS public.recalculate_gradebook_column_for_all_students();
 DROP FUNCTION IF EXISTS public.submission_review_recalculate_dependent_columns();
 
 
+-- 11) Broadcast row-level recalculation state changes (use existing class:* topics)
+CREATE OR REPLACE FUNCTION public.broadcast_gradebook_row_state_change()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_class_id BIGINT;
+  target_student_id UUID;
+  staff_payload JSONB;
+  user_payload JSONB;
+  target_is_private BOOLEAN;
+BEGIN
+  -- Determine IDs and privacy based on operation
+  IF TG_OP = 'INSERT' THEN
+    target_class_id := NEW.class_id;
+    target_student_id := NEW.student_id;
+    target_is_private := NEW.is_private;
+  ELSIF TG_OP = 'UPDATE' THEN
+    target_class_id := COALESCE(NEW.class_id, OLD.class_id);
+    target_student_id := COALESCE(NEW.student_id, OLD.student_id);
+    target_is_private := COALESCE(NEW.is_private, OLD.is_private);
+  ELSIF TG_OP = 'DELETE' THEN
+    target_class_id := OLD.class_id;
+    target_student_id := OLD.student_id;
+    target_is_private := OLD.is_private;
+  END IF;
+
+  IF target_class_id IS NULL THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  -- Build base payload matching existing table_change format
+  staff_payload := jsonb_build_object(
+    'type', 'table_change',
+    'operation', TG_OP,
+    'table', 'gradebook_row_recalc_state',
+    'data', CASE WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,
+    'class_id', target_class_id,
+    'timestamp', NOW()
+  );
+
+  -- Always broadcast to staff channel
+  PERFORM realtime.send(
+    staff_payload || jsonb_build_object('target_audience', 'staff'),
+    'broadcast',
+    'class:' || target_class_id || ':staff',
+    true
+  );
+
+  -- If non-private, also broadcast to the student's user channel
+  IF target_is_private = false THEN
+    user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+    PERFORM realtime.send(
+      user_payload,
+      'broadcast',
+      'class:' || target_class_id || ':user:' || target_student_id,
+      true
+    );
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE TRIGGER broadcast_gradebook_row_recalc_state
+  AFTER INSERT OR UPDATE OR DELETE ON public.gradebook_row_recalc_state
+  FOR EACH ROW
+  EXECUTE FUNCTION public.broadcast_gradebook_row_state_change();
+

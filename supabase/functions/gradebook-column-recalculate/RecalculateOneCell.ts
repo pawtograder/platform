@@ -11,9 +11,9 @@ export async function runHandler() {
   );
   const scope = new Sentry.Scope();
 
-  const class_id = 5;
-  const gradebook_id = 5;
-  const student_id = "515f1bf0-0ccb-489f-8fbe-128e63adc222";
+  const class_id = 7;
+  const gradebook_id = 7;
+  const student_id = "80fdc05a-2ff2-4548-a175-1729531ce99d";
   const is_private = true;
 
   const { data: gcsRows, error: gcsError } = await adminSupabase

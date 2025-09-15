@@ -8,10 +8,13 @@ type TablesThatHaveAnIDField = {
   [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
 }[keyof DatabaseTableTypes];
 
+// Extend known broadcast tables to include row-level recalculation state
+type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
+
 type BroadcastMessage = {
   type: "table_change" | "channel_created" | "system" | "staff_data_change";
   operation?: "INSERT" | "UPDATE" | "DELETE";
-  table?: TablesThatHaveAnIDField;
+  table?: KnownBroadcastTables;
   row_id?: number | string;
   data?: Record<string, unknown>;
   submission_id?: number;
@@ -21,7 +24,7 @@ type BroadcastMessage = {
 };
 
 type MessageFilter = {
-  table?: TablesThatHaveAnIDField;
+  table?: KnownBroadcastTables;
   submission_id?: number;
   operation?: "INSERT" | "UPDATE" | "DELETE";
 };
@@ -366,7 +369,7 @@ export class ClassRealTimeController {
   /**
    * Subscribe to all messages for a specific table
    */
-  subscribeToTable(table: TablesThatHaveAnIDField, callback: MessageCallback): () => void {
+  subscribeToTable(table: KnownBroadcastTables, callback: MessageCallback): () => void {
     return this.subscribe({ table }, callback);
   }
 

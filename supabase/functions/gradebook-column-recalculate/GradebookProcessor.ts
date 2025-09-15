@@ -214,13 +214,7 @@ export async function processGradebookCellCalculation(
     scope.setTag("current_batch", batchIndex + 1);
     scope.setTag("batch_size", batch.length);
 
-    console.log(`Processing dependency batch ${batchIndex + 1}/${cellBatches.length} with ${batch.length} cells`);
     const uniqueColumns = new Set(batch.map((b) => b.gradebook_column_id));
-    console.log(
-      `Columns included: ${Array.from(uniqueColumns)
-        .map((c) => columnMap.get(c)?.class_id + ":" + columnMap.get(c)?.slug)
-        .join(", ")}`
-    );
 
     // Process this batch (cells within a batch can be processed in parallel)
     await processCellBatch(
@@ -426,18 +420,15 @@ export async function processGradebookRowCalculation(
     let nextIncomplete: unknown | null = null;
     let nextReleased = false;
 
-    console.log(column.slug);
-    console.log(column.score_expression);
     if (column.score_expression) {
       try {
         const compiled = compiledById.get(columnId)!;
         const result = compiled.evaluate({ context });
-        console.log(column.score_expression);
         if (typeof result === "object" && result !== null && "entries" in (result as Record<string, unknown>)) {
           const lastEntry = (result as { entries: unknown[] }).entries[
             (result as { entries: unknown[] }).entries.length - 1
           ];
-          if (lastEntry === undefined) {
+          if (lastEntry === undefined || lastEntry === null) {
             nextScore = null;
           } else {
             nextScore = Number(lastEntry);
@@ -445,7 +436,6 @@ export async function processGradebookRowCalculation(
         } else {
           nextScore = result === undefined || result === null ? null : Number(result);
         }
-        console.log("Computed:", slug, columnId, nextScore);
         const depObj = (column.dependencies as Record<string, unknown>) || {};
         const hasDeps = Object.keys(depObj).length > 0;
         isMissing = !hasDeps && nextScore === null;
@@ -453,8 +443,6 @@ export async function processGradebookRowCalculation(
           context.incomplete_values && Object.keys(context.incomplete_values).length === 0
             ? null
             : context.incomplete_values;
-        console.log("Is Missing:", isMissing);
-        console.log("Incomplete:", nextIncomplete);
         const assigns = (column.dependencies as { assignments?: number[] } | null)?.assignments ?? null;
         if (assigns && Array.isArray(assigns)) {
           const hasUnreleased =
@@ -519,7 +507,7 @@ export async function processGradebookRowCalculation(
       is_missing: isMissing,
       is_private,
       released: nextReleased,
-      score: finalScore ?? 0,
+      score: finalScore,
       score_override: (current?.score_override as number | null) ?? null,
       score_override_note: (current?.score_override_note as string | null) ?? null,
       student_id,
@@ -760,7 +748,6 @@ export async function processGradebookRowsCalculation(
       };
       const map = new Map<string, typeof valueForSlug>();
       map.set(slug, valueForSlug);
-      console.log(map);
       setRowOverrideValues(
         class_id,
         student_id,
@@ -977,7 +964,6 @@ async function processCellBatch(
             console.error("Error updating gradebook cell:", updateError);
           }
 
-          console.log(`Cell ${cell.gradebook_column_id} ${cell.student_id} completed, now ${score}`);
           await cell.onComplete();
         } catch (e) {
           const newScope = scope.clone();

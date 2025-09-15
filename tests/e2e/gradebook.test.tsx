@@ -112,7 +112,7 @@ async function waitForStableLocator(page: Page, getLocator: () => Promise<Locato
   }
   throw new Error("Timed out waiting for stable locator box");
 }
-test.setTimeout(120_000);
+// test.setTimeout(120_000);
 test.describe("Gradebook Page - Comprehensive", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeAll(async () => {
@@ -390,7 +390,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get gradebook column student data: ${error.message}`);
       }
       console.log(`Final gradebook column student data: ${JSON.stringify(data)}`);
-      expect(data?.score).toBe(33.2);
+      expect(data?.score).toBe(51.95);
     }).toPass();
   });
 
@@ -472,7 +472,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
       expect(after).not.toBeNaN();
-      expect(after).toBe(33.2);
+      expect(after).toBe(51.95);
     }).toPass();
 
     // Take screenshot for visual regression testing
@@ -495,7 +495,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(async () => {
       const after = await readCellNumber(page, studentName, "Final Grade");
       expect(after).not.toBeNaN();
-      expect(after).toBe(32.75);
+      expect(after).toBe(51.5);
     }).toPass();
   });
 

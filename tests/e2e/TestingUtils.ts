@@ -239,7 +239,7 @@ export async function createUserInClass({
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
   // Try to create user, if it fails due to existing email, try to get the existing user
-  let userId: string;
+  let userId: string | undefined = undefined;
   const tempPassword = useMagicLink
     ? Math.random().toString(36).substring(2, 34)
     : process.env.TEST_PASSWORD || "change-it";
@@ -299,6 +299,9 @@ export async function createUserInClass({
     } else {
       throw e;
     }
+  }
+  if (!userId) {
+    throw new Error("Failed to create user");
   }
   // Check if user already has a role in this class
   const { data: existingRole, error: roleCheckError } = await (
