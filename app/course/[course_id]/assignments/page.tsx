@@ -6,6 +6,7 @@ import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
+import * as Sentry from "@sentry/nextjs";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Container, EmptyState, Heading, Icon, Skeleton, Table, Text } from "@chakra-ui/react";
@@ -50,18 +51,7 @@ export default function StudentPage() {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const { role } = useClassProfiles();
-  const { data: courseData } = useList<{ time_zone: string }>({
-    resource: "classes",
-    meta: {
-      select: "time_zone",
-      limit: 1
-    },
-    filters: [{ field: "id", operator: "eq", value: Number(course_id) }],
-    queryOptions: {
-      enabled: !!course_id
-    }
-  });
-  const course = courseData && courseData.data.length > 0 ? courseData.data[0] : null;
+  const course = role.classes;
 
   const private_profile_id = role.private_profile_id;
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
@@ -100,6 +90,18 @@ export default function StudentPage() {
   const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
 
   const actions = !githubIdentity ? <LinkAccount /> : <></>;
+
+  Sentry.addBreadcrumb({
+    message: "Rendering assignments page",
+    data: {
+      course_id,
+      user_id: user?.id,
+      private_profile_id,
+      assignments: assignments?.length,
+      groups: groups?.length,
+      githubIdentity: githubIdentity
+    }
+  });
 
   const allAssignedWork = useMemo(() => {
     const result: AssignmentUnit[] = [];

@@ -1,6 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import * as Sentry from "@sentry/nextjs";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -55,7 +56,22 @@ export class RealtimeChannelManager {
   private _healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private _lastHealthCheck: number = Date.now();
 
+  // Centralized helper for Sentry breadcrumbs to keep call sites concise
+  private _breadcrumb(
+    category: string,
+    message: string,
+    data?: Record<string, unknown>,
+    level: Sentry.SeverityLevel = "info"
+  ) {
+    try {
+      Sentry.addBreadcrumb({ category, message, data, level });
+    } catch {
+      // no-op
+    }
+  }
+
   private constructor() {
+    this._breadcrumb("manager", "init");
     this._setupNetworkAndFocusListeners();
   }
 
@@ -71,12 +87,14 @@ export class RealtimeChannelManager {
    */
   setClient(client: SupabaseClient<Database>) {
     this._client = client;
+    this._breadcrumb("manager", "setClient", { hasClient: !!client });
   }
 
   /**
    * Set up network connectivity and focus event listeners
    */
   private _setupNetworkAndFocusListeners() {
+    this._breadcrumb("listeners", "setup_start");
     // Network connectivity listeners
     this._onlineListener = () => this._handleOnlineEvent();
     this._offlineListener = () => this._handleOfflineEvent();
@@ -97,6 +115,7 @@ export class RealtimeChannelManager {
 
     // Start periodic health checks
     this._startHealthChecks();
+    this._breadcrumb("listeners", "setup_complete");
   }
 
   /**
@@ -104,6 +123,7 @@ export class RealtimeChannelManager {
    */
   private _handleOnlineEvent() {
     this._isOnline = true;
+    this._breadcrumb("network", "online", { wasOffline: this._wasOffline });
 
     // If we were offline, trigger reconnection to all channels
     if (this._wasOffline) {
@@ -123,6 +143,7 @@ export class RealtimeChannelManager {
   private _handleOfflineEvent() {
     this._isOnline = false;
     this._wasOffline = true;
+    this._breadcrumb("network", "offline");
 
     // Notify all channels of disconnection
     for (const managedChannel of this._channels.values()) {
@@ -145,6 +166,8 @@ export class RealtimeChannelManager {
       (channel) => channel.reconnectAttempts > 0 || channel.isReconnecting
     );
 
+    this._breadcrumb("visibility", "window_focus", { channelsNeedingCheck: channelsNeedingCheck.length });
+
     if (channelsNeedingCheck.length > 0) {
       // Reset health check and trigger immediate health check
       this._lastHealthCheck = Date.now();
@@ -157,6 +180,7 @@ export class RealtimeChannelManager {
    */
   private _handleWindowBlur() {
     // We already handle this in the existing visibility change logic
+    this._breadcrumb("visibility", "window_blur");
   }
 
   /**
@@ -173,6 +197,11 @@ export class RealtimeChannelManager {
       const shouldReconnect = (!wasOnline && this._isOnline) || timeSinceLastCheck > 60000; // 1 minute
 
       if (shouldReconnect) {
+        this._breadcrumb("visibility", "became_visible_reconnect", {
+          wasOnline,
+          isOnline: this._isOnline,
+          timeSinceLastCheck
+        });
         this.resubscribeToAllChannels();
       }
 
@@ -188,6 +217,7 @@ export class RealtimeChannelManager {
     this._healthCheckInterval = setInterval(() => {
       this._performHealthCheck();
     }, 30000);
+    this._breadcrumb("healthcheck", "started", { intervalMs: 30000 });
   }
 
   /**
@@ -197,12 +227,20 @@ export class RealtimeChannelManager {
     const wasOnline = this._isOnline;
     this._isOnline = navigator.onLine;
 
+    this._breadcrumb(
+      "healthcheck",
+      "tick",
+      { wasOnline, isOnline: this._isOnline, channelCount: this._channels.size },
+      "debug"
+    );
+
     if (!wasOnline && this._isOnline) {
       this._handleOnlineEvent();
       return;
     }
 
     if (!this._isOnline) {
+      this._breadcrumb("healthcheck", "skip_offline");
       return;
     }
 
@@ -213,6 +251,7 @@ export class RealtimeChannelManager {
     });
 
     if (stuckChannels.length > 0) {
+      this._breadcrumb("healthcheck", "stuck_channels_detected", { count: stuckChannels.length });
       for (const channel of stuckChannels) {
         channel.isReconnecting = false;
         this._resubscribeToChannelWithBackoff(channel.topic);
@@ -226,6 +265,7 @@ export class RealtimeChannelManager {
    * Cleanup network and focus listeners
    */
   private _cleanupNetworkAndFocusListeners() {
+    this._breadcrumb("listeners", "cleanup_start");
     if (this._onlineListener) {
       window.removeEventListener("online", this._onlineListener);
       this._onlineListener = null;
@@ -255,6 +295,7 @@ export class RealtimeChannelManager {
       clearInterval(this._healthCheckInterval);
       this._healthCheckInterval = null;
     }
+    this._breadcrumb("listeners", "cleanup_complete");
   }
 
   /**
@@ -266,12 +307,14 @@ export class RealtimeChannelManager {
     messageCallback: (message: BroadcastMessage) => void,
     statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void
   ): Promise<() => void> {
+    this._breadcrumb("subscription", "subscribe_called", { topic });
     let managedChannel = this._channels.get(topic);
 
     if (!managedChannel) {
       // Create new channel and subscription
       await this._refreshSessionIfNeeded(client);
       const channel = client.channel(topic, { config: { private: true } });
+      this._breadcrumb("channel", "created", { topic });
 
       managedChannel = {
         channel,
@@ -285,6 +328,14 @@ export class RealtimeChannelManager {
 
       // Set up broadcast message handler
       channel.on("broadcast", { event: "broadcast" }, (message) => {
+        if (Math.random() < 0.1) {
+          this._breadcrumb(
+            "channel",
+            "broadcast_received",
+            { topic, type: (message.payload as BroadcastMessage)?.type },
+            "debug"
+          );
+        }
         this._routeMessage(topic, message.payload as BroadcastMessage);
       });
 
@@ -304,9 +355,14 @@ export class RealtimeChannelManager {
 
     // Add this subscription to the array
     managedChannel.subscriptions.push(subscription);
+    this._breadcrumb("subscription", "added", { topic, subscriptionCount: managedChannel.subscriptions.length });
 
     // Return unsubscribe function that removes this specific subscription
     return () => {
+      this._breadcrumb("subscription", "unsubscribe_called", {
+        topic,
+        remainingBefore: managedChannel.subscriptions.length
+      });
       const wasLastSubscriber = managedChannel.subscriptions.length === 1;
 
       // If this is the last subscriber, proactively notify CLOSED before teardown
@@ -325,10 +381,15 @@ export class RealtimeChannelManager {
 
       // If no more subscriptions, clean up the channel
       if (managedChannel.subscriptions.length === 0) {
+        this._breadcrumb("channel", "teardown", { topic });
         managedChannel.channel.unsubscribe();
         managedChannel.client.removeChannel(managedChannel.channel);
         this._channels.delete(topic);
       }
+      this._breadcrumb("subscription", "removed", {
+        topic,
+        remainingAfter: managedChannel.subscriptions.length
+      });
     };
   }
 
@@ -344,6 +405,7 @@ export class RealtimeChannelManager {
         subscription.callback(message);
       } catch (error) {
         console.error("Error routing message to subscription:", error);
+        this._breadcrumb("channel", "route_error", { topic }, "error");
       }
     }
   }
@@ -354,6 +416,8 @@ export class RealtimeChannelManager {
   private _handleSubscriptionStateEvent(topic: string, status: REALTIME_SUBSCRIBE_STATES, err?: Error) {
     const managedChannel = this._channels.get(topic);
     if (!managedChannel) return;
+
+    this._breadcrumb("subscription", "state_event", { topic, status });
 
     // Handle reconnection logic for certain error states
     if (status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR) {
@@ -366,6 +430,7 @@ export class RealtimeChannelManager {
       if (managedChannel.reconnectAttempts > 0 || managedChannel.isReconnecting) {
         managedChannel.reconnectAttempts = 0;
         managedChannel.isReconnecting = false;
+        this._breadcrumb("subscription", "reconnected", { topic });
       }
     }
 
@@ -398,13 +463,16 @@ export class RealtimeChannelManager {
   private async _refreshSessionIfNeeded(client: SupabaseClient<Database>) {
     const { data, error } = await client.auth.getSession();
     if (error) {
+      this._breadcrumb("auth", "getSession_error", { message: error.message }, "error");
       throw error;
     }
     if (!data.session) {
+      this._breadcrumb("auth", "no_session", {}, "warning");
       throw new Error("Session not found");
     }
     if (client.realtime.accessTokenValue !== data.session.access_token) {
       await client.realtime.setAuth(data.session.access_token);
+      this._breadcrumb("auth", "realtime_auth_updated");
     }
   }
 
@@ -464,9 +532,11 @@ export class RealtimeChannelManager {
     managedChannel.lastReconnectTime = Date.now();
 
     const delay = this._getReconnectDelay(managedChannel.reconnectAttempts - 1);
+    this._breadcrumb("reconnect", "scheduled", { topic, attempts: managedChannel.reconnectAttempts, delay });
 
     setTimeout(async () => {
       try {
+        this._breadcrumb("reconnect", "begin", { topic });
         // Add overall timeout for the entire reconnection process
         const reconnectionPromise = this._resubscribeToChannel(topic);
         const timeoutPromise = new Promise<void>((_, reject) => {
@@ -476,8 +546,10 @@ export class RealtimeChannelManager {
         });
 
         await Promise.race([reconnectionPromise, timeoutPromise]);
+        this._breadcrumb("reconnect", "success", { topic });
       } catch (error) {
         console.error("Reconnection failed:", error);
+        this._breadcrumb("reconnect", "failed", { topic }, "error");
 
         // CRITICAL: Reset reconnecting state so future attempts can be made
         const channel = this._channels.get(topic);
@@ -510,9 +582,18 @@ export class RealtimeChannelManager {
 
       // Create a new channel with the same topic
       const newChannel = managedChannel.client.channel(topic, { config: { private: true } });
+      this._breadcrumb("channel", "resubscribe_new_channel", { topic });
 
       // Set up broadcast message handler
       newChannel.on("broadcast", { event: "broadcast" }, (message) => {
+        if (Math.random() < 0.1) {
+          this._breadcrumb(
+            "channel",
+            "broadcast_received_after_resubscribe",
+            { topic, type: (message.payload as BroadcastMessage)?.type },
+            "debug"
+          );
+        }
         this._routeMessage(topic, message.payload as BroadcastMessage);
       });
 
@@ -529,6 +610,7 @@ export class RealtimeChannelManager {
       // This prevents race conditions
     } catch (error) {
       console.error("Error during resubscription:", error);
+      this._breadcrumb("channel", "resubscribe_error", { topic }, "error");
 
       // CRITICAL: Always reset isReconnecting on failure so future attempts can be made
       managedChannel.isReconnecting = false;
@@ -549,10 +631,12 @@ export class RealtimeChannelManager {
       case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
         managedChannel.reconnectAttempts = 0;
         managedChannel.isReconnecting = false;
+        this._breadcrumb("reconnect", "subscribed", { topic });
         break;
 
       case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
         managedChannel.isReconnecting = false;
+        this._breadcrumb("reconnect", "channel_error", { topic }, "warning");
 
         // Only retry if we haven't exceeded max attempts
         if (this._shouldAttemptReconnection(managedChannel)) {
@@ -563,6 +647,12 @@ export class RealtimeChannelManager {
       case REALTIME_SUBSCRIBE_STATES.CLOSED:
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
         managedChannel.isReconnecting = false;
+        this._breadcrumb(
+          "reconnect",
+          status === REALTIME_SUBSCRIBE_STATES.CLOSED ? "closed" : "timed_out",
+          { topic },
+          "warning"
+        );
         break;
     }
 
@@ -572,6 +662,7 @@ export class RealtimeChannelManager {
         subscription.statusCallback(managedChannel.channel, status, err);
       } catch (error) {
         console.error("Error handling reconnection status event for subscription:", error);
+         this._breadcrumb("reconnect", "status_callback_error", { topic }, "error");
       }
     }
   }
@@ -582,6 +673,7 @@ export class RealtimeChannelManager {
   async resubscribeToAllChannels() {
     try {
       const topics = Array.from(this._channels.keys());
+      this._breadcrumb("reconnect", "resubscribe_all_begin", { count: topics.length });
 
       for (const topic of topics) {
         const managedChannel = this._channels.get(topic);
@@ -591,10 +683,12 @@ export class RealtimeChannelManager {
           managedChannel.isReconnecting = false;
           await this._refreshSessionIfNeeded(managedChannel.client);
           await this._resubscribeToChannel(topic);
+          this._breadcrumb("reconnect", "resubscribed_topic", { topic });
         }
       }
     } catch (error) {
       console.error("Error resubscribing to all channels:", error);
+      this._breadcrumb("reconnect", "resubscribe_all_error", {}, "error");
     }
   }
 
@@ -602,6 +696,7 @@ export class RealtimeChannelManager {
    * Disconnect all channels (useful for tab visibility changes)
    */
   disconnectAllChannels() {
+    this._breadcrumb("channel", "disconnect_all_begin", { channelCount: this._channels.size });
     for (const managedChannel of this._channels.values()) {
       // Reset reconnection state
       managedChannel.isReconnecting = false;
@@ -618,15 +713,18 @@ export class RealtimeChannelManager {
           subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
         } catch (error) {
           console.error("Error notifying subscription of disconnection:", error);
+          this._breadcrumb("channel", "disconnect_notify_error", {}, "error");
         }
       }
     }
+    this._breadcrumb("channel", "disconnect_all_complete");
   }
 
   /**
    * Force cleanup of all channels (use with caution)
    */
   cleanup() {
+    this._breadcrumb("manager", "cleanup_called", { channelCount: this._channels.size });
     for (const managedChannel of this._channels.values()) {
       managedChannel.channel.unsubscribe();
       managedChannel.client.removeChannel(managedChannel.channel);
