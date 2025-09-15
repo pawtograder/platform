@@ -241,7 +241,7 @@ export type RowUpdate = {
 };
 
 function topoSortColumns(columns: ColumnWithPrefix[]): number[] {
-  const idSet = new Set(columns.map((c) => c.id as unknown as number));
+  const idSet = new Set(columns.map((c) => c.id));
   const inDegree = new Map<number, number>();
   const graph = new Map<number, Set<number>>();
   for (const id of idSet) {
@@ -249,7 +249,7 @@ function topoSortColumns(columns: ColumnWithPrefix[]): number[] {
     graph.set(id, new Set());
   }
   for (const c of columns) {
-    const cid = c.id as unknown as number;
+    const cid = c.id;
     const deps = (c.dependencies as { gradebook_columns?: number[] } | null)?.gradebook_columns ?? [];
     for (const dep of deps) {
       if (!idSet.has(dep)) continue;
@@ -390,11 +390,11 @@ export async function processGradebookRowCalculation(
       }
       return node;
     });
-    compiledById.set(c.id as unknown as number, instrumented.compile());
+    compiledById.set(c.id, instrumented.compile());
   }
 
   const gcsByColumnId = new Map<number, GradebookColumnRow>();
-  for (const r of gcsRows as GradebookColumnRow[]) gcsByColumnId.set(r.gradebook_column_id as unknown as number, r);
+  for (const r of gcsRows as GradebookColumnRow[]) gcsByColumnId.set(r.gradebook_column_id, r);
 
   // Override map to expose computed results to subsequent columns
   const rowOverrideMap = new Map<
@@ -650,7 +650,7 @@ export async function processGradebookRowsCalculation(
       }
       return node;
     });
-    compiledById.set(c.id as unknown as number, instrumented.compile());
+    compiledById.set(c.id, instrumented.compile());
   }
 
   const order = topoSortColumns(columns as unknown as ColumnWithPrefix[]);
@@ -930,7 +930,7 @@ async function processCellBatch(
     if (column) {
       scope.setContext("cell", cell);
       scope.setTag("score_expression", column.score_expression ?? "");
-      scope.setTag("column_id", column.id as unknown as number);
+      scope.setTag("column_id", column.id);
       scope.setTag("student_id", cell.student_id);
       scope.setTag("gradebook_column_student_id", cell.gradebook_column_student_id);
       scope.setTag("is_private", cell.is_private);
@@ -944,7 +944,7 @@ async function processCellBatch(
         is_private_calculation: cell.is_private,
         incomplete_values_policy: "report_only",
         scope: scope,
-        class_id: column.class_id as unknown as number
+        class_id: column.class_id
       };
       const compiled = gradebookColumnToScoreExpression.get(column.id);
       if (compiled) {

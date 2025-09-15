@@ -101,8 +101,8 @@ Deno.serve(async (req) => {
           status: 400
         });
       }
-      classId = col.class_id as unknown as number;
-      gradebookId = col.gradebook_id as unknown as number;
+      classId = col.class_id;
+      gradebookId = col.gradebook_id;
     }
   }
 
@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
     .map((c) => ({ id: c.id, slug: c.slug as string }));
 
   const targetColumns = (allColumns as ColumnRow[]).filter(
-    (c) => c.score_expression !== null && c.id !== (excludeColumnId as unknown as number)
+    (c) => c.score_expression !== null && c.id !== excludeColumnId
   );
 
   let updated = 0;
