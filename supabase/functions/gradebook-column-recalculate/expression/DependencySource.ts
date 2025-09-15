@@ -308,8 +308,11 @@ class AssignmentsDependencySource extends DependencySourceBase {
         .select(
           "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public"
         )
-        .in("assignment_id", assignmentIds)
-        .in("student_private_profile_id", Array.from(students));
+        .in("assignment_id", assignmentIds);
+      // Only filter by students when the set is reasonably small to avoid exceeding IN limits
+      if (students.size > 0 && students.size <= 20) {
+        query = query.in("student_private_profile_id", Array.from(students));
+      }
       query = classIds.length === 1 ? query.eq("class_id", classIds[0]) : query.in("class_id", classIds);
       // Ensure stable pagination
       query = query
