@@ -155,7 +155,8 @@ export function useUpdateThreadTeaser() {
         });
       }
     },
-    [updateThread]
+    // TODO: remove refine.dev, it is so annoying that mutate is not stable!
+    [] // eslint-disable-line react-hooks/exhaustive-deps
   );
 }
 export function useRootDiscussionThreadReadStatuses(threadId: number) {
@@ -240,6 +241,7 @@ type DiscussionThreadTeaser = Pick<
   | "body"
   | "ordinal"
   | "answer"
+  | "pinned"
 >;
 
 export function useDiscussionThreadTeasers() {
@@ -257,7 +259,12 @@ export function useDiscussionThreadTeasers() {
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
 export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
   const controller = useCourseController();
-  const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(undefined);
+  const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(() => {
+    if (id === undefined) {
+      return undefined;
+    }
+    return controller.discussionThreadTeasers.getById(id).data;
+  });
   useEffect(() => {
     if (id === undefined) {
       setTeaser(undefined);
@@ -807,24 +814,22 @@ export class CourseController {
     data: UserRoleWithUser[];
   } {
     const mapToStudentUserRoles = (data: unknown[]): UserRoleWithUser[] =>
-      (data as UserRoleWithPrivateProfileAndUser[])
-        .filter((role) => role.role === "student")
-        .map((role) => role as unknown as UserRoleWithUser);
+      (data as UserRoleWithPrivateProfileAndUser[]).filter((role) => role.role === "student").map((role) => role);
 
     if (callback) {
       const result = this.userRolesWithProfiles.list((data) => {
-        callback(mapToStudentUserRoles(data as unknown[]));
+        callback(mapToStudentUserRoles(data));
       });
       return {
         unsubscribe: result.unsubscribe,
-        data: mapToStudentUserRoles(result.data as unknown[])
+        data: mapToStudentUserRoles(result.data)
       };
     }
 
     const result = this.userRolesWithProfiles.list();
     return {
       unsubscribe: result.unsubscribe,
-      data: mapToStudentUserRoles(result.data as unknown[])
+      data: mapToStudentUserRoles(result.data)
     };
   }
 

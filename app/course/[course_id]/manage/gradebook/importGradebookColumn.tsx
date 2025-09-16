@@ -275,15 +275,16 @@ export default function ImportGradebookColumns() {
                               col.name = col.name + ` (Imported ${new Date().toLocaleDateString()})`;
                             }
                             // For each student, get identifier and new value
+                            const rosterData = courseController.getRosterWithUserInfo().data;
+                            const rosterMap = new Map(
+                              rosterData.map((rosterEntry) => [rosterEntry.private_profile_id, rosterEntry])
+                            );
                             const students = dataRows.map((row) => {
                               const identifier = row[idCol];
                               const newValue = row[col.idx];
                               let studentPrivateProfileId: string | null = null;
                               if (idType === "email") {
-                                studentPrivateProfileId =
-                                  courseController
-                                    .getRosterWithUserInfo()
-                                    .data.find((r) => r.users.email === identifier)?.private_profile_id ?? null;
+                                studentPrivateProfileId = rosterMap.get(identifier)?.private_profile_id ?? null;
                               } else if (idType === "sid") {
                                 const trimmedIdentifier = (identifier ?? "").trim();
                                 const sid = parseInt(trimmedIdentifier, 10);
