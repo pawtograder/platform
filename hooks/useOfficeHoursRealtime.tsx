@@ -59,9 +59,11 @@ export class OfficeHoursController {
 
   // Map of help request ID to their dedicated message TableController
   private _helpRequestMessageControllers: Map<number, TableController<"help_request_messages">> = new Map();
+  // Map of help request ID to their dedicated read receipts TableController
+  private _helpRequestReadReceiptControllers: Map<number, TableController<"help_request_message_read_receipts">> =
+    new Map();
 
   // TableControllers for all tables
-  readonly helpRequestMessages: TableController<"help_request_messages">;
   readonly helpRequestReadReceipts: TableController<"help_request_message_read_receipts">;
   readonly helpRequests: TableController<"help_requests">;
   readonly helpQueues: TableController<"help_queues">;
@@ -82,15 +84,6 @@ export class OfficeHoursController {
   ) {
     this._client = client;
     this._officeHoursRealTimeController = officeHoursRealTimeController;
-
-    // Initialize helpRequestMessages with a query that returns no results initially
-    // Individual help request messages will be loaded lazily via dedicated controllers
-    this.helpRequestMessages = new TableController({
-      client,
-      table: "help_request_messages",
-      query: client.from("help_request_messages").select("*").eq("class_id", classId).eq("id", -1), // No message will have id = -1
-      officeHoursRealTimeController
-    });
 
     //TODO: Should be just for the current user, right?
     this.helpRequestReadReceipts = new TableController({
@@ -301,6 +294,29 @@ export class OfficeHoursController {
   }
 
   /**
+   * Load read receipts for a specific help request if not already loaded
+   */
+  loadReadReceiptsForHelpRequest(helpRequestId: number): TableController<"help_request_message_read_receipts"> {
+    if (this._helpRequestReadReceiptControllers.has(helpRequestId)) {
+      return this._helpRequestReadReceiptControllers.get(helpRequestId)!;
+    }
+
+    const controller = new TableController({
+      client: this._client,
+      table: "help_request_message_read_receipts",
+      query: this._client
+        .from("help_request_message_read_receipts")
+        .select("*")
+        .eq("class_id", this.classId)
+        .eq("help_request_id", helpRequestId),
+      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined
+    });
+
+    this._helpRequestReadReceiptControllers.set(helpRequestId, controller);
+    return controller;
+  }
+
+  /**
    * Get the TableController for a specific help request's messages
    */
   getHelpRequestMessagesController(helpRequestId: number): TableController<"help_request_messages"> | undefined {
@@ -329,7 +345,6 @@ export class OfficeHoursController {
     }
 
     // Close all TableControllers
-    this.helpRequestMessages.close();
     this.helpRequestReadReceipts.close();
     this.helpRequests.close();
     this.helpQueues.close();
@@ -348,6 +363,12 @@ export class OfficeHoursController {
       controller.close();
     }
     this._helpRequestMessageControllers.clear();
+
+    // Close per-help-request read receipt controllers
+    for (const controller of this._helpRequestReadReceiptControllers.values()) {
+      controller.close();
+    }
+    this._helpRequestReadReceiptControllers.clear();
 
     this._markedAsReadSet.clear();
     this._loadedHelpRequestIds.clear();
@@ -457,16 +478,22 @@ export function useHelpRequestMessages(help_request_id: number | undefined) {
   return messages;
 }
 
-export function useHelpRequestReadReceipts() {
+export function useHelpRequestReadReceipts(help_request_id: number | undefined) {
   const controller = useOfficeHoursController();
   const [receipts, setReceipts] = useState<HelpRequestMessageReadReceipt[]>([]);
   useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequestReadReceipts.list((data) => {
+    if (!help_request_id) {
+      setReceipts([]);
+      return;
+    }
+
+    const readReceiptsController = controller.loadReadReceiptsForHelpRequest(help_request_id);
+    const { data, unsubscribe } = readReceiptsController.list((data) => {
       setReceipts(data);
     });
     setReceipts(data);
     return unsubscribe;
-  }, [controller]);
+  }, [controller, help_request_id]);
   return receipts;
 }
 

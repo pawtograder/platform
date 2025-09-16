@@ -39,6 +39,8 @@ type SelectOption = {
   value: string;
 };
 
+//TODO: This is a big mess. We should refactor so that new help requests get made via a Postgres function (doing all work in one transaction)
+// and we use existing table controllers for accessing data instead of refine.dev...
 export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
@@ -105,8 +107,7 @@ export default function HelpRequestForm() {
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
-  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity, helpRequestMessages } =
-    controller;
+  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } = controller;
 
   // Get available help queues using individual hook
   const allHelpQueues = useHelpQueues();
@@ -323,6 +324,7 @@ export default function HelpRequestForm() {
 
           try {
             const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
+            const helpRequestMessages = controller.loadMessagesForHelpRequest(createdHelpRequest.id);
             // Get current selected students from ref to avoid closure issues
             const currentSelectedStudents = selectedStudentsRef.current;
 
@@ -484,8 +486,8 @@ export default function HelpRequestForm() {
       helpRequestFileReferences,
       helpRequests,
       helpRequestStudents,
-      helpRequestMessages,
       queue_id,
+      controller,
       router,
       reset,
       submissions?.data,

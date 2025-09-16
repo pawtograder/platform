@@ -13,7 +13,6 @@ export default function CreateStudentReposButton({
   syncAllPermissions?: boolean;
   assignmentId?: number;
 }) {
-  const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const invalidate = useInvalidate();
   return (
@@ -23,6 +22,7 @@ export default function CreateStudentReposButton({
         onClick={async () => {
           try {
             setLoading(true);
+            const supabase = createClient();
             if (syncAllPermissions) {
               await autograderSyncAllPermissionsForStudent(supabase);
             } else {

@@ -110,7 +110,7 @@ export default function AssignmentsTable() {
   const course = classRole.classes;
   const { classRealTimeController } = useCourseController();
   const timeZone = course.time_zone || "America/New_York";
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
 
@@ -1336,7 +1336,7 @@ async function exportGrades({
   }
 }
 function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);
   const [includeRubricChecks, setIncludeRubricChecks] = useState(true);
   const [includeRepoMetadata, setIncludeRepoMetadata] = useState(false);
@@ -1437,7 +1437,7 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
 
 function DownloadAllButton() {
   const { assignment_id, course_id } = useParams();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [isDownloading, setIsDownloading] = useState(false);
 
   async function handleDownloadAllClick() {

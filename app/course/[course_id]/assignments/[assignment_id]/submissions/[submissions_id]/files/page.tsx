@@ -209,11 +209,8 @@ function ArtifactAnnotation({
     resource: "submission_artifact_comments"
   });
   const { reviewAssignment, isLoading: reviewAssignmentLoading } = useReviewAssignment(reviewAssignmentId);
-  if (!comment.submission_review_id) {
-    throw new Error("No submission review ID found");
-  }
 
-  if (reviewAssignmentLoading) {
+  if (reviewAssignmentLoading || !comment.submission_review_id) {
     return <Skeleton height="100px" width="100%" />;
   }
 
@@ -738,8 +735,8 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     let isMounted = true;
 
     async function loadArtifact() {
+      const client = createClient();
       if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
-        const client = createClient();
         const data = await client.functions.invoke("submission-serve-artifact", {
           body: JSON.stringify({
             classId: artifact.class_id,
@@ -749,7 +746,6 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
         });
         setSiteUrl(data.data.url);
       }
-      const client = createClient();
       const data = await client.storage.from("submission-artifacts").download(artifactKey);
 
       if (!isMounted) return; // Component unmounted, exit early

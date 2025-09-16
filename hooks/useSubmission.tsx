@@ -783,16 +783,23 @@ export function useSubmissionReviews() {
   return reviews;
 }
 
-export function useSubmissionReviewOrGradingReview(reviewId: number) {
+export function useSubmissionReviewOrGradingReview(reviewId: number | undefined) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
-  const initialValue = controller.submission_reviews.getById(reviewId).data;
-  const [review, setReview] = useState<SubmissionReview | undefined>(initialValue);
   if (!ctx || !controller) {
     throw new Error("useSubmissionReviewOrGradingReview must be used within a SubmissionContext");
   }
-
+  const [review, setReview] = useState<SubmissionReview | undefined>(() => {
+    if (!reviewId) {
+      return undefined;
+    }
+    return controller.submission_reviews.getById(reviewId).data;
+  });
   useEffect(() => {
+    if (!reviewId) {
+      setReview(undefined);
+      return;
+    }
     const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
       setReview(data);
     });

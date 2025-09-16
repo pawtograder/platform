@@ -51,7 +51,6 @@ export default function BulkCreateGroup({
   const ungroupedProfiles = useUngroupedStudentProfiles(groups) || [];
   const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
   const { addGroupsToCreate } = useGroupManagement();
-  const supabase = createClient();
   const [selectedTags, setSelectedTags] = useState<
     MultiValue<{
       label: string;
@@ -83,6 +82,7 @@ export default function BulkCreateGroup({
   });
 
   const generateGroups = async () => {
+    const supabase = createClient();
     const newGroups = [];
     // shuffle ungrouped profiles
     for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
@@ -112,6 +112,7 @@ export default function BulkCreateGroup({
   };
 
   const generateGroupWithTags = async () => {
+    const supabase = createClient();
     const newGroups = [];
     // shuffle ungrouped profiles
     for (let i = ungroupedProfiles.length - 1; i > 0; i--) {

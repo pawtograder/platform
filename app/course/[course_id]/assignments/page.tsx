@@ -50,18 +50,7 @@ export default function StudentPage() {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const { role } = useClassProfiles();
-  const { data: courseData } = useList<{ time_zone: string }>({
-    resource: "classes",
-    meta: {
-      select: "time_zone",
-      limit: 1
-    },
-    filters: [{ field: "id", operator: "eq", value: Number(course_id) }],
-    queryOptions: {
-      enabled: !!course_id
-    }
-  });
-  const course = courseData && courseData.data.length > 0 ? courseData.data[0] : null;
+  const course = role.classes;
 
   const private_profile_id = role.private_profile_id;
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
@@ -101,7 +90,7 @@ export default function StudentPage() {
 
   const actions = !githubIdentity ? <LinkAccount /> : <></>;
 
-  const allAssignedWork = useMemo(() => {
+  const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
     assignments?.forEach(async (assignment) => {
       const group = groups?.find((group) => group.assignment_id === assignment.id);
@@ -161,31 +150,24 @@ export default function StudentPage() {
       }
     });
     // Sort by effective due date (includes lab-based scheduling and extensions)
-    return result.sort((a, b) => {
+    const sortedResult = result.sort((a, b) => {
       const dateA = a.due_date ? new TZDate(a.due_date) : new TZDate(new Date());
       const dateB = b.due_date ? new TZDate(b.due_date) : new TZDate(new Date());
       return dateB.getTime() - dateA.getTime();
     });
+    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+
+    return {
+      allAssignedWork: sortedResult,
+      workInFuture: sortedResult.filter((work) => {
+        return work.due_date && work.due_date > curTimeInCourseTimezone;
+      }),
+      workInPast: sortedResult.filter((work) => {
+        return work.due_date && work.due_date < curTimeInCourseTimezone;
+      })
+    };
   }, [assignments, groups, course, course_id]);
 
-  const workInFuture = useMemo(() => {
-    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
-    return allAssignedWork.filter((work) => {
-      return work.due_date && work.due_date > curTimeInCourseTimezone;
-    });
-  }, [allAssignedWork, course?.time_zone]);
-  workInFuture.sort((a, b) => {
-    return (a.due_date?.getTime() ?? 0) - (b.due_date?.getTime() ?? 0);
-  });
-  const workInPast = useMemo(() => {
-    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
-    return allAssignedWork.filter((work) => {
-      return work.due_date && work.due_date < curTimeInCourseTimezone;
-    });
-  }, [allAssignedWork, course?.time_zone]);
-  workInPast.sort((a, b) => {
-    return (b.due_date?.getTime() ?? 0) - (a.due_date?.getTime() ?? 0);
-  });
   return (
     <Container>
       {actions}

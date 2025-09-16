@@ -5,7 +5,7 @@ import {
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Text } from "@chakra-ui/react";
+import { Box, Skeleton } from "@chakra-ui/react";
 import { useCallback, useState } from "react";
 import { Checkbox } from "./checkbox";
 import MessageInput from "./message-input";
@@ -40,9 +40,6 @@ export default function LineCommentForm({
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(defaultEventuallyVisible ?? true);
 
-  if (!submissionReviewId) {
-    throw new Error("No submission review ID found");
-  }
   const fetchedSubmissionReview = useSubmissionReviewOrGradingReview(submissionReviewId);
   const isLoadingReviewDetails = submissionReviewId !== undefined && fetchedSubmissionReview === undefined;
 
@@ -107,8 +104,8 @@ export default function LineCommentForm({
     ]
   );
 
-  if (isLoadingReviewDetails && submissionReviewId) {
-    return <Text fontSize="sm">Loading review context...</Text>;
+  if (!submissionReviewId) {
+    return <Skeleton height="100px" width="100%" />;
   }
 
   return (

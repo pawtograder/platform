@@ -59,7 +59,7 @@ function CreateGroupButton({
 
   const [name, setName] = useState<string>("");
   const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [isLoading, setIsLoading] = useState(false);
 
   return (
@@ -175,7 +175,7 @@ function InviteButton({
   const { private_profile_id } = useClassProfiles();
   const [open, setOpen] = useState(false);
   const invalidate = useInvalidate();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
   const ungroupedProfiles = useUngroupedProfiles(allGroups);
   const ungroupedProfilesWithoutInvitations = useMemo(() => {
@@ -290,7 +290,7 @@ function JoinGroupButton({
   const { private_profile_id } = useClassProfiles();
   const [open, setOpen] = useState(false);
   const invalidate = useInvalidate();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [groupToJoin, setGroupToJoin] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
   const myInvitations = useMemo(() => {
     const invitations = groups.map((g) => g.assignment_group_invitations.map((i) => ({ ...i, group: g }))).flat();
@@ -560,7 +560,7 @@ function JoinGroupButton({
 }
 
 function LeaveGroupButton({ assignment }: { assignment: Assignment }) {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const invalidate = useInvalidate();
   return (
     <PopConfirm
@@ -666,7 +666,7 @@ function AssignmentGroupJoinRequests({ group }: { group: AssignmentGroupWithMemb
 function AssignmentGroupJoinRequestView({ join_request }: { join_request: AssignmentGroupJoinRequest }) {
   const profile = useUserProfile(join_request.profile_id);
   const { private_profile_id, role } = useClassProfiles();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const invalidate = useInvalidate();
   const invalidateInvites = useCallback(() => {
     invalidate({ resource: "assignment_group_join_request", invalidates: ["all"] });
@@ -818,14 +818,17 @@ function GroupDetails({
 }
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
-  if (repositories?.length === 0) {
+  if (!repositories) {
+    return <Skeleton height="100px" />;
+  }
+  if (repositories.length === 0) {
     return (
       <Text fontSize="sm" color="text.muted">
         No repositories found. Please refresh the page. If this issue persists, please contact your instructor.
       </Text>
     );
   }
-  if (repositories?.length === 1) {
+  if (repositories.length === 1) {
     return (
       <HStack>
         <Text fontSize="sm" fontWeight="bold">
@@ -949,6 +952,7 @@ export default function ManageGroupWidget({
         {description}
       </Text>
       {actions}
+      <RepositoriesInfo repositories={repositories} />
     </Box>
   );
 }
