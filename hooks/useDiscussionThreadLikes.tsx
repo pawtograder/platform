@@ -8,6 +8,9 @@ export function useDiscussionThreadLikes(thread_id: number) {
     pagination: {
       pageSize: 1000
     },
+    queryOptions: {
+      enabled: !!private_profile_id
+    },
     liveMode: "auto",
     filters: [
       {

@@ -139,6 +139,7 @@ function DiscussionThreadChildrenProvider({ controller }: { controller: Discussi
     },
     queryOptions: {
       cacheTime: Infinity,
+      enabled: !!controller.root_id,
       staleTime: Infinity // Realtime data
     },
     sorters: [

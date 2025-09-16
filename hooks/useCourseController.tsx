@@ -1018,7 +1018,8 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     liveMode: "manual",
     queryOptions: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: Infinity,
+      enabled: !!user?.id
     },
     pagination: {
       pageSize: 1000
@@ -1042,7 +1043,8 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     resource: "discussion_thread_watchers",
     queryOptions: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: Infinity,
+      enabled: !!user?.id
     },
     filters: [
       {
@@ -1074,7 +1076,8 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     resource: "help_request_watchers",
     queryOptions: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: Infinity,
+      enabled: !!user?.id
     },
     filters: [
       {
