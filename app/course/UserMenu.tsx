@@ -40,6 +40,13 @@ import { signOutAction } from "../actions";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 
 function SupportMenu() {
+  const buildNumber = useMemo(() => {
+    const str = process.env.SENTRY_RELEASE ?? process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.npm_package_version;
+    if (str) {
+      return str.substring(0, 7);
+    }
+    return "Unknown";
+  }, []);
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
@@ -80,6 +87,9 @@ function SupportMenu() {
               >
                 View open bugs
               </Link>
+            </Menu.Item>
+            <Menu.Item value="current-version">
+              <Text>Build: {buildNumber}</Text>
             </Menu.Item>
           </Menu.Content>
         </Menu.Positioner>
