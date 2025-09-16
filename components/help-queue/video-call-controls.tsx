@@ -39,7 +39,6 @@ export default function VideoCallControls({
   const [isStartingCall, setIsStartingCall] = useState(false);
   const [isJoiningCall, setIsJoiningCall] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
-  const supabase = createClient();
   const { openMeetingWindow } = useMeetingWindows();
   const { private_profile_id } = useClassProfiles();
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -118,6 +117,7 @@ export default function VideoCallControls({
    * Starts a video call for the help request
    */
   const startVideoCall = useCallback(async () => {
+    const supabase = createClient();
     if (!canStartCall || isStartingCall) return;
 
     setIsStartingCall(true);
@@ -165,7 +165,7 @@ export default function VideoCallControls({
     } finally {
       setIsStartingCall(false);
     }
-  }, [canStartCall, isStartingCall, updateRequest, request, supabase, openMeetingWindow, logVideoActivity]);
+  }, [canStartCall, isStartingCall, updateRequest, request, openMeetingWindow, logVideoActivity]);
 
   /**
    * Joins an existing video call
@@ -189,6 +189,7 @@ export default function VideoCallControls({
    * Ends the video call
    */
   const endVideoCall = useCallback(async () => {
+    const supabase = createClient();
     if (isEndingCall) return;
 
     setIsEndingCall(true);
@@ -217,7 +218,7 @@ export default function VideoCallControls({
     } finally {
       setIsEndingCall(false);
     }
-  }, [isEndingCall, request, supabase, logVideoActivityForAllStudents]);
+  }, [isEndingCall, request, logVideoActivityForAllStudents]);
 
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
   const currentUserIsInstructorOrGrader = true;

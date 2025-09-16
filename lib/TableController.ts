@@ -5,6 +5,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
+import * as Sentry from "@sentry/nextjs";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 export type TablesThatHaveAnIDField = {
@@ -538,6 +539,7 @@ export default class TableController<
         }
       }
     } catch (error) {
+      Sentry.captureException(error);
       console.error(`Failed to refetch data for table ${this._table}:`, error);
     } finally {
       // Set refetch state to false and notify listeners
