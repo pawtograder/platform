@@ -345,6 +345,7 @@ export class CourseController {
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
   private _assignments?: TableController<"assignments">;
   private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
+  private _repositories?: TableController<"repositories">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -558,6 +559,18 @@ export class CourseController {
       });
     }
     return this._assignmentGroupsWithMembers;
+  }
+
+  get repositories(): TableController<"repositories"> {
+    if (!this._repositories) {
+      this._repositories = new TableController({
+        client: this._client,
+        table: "repositories",
+        query: this._client.from("repositories").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._repositories;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};

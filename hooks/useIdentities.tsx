@@ -12,9 +12,9 @@ export function useIdentity(): UseIdentityReturn {
   const [identities, setIdentities] = useState<UserIdentity[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const supabase = createClient();
   useEffect(() => {
     const fetchIdentities = async () => {
+      const supabase = createClient();
       try {
         setLoading(true);
         setError(null);
@@ -30,7 +30,7 @@ export function useIdentity(): UseIdentityReturn {
     };
 
     fetchIdentities();
-  }, [supabase]);
+  }, []);
 
   return {
     identities,

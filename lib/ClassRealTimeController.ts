@@ -100,6 +100,13 @@ export class ClassRealTimeController {
     this._initializationPromise = this._initializeChannels();
   }
 
+  get isStaff(): boolean {
+    return this._isStaff;
+  }
+
+  get profileId(): string {
+    return this._profileId;
+  }
   /**
    * Start the realtime controller with enhanced features
    * Returns true when initialization is complete

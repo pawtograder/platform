@@ -301,7 +301,6 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     }
   });
   const { time_zone } = useCourse();
-  const supabase = createClient();
   const isGraderInterface = pathname.includes("/grade");
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
@@ -403,6 +402,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                             variant="outline"
                             size="xs"
                             onClick={async () => {
+                              const supabase = createClient();
                               await activateSubmission({ submission_id: historical_submission.id }, supabase);
                               invalidate({ resource: "submissions", invalidates: ["list"] });
                               router.push(link);

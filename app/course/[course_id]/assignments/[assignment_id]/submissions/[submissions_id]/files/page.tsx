@@ -735,8 +735,8 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     let isMounted = true;
 
     async function loadArtifact() {
+      const client = createClient();
       if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
-        const client = createClient();
         const data = await client.functions.invoke("submission-serve-artifact", {
           body: JSON.stringify({
             classId: artifact.class_id,
@@ -746,7 +746,6 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
         });
         setSiteUrl(data.data.url);
       }
-      const client = createClient();
       const data = await client.storage.from("submission-artifacts").download(artifactKey);
 
       if (!isMounted) return; // Component unmounted, exit early
