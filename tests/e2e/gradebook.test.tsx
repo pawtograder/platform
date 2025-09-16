@@ -389,7 +389,6 @@ test.describe("Gradebook Page - Comprehensive", () => {
       if (error) {
         throw new Error(`Failed to get gradebook column student data: ${error.message}`);
       }
-      console.log(`Final gradebook column student data: ${JSON.stringify(data)}`);
       expect(data?.score).toBe(51.95);
     }).toPass();
   });
