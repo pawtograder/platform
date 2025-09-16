@@ -106,19 +106,19 @@ export function useMentions(text: string, cursorPosition: number) {
       if (!selectedThread) return null;
 
       // Look for existing mention pattern: [@number](link) that ends before or at cursor
-      const existingMentionMatch = text.match(/\[@\d+\]\([^)]+\)\s*/g);
+      const mentionRegex = /\[@\d+\]\([^)]+\)\s*/g;
+      const mentionMatches = Array.from(text.matchAll(mentionRegex));
 
       let replacementStart = mentionState.position;
       let replacementEnd = cursorPosition;
 
-      if (existingMentionMatch) {
-        for (const match of existingMentionMatch) {
-          const matchStart = text.indexOf(match);
-          const matchEnd = matchStart + match.length;
+      if (mentionMatches.length > 0) {
+        for (const match of mentionMatches) {
+          const matchStart = match.index!;
+          const matchEnd = matchStart + match[0].length;
 
           // If cursor is inside this existing mention
           if (cursorPosition >= matchStart && cursorPosition <= matchEnd) {
-            console.log("Found existing mention to replace:", match, "at position", matchStart, "-", matchEnd);
             replacementStart = matchStart;
             replacementEnd = matchEnd;
             break;
