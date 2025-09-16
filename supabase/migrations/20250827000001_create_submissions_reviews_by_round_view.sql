@@ -204,6 +204,8 @@ CREATE OR REPLACE FUNCTION "public"."call_edge_function_internal_post_payload"("
 
   END;
 $$;
+REVOKE ALL ON FUNCTION public.call_edge_function_internal_post_payload FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.call_edge_function_internal_post_payload TO service_role;
 
 
 -- purpose: call edge function to recompute dependencies for other gradebook columns

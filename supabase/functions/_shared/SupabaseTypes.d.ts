@@ -2480,13 +2480,6 @@ export type Database = {
             foreignKeyName: "grader_result_tests_submission_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "grader_result_tests_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -2582,13 +2575,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "grader_result_tests";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "grader_result_tests_hint_feedback_submission_id_fkey";
@@ -2706,13 +2692,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "grader_results_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: true;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "grader_results_submission_id_fkey";
@@ -3106,13 +3085,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submission_files";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "help_request_file_references_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "help_request_file_references_submission_id_fkey";
@@ -3629,13 +3601,6 @@ export type Database = {
             foreignKeyName: "help_requests_referenced_submission_id_fkey";
             columns: ["referenced_submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "help_requests_referenced_submission_id_fkey";
-            columns: ["referenced_submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -3975,13 +3940,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "grader_result_tests";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "llm_inference_usage_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "llm_inference_usage_submission_id_fkey";
@@ -4966,13 +4924,6 @@ export type Database = {
             foreignKeyName: "review_assignments_submission_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "review_assignments_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -5757,13 +5708,6 @@ export type Database = {
             foreignKeyName: "submission_artifact_comments_submission_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "submission_artifact_comments_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -5787,13 +5731,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["activesubmissionid"];
-          },
-          {
-            foreignKeyName: "submission_artifact_comments_submission_id_fkey1";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "submission_artifact_comments_submission_id_fkey1";
@@ -5944,13 +5881,6 @@ export type Database = {
             foreignKeyName: "submission_artifacts_submission_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "submission_artifacts_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -6078,13 +6008,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submission_reviews";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_comments_submissions_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "submission_comments_submissions_id_fkey";
@@ -6235,13 +6158,6 @@ export type Database = {
             foreignKeyName: "submission_file_lcomments_submissions_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "submission_file_lcomments_submissions_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -6348,13 +6264,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "user_roles";
             referencedColumns: ["private_profile_id"];
-          },
-          {
-            foreignKeyName: "submission_files_submissions_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "submission_files_submissions_id_fkey";
@@ -6561,13 +6470,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_regrade_request_comments_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "submission_regrade_request_comments_submission_id_fkey";
@@ -6802,13 +6704,6 @@ export type Database = {
             foreignKeyName: "submission_regrade_requests_submission_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "submission_regrade_requests_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -6960,13 +6855,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "rubrics";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_reviews_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "submission_reviews_submission_id_fkey";
@@ -7747,13 +7635,6 @@ export type Database = {
             foreignKeyName: "workflow_run_error_submission_id_fkey";
             columns: ["submission_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
-          },
-          {
-            foreignKeyName: "workflow_run_error_submission_id_fkey";
-            columns: ["submission_id"];
-            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -7944,13 +7825,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_for_student_dashboard";
             referencedColumns: ["assignment_self_review_setting_id"];
-          },
-          {
-            foreignKeyName: "review_assignments_submission_id_fkey";
-            columns: ["review_submission_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "review_assignments_submission_id_fkey";
