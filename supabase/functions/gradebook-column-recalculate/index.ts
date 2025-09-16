@@ -434,9 +434,6 @@ Deno.serve((req) => {
   const headers = req.headers;
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
-  console.log("Invoking gradebook_column_recalculate batch handler");
-  console.log("Expected secret:", expectedSecret);
-  console.log("Secret:", secret);
   if (secret !== expectedSecret) {
     return new Response(JSON.stringify({ error: "Invalid secret" }), {
       headers: { "Content-Type": "application/json" }
