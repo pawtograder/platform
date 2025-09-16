@@ -125,7 +125,6 @@ export class DiscussionThreadsController {
   }
 }
 function DiscussionThreadChildrenProvider({ controller }: { controller: DiscussionThreadsController }) {
-  const { user } = useAuthState();
   const { data } = useList<DiscussionThread>({
     resource: "discussion_threads",
     meta: {

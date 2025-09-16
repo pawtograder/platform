@@ -1495,6 +1495,7 @@ export type Database = {
           likes_count: number;
           ordinal: number | null;
           parent: number | null;
+          pinned: boolean;
           root: number | null;
           root_class_id: number | null;
           subject: string;
@@ -1515,6 +1516,7 @@ export type Database = {
           likes_count?: number;
           ordinal?: number | null;
           parent?: number | null;
+          pinned?: boolean;
           root?: number | null;
           root_class_id?: number | null;
           subject: string;
@@ -1535,6 +1537,7 @@ export type Database = {
           likes_count?: number;
           ordinal?: number | null;
           parent?: number | null;
+          pinned?: boolean;
           root?: number | null;
           root_class_id?: number | null;
           subject?: string;
@@ -8912,7 +8915,7 @@ export type Database = {
         Returns: boolean;
       };
       authorize_for_private_discussion_thread: {
-        Args: { root: number };
+        Args: { p_root: number };
         Returns: boolean;
       };
       authorize_for_submission: {
