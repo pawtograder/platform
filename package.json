@@ -104,6 +104,7 @@
     "openai": "^5.16.0",
     "papaparse": "^5.5.3",
     "pluralize": "^8.0.0",
+    "posthog-js": "^1.266.0",
     "react": "18.3.0",
     "react-bootstrap": "^1.0.1",
     "react-dom": "18.3.0",

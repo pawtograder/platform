@@ -2,10 +2,15 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { useEffect, useState } from "react";
+import { usePostHog } from "posthog-js/react";
 
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
   const [errorID, setErrorID] = useState<string | null>(null);
+  const posthog = usePostHog();
   useEffect(() => {
+    posthog.capture("error", {
+      error: error.message,
+    });
     setErrorID(Sentry.captureException(error));
   }, [error]);
 

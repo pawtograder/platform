@@ -15,6 +15,7 @@ export default function GradebookLayout({ children }: { children: React.ReactNod
     } catch {
       // Course data not available yet, skip setting title
     }
+    throw new Error("test");
   }, [controller]);
   return <GradebookProvider>{children}</GradebookProvider>;
 }
