@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { processGradebookCellCalculation } from "./GradebookProcessor.ts";
+import { processGradebookRowCalculation, processGradebookRowsCalculation, RowUpdate } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 // Declare EdgeRuntime for type safety
@@ -27,132 +27,317 @@ export type QueueMessage<T> = {
   message: T;
 };
 
-/**
- * Batch check which cells have dependencies that are currently being recalculated
- */
-async function filterCellsByDependencyStatus(
-  cells: { gradebook_column_id: number; student_id: string; is_private: boolean }[],
+type RowMessage = {
+  class_id: number;
+  gradebook_id: number;
+  student_id: string;
+  is_private: boolean;
+};
+
+const SCOPED_FETCH_THRESHOLD = 20;
+
+async function processRowsForClass(
   adminSupabase: ReturnType<typeof createClient<Database>>,
-  scope: Sentry.Scope
-): Promise<{
-  readyToProcess: typeof cells;
-  waitingForDependencies: typeof cells;
-}> {
-  if (cells.length === 0) {
-    return { readyToProcess: [], waitingForDependencies: [] };
+  scope: Sentry.Scope,
+  queueMessages: QueueMessage<RowMessage>[],
+  classId: number
+): Promise<boolean> {
+  const classScope = scope.clone();
+  classScope.setTag("class_id", classId);
+
+  // Build a map of (gradebook_id, student_id, is_private) → messages
+  const keyFor = (m: RowMessage) => `${m.gradebook_id}:${m.student_id}:${m.is_private}`;
+  const rows = new Map<string, QueueMessage<RowMessage>[]>();
+  for (const msg of queueMessages) {
+    const k = keyFor(msg.message);
+    const arr = rows.get(k) ?? [];
+    arr.push(msg);
+    rows.set(k, arr);
   }
 
-  // Get all unique column IDs
-  const columnIds = Array.from(new Set(cells.map((cell) => cell.gradebook_column_id)));
-
-  // Batch fetch all column dependencies
-  const { data: columns, error: columnsError } = await adminSupabase
-    .from("gradebook_columns")
-    .select("id, dependencies")
-    .in("id", columnIds);
-
-  if (columnsError) {
-    const newScope = scope.clone();
-    newScope.setContext("column_ids", { ids: columnIds });
-    Sentry.captureException(columnsError, newScope);
-    console.error("Error fetching gradebook columns for dependency check:", columnsError);
-    // On error, assume all cells are ready to avoid blocking processing
-    return { readyToProcess: cells, waitingForDependencies: [] };
+  // Group rows by gradebook_id to maximize data reuse
+  const gbToRows = new Map<number, { key: string; msg: QueueMessage<RowMessage> }[]>();
+  for (const [key, msgs] of rows.entries()) {
+    const first = msgs[0];
+    const gb = first.message.gradebook_id;
+    const arr = gbToRows.get(gb) ?? [];
+    arr.push({ key, msg: first });
+    gbToRows.set(gb, arr);
   }
 
-  if (!columns) {
-    return { readyToProcess: cells, waitingForDependencies: [] };
-  }
+  let didWork = false;
+  for (const [gradebook_id, rowEntries] of gbToRows.entries()) {
+    const isBulk = rowEntries.length > SCOPED_FETCH_THRESHOLD;
 
-  // Create a map of column dependencies
-  const columnDepsMap = new Map<number, number[]>();
-  for (const column of columns) {
-    const deps = column.dependencies as { gradebook_columns?: number[] };
-    if (deps?.gradebook_columns && deps.gradebook_columns.length > 0) {
-      columnDepsMap.set(column.id, deps.gradebook_columns);
-    }
-  }
+    if (isBulk) {
+      // Full-class fetch for this gradebook & privacy: compute all rows first, then bulk RPC per row
+      const studentIds = rowEntries.map((e) => e.msg.message.student_id);
+      const is_private = rowEntries[0].msg.message.is_private;
 
-  // Get all unique student-privacy combinations that have dependencies
-  const studentsWithDeps = cells.filter((cell) => columnDepsMap.has(cell.gradebook_column_id));
+      // Paginate through all rows with pageSize 1000
+      const allGcs: Array<{
+        id: number;
+        gradebook_column_id: number;
+        is_missing: boolean;
+        is_excused: boolean;
+        is_droppable: boolean;
+        score_override: number | null;
+        score: number | null;
+        released: boolean;
+        score_override_note: string | null;
+        incomplete_values: Database["public"]["Tables"]["gradebook_column_students"]["Row"]["incomplete_values"];
+        student_id: string;
+      }> = [];
+      let from = 0;
+      const pageSize = 1000;
+      while (true) {
+        const to = from + pageSize - 1;
+        const { data: page, error: gcsError } = await adminSupabase
+          .from("gradebook_column_students")
+          .select(
+            "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
+          )
+          .eq("class_id", classId)
+          .eq("gradebook_id", gradebook_id)
+          .eq("is_private", is_private)
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (gcsError) {
+          Sentry.captureException(gcsError, classScope);
+          break;
+        }
+        if (!page || page.length === 0) break;
+        allGcs.push(...(page as unknown as typeof allGcs));
+        if (page.length < pageSize) break;
+        from += pageSize;
+      }
 
-  if (studentsWithDeps.length === 0) {
-    return { readyToProcess: cells, waitingForDependencies: [] };
-  }
+      const grouped: Map<string, typeof allGcs> = new Map();
+      for (const r of allGcs) {
+        const arr = grouped.get(r.student_id as string) ?? [];
+        arr.push(r);
+        grouped.set(r.student_id as string, arr);
+      }
 
-  // Get all dependency column IDs
-  const allDepColumnIds = Array.from(new Set(Array.from(columnDepsMap.values()).flat()));
+      const rowsInput = studentIds.map((sid) => ({ student_id: sid, gcsRows: grouped.get(sid) ?? [] }));
+      const updatesByStudent = await processGradebookRowsCalculation(adminSupabase, classScope, {
+        class_id: classId,
+        gradebook_id,
+        is_private,
+        rows: rowsInput
+      });
 
-  // Batch check for recalculating dependencies
-  const { data: recalculatingCells, error: recalculatingError } = await adminSupabase
-    .from("gradebook_column_students")
-    .select("gradebook_column_id, student_id, is_private")
-    .in("gradebook_column_id", allDepColumnIds)
-    .in("student_id", Array.from(new Set(studentsWithDeps.map((c) => c.student_id))))
-    .eq("is_recalculating", true);
+      // Pre-fetch versions for all rows in this gradebook/privacy (avoid IN with many ids)
+      const versionsByStudent = new Map<string, number>();
+      {
+        let vFrom = 0;
+        const vPageSize = 1000;
+        while (true) {
+          const vTo = vFrom + vPageSize - 1;
+          const { data: verPage, error: verErr } = await adminSupabase
+            .from("gradebook_row_recalc_state")
+            .select("student_id, version")
+            .eq("class_id", classId)
+            .eq("gradebook_id", gradebook_id)
+            .eq("is_private", is_private)
+            .order("student_id", { ascending: true })
+            .range(vFrom, vTo);
+          if (verErr) {
+            Sentry.captureException(verErr, classScope);
+            break;
+          }
+          if (!verPage || verPage.length === 0) break;
+          for (const row of verPage as unknown as Array<{ student_id: string; version: number }>) {
+            versionsByStudent.set(row.student_id, row.version);
+          }
+          if (verPage.length < vPageSize) break;
+          vFrom += vPageSize;
+        }
+      }
 
-  if (recalculatingError) {
-    const newScope = scope.clone();
-    newScope.setContext("dependency_column_ids", { ids: allDepColumnIds });
-    newScope.setContext("student_ids", { ids: Array.from(new Set(studentsWithDeps.map((c) => c.student_id))) });
-    Sentry.captureException(recalculatingError, newScope);
-    console.error("Error checking for recalculating dependencies:", recalculatingError);
-    // On error, assume no dependencies are recalculating to avoid blocking
-    return { readyToProcess: cells, waitingForDependencies: [] };
-  }
-
-  // Create a set of blocked student-column-privacy combinations
-  const blockedCombinations = new Set<string>();
-  if (recalculatingCells) {
-    for (const recalc of recalculatingCells) {
-      blockedCombinations.add(`${recalc.gradebook_column_id}:${recalc.student_id}:${recalc.is_private}`);
-    }
-  }
-
-  // Separate cells into ready vs waiting
-  const readyToProcess: typeof cells = [];
-  const waitingForDependencies: typeof cells = [];
-
-  for (const cell of cells) {
-    const depColumnIds = columnDepsMap.get(cell.gradebook_column_id);
-
-    if (!depColumnIds) {
-      // No dependencies, ready to process
-      readyToProcess.push(cell);
+      // Apply updates and archive per row
+      for (const entry of rowEntries) {
+        const { student_id } = entry.msg.message;
+        // Ensure UI and gating reflect processing now
+        await adminSupabase.from("gradebook_row_recalc_state").upsert({
+          class_id: classId,
+          gradebook_id,
+          student_id,
+          is_private,
+          dirty: true,
+          is_recalculating: true,
+          updated_at: new Date().toISOString()
+        });
+        const updates = updatesByStudent.get(student_id) ?? [];
+        if (updates.length > 0) {
+          const expectedVersion = versionsByStudent.get(student_id) ?? 0;
+          const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
+            p_class_id: classId,
+            p_gradebook_id: gradebook_id,
+            p_student_id: student_id,
+            p_is_private: is_private,
+            p_updates:
+              updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
+            p_expected_version: expectedVersion
+          };
+          const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
+          if (rpcError) {
+            Sentry.captureException(rpcError, classScope);
+          }
+        }
+        // Clear row state only if version hasn't changed mid-run
+        const { data: verAfter } = await adminSupabase
+          .from("gradebook_row_recalc_state")
+          .select("version")
+          .eq("class_id", classId)
+          .eq("gradebook_id", gradebook_id)
+          .eq("student_id", student_id)
+          .eq("is_private", is_private)
+          .single();
+        const expectedVersion = versionsByStudent.get(student_id) ?? 0;
+        if (((verAfter as unknown as { version?: number } | null)?.version ?? null) === expectedVersion) {
+          await adminSupabase
+            .from("gradebook_row_recalc_state")
+            .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
+            .eq("class_id", classId)
+            .eq("gradebook_id", gradebook_id)
+            .eq("student_id", student_id)
+            .eq("is_private", is_private);
+        }
+        // Archive the message
+        await adminSupabase
+          .schema("pgmq_public")
+          .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: entry.msg.msg_id });
+        didWork = true;
+      }
       continue;
     }
 
-    // Check if any dependencies are being recalculated
-    const hasBlockingDeps = depColumnIds.some((depColId) =>
-      blockedCombinations.has(`${depColId}:${cell.student_id}:${cell.is_private}`)
-    );
+    // Scoped path per row
+    for (const { msg } of rowEntries) {
+      const { student_id, is_private } = msg.message;
+      classScope.setContext("row", { gradebook_id, student_id, is_private });
 
-    if (hasBlockingDeps) {
-      waitingForDependencies.push(cell);
-    } else {
-      readyToProcess.push(cell);
+      // Fetch row cell ids
+      const { data: gcsRows, error: gcsError } = await adminSupabase
+        .from("gradebook_column_students")
+        .select(
+          "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values"
+        )
+        .eq("class_id", classId)
+        .eq("gradebook_id", gradebook_id)
+        .eq("student_id", student_id)
+        .eq("is_private", is_private);
+
+      if (gcsError || !gcsRows || gcsRows.length === 0) {
+        if (gcsError) Sentry.captureException(gcsError, classScope);
+        continue;
+      }
+
+      // Mark row as recalculating now (defensive even if already set at enqueue)
+      await adminSupabase.from("gradebook_row_recalc_state").upsert({
+        class_id: classId,
+        gradebook_id,
+        student_id,
+        is_private,
+        dirty: true,
+        is_recalculating: true,
+        updated_at: new Date().toISOString()
+      });
+
+      // Compute row updates in-memory
+      let updates: RowUpdate[] = [];
+      try {
+        updates = await processGradebookRowCalculation(adminSupabase, classScope, {
+          class_id: classId,
+          gradebook_id,
+          student_id,
+          is_private,
+          gcsRows
+        });
+      } catch (e) {
+        Sentry.captureException(e, classScope);
+        continue;
+      }
+
+      // Fetch current version for optimistic update
+      const { data: versionRow } = await adminSupabase
+        .from("gradebook_row_recalc_state")
+        .select("version")
+        .eq("class_id", classId)
+        .eq("gradebook_id", gradebook_id)
+        .eq("student_id", student_id)
+        .eq("is_private", is_private)
+        .single();
+      const expectedVersion = ((versionRow as unknown as { version?: number } | null)?.version ?? 0) as number;
+
+      // Send batched update via RPC
+      const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
+        p_class_id: classId,
+        p_gradebook_id: gradebook_id,
+        p_student_id: student_id,
+        p_is_private: is_private,
+        p_updates: updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
+        p_expected_version: expectedVersion
+      };
+      const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
+      if (rpcError) {
+        Sentry.captureException(rpcError, classScope);
+        console.error("Error updating row via RPC:", rpcError);
+      }
+
+      // Clear row state flags only if version hasn't changed mid-run
+      const { data: verAfter } = await adminSupabase
+        .from("gradebook_row_recalc_state")
+        .select("version")
+        .eq("class_id", classId)
+        .eq("gradebook_id", gradebook_id)
+        .eq("student_id", student_id)
+        .eq("is_private", is_private)
+        .single();
+      const versionUnchanged =
+        ((verAfter as unknown as { version?: number } | null)?.version ?? null) === expectedVersion;
+      const { error: clearError } = versionUnchanged
+        ? await adminSupabase
+            .from("gradebook_row_recalc_state")
+            .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
+            .eq("class_id", classId)
+            .eq("gradebook_id", gradebook_id)
+            .eq("student_id", student_id)
+            .eq("is_private", is_private)
+        : ({ error: null } as { error: unknown | null });
+      if (clearError) {
+        Sentry.captureException(clearError, classScope);
+        console.error("Error clearing row state:", clearError);
+      }
+
+      // Archive messages for this row
+      const { error: archiveError } = await adminSupabase
+        .schema("pgmq_public")
+        .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: msg.msg_id });
+      if (archiveError) {
+        Sentry.captureException(archiveError, classScope);
+        console.error("Error archiving completed message:", archiveError);
+      }
+
+      didWork = true;
     }
   }
 
-  return { readyToProcess, waitingForDependencies };
+  return didWork;
 }
 
 /**
  * Process a batch of gradebook cell calculations with dependency coordination.
  *
- * This function implements coordination between multiple workers to prevent race conditions:
- * 1. Reads messages from the queue
- * 2. Filters out cells whose dependencies are currently being recalculated by other workers
- * 3. Re-queues cells that must wait for dependencies to complete
- * 4. Processes only cells that are ready (no dependencies being recalculated)
- * 5. Uses the is_recalculating flag to coordinate between workers
  */
 export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>, scope: Sentry.Scope) {
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
-    queue_name: "gradebook_column_recalculate",
+    queue_name: "gradebook_row_recalculate",
     sleep_seconds: 60, // Short sleep since we're polling frequently
     n: 500
   });
+  console.log(`Read ${result.data?.length} messages from gradebook_row_recalculate queue`);
   if (result.error) {
     Sentry.captureException(result.error, scope);
     console.error("Queue read error:", result.error);
@@ -161,115 +346,23 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
 
   scope.setTag("queue_length", result.data?.length || 0);
   if (result.data && result.data.length > 0) {
-    const queueMessages = result.data as QueueMessage<{
-      gradebook_column_id: number;
-      student_id: string;
-      gradebook_column_student_id: number;
-      is_private: boolean;
-    }>[];
-
-    // Filter cells to separate those that can be processed now vs those that need to wait
-    const cellMessages = queueMessages.map((msg) => msg.message);
-    const { readyToProcess: readyCells, waitingForDependencies: waitingCells } = await filterCellsByDependencyStatus(
-      cellMessages,
-      adminSupabase,
-      scope
-    );
-
-    // Map back to queue messages
-    const readyToProcess = queueMessages.filter((msg) =>
-      readyCells.some(
-        (cell) =>
-          cell.gradebook_column_id === msg.message.gradebook_column_id &&
-          cell.student_id === msg.message.student_id &&
-          cell.is_private === msg.message.is_private
-      )
-    );
-
-    const waitingForDependencies = queueMessages.filter((msg) =>
-      waitingCells.some(
-        (cell) =>
-          cell.gradebook_column_id === msg.message.gradebook_column_id &&
-          cell.student_id === msg.message.student_id &&
-          cell.is_private === msg.message.is_private
-      )
-    );
-
-    scope.setTag("ready_to_process", readyToProcess.length);
-    scope.setTag("waiting_for_dependencies", waitingForDependencies.length);
-
-    // Re-queue cells that are waiting for dependencies
-    if (waitingForDependencies.length > 0) {
-      console.log(`Re-queuing ${waitingForDependencies.length} cells waiting for dependencies`);
-
-      // Archive the original messages and send new ones with a delay
-      const requeuePromises = waitingForDependencies.map(async (msg) => {
-        // Archive the original message
-        const { error: archiveError } = await adminSupabase
-          .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: msg.msg_id });
-
-        if (archiveError) {
-          const newScope = scope.clone();
-          newScope.setContext("message_id", { id: msg.msg_id });
-          newScope.setContext("message", msg.message);
-          Sentry.captureException(archiveError, newScope);
-          console.error("Error archiving message during requeue:", archiveError);
-          return;
-        }
-
-        // Re-queue with a 5-second delay to avoid immediate re-processing
-        // Note: pgmq doesn't support delay_seconds in send, so we'll just re-queue immediately
-        // The worker polling interval should prevent immediate re-processing
-        const { error: sendError } = await adminSupabase.schema("pgmq_public").rpc("send", {
-          queue_name: "gradebook_column_recalculate",
-          message: msg.message
-        });
-
-        if (sendError) {
-          const newScope = scope.clone();
-          newScope.setContext("message", msg.message);
-          Sentry.captureException(sendError, newScope);
-          console.error("Error re-queuing message:", sendError);
-        }
-      });
-
-      await Promise.all(requeuePromises);
+    const queueMessages = result.data as QueueMessage<RowMessage>[];
+    // Group by class for processing reuse
+    const classIdToMessages = new Map<number, typeof queueMessages>();
+    for (const msg of queueMessages) {
+      const classId = msg.message.class_id;
+      const arr = classIdToMessages.get(classId) ?? [];
+      arr.push(msg);
+      classIdToMessages.set(classId, arr);
     }
 
-    // Process only the cells that are ready
-    if (readyToProcess.length > 0) {
-      const studentColumns = readyToProcess.map((s) => ({
-        gradebook_column_id: s.message.gradebook_column_id,
-        student_id: s.message.student_id,
-        gradebook_column_student_id: s.message.gradebook_column_student_id,
-        is_private: s.message.is_private,
-        onComplete: async () => {
-          const { error: archiveError } = await adminSupabase
-            .schema("pgmq_public")
-            .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
-
-          if (archiveError) {
-            const newScope = scope.clone();
-            newScope.setContext("message_id", { id: s.msg_id });
-            newScope.setContext("message", s.message);
-            Sentry.captureException(archiveError, newScope);
-            console.error("Error archiving completed message:", archiveError);
-          }
-        }
-      }));
-
-      try {
-        await processGradebookCellCalculation(studentColumns, adminSupabase, scope);
-        return true;
-      } catch (e) {
-        Sentry.captureException(e, scope);
-        return false;
-      }
-    } else {
-      console.log("No cells ready to process - all are waiting for dependencies");
-      return false;
+    let processedAny = false;
+    for (const [classId, messages] of classIdToMessages.entries()) {
+      const didWork = await processRowsForClass(adminSupabase, scope, messages, classId);
+      processedAny = processedAny || didWork;
     }
+
+    return processedAny;
   } else {
     // console.log("No messages in queue");
     return false;

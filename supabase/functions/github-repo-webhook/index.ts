@@ -608,6 +608,23 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
 });
 // Handle team membership changes (when users are added to GitHub teams)
 eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) => {
+  // Extract team information early for e2e-ignore guard
+  const teamSlug = (payload.team as { slug?: string })?.slug;
+  const orgName = payload.organization?.login;
+
+  // Parse team slug to determine course slug for e2e-ignore guard
+  let courseSlug: string | undefined;
+  if (teamSlug?.endsWith("-staff")) {
+    courseSlug = teamSlug.slice(0, -6); // Remove '-staff'
+  } else if (teamSlug?.endsWith("-students")) {
+    courseSlug = teamSlug.slice(0, -9); // Remove '-students'
+  }
+
+  // e2e-ignore guard - execute before any console.log or metric calls
+  if (orgName === "pawtograder-playground" && courseSlug?.startsWith("e2e-ignore-")) {
+    return;
+  }
+
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "membership", payload);
 
@@ -619,8 +636,6 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
       return;
     }
 
-    // Extract team information - cast to any to access team property
-    const teamSlug = payload.team?.slug;
     const memberGithubUsername = payload.member?.login;
 
     if (!teamSlug || !memberGithubUsername) {
@@ -630,7 +645,6 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 
     // Parse team slug to determine course and team type
     // Team naming convention: {courseSlug}-staff or {courseSlug}-students
-    let courseSlug: string;
     let teamType: "staff" | "student";
 
     if (teamSlug.endsWith("-staff")) {
@@ -643,7 +657,6 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
       return;
     }
 
-    const orgName = payload.organization?.login;
     scope?.setTag("org_name", orgName);
     scope?.setTag("course_slug", courseSlug);
     scope?.setTag("team_type", teamType);
@@ -730,6 +743,14 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 
 // Handle organization invitation events
 eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent }) => {
+  // Extract organization name early for e2e-ignore guard
+  const organizationName = payload.organization?.login;
+
+  // e2e-ignore guard - execute before any console.log or metric calls
+  if (organizationName === "pawtograder-playground") {
+    return;
+  }
+
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "organization", payload);
   if ("invitation" in payload) {
@@ -755,9 +776,6 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
       return;
     }
 
-    // Extract organization from the payload
-    const organizationName = payload.organization?.login;
-
     if (!organizationName) {
       return;
     }
@@ -773,9 +791,6 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
     const userError = result.error;
 
     if (userError || !userData) {
-      if (organizationName === "pawtograder-playground") {
-        return; // Don't bother logging this - we intentionally share this org across instances.
-      }
       if (userError) {
         Sentry.captureException(userError, scope);
       }

@@ -44,6 +44,8 @@ export class RealtimeChannelManager {
   private static _instance: RealtimeChannelManager | null = null;
   private _channels: Map<string, ManagedChannel> = new Map();
   private _client: SupabaseClient<Database> | null = null;
+  // Prevent duplicate channel creation for the same topic when multiple callers subscribe concurrently
+  private _pendingChannelCreates: Map<string, Promise<void>> = new Map();
 
   // Network connectivity tracking
   private _isOnline: boolean = navigator.onLine;
@@ -308,43 +310,58 @@ export class RealtimeChannelManager {
     statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void
   ): Promise<() => void> {
     this._breadcrumb("subscription", "subscribe_called", { topic });
+    // Fast path if channel already exists
     let managedChannel = this._channels.get(topic);
-
     if (!managedChannel) {
-      // Create new channel and subscription
-      await this._refreshSessionIfNeeded(client);
-      const channel = client.channel(topic, { config: { private: true } });
-      this._breadcrumb("channel", "created", { topic });
+      // If a creation is already in-flight for this topic, wait for it
+      const pending = this._pendingChannelCreates.get(topic);
+      if (pending) {
+        await pending;
+      } else {
+        // Start creation and store the promise to serialize concurrent calls
+        const createPromise = (async () => {
+          await this._refreshSessionIfNeeded(client);
+          const channel = client.channel(topic, { config: { private: true } });
+          this._breadcrumb("channel", "created", { topic });
 
-      managedChannel = {
-        channel,
-        subscriptions: [],
-        topic,
-        client,
-        reconnectAttempts: 0,
-        lastReconnectTime: 0,
-        isReconnecting: false
-      };
+          const newManaged: ManagedChannel = {
+            channel,
+            subscriptions: [],
+            topic,
+            client,
+            reconnectAttempts: 0,
+            lastReconnectTime: 0,
+            isReconnecting: false
+          };
 
-      // Set up broadcast message handler
-      channel.on("broadcast", { event: "broadcast" }, (message) => {
-        if (Math.random() < 0.1) {
-          this._breadcrumb(
-            "channel",
-            "broadcast_received",
-            { topic, type: (message.payload as BroadcastMessage)?.type },
-            "debug"
-          );
-        }
-        this._routeMessage(topic, message.payload as BroadcastMessage);
-      });
+          // Set up broadcast message handler
+          channel.on("broadcast", { event: "broadcast" }, (message) => {
+            if (Math.random() < 0.1) {
+              this._breadcrumb(
+                "channel",
+                "broadcast_received",
+                { topic, type: (message.payload as BroadcastMessage)?.type },
+                "debug"
+              );
+            }
+            this._routeMessage(topic, message.payload as BroadcastMessage);
+          });
 
-      // Subscribe to the channel (this should only happen once per topic)
-      channel.subscribe(async (status, err) => {
-        this._handleSubscriptionStateEvent(topic, status, err);
-      });
+          // Subscribe to the channel (this should only happen once per topic)
+          channel.subscribe(async (status, err) => {
+            this._handleSubscriptionStateEvent(topic, status, err, channel);
+          });
 
-      this._channels.set(topic, managedChannel);
+          this._channels.set(topic, newManaged);
+        })().finally(() => {
+          this._pendingChannelCreates.delete(topic);
+        });
+
+        this._pendingChannelCreates.set(topic, createPromise);
+        await createPromise;
+      }
+
+      managedChannel = this._channels.get(topic)!;
     }
 
     // Create the subscription object
@@ -413,14 +430,27 @@ export class RealtimeChannelManager {
   /**
    * Handle subscription state events and notify all subscribed controllers
    */
-  private _handleSubscriptionStateEvent(topic: string, status: REALTIME_SUBSCRIBE_STATES, err?: Error) {
+  private _handleSubscriptionStateEvent(
+    topic: string,
+    status: REALTIME_SUBSCRIBE_STATES,
+    err?: Error,
+    sourceChannel?: RealtimeChannel
+  ) {
     const managedChannel = this._channels.get(topic);
     if (!managedChannel) return;
 
+    // Ignore events from stale channel instances created before latest resubscribe
+    if (sourceChannel && managedChannel.channel !== sourceChannel) {
+      return;
+    }
     this._breadcrumb("subscription", "state_event", { topic, status });
 
     // Handle reconnection logic for certain error states
-    if (status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR) {
+    if (
+      status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
+      status === REALTIME_SUBSCRIBE_STATES.CLOSED ||
+      status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+    ) {
       // Only attempt reconnection if the tab is visible and we're not already reconnecting
       if (!document.hidden && !managedChannel.isReconnecting && this._shouldAttemptReconnection(managedChannel)) {
         this._resubscribeToChannelWithBackoff(topic);
@@ -597,14 +627,30 @@ export class RealtimeChannelManager {
         this._routeMessage(topic, message.payload as BroadcastMessage);
       });
 
-      // Subscribe to the new channel with improved error handling
-      newChannel.subscribe(async (status, err) => {
-        // Use a different handler to prevent infinite recursion
-        this._handleReconnectionStateEvent(topic, status, err);
-      });
-
-      // Update the managed channel
+      // Update the managed channel reference before subscribing
       managedChannel.channel = newChannel;
+
+      // Subscribe and wait for a definitive outcome
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        newChannel.subscribe((status, err) => {
+          // Notify listeners of status changes
+          this._handleReconnectionStateEvent(topic, status, err);
+          if (settled) return;
+          switch (status) {
+            case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
+              settled = true;
+              resolve();
+              break;
+            case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
+            case REALTIME_SUBSCRIBE_STATES.CLOSED:
+            case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
+              settled = true;
+              reject(err ?? new Error(`Failed to resubscribe to ${topic}: ${status}`));
+              break;
+          }
+        });
+      });
 
       // Note: Don't reset isReconnecting here - let the SUBSCRIBED event handler do it
       // This prevents race conditions
@@ -633,7 +679,6 @@ export class RealtimeChannelManager {
         managedChannel.isReconnecting = false;
         this._breadcrumb("reconnect", "subscribed", { topic });
         break;
-
       case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
         managedChannel.isReconnecting = false;
         this._breadcrumb("reconnect", "channel_error", { topic }, "warning");
@@ -646,7 +691,8 @@ export class RealtimeChannelManager {
 
       case REALTIME_SUBSCRIBE_STATES.CLOSED:
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
-        managedChannel.isReconnecting = false;
+        // Do not change flags or schedule retries here.
+        // The backoff controller (_resubscribeToChannelWithBackoff) manages retry lifecycle.
         this._breadcrumb(
           "reconnect",
           status === REALTIME_SUBSCRIBE_STATES.CLOSED ? "closed" : "timed_out",
