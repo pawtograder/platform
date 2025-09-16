@@ -41,7 +41,10 @@ export function MentionDropdown({ threads, selectedIndex, onSelect, position, vi
             cursor="pointer"
             bg={index === selectedIndex ? "bg.muted" : "transparent"}
             _hover={{ bg: "bg.muted" }}
-            onClick={() => onSelect(index)}
+            onMouseDown={(event: React.MouseEvent) => {
+              event.preventDefault();
+              onSelect(index);
+            }}
             borderRadius="sm"
             mx="1"
           >

@@ -58,6 +58,11 @@ export function getCursorPosition(element: HTMLTextAreaElement, selectionStart: 
   mirror.style.whiteSpace = "pre-wrap";
   mirror.style.wordWrap = "break-word";
 
+  // Get the textarea's bounding rect to anchor the mirror
+  const elementRect = element.getBoundingClientRect();
+  mirror.style.left = `${elementRect.left}px`;
+  mirror.style.top = `${elementRect.top}px`;
+
   // Add the mirror to the DOM
   document.body.appendChild(mirror);
 
@@ -76,12 +81,13 @@ export function getCursorPosition(element: HTMLTextAreaElement, selectionStart: 
 
   // Get the position of the cursor span
   const cursorRect = cursorSpan.getBoundingClientRect();
-  const elementRect = element.getBoundingClientRect();
 
-  // Calculate relative position
+  // Calculate relative position using the anchored mirror
+  // Since the mirror is positioned at elementRect.left/top, cursorRect is already in viewport coordinates
+  // We need to convert to element-relative coordinates by subtracting scroll offsets
   const position = {
-    top: cursorRect.top - elementRect.top + element.scrollTop,
-    left: cursorRect.left - elementRect.left + element.scrollLeft,
+    top: cursorRect.top - elementRect.top - element.scrollTop,
+    left: cursorRect.left - elementRect.left - element.scrollLeft,
     height: cursorRect.height
   };
 

@@ -2,9 +2,10 @@
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import MdEditor from "@/components/ui/md-editor";
+import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { Toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -14,7 +15,6 @@ import { useCallback } from "react";
 import { Controller } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
@@ -298,7 +298,7 @@ export default function NewDiscussionThread() {
                   control={control}
                   render={({ field }) => {
                     return (
-                      <MdEditor
+                      <MessageInput
                         style={{ minWidth: "100%", width: "100%" }}
                         onChange={field.onChange}
                         value={field.value}
@@ -308,7 +308,7 @@ export default function NewDiscussionThread() {
                 />
               </Field>
             </Fieldset.Content>
-            <Button type="submit" loading={isSubmitting} disabled={isSubmitting} w="100%">
+            <Button type="submit" loading={isSubmitting} disabled={isSubmitting} w="100%" colorPalette="green">
               Submit
             </Button>
           </Fieldset.Root>

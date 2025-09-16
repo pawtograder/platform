@@ -24,7 +24,7 @@ import { Tooltip } from "./tooltip";
 
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   defaultSingleLine?: boolean;
-  sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
+  sendMessage?: (message: string, profile_id: string, close?: boolean) => Promise<void>;
   enableFilePicker?: boolean;
   enableGiphyPicker?: boolean;
   enableEmojiPicker?: boolean;
@@ -66,6 +66,7 @@ export default function MessageInput(props: MessageInputProps) {
     textAreaRef,
     onClose,
     closeButtonText,
+    onChange: editorOnChange,
     value: initialValue,
     ariaLabel,
     uploadFolder = "discussion",
@@ -102,9 +103,9 @@ export default function MessageInput(props: MessageInputProps) {
   const onChange = useCallback(
     (value: string) => {
       setValue(value);
-      props.onChange?.(value);
+      editorOnChange?.(value);
     },
-    [props]
+    [editorOnChange]
   );
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const public_profile = useUserProfile(public_profile_id);
@@ -135,7 +136,7 @@ export default function MessageInput(props: MessageInputProps) {
           if (!oldValue) return "";
           const replacementText = `[${replacement.text}](${replacement.link}) `;
           const newValue = oldValue.slice(0, replacement.start) + replacementText + oldValue.slice(replacement.end);
-          props.onChange?.(newValue);
+          editorOnChange?.(newValue);
 
           // Set cursor position after the replacement
           const newCursorPos = replacement.start + replacementText.length;
@@ -197,6 +198,9 @@ export default function MessageInput(props: MessageInputProps) {
 
   const fileUpload = useCallback(
     async (file: File) => {
+      if (!sendMessage) {
+        return null;
+      }
       // Check if this is a text/code file
       if (isTextFile(file)) {
         try {
@@ -337,6 +341,9 @@ export default function MessageInput(props: MessageInputProps) {
               // Mention handling is done in handleKeyDown
               return;
             }
+            if (!sendMessage) {
+              return;
+            }
             if (e.key === "Enter" && !(e.shiftKey || e.metaKey || !enterToSend)) {
               e.preventDefault();
               if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
@@ -461,6 +468,9 @@ export default function MessageInput(props: MessageInputProps) {
                     <GiphyPicker
                       onGifSelect={(gif: IGif) => {
                         setShowGiphyPicker(false);
+                        if (!sendMessage) {
+                          return;
+                        }
                         sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
                       }}
                     />
@@ -494,41 +504,46 @@ export default function MessageInput(props: MessageInputProps) {
               {closeButtonText ?? "Close"}
             </Button>
           )}
-          <Button
-            loading={isSending}
-            aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
-            onClick={async () => {
-              if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
-                toaster.create({
-                  title: "Empty message",
-                  description: "You must add a message to continue",
-                  type: "error"
-                });
-                return;
-              }
-              try {
-                setIsSending(true);
-                await sendMessage(value!, profile_id, true);
-                setValue("");
-                // Return focus to the textarea after sending (with small delay to ensure DOM update)
-                setTimeout(() => internalTextAreaRef?.current?.focus(), 0);
-              } catch (error) {
-                toaster.create({
-                  title: "Error sending message",
-                  description: error instanceof Error ? error.message : "Unknown error",
-                  type: "error"
-                });
-              } finally {
-                setIsSending(false);
-              }
-            }}
-            variant="solid"
-            colorPalette="green"
-            size="xs"
-            m={2}
-          >
-            {props.sendButtonText ? props.sendButtonText : "Send"}
-          </Button>
+          {sendMessage && (
+            <Button
+              loading={isSending}
+              aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
+              onClick={async () => {
+                if (!sendMessage) {
+                  return;
+                }
+                if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
+                  toaster.create({
+                    title: "Empty message",
+                    description: "You must add a message to continue",
+                    type: "error"
+                  });
+                  return;
+                }
+                try {
+                  setIsSending(true);
+                  await sendMessage(value!, profile_id, true);
+                  setValue("");
+                  // Return focus to the textarea after sending (with small delay to ensure DOM update)
+                  setTimeout(() => internalTextAreaRef?.current?.focus(), 0);
+                } catch (error) {
+                  toaster.create({
+                    title: "Error sending message",
+                    description: error instanceof Error ? error.message : "Unknown error",
+                    type: "error"
+                  });
+                } finally {
+                  setIsSending(false);
+                }
+              }}
+              variant="solid"
+              colorPalette="green"
+              size="xs"
+              m={2}
+            >
+              {props.sendButtonText ? props.sendButtonText : "Send"}
+            </Button>
+          )}
         </HStack>
       </VStack>
     );
@@ -565,8 +580,9 @@ export default function MessageInput(props: MessageInputProps) {
           }
         }}
         onChange={(value) => {
+          console.log("onChange", value);
           setValue(value);
-          props.onChange?.(value);
+          editorOnChange?.(value);
           // Update cursor position when text changes
           setTimeout(() => {
             const editorTextarea = containerRef.current?.querySelector("textarea");
@@ -642,7 +658,7 @@ export default function MessageInput(props: MessageInputProps) {
               onChange={attachFile}
             />
           )}
-          {enableGiphyPicker && (
+          {enableGiphyPicker && sendMessage && (
             <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
               <PopoverTrigger asChild>
                 <Button
@@ -662,6 +678,9 @@ export default function MessageInput(props: MessageInputProps) {
                   <GiphyPicker
                     onGifSelect={(gif: IGif) => {
                       setShowGiphyPicker(false);
+                      if (!sendMessage) {
+                        return;
+                      }
                       sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
                     }}
                   />
@@ -669,7 +688,7 @@ export default function MessageInput(props: MessageInputProps) {
               </PopoverContent>
             </PopoverRoot>
           )}
-          {enableEmojiPicker && (
+          {enableEmojiPicker && sendMessage && (
             <Tooltip content="Toggle emoji picker">
               <Button
                 aria-label="Toggle emoji picker"
@@ -689,41 +708,43 @@ export default function MessageInput(props: MessageInputProps) {
             {closeButtonText ?? "Close"}
           </Button>
         )}
-        <Button
-          loading={isSending}
-          aria-label="Send message"
-          onClick={async () => {
-            if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
-              toaster.create({
-                title: "Empty message",
-                description: "You must add a message to continue",
-                type: "error"
-              });
-              return;
-            }
-            try {
-              setIsSending(true);
-              await sendMessage(value!, profile_id, true);
-              setValue("");
-              // Return focus to the MDEditor after sending
-              mdEditorRef?.current?.codemirror?.focus();
-            } catch (error) {
-              toaster.create({
-                title: "Error sending message",
-                description: error instanceof Error ? error.message : "Unknown error",
-                type: "error"
-              });
-            } finally {
-              setIsSending(false);
-            }
-          }}
-          variant="solid"
-          colorPalette="green"
-          size="xs"
-          ml={2}
-        >
-          {props.sendButtonText ? props.sendButtonText : "Send"}
-        </Button>
+        {sendMessage && (
+          <Button
+            loading={isSending}
+            aria-label="Send message"
+            onClick={async () => {
+              if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
+                toaster.create({
+                  title: "Empty message",
+                  description: "You must add a message to continue",
+                  type: "error"
+                });
+                return;
+              }
+              try {
+                setIsSending(true);
+                await sendMessage(value!, profile_id, true);
+                setValue("");
+                // Return focus to the MDEditor after sending
+                mdEditorRef?.current?.codemirror?.focus();
+              } catch (error) {
+                toaster.create({
+                  title: "Error sending message",
+                  description: error instanceof Error ? error.message : "Unknown error",
+                  type: "error"
+                });
+              } finally {
+                setIsSending(false);
+              }
+            }}
+            variant="solid"
+            colorPalette="green"
+            size="xs"
+            ml={2}
+          >
+            {props.sendButtonText ? props.sendButtonText : "Send"}
+          </Button>
+        )}
       </HStack>
     </VStack>
   );
