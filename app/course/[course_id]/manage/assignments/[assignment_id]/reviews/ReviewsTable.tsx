@@ -147,8 +147,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         `
         )
         .eq("assignment_id", Number(assignmentId))
-        .not("rubric_id", "eq", selfReviewRubric?.id || 0)
-        .limit(1000);
+        .not("rubric_id", "eq", selfReviewRubric?.id || 0);
 
       if (error) {
         toaster.error({ title: "Error fetching data for export", description: error.message });
@@ -187,8 +186,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           users(email)
         `
         )
-        .eq("class_id", course.classes.id)
-        .limit(1000);
+        .eq("class_id", course.classes.id);
 
       if (emailError) {
         toaster.error({ title: "Error fetching emails", description: emailError.message });
@@ -206,8 +204,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       const { data: extensionData, error: extensionError } = await supabase
         .from("assignment_due_date_exceptions")
         .select("*")
-        .eq("assignment_id", Number(assignmentId))
-        .limit(1000);
+        .eq("assignment_id", Number(assignmentId));
 
       if (extensionError) {
         toaster.error({ title: "Error fetching extensions", description: extensionError.message });
