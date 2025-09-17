@@ -835,42 +835,7 @@ USING (
 -- Complex SELECT policy with inlined help_request_is_private
 ALTER POLICY "Students can view help request members"
 ON public.help_request_students
-USING (
-  EXISTS (
-    SELECT 1
-    FROM public.user_privileges up
-    WHERE up.user_id = auth.uid()
-      AND up.class_id = help_request_students.class_id
-      AND up.role IN ('instructor','grader')
-  )
-  OR
-  (
-    -- Inline help_request_is_private: NOT hr.is_private
-    EXISTS (
-      SELECT 1
-      FROM public.help_requests hr
-      WHERE hr.id = help_request_students.help_request_id
-        AND NOT hr.is_private
-    )
-    AND EXISTS (
-      SELECT 1
-      FROM public.user_privileges up
-      WHERE up.user_id = auth.uid()
-        AND up.class_id = help_request_students.class_id
-    )
-  )
-  OR
-  (
-    -- Inline help_request_is_private: hr.is_private
-    EXISTS (
-      SELECT 1
-      FROM public.help_requests hr
-      WHERE hr.id = help_request_students.help_request_id
-        AND hr.is_private
-    )
-    AND public.user_is_in_help_request(help_request_id)
-  )
-);
+USING ((authorizeforclassgrader(class_id) OR ((NOT help_request_is_private(help_request_id)) AND authorizeforclass(class_id)) OR (help_request_is_private(help_request_id) AND user_is_in_help_request(help_request_id))));
 
 -- Inline RLS for help_request_file_references policies
 -- Original: authorizeforclass(class_id)
@@ -1061,9 +1026,6 @@ CREATE OR REPLACE FUNCTION "public"."user_is_in_help_request"("p_help_request_id
   );
 $$;
 
--- Drop the help_request_is_private function since it's now inlined
--- This simple function just returned hr.is_private and is now inlined for better performance
-DROP FUNCTION IF EXISTS "public"."help_request_is_private"("p_help_request_id" bigint);
 
 -- ========================================
 -- BATCH 2: Single Authorization Function Migrations
