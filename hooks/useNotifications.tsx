@@ -48,6 +48,7 @@ export function useNotifications(resource?: string, id?: number) {
           }
         });
       } catch (error) {
+        // eslint-disable-next-line no-console
         console.error("error setting notification read", error);
       }
     },

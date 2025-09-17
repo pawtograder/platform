@@ -22,7 +22,7 @@ export async function runHandler() {
   }
   if (result.data) {
     const scope = new Sentry.Scope();
-    scope.setTag("batch_processor", "gradebook_column_recalculate");
+    scope.setTag("batch_processor", "gradebook_row_recalculate");
     const studentColumns = (
       result.data as QueueMessage<{
         gradebook_column_id: number;
@@ -43,7 +43,7 @@ export async function runHandler() {
         }
         await adminSupabase
           .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
+          .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: s.msg_id });
       }
     }));
     await processGradebookCellCalculation(studentColumns, adminSupabase, scope);

@@ -45,7 +45,10 @@ export const updateSession = async (request: NextRequest) => {
 
     // protected routes
     if (request.nextUrl.pathname.startsWith("/course") && user.error) {
-      return NextResponse.redirect(new URL("/sign-in", request.url));
+      const signInUrl = new URL("/sign-in", request.url);
+      const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+      signInUrl.searchParams.set("redirect", originalPathWithSearch);
+      return NextResponse.redirect(signInUrl);
     }
     // const urlError = request.nextUrl.searchParams.get("error");
     // if (urlError && request.nextUrl.pathname !== "/error" && request.nextUrl.pathname !== "/sign-in") {
@@ -56,7 +59,7 @@ export const updateSession = async (request: NextRequest) => {
     }
 
     return response;
-  } catch (e) {
+  } catch {
     // If you are here, a Supabase client could not be created!
     // This is likely because you have not set up environment variables.
     // Check out http://localhost:3000 for Next Steps.

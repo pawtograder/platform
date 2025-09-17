@@ -335,7 +335,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_row_recalculate",
     sleep_seconds: 60, // Short sleep since we're polling frequently
-    n: 500
+    n: 20
   });
   console.log(`Read ${result.data?.length} messages from gradebook_row_recalculate queue`);
   if (result.error) {
