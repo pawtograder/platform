@@ -501,7 +501,12 @@ WITH CHECK (
       AND up.class_id = help_request_moderation.class_id
       AND up.role IN ('instructor','grader')
   )
-  AND (auth.uid() = moderator_profile_id)
+  AND EXISTS (
+    SELECT 1
+    FROM public.user_privileges up
+    WHERE up.user_id = auth.uid()
+      AND (up.public_profile_id = moderator_profile_id OR up.private_profile_id = moderator_profile_id)
+  )
 );
 
 ALTER POLICY "Graders can view moderation records and students can view their"
@@ -1040,6 +1045,11 @@ CREATE OR REPLACE FUNCTION "public"."user_is_in_help_request"("p_help_request_id
       select up.private_profile_id
       from public.user_privileges up
       where up.user_id = p_user_id
+      union 
+      select up.public_profile_id
+      from public.user_privileges up
+      where up.user_id = p_user_id
+        and up.public_profile_id is not null
     )
   ) OR exists (
     -- Check if user is the creator of the help request
@@ -1626,7 +1636,11 @@ ALTER POLICY "Allow students to see own logs, instructors/graders to see clas"
 ON public.flashcard_interaction_logs
 USING (
   (
-    (student_id = auth.uid())
+    EXISTS (
+      SELECT 1 FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = student_id OR up.private_profile_id = student_id)
+    )
     OR
     EXISTS (
       SELECT 1
@@ -1659,7 +1673,11 @@ ALTER POLICY "Allow students to see own progress, instructors/graders to see "
 ON public.student_flashcard_deck_progress
 USING (
   (
-    (student_id = auth.uid())
+        EXISTS (
+      SELECT 1 FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = student_id OR up.private_profile_id = student_id)
+    )
     OR
     EXISTS (
       SELECT 1
@@ -1731,12 +1749,12 @@ USING (
   -- Users can always see themselves
   (auth.uid() = user_id)
   OR
-  -- Instructors/graders can see students in their classes - optimized with = ANY()
+  -- Instructors/graders can see students in their classes - optimized with IN
   (
-    user_id = ANY(
-      SELECT student_up.user_id
-      FROM public.user_privileges student_up
-      JOIN public.user_privileges staff_up ON staff_up.class_id = student_up.class_id
+    user_id IN (
+      SELECT student_ur.user_id
+      FROM public.user_roles student_ur
+      JOIN public.user_privileges staff_up ON staff_up.class_id = student_ur.class_id
       WHERE staff_up.user_id = auth.uid()
         AND staff_up.role IN ('instructor','grader')
     )
@@ -1824,7 +1842,7 @@ USING (
   -- Path 1: Public threads visible to class members
   (
     (instructors_only = false)
-    AND class_id = ANY(
+    AND class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -1833,7 +1851,7 @@ USING (
   OR
   -- Path 2: Instructors/graders can see all threads in their classes
   (
-    class_id = ANY(
+    class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -1843,7 +1861,7 @@ USING (
   OR
   -- Path 3: Authors can see their own threads
   (
-    author = ANY(
+    author IN (
       SELECT up.private_profile_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -1949,7 +1967,7 @@ ON public.submission_artifacts
 USING (
   -- Path 1: Instructor/grader access
   (
-    submission_artifacts.class_id = ANY(
+    submission_artifacts.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -1959,7 +1977,7 @@ USING (
   OR
   -- Path 2: Profile ownership (profile_id always points to private profile)
   (
-    submission_artifacts.profile_id = ANY(
+    submission_artifacts.profile_id IN (
       SELECT up.private_profile_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -1970,7 +1988,7 @@ USING (
   -- Path 3: Assignment group membership
   (
     submission_artifacts.assignment_group_id IS NOT NULL
-    AND submission_artifacts.assignment_group_id = ANY(
+    AND submission_artifacts.assignment_group_id IN (
       SELECT agm.assignment_group_id
       FROM public.assignment_groups_members agm
       JOIN public.user_privileges up ON up.private_profile_id = agm.profile_id
@@ -1986,7 +2004,7 @@ ON public.grader_result_output
 USING (
   -- Path 1: Instructors/graders always see all
   (
-    grader_result_output.class_id = ANY(
+    grader_result_output.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2000,7 +2018,7 @@ USING (
     AND (
       -- Student profile ownership (student_id always points to private profile)
       (
-        grader_result_output.student_id = ANY(
+        grader_result_output.student_id IN (
           SELECT up.private_profile_id
           FROM public.user_privileges up
           WHERE up.user_id = auth.uid()
@@ -2011,7 +2029,7 @@ USING (
       -- Assignment group membership
       (
         grader_result_output.assignment_group_id IS NOT NULL
-        AND grader_result_output.assignment_group_id = ANY(
+        AND grader_result_output.assignment_group_id IN (
           SELECT agm.assignment_group_id
           FROM public.assignment_groups_members agm
           JOIN public.user_privileges up ON up.private_profile_id = agm.profile_id
@@ -2029,7 +2047,7 @@ ON public.grader_result_tests
 USING (
   -- Path 1: Instructors/graders see all
   (
-    grader_result_tests.class_id = ANY(
+    grader_result_tests.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2040,7 +2058,7 @@ USING (
   -- Path 2: Students see own if released (student_id always points to private profile)
   (
     is_released = true
-    AND grader_result_tests.student_id = ANY(
+    AND grader_result_tests.student_id IN (
       SELECT up.private_profile_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2051,7 +2069,7 @@ USING (
   -- Path 3: Assignment group members see group results
   (
     grader_result_tests.assignment_group_id IS NOT NULL
-    AND grader_result_tests.assignment_group_id = ANY(
+    AND grader_result_tests.assignment_group_id IN (
       SELECT agm.assignment_group_id
       FROM public.assignment_groups_members agm
       JOIN public.user_privileges up ON up.private_profile_id = agm.profile_id
@@ -2067,7 +2085,7 @@ ON public.grader_results
 USING (
   -- Path 1: Instructor/grader access
   (
-    grader_results.class_id = ANY(
+    grader_results.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2077,7 +2095,7 @@ USING (
   OR
   -- Path 2: Profile ownership (profile_id always points to private profile)
   (
-    grader_results.profile_id = ANY(
+    grader_results.profile_id IN (
       SELECT up.private_profile_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2088,7 +2106,7 @@ USING (
   -- Path 3: Assignment group membership
   (
     grader_results.assignment_group_id IS NOT NULL
-    AND grader_results.assignment_group_id = ANY(
+    AND grader_results.assignment_group_id IN (
       SELECT agm.assignment_group_id
       FROM public.assignment_groups_members agm
       JOIN public.user_privileges up ON up.private_profile_id = agm.profile_id
@@ -2104,7 +2122,7 @@ ON public.submission_reviews
 USING (
   -- Path 1: Instructors/graders see all
   (
-    submission_reviews.class_id = ANY(
+    submission_reviews.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2123,7 +2141,7 @@ ON public.submission_artifact_comments
 USING (
   -- Path 1: Instructors/graders see all
   (
-    submission_artifact_comments.class_id = ANY(
+    submission_artifact_comments.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2145,7 +2163,7 @@ ON public.submission_comments
 USING (
   -- Path 1: Instructors/graders see all
   (
-    submission_comments.class_id = ANY(
+    submission_comments.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2167,7 +2185,7 @@ ON public.submission_file_comments
 USING (
   -- Path 1: Instructors/graders see all
   (
-    submission_file_comments.class_id = ANY(
+    submission_file_comments.class_id IN (
       SELECT up.class_id
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
@@ -2191,7 +2209,7 @@ USING (
   AND (
     -- Path 1: Instructors/graders see all errors
     (
-      workflow_run_error.class_id = ANY(
+      workflow_run_error.class_id IN (
         SELECT up.class_id
         FROM public.user_privileges up
         WHERE up.user_id = auth.uid()
