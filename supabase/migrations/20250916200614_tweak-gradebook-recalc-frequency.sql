@@ -143,3 +143,222 @@ WHERE is_active = true AND assignment_group_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_roles_role_class_active
 ON public.user_roles (role, class_id, private_profile_id)
 WHERE disabled = false;
+
+
+-- Lightweight privilege table to avoid scanning user_roles for global checks
+CREATE TABLE IF NOT EXISTS public.user_privileges (
+  user_id uuid NOT NULL,
+  class_id bigint,
+  role public.app_role NOT NULL,
+  private_profile_id uuid,
+  public_profile_id uuid
+);
+
+ALTER TABLE public.user_privileges ENABLE ROW LEVEL SECURITY;
+
+-- Read your own privileges only
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'user_privileges' AND policyname = 'Users can read own privileges'
+  ) THEN
+    CREATE POLICY "Users can read own privileges" ON public.user_privileges FOR SELECT TO authenticated USING (user_id = auth.uid());
+  END IF;
+END $$;
+
+-- Uniqueness and supporting indexes
+-- Upgrade uniqueness to include class dimension
+-- Ensure a single row per (user_id, class_id)
+ALTER TABLE public.user_privileges
+  DROP CONSTRAINT IF EXISTS user_privileges_unique,
+  ADD CONSTRAINT user_privileges_pkey PRIMARY KEY (user_id, class_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_privileges_user_id ON public.user_privileges (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_privileges_user_class ON public.user_privileges (user_id, class_id);
+CREATE INDEX IF NOT EXISTS idx_user_privileges_role ON public.user_privileges (role);
+CREATE INDEX IF NOT EXISTS idx_user_privileges_user_private ON public.user_privileges (user_id, private_profile_id);
+CREATE INDEX IF NOT EXISTS idx_user_privileges_private ON public.user_privileges (private_profile_id);
+CREATE INDEX IF NOT EXISTS idx_user_privileges_user_public ON public.user_privileges (user_id, public_profile_id);
+CREATE INDEX IF NOT EXISTS idx_user_privileges_public ON public.user_privileges (public_profile_id);
+
+-- Backfill from active user_roles
+INSERT INTO public.user_privileges (user_id, class_id, role, private_profile_id, public_profile_id)
+SELECT DISTINCT r.user_id, r.class_id, r.role, r.private_profile_id, r.public_profile_id
+FROM public.user_roles r
+WHERE r.disabled = false
+ON CONFLICT (user_id, class_id) DO UPDATE SET 
+  role = EXCLUDED.role,
+  private_profile_id = EXCLUDED.private_profile_id,
+  public_profile_id = EXCLUDED.public_profile_id;
+
+-- Trigger to keep user_privileges in sync with user_roles
+CREATE OR REPLACE FUNCTION public.user_privileges_sync_from_user_roles() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = 'public'
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.disabled = false THEN
+      INSERT INTO public.user_privileges(user_id, class_id, role, private_profile_id, public_profile_id)
+      VALUES (NEW.user_id, NEW.class_id, NEW.role, NEW.private_profile_id, NEW.public_profile_id)
+      ON CONFLICT (user_id, class_id) DO UPDATE SET 
+        role = EXCLUDED.role,
+        private_profile_id = EXCLUDED.private_profile_id,
+        public_profile_id = EXCLUDED.public_profile_id;
+    END IF;
+    RETURN NEW;
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- Ensure NEW active role exists
+    IF NEW.disabled = false THEN
+      INSERT INTO public.user_privileges(user_id, class_id, role, private_profile_id, public_profile_id)
+      VALUES (NEW.user_id, NEW.class_id, NEW.role, NEW.private_profile_id, NEW.public_profile_id)
+      ON CONFLICT (user_id, class_id) DO UPDATE SET 
+        role = EXCLUDED.role,
+        private_profile_id = EXCLUDED.private_profile_id,
+        public_profile_id = EXCLUDED.public_profile_id;
+    END IF;
+
+    -- Remove OLD role if no longer present in any active row
+    IF OLD.disabled = false AND (OLD.user_id IS DISTINCT FROM NEW.user_id OR OLD.role IS DISTINCT FROM NEW.role OR OLD.class_id IS DISTINCT FROM NEW.class_id OR NEW.disabled = true) THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM public.user_roles r
+        WHERE r.user_id = OLD.user_id AND r.class_id = OLD.class_id AND r.role = OLD.role AND r.disabled = false
+      ) THEN
+        DELETE FROM public.user_privileges up
+        WHERE up.user_id = OLD.user_id AND up.class_id = OLD.class_id AND up.role = OLD.role;
+      END IF;
+    END IF;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    IF OLD.disabled = false THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM public.user_roles r
+        WHERE r.user_id = OLD.user_id AND r.class_id = OLD.class_id AND r.role = OLD.role AND r.disabled = false
+      ) THEN
+        DELETE FROM public.user_privileges up
+        WHERE up.user_id = OLD.user_id AND up.class_id = OLD.class_id AND up.role = OLD.role;
+      END IF;
+    END IF;
+    RETURN OLD;
+  END IF;
+  RETURN NULL;
+END;$$;
+
+DROP TRIGGER IF EXISTS trg_user_priv_sync_ins ON public.user_roles;
+CREATE TRIGGER trg_user_priv_sync_ins
+AFTER INSERT ON public.user_roles
+FOR EACH ROW EXECUTE FUNCTION public.user_privileges_sync_from_user_roles();
+
+DROP TRIGGER IF EXISTS trg_user_priv_sync_upd ON public.user_roles;
+CREATE TRIGGER trg_user_priv_sync_upd
+AFTER UPDATE OF user_id, role, disabled ON public.user_roles
+FOR EACH ROW EXECUTE FUNCTION public.user_privileges_sync_from_user_roles();
+
+DROP TRIGGER IF EXISTS trg_user_priv_sync_del ON public.user_roles;
+CREATE TRIGGER trg_user_priv_sync_del
+AFTER DELETE ON public.user_roles
+FOR EACH ROW EXECUTE FUNCTION public.user_privileges_sync_from_user_roles();
+
+-- Use user_privileges in authorizeforclassgrader for fast checks
+CREATE OR REPLACE FUNCTION public.authorizeforclassgrader(class__id bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT (
+  EXISTS (
+      SELECT 1 FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND up.class_id = authorizeforclassgrader.class__id
+        AND up.role IN ('instructor','grader')
+    )
+  );
+$$;
+
+-- Also optimize authorizeforclass and authorizeforclassinstructor using user_privileges
+CREATE OR REPLACE FUNCTION public.authorizeforclass(class__id bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT (
+    EXISTS (
+      SELECT 1 FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND up.class_id = authorizeforclass.class__id
+    )
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.authorizeforclassinstructor(class__id bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT (
+   EXISTS (
+      SELECT 1 FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND up.class_id = authorizeforclassinstructor.class__id
+        AND up.role = 'instructor'
+    )
+  );
+$$;
+
+
+-- Inline RLS for assignment_groups_members to avoid function calls in policy
+ALTER POLICY "anyone in class can see all"
+ON public.assignment_groups_members
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.user_privileges ur
+    WHERE ur.user_id = auth.uid()
+      AND (ur.class_id = class_id)
+  )
+);
+
+ALTER POLICY "Instructors can view group members"
+ON public.assignment_groups_members
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.user_privileges ur
+    WHERE ur.user_id = auth.uid()
+      AND (ur.class_id = class_id AND ur.role = 'instructor')
+  )
+);
+
+-- Inline RLS for submission_regrade_requests SELECT policy
+-- Original: authorizeforclassgrader(class_id) OR authorize_for_submission(submission_id)
+ALTER POLICY "graders all, students own"
+ON public.submission_regrade_requests
+USING (
+  -- Instructors/graders for the request's class
+  EXISTS (
+    SELECT 1
+    FROM public.user_privileges ur
+    WHERE ur.user_id = auth.uid()
+      AND (
+        (ur.class_id = class_id AND ur.role IN ('instructor','grader'))
+      )
+  )
+  OR
+  -- Student owns the submission (direct profile ownership)
+  EXISTS (
+    SELECT 1
+    FROM public.submissions s
+    JOIN public.user_privileges ur ON ur.private_profile_id = s.profile_id
+    WHERE s.id = submission_id
+      AND ur.user_id = auth.uid()
+  )
+  OR
+  -- Student is member of the submission's assignment group
+  EXISTS (
+    SELECT 1
+    FROM public.submissions s
+    JOIN public.assignment_groups_members agm ON agm.assignment_group_id = s.assignment_group_id
+    JOIN public.user_privileges ur ON ur.private_profile_id = agm.profile_id
+    WHERE s.id = submission_id
+      AND ur.user_id = auth.uid()
+  )
+);
