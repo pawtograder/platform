@@ -344,7 +344,7 @@ const workerId = crypto.randomUUID();
 export async function processBatch(
   adminSupabase: ReturnType<typeof createClient<Database>>,
   scope: Sentry.Scope,
-  maxMessages = 200
+  maxMessages = 500
 ) {
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_row_recalculate",
@@ -441,9 +441,7 @@ Deno.serve((req) => {
     });
   }
 
-  Sentry.captureMessage("Gradebook batch handler started, but is disabled!");
-
-  // EdgeRuntime.waitUntil(runBatchHandler());
+  EdgeRuntime.waitUntil(runBatchHandler());
 
   // Return immediately to acknowledge the start request
   return Promise.resolve(
