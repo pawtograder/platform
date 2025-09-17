@@ -1,10 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { processGradebookRowCalculation, processGradebookRowsCalculation, RowUpdate } from "./GradebookProcessor.ts";
+import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 // Declare EdgeRuntime for type safety
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
 };
@@ -69,6 +70,7 @@ async function processRowsForClass(
   for (const [gradebook_id, rowEntries] of gbToRows.entries()) {
     const isBulk = rowEntries.length > SCOPED_FETCH_THRESHOLD;
 
+    console.log(`${workerId} Processing ${rowEntries.length} rows for gradebook ${gradebook_id} (isBulk: ${isBulk})`);
     if (isBulk) {
       // Full-class fetch for this gradebook & privacy: compute all rows first, then bulk RPC per row
       const studentIds = rowEntries.map((e) => e.msg.message.student_id);
@@ -213,28 +215,62 @@ async function processRowsForClass(
       continue;
     }
 
-    // Scoped path per row
-    for (const { msg } of rowEntries) {
-      const { student_id, is_private } = msg.message;
-      classScope.setContext("row", { gradebook_id, student_id, is_private });
+    // Small, scoped multi-row path: still batch compile and dependency fetch once
+    const studentIds = rowEntries.map((e) => e.msg.message.student_id);
+    const is_private = rowEntries[0].msg.message.is_private;
 
-      // Fetch row cell ids
-      const { data: gcsRows, error: gcsError } = await adminSupabase
-        .from("gradebook_column_students")
-        .select(
-          "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values"
-        )
+    // Fetch only the needed rows for these students
+    const { data: scopedGcs, error: scopedErr } = await adminSupabase
+      .from("gradebook_column_students")
+      .select(
+        "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
+      )
+      .eq("class_id", classId)
+      .eq("gradebook_id", gradebook_id)
+      .eq("is_private", is_private)
+      .in("student_id", studentIds);
+    if (scopedErr) {
+      Sentry.captureException(scopedErr, classScope);
+      continue;
+    }
+
+    const groupedScoped: Map<string, NonNullable<typeof scopedGcs>> = new Map();
+    for (const r of scopedGcs ?? []) {
+      const arr = groupedScoped.get(r.student_id as string) ?? [];
+      arr.push(r);
+      groupedScoped.set(r.student_id as string, arr);
+    }
+
+    const rowsInputScoped = studentIds.map((sid) => ({ student_id: sid, gcsRows: groupedScoped.get(sid) ?? [] }));
+    const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, classScope, {
+      class_id: classId,
+      gradebook_id,
+      is_private,
+      rows: rowsInputScoped
+    });
+
+    // Prefetch versions for these students only
+    const versionsByStudentScoped = new Map<string, number>();
+    {
+      const { data: verRows, error: verErr } = await adminSupabase
+        .from("gradebook_row_recalc_state")
+        .select("student_id, version")
         .eq("class_id", classId)
         .eq("gradebook_id", gradebook_id)
-        .eq("student_id", student_id)
-        .eq("is_private", is_private);
-
-      if (gcsError || !gcsRows || gcsRows.length === 0) {
-        if (gcsError) Sentry.captureException(gcsError, classScope);
-        continue;
+        .eq("is_private", is_private)
+        .in("student_id", studentIds);
+      if (verErr) {
+        Sentry.captureException(verErr, classScope);
       }
+      for (const row of (verRows as unknown as Array<{ student_id: string; version: number }>) ?? []) {
+        versionsByStudentScoped.set(row.student_id, row.version);
+      }
+    }
 
-      // Mark row as recalculating now (defensive even if already set at enqueue)
+    // Apply updates and archive per row
+    for (const entry of rowEntries) {
+      const { student_id } = entry.msg.message;
+      // Ensure UI and gating reflect processing now
       await adminSupabase.from("gradebook_row_recalc_state").upsert({
         class_id: classId,
         gradebook_id,
@@ -245,48 +281,25 @@ async function processRowsForClass(
         updated_at: new Date().toISOString()
       });
 
-      // Compute row updates in-memory
-      let updates: RowUpdate[] = [];
-      try {
-        updates = await processGradebookRowCalculation(adminSupabase, classScope, {
-          class_id: classId,
-          gradebook_id,
-          student_id,
-          is_private,
-          gcsRows
-        });
-      } catch (e) {
-        Sentry.captureException(e, classScope);
-        continue;
+      const updates = updatesByStudentScoped.get(student_id) ?? [];
+      if (updates.length > 0) {
+        const expectedVersion = versionsByStudentScoped.get(student_id) ?? 0;
+        const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
+          p_class_id: classId,
+          p_gradebook_id: gradebook_id,
+          p_student_id: student_id,
+          p_is_private: is_private,
+          p_updates:
+            updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
+          p_expected_version: expectedVersion
+        };
+        const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
+        if (rpcError) {
+          Sentry.captureException(rpcError, classScope);
+        }
       }
 
-      // Fetch current version for optimistic update
-      const { data: versionRow } = await adminSupabase
-        .from("gradebook_row_recalc_state")
-        .select("version")
-        .eq("class_id", classId)
-        .eq("gradebook_id", gradebook_id)
-        .eq("student_id", student_id)
-        .eq("is_private", is_private)
-        .single();
-      const expectedVersion = ((versionRow as unknown as { version?: number } | null)?.version ?? 0) as number;
-
-      // Send batched update via RPC
-      const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
-        p_class_id: classId,
-        p_gradebook_id: gradebook_id,
-        p_student_id: student_id,
-        p_is_private: is_private,
-        p_updates: updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
-        p_expected_version: expectedVersion
-      };
-      const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
-      if (rpcError) {
-        Sentry.captureException(rpcError, classScope);
-        console.error("Error updating row via RPC:", rpcError);
-      }
-
-      // Clear row state flags only if version hasn't changed mid-run
+      // Clear row state only if version hasn't changed mid-run
       const { data: verAfter } = await adminSupabase
         .from("gradebook_row_recalc_state")
         .select("version")
@@ -295,31 +308,21 @@ async function processRowsForClass(
         .eq("student_id", student_id)
         .eq("is_private", is_private)
         .single();
-      const versionUnchanged =
-        ((verAfter as unknown as { version?: number } | null)?.version ?? null) === expectedVersion;
-      const { error: clearError } = versionUnchanged
-        ? await adminSupabase
-            .from("gradebook_row_recalc_state")
-            .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
-            .eq("class_id", classId)
-            .eq("gradebook_id", gradebook_id)
-            .eq("student_id", student_id)
-            .eq("is_private", is_private)
-        : ({ error: null } as { error: unknown | null });
-      if (clearError) {
-        Sentry.captureException(clearError, classScope);
-        console.error("Error clearing row state:", clearError);
+      const expectedVersion = versionsByStudentScoped.get(student_id) ?? 0;
+      if (((verAfter as unknown as { version?: number } | null)?.version ?? null) === expectedVersion) {
+        await adminSupabase
+          .from("gradebook_row_recalc_state")
+          .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
+          .eq("class_id", classId)
+          .eq("gradebook_id", gradebook_id)
+          .eq("student_id", student_id)
+          .eq("is_private", is_private);
       }
 
-      // Archive messages for this row
-      const { error: archiveError } = await adminSupabase
+      // Archive the message
+      await adminSupabase
         .schema("pgmq_public")
-        .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: msg.msg_id });
-      if (archiveError) {
-        Sentry.captureException(archiveError, classScope);
-        console.error("Error archiving completed message:", archiveError);
-      }
-
+        .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: entry.msg.msg_id });
       didWork = true;
     }
   }
@@ -327,17 +330,22 @@ async function processRowsForClass(
   return didWork;
 }
 
+const workerId = crypto.randomUUID();
 /**
  * Process a batch of gradebook cell calculations with dependency coordination.
  *
  */
-export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>, scope: Sentry.Scope) {
+export async function processBatch(
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  scope: Sentry.Scope,
+  maxMessages = 10
+) {
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_row_recalculate",
     sleep_seconds: 60, // Short sleep since we're polling frequently
-    n: 500
+    n: maxMessages
   });
-  console.log(`Read ${result.data?.length} messages from gradebook_row_recalculate queue`);
+  console.log(`${workerId} Read ${result.data?.length} messages from gradebook_row_recalculate queue`);
   if (result.error) {
     Sentry.captureException(result.error, scope);
     console.error("Queue read error:", result.error);
@@ -358,6 +366,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
 
     let processedAny = false;
     for (const [classId, messages] of classIdToMessages.entries()) {
+      console.log(`${workerId} Processing ${messages.length} messages for class ${classId}`);
       const didWork = await processRowsForClass(adminSupabase, scope, messages, classId);
       processedAny = processedAny || didWork;
     }
@@ -385,7 +394,7 @@ export async function runBatchHandler() {
   // Handle graceful shutdown
   const controller = new AbortController();
   const shutdownHandler = () => {
-    console.log("Received shutdown signal, stopping batch handler...");
+    console.log(`${workerId} Received shutdown signal, stopping batch handler...`);
     isRunning = false;
     controller.abort();
   };
@@ -440,7 +449,9 @@ Deno.serve((req) => {
     });
   }
 
-  EdgeRuntime.waitUntil(runBatchHandler());
+  Sentry.captureMessage("Gradebook batch handler started, but is disabled!");
+
+  // EdgeRuntime.waitUntil(runBatchHandler());
 
   // Return immediately to acknowledge the start request
   return Promise.resolve(
