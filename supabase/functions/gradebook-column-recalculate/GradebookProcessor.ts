@@ -369,9 +369,9 @@ export async function processGradebookRowCalculation(
             if (typeof argVal === "string" && (argVal as string).includes("*")) {
               const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
                 ._batchDependencySourceMap as Record<
-                string,
-                { expandKey: (params: { key: string; class_id: number }) => string[] }
-              >;
+                  string,
+                  { expandKey: (params: { key: string; class_id: number }) => string[] }
+                >;
               if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
                 const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id });
@@ -602,6 +602,7 @@ export async function processGradebookRowsCalculation(
     }
   }
 
+  console.log(`Working on ${keys.length} keys for gradebook ${gradebook_id}`);
   await addDependencySourceFunctions({ math, keys, supabase: adminSupabase });
 
   const compiledById = new Map<number, EvalFunction>();
@@ -628,9 +629,9 @@ export async function processGradebookRowsCalculation(
             if (typeof argVal === "string" && (argVal as string).includes("*")) {
               const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
                 ._batchDependencySourceMap as Record<
-                string,
-                { expandKey: (params: { key: string; class_id: number }) => string[] }
-              >;
+                  string,
+                  { expandKey: (params: { key: string; class_id: number }) => string[] }
+                >;
               if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
                 const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id });
@@ -806,6 +807,7 @@ export async function processGradebookRowsCalculation(
     clearRowOverrideValues(class_id, student_id, is_private);
     result.set(student_id, updates);
   }
+  console.log(`Finished working on ${rows.length} students for gradebook ${gradebook_id}, results: ${result.size}`);
 
   return result;
 }
@@ -901,9 +903,9 @@ async function processCellBatch(
               // For wildcard patterns, expand them using the batch dependency sources
               const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
                 ._batchDependencySourceMap as Record<
-                string,
-                { expandKey: (params: { key: string; class_id: number }) => string[] }
-              >;
+                  string,
+                  { expandKey: (params: { key: string; class_id: number }) => string[] }
+                >;
               if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
                 const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id: column.class_id });

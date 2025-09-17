@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
+import Bottleneck from "npm:bottleneck@2.19.5";
 
 // Declare EdgeRuntime for type safety
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -44,20 +45,25 @@ async function processRowsAll(
 ): Promise<boolean> {
   // Deduplicate by (gradebook_id, student_id, is_private)
   const keyFor = (m: RowMessage) => `${m.gradebook_id}:${m.student_id}:${m.is_private}`;
-  const rows = new Map<string, QueueMessage<RowMessage>>();
+  const rows = new Map<string, { primary: QueueMessage<RowMessage>; duplicateMsgIds: number[] }>();
   for (const msg of queueMessages) {
     const k = keyFor(msg.message);
-    if (!rows.has(k)) rows.set(k, msg);
+    const existing = rows.get(k);
+    if (!existing) {
+      rows.set(k, { primary: msg, duplicateMsgIds: [] });
+    } else {
+      existing.duplicateMsgIds.push(msg.msg_id);
+    }
   }
 
   // Group by (class_id, gradebook_id)
-  type RowEntry = { key: string; msg: QueueMessage<RowMessage> };
+  type RowEntry = { key: string; msg: QueueMessage<RowMessage>; duplicateMsgIds: number[] };
   const gbToRows = new Map<string, RowEntry[]>();
-  for (const [key, msg] of rows.entries()) {
-    const { class_id, gradebook_id } = msg.message;
+  for (const [key, entry] of rows.entries()) {
+    const { class_id, gradebook_id } = entry.primary.message;
     const gbKey = `${class_id}:${gradebook_id}`;
     const arr = gbToRows.get(gbKey) ?? [];
-    arr.push({ key, msg });
+    arr.push({ key, msg: entry.primary, duplicateMsgIds: entry.duplicateMsgIds });
     gbToRows.set(gbKey, arr);
   }
 
@@ -156,7 +162,11 @@ async function processRowsAll(
         }
       }
 
-      for (const entry of rowEntries) {
+      console.log(`Upserting ${rowEntries.length} rows for gradebook ${gradebook_id}`);
+      const updateLimiter = new Bottleneck({
+        maxConcurrent: 20,
+      });
+      const updatePromises = await rowEntries.map((entry) => updateLimiter.schedule(async () => {
         const { student_id } = entry.msg.message;
         await adminSupabase.from("gradebook_row_recalc_state").upsert({
           class_id: classId,
@@ -202,11 +212,16 @@ async function processRowsAll(
             .eq("student_id", student_id)
             .eq("is_private", is_private);
         }
-        await adminSupabase
-          .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: entry.msg.msg_id });
+        const toArchive = [entry.msg.msg_id, ...entry.duplicateMsgIds];
+        for (const message_id of toArchive) {
+          await adminSupabase
+            .schema("pgmq_public")
+            .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id });
+        }
         didWork = true;
-      }
+      }));
+      await Promise.all(updatePromises)
+      console.log(`Finished processing ${rowEntries.length} rows for gradebook ${gradebook_id}`);
       continue;
     }
 
@@ -307,9 +322,12 @@ async function processRowsAll(
           .eq("is_private", is_private);
       }
 
-      await adminSupabase
-        .schema("pgmq_public")
-        .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id: entry.msg.msg_id });
+      const toArchive = [entry.msg.msg_id, ...entry.duplicateMsgIds];
+      for (const message_id of toArchive) {
+        await adminSupabase
+          .schema("pgmq_public")
+          .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id });
+      }
       didWork = true;
     }
   }

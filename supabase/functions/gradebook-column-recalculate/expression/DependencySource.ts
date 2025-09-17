@@ -626,6 +626,7 @@ export async function addDependencySourceFunctions({
     )
   );
 
+  console.log("Adding dependency source functions");
   type UnknownFn = (...args: unknown[]) => unknown;
   const imports: Record<string, UnknownFn> = {};
   for (const dependencySourceProvider of Object.values(batchDependencySourceMap)) {
@@ -911,4 +912,5 @@ export async function addDependencySourceFunctions({
     };
   }
   math.import(imports, { override: true });
+  console.log("Added dependency source functions");
 }

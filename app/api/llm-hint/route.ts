@@ -22,7 +22,9 @@ type GradrResultTestWithGraderResults = GetResult<
           submissions!inner (
             id,
             class_id,
-            assignment_id
+            assignment_id,
+            profile_id,
+            assignment_group_id
           )
         )
       `
@@ -159,10 +161,19 @@ async function checkRateLimits(
   // Check assignment total limit
   if (rateLimit.assignment_total) {
     // First get all submissions for this assignment
-    const { data: assignmentSubmissions } = await serviceSupabase
+    const query = serviceSupabase
       .from("submissions")
       .select("id")
-      .eq("assignment_id", assignmentId);
+      .eq("assignment_id", assignmentId)
+      .neq("id", submissionId);
+    if (testResult.grader_results.submissions.profile_id) {
+      query.eq("profile_id", testResult.grader_results.submissions.profile_id);
+    }
+    if (testResult.grader_results.submissions.assignment_group_id) {
+      query.eq("assignment_group_id", testResult.grader_results.submissions.assignment_group_id);
+    }
+    query.limit(100);
+    const { data: assignmentSubmissions } = await query;
 
     if (assignmentSubmissions && assignmentSubmissions.length > 0) {
       const submissionIds = assignmentSubmissions.map((s) => s.id);
@@ -230,7 +241,9 @@ export async function POST(request: NextRequest) {
           submissions!inner (
             id,
             class_id,
-            assignment_id
+            assignment_id,
+            profile_id,
+            assignment_group_id
           )
         )
       `
