@@ -725,7 +725,7 @@ export async function processGradebookRowsCalculation(
           } else {
             nextScore = resultVal === undefined || resultVal === null ? null : Number(resultVal);
           }
-          console.log(`Next score for column ${column.slug}: ${nextScore}`);
+          // console.log(`Next score for column ${column.slug}: ${nextScore}`);
           const depObj = (column.dependencies as Record<string, unknown>) || {};
           const hasDeps = Object.keys(depObj).length > 0;
           isMissing = !hasDeps && nextScore === null;

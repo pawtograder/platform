@@ -813,10 +813,8 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     condition: (value: GradebookColumnStudentWithMaxScore) => boolean
   ) => {
-    console.log(`countif called with value: ${JSON.stringify(value, null, 2)}`);
     if (Array.isArray(value)) {
       const values = value.map((v) => {
-        console.log(v.score)
         const ret = condition(v) ? 1 : 0;
         return ret;
       });
@@ -824,7 +822,6 @@ export async function addDependencySourceFunctions({
       if (validValues.length === 0) {
         return undefined;
       }
-      console.log(`validValues: ${JSON.stringify(validValues, null, 2)}`);
       return validValues.filter((v) => v === 1).length;
     }
     throw new Error("Countif called with non-array value");
