@@ -160,33 +160,24 @@ async function checkRateLimits(
 
   // Check assignment total limit
   if (rateLimit.assignment_total) {
-    // First get all submissions for this assignment
+    // Count usage across all matching submissions for this assignment using a single query
     const query = serviceSupabase
-      .from("submissions")
-      .select("id")
-      .eq("assignment_id", assignmentId)
-      .neq("id", submissionId);
+      .from("llm_inference_usage")
+      .select("*", { count: "exact", head: true })
+      .eq("submissions.assignment_id", assignmentId)
+      .neq("submission_id", submissionId);
+
     if (testResult.grader_results.submissions.profile_id) {
-      query.eq("profile_id", testResult.grader_results.submissions.profile_id);
+      query.eq("submissions.profile_id", testResult.grader_results.submissions.profile_id);
     }
     if (testResult.grader_results.submissions.assignment_group_id) {
-      query.eq("assignment_group_id", testResult.grader_results.submissions.assignment_group_id);
+      query.eq("submissions.assignment_group_id", testResult.grader_results.submissions.assignment_group_id);
     }
-    query.limit(100);
-    const { data: assignmentSubmissions } = await query;
 
-    if (assignmentSubmissions && assignmentSubmissions.length > 0) {
-      const submissionIds = assignmentSubmissions.map((s) => s.id);
+    const { count: assignmentUsageCount } = await query;
 
-      // Count usage across all submissions for this assignment
-      const { count: assignmentUsageCount } = await serviceSupabase
-        .from("llm_inference_usage")
-        .select("*", { count: "exact", head: true })
-        .in("submission_id", submissionIds);
-
-      if (assignmentUsageCount && assignmentUsageCount >= rateLimit.assignment_total) {
-        return `Rate limit: Maximum number of Feedbot responses (${rateLimit.assignment_total}) for this assignment has been reached.`;
-      }
+    if (assignmentUsageCount && assignmentUsageCount >= rateLimit.assignment_total) {
+      return `Rate limit: Maximum number of Feedbot responses (${rateLimit.assignment_total}) for this assignment has been reached.`;
     }
   }
 
