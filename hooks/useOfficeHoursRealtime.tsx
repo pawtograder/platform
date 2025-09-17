@@ -275,7 +275,11 @@ export class OfficeHoursController {
         .select("*")
         .eq("class_id", this.classId)
         .eq("help_request_id", helpRequestId),
-      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined
+      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined,
+      realtimeFilter: {
+        class_id: this.classId,
+        help_request_id: helpRequestId
+      }
     });
 
     this._helpRequestMessageControllers.set(helpRequestId, controller);
