@@ -164,63 +164,65 @@ async function processRowsAll(
 
       console.log(`Upserting ${rowEntries.length} rows for gradebook ${gradebook_id}`);
       const updateLimiter = new Bottleneck({
-        maxConcurrent: 20,
+        maxConcurrent: 20
       });
-      const updatePromises = await rowEntries.map((entry) => updateLimiter.schedule(async () => {
-        const { student_id } = entry.msg.message;
-        await adminSupabase.from("gradebook_row_recalc_state").upsert({
-          class_id: classId,
-          gradebook_id,
-          student_id,
-          is_private,
-          dirty: true,
-          is_recalculating: true,
-          updated_at: new Date().toISOString()
-        });
-        const updates = updatesByStudent.get(student_id) ?? [];
-        if (updates.length > 0) {
-          const expectedVersion = versionsByStudent.get(student_id) ?? 0;
-          const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
-            p_class_id: classId,
-            p_gradebook_id: gradebook_id,
-            p_student_id: student_id,
-            p_is_private: is_private,
-            p_updates:
-              updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
-            p_expected_version: expectedVersion
-          };
-          const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
-          if (rpcError) {
-            Sentry.captureException(rpcError, gbScope);
+      const updatePromises = await rowEntries.map((entry) =>
+        updateLimiter.schedule(async () => {
+          const { student_id } = entry.msg.message;
+          await adminSupabase.from("gradebook_row_recalc_state").upsert({
+            class_id: classId,
+            gradebook_id,
+            student_id,
+            is_private,
+            dirty: true,
+            is_recalculating: true,
+            updated_at: new Date().toISOString()
+          });
+          const updates = updatesByStudent.get(student_id) ?? [];
+          if (updates.length > 0) {
+            const expectedVersion = versionsByStudent.get(student_id) ?? 0;
+            const payload: Database["public"]["Functions"]["update_gradebook_row"]["Args"] = {
+              p_class_id: classId,
+              p_gradebook_id: gradebook_id,
+              p_student_id: student_id,
+              p_is_private: is_private,
+              p_updates:
+                updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
+              p_expected_version: expectedVersion
+            };
+            const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
+            if (rpcError) {
+              Sentry.captureException(rpcError, gbScope);
+            }
           }
-        }
-        const { data: verAfter } = await adminSupabase
-          .from("gradebook_row_recalc_state")
-          .select("version")
-          .eq("class_id", classId)
-          .eq("gradebook_id", gradebook_id)
-          .eq("student_id", student_id)
-          .eq("is_private", is_private)
-          .single();
-        const expectedVersion = versionsByStudent.get(student_id) ?? 0;
-        if (((verAfter as unknown as { version?: number } | null)?.version ?? null) === expectedVersion) {
-          await adminSupabase
+          const { data: verAfter } = await adminSupabase
             .from("gradebook_row_recalc_state")
-            .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
+            .select("version")
             .eq("class_id", classId)
             .eq("gradebook_id", gradebook_id)
             .eq("student_id", student_id)
-            .eq("is_private", is_private);
-        }
-        const toArchive = [entry.msg.msg_id, ...entry.duplicateMsgIds];
-        for (const message_id of toArchive) {
-          await adminSupabase
-            .schema("pgmq_public")
-            .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id });
-        }
-        didWork = true;
-      }));
-      await Promise.all(updatePromises)
+            .eq("is_private", is_private)
+            .single();
+          const expectedVersion = versionsByStudent.get(student_id) ?? 0;
+          if (((verAfter as unknown as { version?: number } | null)?.version ?? null) === expectedVersion) {
+            await adminSupabase
+              .from("gradebook_row_recalc_state")
+              .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
+              .eq("class_id", classId)
+              .eq("gradebook_id", gradebook_id)
+              .eq("student_id", student_id)
+              .eq("is_private", is_private);
+          }
+          const toArchive = [entry.msg.msg_id, ...entry.duplicateMsgIds];
+          for (const message_id of toArchive) {
+            await adminSupabase
+              .schema("pgmq_public")
+              .rpc("archive", { queue_name: "gradebook_row_recalculate", message_id });
+          }
+          didWork = true;
+        })
+      );
+      await Promise.all(updatePromises);
       console.log(`Finished processing ${rowEntries.length} rows for gradebook ${gradebook_id}`);
       continue;
     }
@@ -293,8 +295,7 @@ async function processRowsAll(
           p_gradebook_id: gradebook_id,
           p_student_id: student_id,
           p_is_private: is_private,
-          p_updates:
-            updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
+          p_updates: updates as unknown as Database["public"]["Functions"]["update_gradebook_row"]["Args"]["p_updates"],
           p_expected_version: expectedVersion
         };
         const { error: rpcError } = await adminSupabase.rpc("update_gradebook_row", payload);
