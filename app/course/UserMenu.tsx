@@ -41,7 +41,11 @@ import NotificationPreferences from "@/components/notifications/notification-pre
 
 function SupportMenu() {
   const buildNumber = useMemo(() => {
-    const str = process.env.SENTRY_RELEASE ?? process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.npm_package_version;
+    const str =
+      process.env.SENTRY_RELEASE ??
+      process.env.VERCEL_GIT_COMMIT_SHA ??
+      process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
+      process.env.npm_package_version;
     if (str) {
       return str.substring(0, 7);
     }
