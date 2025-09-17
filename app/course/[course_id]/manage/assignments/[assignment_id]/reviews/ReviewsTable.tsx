@@ -18,7 +18,7 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender, Row, Table as TanstackTable } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaEdit, FaTrash, FaDownload } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
 import { FaCopy } from "react-icons/fa";
@@ -63,6 +63,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const rubrics = useRubrics();
   const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
   const supabase = createClient();
+  const [isExporting, setIsExporting] = useState(false);
 
   const { mutateAsync: createReviewAssignment } = useCreate();
 
@@ -147,6 +148,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
   // CSV Export function
   const exportToCSV = useCallback(async () => {
+    setIsExporting(true);
     try {
       // Fetch all review assignments data
       let csvData: PopulatedReviewAssignment[];
@@ -390,6 +392,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       toaster.success({ title: "CSV exported successfully" });
     } catch {
       toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
+    } finally {
+      setIsExporting(false);
     }
   }, [
     assignmentId,
@@ -893,7 +897,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         <Text fontSize="lg" fontWeight="bold">
           Review Assignments
         </Text>
-        <Button onClick={exportToCSV} size="sm" variant="outline">
+        <Button onClick={exportToCSV} size="sm" variant="outline" loading={isExporting}>
           <FaDownload style={{ marginRight: "8px" }} />
           Export CSV
         </Button>
