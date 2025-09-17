@@ -120,41 +120,69 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     return "Pending";
   }, []);
 
+  // Helper function to fetch all pages of data
+  const fetchAllPages = useCallback(async (queryBuilder: () => any, pageSize: number = 1000): Promise<any[]> => {
+    const allData: any[] = [];
+    let hasMore = true;
+    let page = 0;
+
+    while (hasMore) {
+      const { data: pageData, error } = await queryBuilder().range(page * pageSize, (page + 1) * pageSize - 1);
+
+      if (error) {
+        throw error;
+      }
+
+      if (!pageData || pageData.length === 0) {
+        hasMore = false;
+      } else {
+        allData.push(...pageData);
+        hasMore = pageData.length === pageSize;
+        page++;
+      }
+    }
+
+    return allData;
+  }, []);
+
   // CSV Export function
   const exportToCSV = useCallback(async () => {
     try {
-      // Enhanced query for CSV export with emails and extensions
-      const { data: csvData, error } = await supabase
-        .from("review_assignments")
-        .select(
-          `
-          *,
-          profiles!assignee_profile_id(*),
-          rubrics(*),
-          submissions(*,
-            profiles!profile_id(*),
-            assignment_groups(*,
-              assignment_groups_members(*,
-                profiles!profile_id(*)
+      // Fetch all review assignments data
+      let csvData: PopulatedReviewAssignment[];
+      try {
+        csvData = await fetchAllPages(() =>
+          supabase
+            .from("review_assignments")
+            .select(
+              `
+              *,
+              profiles!assignee_profile_id(*),
+              rubrics(*),
+              submissions(*,
+                profiles!profile_id(*),
+                assignment_groups(*,
+                  assignment_groups_members(*,
+                    profiles!profile_id(*)
+                  )
+                ),
+                assignments(*),
+                submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)
+              ),
+              review_assignment_rubric_parts(*,
+                rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name)
               )
-            ),
-            assignments(*),
-            submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)
-          ),
-          review_assignment_rubric_parts(*,
-            rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name)
-          )
-        `
-        )
-        .eq("assignment_id", Number(assignmentId))
-        .not("rubric_id", "eq", selfReviewRubric?.id || 0);
-
-      if (error) {
+            `
+            )
+            .eq("assignment_id", Number(assignmentId))
+            .not("rubric_id", "eq", selfReviewRubric?.id || 0)
+        );
+      } catch (error: any) {
         toaster.error({ title: "Error fetching data for export", description: error.message });
         return;
       }
 
-      if (!csvData || csvData.length === 0) {
+      if (csvData.length === 0) {
         toaster.error({ title: "No data to export" });
         return;
       }
@@ -177,19 +205,23 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       });
 
-      // Fetch emails for all profiles
-      const { data: emailData, error: emailError } = await supabase
-        .from("user_roles")
-        .select(
-          `
-          private_profile_id,
-          users(email)
-        `
-        )
-        .eq("class_id", course.classes.id);
-
-      if (emailError) {
-        toaster.error({ title: "Error fetching emails", description: emailError.message });
+      // Fetch all user emails
+      let emailData: any[];
+      try {
+        emailData = await fetchAllPages(() =>
+          supabase
+            .from("user_roles")
+            .select(
+              `
+              private_profile_id,
+              users(email)
+            `
+            )
+            .eq("class_id", course.classes.id)
+        );
+      } catch (error: any) {
+        toaster.error({ title: "Error fetching emails", description: error.message });
+        emailData = [];
       }
 
       // Create email lookup map
@@ -200,14 +232,15 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       });
 
-      // Fetch extension data for submissions
-      const { data: extensionData, error: extensionError } = await supabase
-        .from("assignment_due_date_exceptions")
-        .select("*")
-        .eq("assignment_id", Number(assignmentId));
-
-      if (extensionError) {
-        toaster.error({ title: "Error fetching extensions", description: extensionError.message });
+      // Fetch all extension data
+      let extensionData: any[];
+      try {
+        extensionData = await fetchAllPages(() =>
+          supabase.from("assignment_due_date_exceptions").select("*").eq("assignment_id", Number(assignmentId))
+        );
+      } catch (error: any) {
+        toaster.error({ title: "Error fetching extensions", description: error.message });
+        extensionData = [];
       }
 
       // Create extension lookup map
@@ -358,7 +391,15 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     } catch {
       toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
     }
-  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone, course.classes.id]);
+  }, [
+    assignmentId,
+    supabase,
+    selfReviewRubric,
+    getReviewStatus,
+    course.classes.time_zone,
+    course.classes.id,
+    fetchAllPages
+  ]);
 
   // Helper function to create filter options from unique values
   const createFilterOptions = useCallback(
