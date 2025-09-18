@@ -15,7 +15,7 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
-import { Toaster } from "@/components/ui/toaster";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
 import {
@@ -59,6 +59,7 @@ import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
 import { useAssignmentController } from "@/hooks/useAssignment";
+import * as Sentry from "@sentry/nextjs";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -303,15 +304,14 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const { time_zone } = useCourse();
   const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
-  const {dueDate} = useAssignmentDueDate(submission.assignments, {
-    studentPrivateProfileId: submission.profile_id ||undefined 
+  const { dueDate } = useAssignmentDueDate(submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined
   });
   const isStaff = useIsGraderOrInstructor();
-  const disableActivationButton = dueDate && TZDate.tz(time_zone || "America/New_York") > new TZDate(dueDate, time_zone || "America/New_York") && !isStaff;
-  console.log(disableActivationButton);
-  console.log(dueDate);
-  console.log(new TZDate(dueDate, time_zone || "America/New_York"));
-  console.log(TZDate.tz(time_zone || "America/New_York"));
+  const disableActivationButton =
+    dueDate &&
+    TZDate.tz(time_zone || "America/New_York") > new TZDate(dueDate, time_zone || "America/New_York") &&
+    !isStaff;
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
   }
@@ -348,6 +348,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
               }
             }}
           >
+            <Toaster />
             <Table.Root>
               <Table.Header>
                 <Table.Row>
@@ -419,7 +420,18 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                                 const supabase = createClient();
                                 await activateSubmission({ submission_id: historical_submission.id }, supabase);
                                 invalidate({ resource: "submissions", invalidates: ["list"] });
+                                toaster.create({
+                                  title: "Active submission changed",
+                                  type: "success"
+                                });
                                 router.push(link);
+                              } catch (error) {
+                                const errorId = Sentry.captureException(error);
+                                toaster.create({
+                                  title: "Error activating submission",
+                                  description: `We have recorded this error with trace ID: ${errorId}`,
+                                  type: "error"
+                                });
                               } finally {
                                 setIsActivating(false);
                               }
