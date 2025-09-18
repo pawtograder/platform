@@ -301,6 +301,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     }
   });
   const { time_zone } = useCourse();
+  const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
@@ -401,11 +402,17 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                           <Button
                             variant="outline"
                             size="xs"
+                            loading={isActivating}
                             onClick={async () => {
-                              const supabase = createClient();
-                              await activateSubmission({ submission_id: historical_submission.id }, supabase);
-                              invalidate({ resource: "submissions", invalidates: ["list"] });
-                              router.push(link);
+                              setIsActivating(true);
+                              try {
+                                const supabase = createClient();
+                                await activateSubmission({ submission_id: historical_submission.id }, supabase);
+                                invalidate({ resource: "submissions", invalidates: ["list"] });
+                                router.push(link);
+                              } finally {
+                                setIsActivating(false);
+                              }
                             }}
                           >
                             <Icon as={FaCheckCircle} />
