@@ -587,8 +587,7 @@ async function debugStudentEnrollment(classId: number, sisUserId: number): Promi
     .from("user_roles")
     .select(
       `
-      id, role, disabled, class_section_id, lab_section_id, canvas_id,
-      created_at, updated_at
+      id, role, disabled, class_section_id, lab_section_id, canvas_id
     `
     )
     .eq("user_id", user.user_id)
@@ -601,7 +600,7 @@ async function debugStudentEnrollment(classId: number, sisUserId: number): Promi
     userRoles.forEach((role, index) => {
       console.log(`   ${index + 1}. Role: ${role.role}, Disabled: ${role.disabled}`);
       console.log(`      Class Section: ${role.class_section_id}, Lab Section: ${role.lab_section_id}`);
-      console.log(`      Canvas ID: ${role.canvas_id}, Created: ${role.created_at}`);
+      console.log(`      Canvas ID: ${role.canvas_id}`);
     });
   }
 

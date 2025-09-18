@@ -284,6 +284,9 @@ test.describe("Pyret REPL Integration", () => {
       return replElement && replElement.children.length > 0;
     });
 
+    await expect(
+      page.getByText("Partial credit: Your solution works for some cases but needs improvement for edge cases.")
+    ).toBeVisible();
     await argosScreenshot(page, "pyret-repl-expanded");
 
     await replToggle.click();
