@@ -227,7 +227,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       run_number: Number.parseInt(run_id),
       run_attempt: Number.parseInt(run_attempt),
       class_id: class_id,
-      regression_test_id: autograder_regression_test_id ?? null,
+      autograder_regression_test_id: autograder_regression_test_id ?? null,
       submission_id: submission_id ?? null,
       repository_id: repository_id ?? null,
       name,
@@ -291,7 +291,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   scope?.setTag("checkRun", checkRun ? JSON.stringify(checkRun) : "(null)");
   try {
     //Resolve the action SHA
-    const action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
+    let action_sha: string | undefined = undefined;
+    try{
+      action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
+    } catch (e) {
+      console.error(e);
+    }
     const score =
       requestBody.feedback.score ||
       requestBody.feedback.tests
