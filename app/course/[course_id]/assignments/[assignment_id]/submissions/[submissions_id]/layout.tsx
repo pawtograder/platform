@@ -308,10 +308,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     studentPrivateProfileId: submission.profile_id || undefined
   });
   const isStaff = useIsGraderOrInstructor();
-  const disableActivationButton =
+  const disableActivationButton = Boolean(
     dueDate &&
-    TZDate.tz(time_zone || "America/New_York") > new TZDate(dueDate, time_zone || "America/New_York") &&
-    !isStaff;
+      TZDate.tz(time_zone ?? "America/New_York").getTime() >
+        new TZDate(dueDate, time_zone ?? "America/New_York").getTime() &&
+      !isStaff
+  );
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
   }
