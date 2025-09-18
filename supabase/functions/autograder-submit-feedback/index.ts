@@ -292,7 +292,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   try {
     //Resolve the action SHA
     let action_sha: string | undefined = undefined;
-    try{
+    try {
       action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
     } catch (e) {
       console.error(e);
