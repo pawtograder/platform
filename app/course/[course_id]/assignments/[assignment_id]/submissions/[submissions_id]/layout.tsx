@@ -402,6 +402,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                           <Button
                             variant="outline"
                             size="xs"
+                            loading={isActivating}
                             onClick={async () => {
                               setIsActivating(true);
                               try {
