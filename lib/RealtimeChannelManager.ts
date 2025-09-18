@@ -487,10 +487,17 @@ export class RealtimeChannelManager {
     };
   }
 
+  private _lastSessionRefreshTime: number = 0;
   /**
    * Refresh the session token if needed and set it for Supabase Realtime
    */
   private async _refreshSessionIfNeeded(client: SupabaseClient<Database>) {
+    if (Date.now() - this._lastSessionRefreshTime < 1000 * 60 * 2) { // 2 minutes
+      this._breadcrumb("auth", "session_refresh_skipped", { message: "Session refresh skipped because it was too recent" });
+      return;
+    }
+    this._breadcrumb("auth", `time since last session refresh: ${Date.now() - this._lastSessionRefreshTime}`);
+    this._lastSessionRefreshTime = Date.now();
     const { data, error } = await client.auth.getSession();
     if (error) {
       this._breadcrumb("auth", "getSession_error", { message: error.message }, "error");
