@@ -459,7 +459,7 @@ export class ClassRealTimeController {
     this._channelUnsubscribers.clear();
 
     if (this._authUnsubscriber) {
-      this._authUnsubscriber();
+      this._authUnsubscriber.data.subscription.unsubscribe();
       this._authUnsubscriber = undefined;
     }
 
