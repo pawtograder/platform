@@ -2,6 +2,7 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
+import * as Sentry from "@sentry/nextjs";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -134,7 +135,17 @@ export class ClassRealTimeController {
       return;
     }
 
-    // Session refresh is now handled by the channel manager
+
+    this._client.auth.onAuthStateChange((event, session) => {
+      Sentry.addBreadcrumb({
+        category: "realtime",
+        message: `Auth state changed: ${event}`,
+        data: {
+          event,
+          session
+        }
+      });
+    });
 
     await this._subscribeToUserChannel();
 
@@ -525,6 +536,13 @@ export class ClassRealTimeController {
    */
   private _notifyStatusChange() {
     const status = this.getConnectionStatus();
+    Sentry.addBreadcrumb({
+      category: "realtime",
+      message: "Connection status changed",
+      data: {
+        status
+      }
+    });
     this._statusChangeListeners.forEach((callback) => callback(status));
   }
 
