@@ -13,6 +13,7 @@ import {
 } from "./expression/DependencySource.ts";
 import * as Sentry from "npm:@sentry/deno";
 
+const DEBUG_LOG = Boolean(Deno.env.get("DEBUG_GRADEBOOK_CALCULATION")) || false;
 type ColumnWithPrefix = Database["public"]["Tables"]["gradebook_columns"]["Row"] & {
   gradebooks: { expression_prefix: string | null };
 };
@@ -449,9 +450,11 @@ export async function processGradebookRowCalculation(
       try {
         const compiled = compiledById.get(columnId)!;
         const result = compiled.evaluate({ context });
-        console.log(
-          `Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(result, null, 2)}`
-        );
+        if (DEBUG_LOG) {
+          console.log(
+            `Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(result, null, 2)}`
+          );
+        }
         if (typeof result === "object" && result !== null && "entries" in (result as Record<string, unknown>)) {
           const lastEntry = (result as { entries: unknown[] }).entries[
             (result as { entries: unknown[] }).entries.length - 1
@@ -602,7 +605,9 @@ export async function processGradebookRowsCalculation(
     }
   }
 
-  console.log(`Working on ${keys.length} keys for gradebook ${gradebook_id}`);
+  if (DEBUG_LOG) {
+    console.log(`Working on ${keys.length} keys for gradebook ${gradebook_id}`);
+  }
   await addDependencySourceFunctions({ math, keys, supabase: adminSupabase });
 
   const compiledById = new Map<number, EvalFunction>();
@@ -713,9 +718,11 @@ export async function processGradebookRowsCalculation(
         try {
           const compiled = compiledById.get(columnId)!;
           const resultVal = compiled.evaluate({ context });
-          console.log(
-            `Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(resultVal, null, 2)}`
-          );
+          if (DEBUG_LOG) {
+            console.log(
+              `Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(resultVal, null, 2)}`
+            );
+          }
           if (
             typeof resultVal === "object" &&
             resultVal !== null &&
@@ -761,13 +768,17 @@ export async function processGradebookRowsCalculation(
         continue;
       }
 
-      console.log(`nextScore: ${nextScore}`);
+      if (DEBUG_LOG) {
+        console.log(`nextScore: ${nextScore}`);
+      }
       const overrideScore = (current?.score_override as number | null) ?? null;
       if (overrideScore !== null) {
         isMissing = false;
       }
       const curScore = (current?.score as number | null) ?? null;
-      console.log(`curScore: ${curScore}`);
+      if (DEBUG_LOG) {
+        console.log(`curScore: ${curScore}`);
+      }
       const curMissing = (current?.is_missing as boolean) ?? false;
       const curReleased = (current?.released as boolean) ?? false;
       const curIncomplete = current?.incomplete_values ?? null;
@@ -777,7 +788,9 @@ export async function processGradebookRowsCalculation(
         nextReleased !== curReleased ||
         !deepEqualJson(nextIncomplete, curIncomplete);
       if (changed) {
-        console.log(`Adding update GCID: ${columnId}, nextScore: ${nextScore}, curScore: ${curScore}`);
+        if (DEBUG_LOG) {
+          console.log(`Adding update GCID: ${columnId}, nextScore: ${nextScore}, curScore: ${curScore}`);
+        }
         updates.push({
           gradebook_column_id: columnId,
           score: nextScore,
@@ -817,9 +830,10 @@ export async function processGradebookRowsCalculation(
     clearRowOverrideValues(class_id, student_id, is_private);
     result.set(student_id, updates);
   }
-  console.log(`Finished working on ${rows.length} students for gradebook ${gradebook_id}, results: ${result.size}`);
-  console.log(JSON.stringify(result.values(), null, 2));
-
+  if (DEBUG_LOG) {
+    console.log(`Finished working on ${rows.length} students for gradebook ${gradebook_id}, results: ${result.size}`);
+    console.log(JSON.stringify(result.values(), null, 2));
+  }
   return result;
 }
 
