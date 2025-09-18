@@ -62,7 +62,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
   const isUnread = readStatus === null || readStatus?.read_at === null;
   return (
     <Box position="relative" width={props.width || "100%"}>
-      <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
+      <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
           {isUnread && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
         </Box>
@@ -271,7 +271,7 @@ export default function DiscussionThreadList() {
           Discussion Feed
         </Heading>
         <Button asChild size="sm" variant="surface" colorPalette="green" mb="4" width="100%">
-          <NextLink prefetch={true} href={`/course/${course_id}/discussion/new`}>
+          <NextLink href={`/course/${course_id}/discussion/new`}>
             <Icon as={FaPlus} mr="1" />
             New Thread
           </NextLink>
