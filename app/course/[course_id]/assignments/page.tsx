@@ -227,20 +227,14 @@ export default function StudentPage() {
                 bg={isCloseDeadline ? "bg.info" : undefined}
               >
                 <Table.Cell>
-                  <Link prefetch={true} href={work.due_date_link ?? ""}>
-                    {work.due_date_component}
-                  </Link>
+                  <Link href={work.due_date_link ?? ""}>{work.due_date_component}</Link>
                 </Table.Cell>
                 <Table.Cell>
-                  <Link prefetch={true} href={work.name_link}>
-                    {work.name}
-                  </Link>
+                  <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>
                 <Table.Cell>
                   {work.submission_link ? (
-                    <Link prefetch={true} href={work.submission_link}>
-                      {work.submission_text}
-                    </Link>
+                    <Link href={work.submission_link}>{work.submission_text}</Link>
                   ) : (
                     <Text>{work.submission_text}</Text>
                   )}
@@ -302,20 +296,14 @@ export default function StudentPage() {
             return (
               <Table.Row key={work.key}>
                 <Table.Cell>
-                  <Link prefetch={true} href={work.due_date_link ?? ""}>
-                    {work.due_date_component}
-                  </Link>
+                  <Link href={work.due_date_link ?? ""}>{work.due_date_component}</Link>
                 </Table.Cell>
                 <Table.Cell>
-                  <Link prefetch={true} href={work.name_link}>
-                    {work.name}
-                  </Link>
+                  <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>
                 <Table.Cell>
                   {work.submission_link ? (
-                    <Link prefetch={true} href={work.submission_link}>
-                      {work.submission_text}
-                    </Link>
+                    <Link href={work.submission_link}>{work.submission_text}</Link>
                   ) : (
                     <Text>{work.submission_text}</Text>
                   )}

@@ -793,13 +793,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         bg="bg.muted"
         defaultValue="results"
       >
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "results", searchParams)}>
+        <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "files", searchParams)}>
+        <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
           <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files

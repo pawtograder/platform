@@ -120,7 +120,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
                   justifyContent="flex-start"
                   asChild
                 >
-                  <NextLink href={item.href} prefetch={true}>
+                  <NextLink href={item.href}>
                     <HStack textAlign="left" w="100%" justify="flex-start">
                       {React.createElement(item.icon)}
                       {item.label}
