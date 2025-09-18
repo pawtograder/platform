@@ -1,10 +1,21 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
+import { useActiveSubmissions, useAssignmentController, useRubrics } from "@/hooks/useAssignment";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import {
+  useAssignments,
+  useClassSections,
+  useCourseController,
+  useLabSections,
+  useUserRolesWithProfiles
+} from "@/hooks/useCourseController";
 import useTags from "@/hooks/useTags";
+import TableController, { PossiblyTentativeResult, useListTableControllerValues } from "@/lib/TableController";
 import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -21,21 +32,16 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useInvalidate, useList } from "@refinedev/core";
-import type { CrudFilters } from "@refinedev/core";
+import { useInvalidate } from "@refinedev/core";
 import { MultiValue, Select } from "chakra-react-select";
+import { addDays } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
+import { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
-import { useAssignmentController, useRubrics } from "@/hooks/useAssignment";
-import { useLabSections } from "@/hooks/useCourseController";
-import { Alert } from "@/components/ui/alert";
-import { addDays } from "date-fns";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 
 // Main Page Component
 export default function BulkAssignGradingPage() {
@@ -76,7 +82,8 @@ export default function BulkAssignGradingPage() {
 }
 
 function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
-  const { assignment } = useAssignmentController();
+  const assignmentController = useAssignmentController();
+  const assignment = assignmentController.assignment;
   const rubrics = useRubrics();
   const labSections = useLabSections();
   const { course_id, assignment_id } = useParams();
@@ -130,142 +137,244 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const [numGradersToSelect, setNumGradersToSelect] = useState<number>(0);
   const [isGraderListExpanded, setIsGraderListExpanded] = useState<boolean>(false);
 
-  // const { mutateAsync } = useCreate();
   const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
   const { role: classRole } = useClassProfiles();
   const course = classRole.classes;
   const { tags } = useTags();
   const supabase = createClient();
 
-  // Fetch class sections
-  const { data: classSections } = useList<ClassSection>({
-    resource: "class_sections",
-    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    }
-  });
-
-  // Fetch all assignments for reference selection
-  const { data: allAssignments } = useList<Assignment>({
-    resource: "assignments",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    queryOptions: {
-      enabled: !!course_id
-    },
-    pagination: {
-      pageSize: 1000
-    }
-  });
+  const classSections = useClassSections();
+  const allAssignments = useAssignments();
 
   const gradingRubric = rubrics.find((rubric) => rubric.review_round === "grading-review");
-  const { data: activeSubmissions } = useList<SubmissionWithGrading>({
-    resource: "submissions",
-    meta: {
-      select:
-        "*, submission_reviews!submission_reviews_submission_id_fkey(*), review_assignments!review_assignments_submission_id_fkey(*, review_assignment_rubric_parts!review_assignment_rubric_parts_review_assignment_id_fkey(*)), assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)), user_roles!inner(disabled)"
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "assignment_id", operator: "eq", value: assignment_id },
-      { field: "is_active", operator: "eq", value: true },
-      { field: "submission_reviews.rubric_id", operator: "eq", value: selectedRubric?.id },
-      { field: "review_assignments.rubric_id", operator: "eq", value: selectedRubric?.id },
-      { field: "user_roles.role", operator: "eq", value: "student" },
-      { field: "user_roles.disabled", operator: "eq", value: false }
-    ],
-    queryOptions: {
-      enabled: !!selectedRubric && !!assignment_id && !!course_id
-    },
-    pagination: {
-      pageSize: 1000
-    }
-  });
+  const allActiveSubmissions = useActiveSubmissions();
 
-  const { data: userRoles } = useList<UserRoleWithConflictsAndName>({
-    resource: "user_roles",
-    meta: {
-      select:
-        "*, profiles!user_roles_private_profile_id_fkey(name, grading_conflicts!grading_conflicts_grader_profile_id_fkey(*))"
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    }
-  });
+  const userRoles = useUserRolesWithProfiles();
 
-  // Fetch review assignments from reference assignment to understand previous grader assignments
-  const referenceFilters: CrudFilters = [
-    { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
-    { field: "class_id", operator: "eq", value: course_id }
-  ];
-  if (selectedReferenceRubric) {
-    referenceFilters.push({ field: "rubric_id", operator: "eq", value: selectedReferenceRubric.id });
-  }
+  const courseController = useCourseController();
 
-  const { data: referenceReviewAssignments } = useList({
-    resource: "review_assignments",
-    meta: {
-      select:
-        "assignee_profile_id, submission_id, rubric_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
-    },
-    filters: referenceFilters,
-    queryOptions: {
-      enabled: !!selectedReferenceAssignment && !!course_id
-    },
-    pagination: {
-      pageSize: 1000
-    }
-  });
+  // Map of assignment_group_id -> member profile ids
+  const [groupMembersByGroupId, setGroupMembersByGroupId] = useState<Map<number, string[]>>(new Map());
+  useEffect(() => {
+    const buildMap = (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
+      const map = new Map<number, string[]>();
+      for (const row of rows) {
+        const members = row.assignment_groups_members?.map((m) => m.profile_id) ?? [];
+        map.set(row.id, members);
+      }
+      return map;
+    };
+    const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
+      (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
+        setGroupMembersByGroupId(buildMap(rows));
+      }
+    );
+    setGroupMembersByGroupId(
+      buildMap(data as Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>)
+    );
+    return unsubscribe;
+  }, [courseController]);
 
-  const { data: referenceRubrics } = useList<RubricWithParts>({
-    resource: "rubrics",
-    meta: {
-      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
-    },
-    filters: [
-      { field: "assignment_id", operator: "eq", value: selectedReferenceAssignment?.id },
-      { field: "class_id", operator: "eq", value: course_id }
-    ],
-    queryOptions: {
-      enabled: !!selectedReferenceAssignment && !!course_id
-    }
-  });
+  // Current assignment review assignments rows (live via TableController)
+  const [currentReviewAssignments, setCurrentReviewAssignments] = useState<
+    { id: number; submission_id: number; rubric_id: number; assignee_profile_id: string }[]
+  >([]);
+  useEffect(() => {
+    type MinimalRA = { id: number; submission_id: number; rubric_id: number; assignee_profile_id: string };
+    const { data, unsubscribe } = assignmentController.reviewAssignments.list((rows: MinimalRA[]) => {
+      setCurrentReviewAssignments(
+        rows.map((r) => ({
+          id: r.id,
+          submission_id: r.submission_id,
+          rubric_id: r.rubric_id,
+          assignee_profile_id: r.assignee_profile_id
+        }))
+      );
+    });
+    setCurrentReviewAssignments(
+      (data as MinimalRA[]).map((r) => ({
+        id: r.id,
+        submission_id: r.submission_id,
+        rubric_id: r.rubric_id,
+        assignee_profile_id: r.assignee_profile_id
+      }))
+    );
+    return unsubscribe;
+  }, [assignmentController]);
 
-  const { data: exclusionRubrics } = useList<RubricWithParts>({
-    resource: "rubrics",
-    meta: {
-      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
+  // Map of review_assignment_id -> assigned rubric_part_ids
+  const [reviewAssignmentPartsById, setReviewAssignmentPartsById] = useState<Map<number, number[]>>(new Map());
+  const reviewAssignmentPartsController = useMemo(() => {
+    const controller = new TableController<
+      "review_assignment_rubric_parts",
+      "id, review_assignment_id, rubric_part_id"
+    >({
+      client: supabase,
+      table: "review_assignment_rubric_parts",
+      query: supabase
+        .from("review_assignment_rubric_parts")
+        .select("id,review_assignment_id, rubric_part_id")
+        .eq("class_id", Number(course_id))
+    });
+    return controller;
+  }, [supabase, course_id]);
+  const reviewAssignmentsPredicate = useCallback(
+    (
+      row: PossiblyTentativeResult<{
+        id: number;
+        review_assignment_id: number;
+        rubric_part_id: number;
+      }>
+    ) => {
+      return currentReviewAssignments.some((r) => r.id === row.review_assignment_id);
     },
-    filters: [
-      { field: "assignment_id", operator: "eq", value: selectedExclusionAssignment?.id },
-      { field: "class_id", operator: "eq", value: course_id }
-    ],
-    queryOptions: {
-      enabled: !!selectedExclusionAssignment && !!course_id
+    [currentReviewAssignments]
+  );
+  const reviewAssignmentParts = useListTableControllerValues(
+    reviewAssignmentPartsController,
+    reviewAssignmentsPredicate
+  );
+  useEffect(() => {
+    const ids = currentReviewAssignments.map((r) => r.id);
+    if (ids.length === 0) {
+      setReviewAssignmentPartsById(new Map());
+      return;
     }
-  });
+    const map = new Map<number, number[]>();
+    for (const part of reviewAssignmentParts) {
+      const list = map.get(part.review_assignment_id) ?? [];
+      list.push(part.rubric_part_id);
+      map.set(part.review_assignment_id, list);
+    }
+    setReviewAssignmentPartsById(map);
+  }, [currentReviewAssignments, reviewAssignmentParts]);
 
-  // For exclusions, we also need the review assignments
-  const { data: exclusionReviewAssignments } = useList({
-    resource: "review_assignments",
-    meta: {
-      select:
-        "assignee_profile_id, submission_id, rubric_id, submissions!review_assignments_submission_id_fkey(profile_id, assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id)))"
-    },
-    filters: [
-      { field: "assignment_id", operator: "eq", value: selectedExclusionAssignment?.id },
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "rubric_id", operator: "eq", value: selectedExclusionRubric?.id }
-    ],
-    queryOptions: {
-      enabled: !!selectedExclusionAssignment && !!selectedExclusionRubric && !!course_id
-    },
-    pagination: {
-      pageSize: 1000
-    }
-  });
+  // Grading conflicts via local TableController scoped to current class
+  const gradingConflictsController = useMemo(() => {
+    return new TableController({
+      client: supabase,
+      table: "grading_conflicts",
+      query: supabase
+        .from("grading_conflicts")
+        .select("id, grader_profile_id, student_profile_id, class_id, created_at, created_by_profile_id, reason")
+        .eq("class_id", Number(course_id)),
+      classRealTimeController: courseController.classRealTimeController,
+      realtimeFilter: { class_id: Number(course_id) }
+    });
+  }, [supabase, course_id, courseController.classRealTimeController]);
+  const gradingConflicts = useMemo(() => {
+    const { data } = gradingConflictsController.list();
+    return data as unknown[] as GradingConflictWithPopulatedProfiles[];
+  }, [gradingConflictsController]);
+
+  // Reference/exclusion rubric and assignments (loaded table-by-table)
+  const [referenceRubrics, setReferenceRubrics] = useState<RubricWithParts[] | undefined>(undefined);
+  const [exclusionRubrics, setExclusionRubrics] = useState<RubricWithParts[] | undefined>(undefined);
+  // Reference & Exclusion review_assignments via local TableControllers
+  const referenceReviewAssignmentsController = useMemo(() => {
+    if (!selectedReferenceAssignment) return null;
+    return new TableController({
+      client: supabase,
+      table: "review_assignments",
+      query: supabase
+        .from("review_assignments")
+        .select("id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id")
+        .eq("assignment_id", selectedReferenceAssignment.id)
+        .eq("class_id", Number(course_id)),
+      classRealTimeController: courseController.classRealTimeController,
+      realtimeFilter: { assignment_id: selectedReferenceAssignment.id, class_id: Number(course_id) }
+    });
+  }, [supabase, selectedReferenceAssignment, course_id, courseController.classRealTimeController]);
+  const exclusionReviewAssignmentsController = useMemo(() => {
+    if (!selectedExclusionAssignment) return null;
+    return new TableController({
+      client: supabase,
+      table: "review_assignments",
+      query: supabase
+        .from("review_assignments")
+        .select("id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id")
+        .eq("assignment_id", selectedExclusionAssignment.id)
+        .eq("class_id", Number(course_id)),
+      classRealTimeController: courseController.classRealTimeController,
+      realtimeFilter: { assignment_id: selectedExclusionAssignment.id, class_id: Number(course_id) }
+    });
+  }, [supabase, selectedExclusionAssignment, course_id, courseController.classRealTimeController]);
+  const referenceReviewAssignments = useMemo(() => {
+    if (!referenceReviewAssignmentsController)
+      return [] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];
+    const { data } = referenceReviewAssignmentsController.list();
+    return data as unknown[] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];
+  }, [referenceReviewAssignmentsController]);
+  const exclusionReviewAssignments = useMemo(() => {
+    if (!exclusionReviewAssignmentsController)
+      return [] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];
+    const { data } = exclusionReviewAssignmentsController.list();
+    return data as unknown[] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];
+  }, [exclusionReviewAssignmentsController]);
+  const [referenceSubmissionsMap, setReferenceSubmissionsMap] = useState<
+    Record<number, { profile_id: string | null; assignment_group_id: number | null }>
+  >({});
+  const [exclusionSubmissionsMap, setExclusionSubmissionsMap] = useState<
+    Record<number, { profile_id: string | null; assignment_group_id: number | null }>
+  >({});
+
+  useEffect(() => {
+    const load = async () => {
+      if (!selectedReferenceAssignment || !course_id) {
+        setReferenceRubrics(undefined);
+        setReferenceSubmissionsMap({});
+        return;
+      }
+      const { data: rubrics } = await supabase
+        .from("rubrics")
+        .select("id, name, assignment_id")
+        .eq("assignment_id", selectedReferenceAssignment.id)
+        .limit(1000);
+      setReferenceRubrics((rubrics as unknown as RubricWithParts[]) || []);
+      const { data: submissions } = await supabase
+        .from("submissions")
+        .select("id, profile_id, assignment_group_id")
+        .eq("assignment_id", selectedReferenceAssignment.id)
+        .eq("class_id", Number(course_id))
+        .limit(1000);
+      type MinimalSubmission = { id: number; profile_id: string | null; assignment_group_id: number | null };
+      const subMap: Record<number, { profile_id: string | null; assignment_group_id: number | null }> = {};
+      for (const s of (submissions as unknown as MinimalSubmission[]) || []) {
+        subMap[s.id] = { profile_id: s.profile_id, assignment_group_id: s.assignment_group_id };
+      }
+      setReferenceSubmissionsMap(subMap);
+    };
+    void load();
+  }, [selectedReferenceAssignment, course_id, supabase]);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!selectedExclusionAssignment || !course_id) {
+        setExclusionRubrics(undefined);
+        setExclusionSubmissionsMap({});
+        return;
+      }
+      const { data: rubrics } = await supabase
+        .from("rubrics")
+        .select("id, name, assignment_id")
+        .eq("assignment_id", selectedExclusionAssignment.id);
+      setExclusionRubrics((rubrics as unknown as RubricWithParts[]) || []);
+      const { data: submissions } = await supabase
+        .from("submissions")
+        .select("id, profile_id, assignment_group_id")
+        .eq("assignment_id", selectedExclusionAssignment.id)
+        .eq("class_id", Number(course_id));
+      type MinimalSubmission = { id: number; profile_id: string | null; assignment_group_id: number | null };
+      const subMap: Record<number, { profile_id: string | null; assignment_group_id: number | null }> = {};
+      for (const s of (submissions as unknown as MinimalSubmission[]) || []) {
+        subMap[s.id] = { profile_id: s.profile_id, assignment_group_id: s.assignment_group_id };
+      }
+      setExclusionSubmissionsMap(subMap);
+    };
+    void load();
+  }, [selectedExclusionAssignment, course_id, supabase]);
+
+  // Replaced refine.dev filters with explicit loads above
 
   function shuffle<T>(array: T[]): T[] {
     const shuffled = [...array];
@@ -278,15 +387,18 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // shuffled course staff to avoid those created first from consistently getting more assignments when
   // submissions / course_staff has a remainder
-  const courseStaff = useMemo(
-    () =>
-      shuffle(
-        userRoles?.data.filter((user) => {
-          return user.role === "grader" || user.role === "instructor";
-        }) ?? []
-      ),
-    [userRoles]
-  );
+  const courseStaff = useMemo(() => {
+    const staffBase = userRoles.filter((user) => user.role === "grader" || user.role === "instructor");
+    const enriched: UserRoleWithConflictsAndName[] = staffBase.map((u) => ({
+      ...(u as unknown as UserRoleWithConflictsAndName),
+      profiles: {
+        ...(u.profiles as unknown as UserRoleWithConflictsAndName["profiles"]),
+        name: (u.profiles as unknown as UserRoleWithConflictsAndName["profiles"]).name,
+        grading_conflicts: gradingConflicts.filter((gc) => gc.grader_profile_id === u.private_profile_id)
+      }
+    }));
+    return shuffle(enriched);
+  }, [userRoles, gradingConflicts]);
 
   useEffect(() => {
     setSelectedRubricPartsForFilter(
@@ -320,75 +432,99 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    * Populate submissions to do for assigning grading
    */
   useEffect(() => {
-    if (selectedRubric && activeSubmissions) {
-      setSubmissionsToDo(
-        activeSubmissions.data.filter((sub) => {
-          // Check if already assigned
-          const isAlreadyAssigned = sub.review_assignments.find(
-            (assign) =>
-              assign.rubric_id === selectedRubric.id &&
-              (assign.review_assignment_rubric_parts.length === 0 ||
-                selectedRubricPartsForFilter.every((filter) =>
-                  assign.review_assignment_rubric_parts.some((part) => part.rubric_part_id === filter.value.id)
-                ))
-          );
-          if (isAlreadyAssigned) return false;
-
-          // Apply new filters: class section, lab section, and student tags
-          const groupMembers = sub.assignment_groups?.assignment_groups_members || [{ profile_id: sub.profile_id }];
-
-          // For class section filtering
-          if (selectedClassSections.length > 0) {
-            const hasMatchingClassSection = groupMembers.some((member) => {
-              // Get user roles for this profile ID
-              const memberUserRoles =
-                userRoles?.data.filter((role) => role.private_profile_id === member.profile_id) || [];
-              return memberUserRoles.some((role) =>
-                selectedClassSections.some((section) => section.value.id === role.class_section_id)
-              );
-            });
-            if (!hasMatchingClassSection) return false;
-          }
-
-          // For lab section filtering
-          if (selectedLabSections.length > 0) {
-            const hasMatchingLabSection = groupMembers.some((member) => {
-              // Get user roles for this profile ID
-              const memberUserRoles =
-                userRoles?.data.filter((role) => role.private_profile_id === member.profile_id) || [];
-              return memberUserRoles.some((role) =>
-                selectedLabSections.some((section) => section.value.id === role.lab_section_id)
-              );
-            });
-            if (!hasMatchingLabSection) return false;
-          }
-
-          // For student tag filtering
-          if (selectedStudentTags.length > 0) {
-            const memberProfileIds = groupMembers.map((member) => member.profile_id);
-            const hasMatchingTag = tags.some(
-              (tag) =>
-                memberProfileIds.includes(tag.profile_id) &&
-                selectedStudentTags.some(
-                  (selectedTag) => selectedTag.value.color === tag.color && selectedTag.value.name === tag.name
-                )
-            );
-            if (!hasMatchingTag) return false;
-          }
-
-          return true;
-        })
-      );
+    if (!selectedRubric) {
+      setSubmissionsToDo([]);
+      return;
     }
+
+    const selectedPartIds = selectedRubricPartsForFilter.map((p) => p.value.id);
+    const selectedClassSectionIds = new Set(selectedClassSections.map((s) => s.value.id));
+    const selectedLabSectionIds = new Set(selectedLabSections.map((s) => s.value.id));
+
+    const buildMemberIds = (submission: { assignment_group_id: number | null; profile_id: string | null }) => {
+      if (submission.assignment_group_id && groupMembersByGroupId.has(submission.assignment_group_id)) {
+        return groupMembersByGroupId.get(submission.assignment_group_id)!;
+      }
+      return submission.profile_id ? [submission.profile_id] : [];
+    };
+
+    const isAssignedForSelectedParts = (submissionId: number): boolean => {
+      const ras = currentReviewAssignments.filter(
+        (ra) => ra.submission_id === submissionId && ra.rubric_id === selectedRubric.id
+      );
+      for (const ra of ras) {
+        const parts = reviewAssignmentPartsById.get(ra.id) ?? [];
+        if (parts.length === 0) {
+          return true; // whole rubric assigned
+        }
+        const coversAll = selectedPartIds.every((pid) => parts.includes(pid));
+        if (coversAll) return true;
+      }
+      return false;
+    };
+
+    const filtered = allActiveSubmissions
+      .filter((sub) => sub.assignment_id === Number(assignment_id))
+      .filter((sub) => !isAssignedForSelectedParts(sub.id))
+      .filter((sub) => {
+        const memberIds = buildMemberIds(sub);
+        // Class section filter
+        if (selectedClassSectionIds.size > 0) {
+          const ok = memberIds.some((pid) =>
+            userRoles.some(
+              (ur) => ur.private_profile_id === pid && selectedClassSectionIds.has(ur.class_section_id || 0)
+            )
+          );
+          if (!ok) return false;
+        }
+        // Lab section filter
+        if (selectedLabSectionIds.size > 0) {
+          const ok = memberIds.some((pid) =>
+            userRoles.some((ur) => ur.private_profile_id === pid && selectedLabSectionIds.has(ur.lab_section_id || 0))
+          );
+          if (!ok) return false;
+        }
+        // Tag filter
+        if (selectedStudentTags.length > 0) {
+          const memberSet = new Set(memberIds);
+          const ok = tags.some(
+            (tag) =>
+              memberSet.has(tag.profile_id) &&
+              selectedStudentTags.some((sel) => sel.value.color === tag.color && sel.value.name === tag.name)
+          );
+          if (!ok) return false;
+        }
+        // Exclude submissions where all members are disabled
+        const anyActive = memberIds.some((pid) =>
+          userRoles.some((ur) => ur.private_profile_id === pid && !ur.disabled)
+        );
+        return anyActive;
+      })
+      .map((sub) => {
+        const memberIds = buildMemberIds(sub);
+        return {
+          ...(sub as unknown as SubmissionWithGrading),
+          submission_reviews: [],
+          review_assignments: [],
+          assignment_groups:
+            memberIds.length > 0 ? { assignment_groups_members: memberIds.map((profile_id) => ({ profile_id })) } : null
+        } as SubmissionWithGrading;
+      });
+
+    setSubmissionsToDo(filtered);
   }, [
     selectedRubric,
-    activeSubmissions,
     selectedRubricPartsForFilter,
     selectedClassSections,
     selectedLabSections,
     selectedStudentTags,
     tags,
-    userRoles
+    userRoles,
+    groupMembersByGroupId,
+    allActiveSubmissions,
+    currentReviewAssignments,
+    reviewAssignmentPartsById,
+    assignment_id
   ]);
 
   /**
@@ -396,70 +532,60 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    */
   const buildGraderPreferenceMap = useCallback(() => {
     const preferenceMap = new Map<string, string>();
+    if (!selectedReferenceAssignment || !referenceReviewAssignments) return preferenceMap;
 
-    if (!selectedReferenceAssignment || !referenceReviewAssignments?.data) {
-      return preferenceMap;
+    const rubricIdFilter = selectedReferenceRubric?.id;
+
+    for (const ra of referenceReviewAssignments) {
+      if (rubricIdFilter && ra.rubric_id !== rubricIdFilter) continue;
+      const sub = referenceSubmissionsMap[ra.submission_id];
+      if (!sub) continue;
+      const memberIds =
+        sub.assignment_group_id && groupMembersByGroupId.get(sub.assignment_group_id)
+          ? groupMembersByGroupId.get(sub.assignment_group_id)!
+          : sub.profile_id
+            ? [sub.profile_id]
+            : [];
+      for (const pid of memberIds) {
+        preferenceMap.set(pid, ra.assignee_profile_id);
+      }
     }
-
-    referenceReviewAssignments.data.forEach((reviewAssignment) => {
-      // Filter by selected rubric if one is chosen
-      if (selectedReferenceRubric && reviewAssignment.rubric_id !== selectedReferenceRubric.id) {
-        return; // Skip this assignment if it's not for the selected rubric
-      }
-
-      const submission = reviewAssignment.submissions;
-      if (submission) {
-        // Handle individual submissions
-        if (submission.profile_id) {
-          preferenceMap.set(submission.profile_id, reviewAssignment.assignee_profile_id);
-        }
-
-        // Handle group submissions
-        if (submission.assignment_groups?.assignment_groups_members) {
-          submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
-            preferenceMap.set(member.profile_id, reviewAssignment.assignee_profile_id);
-          });
-        }
-      }
-    });
-
     return preferenceMap;
-  }, [selectedReferenceAssignment, selectedReferenceRubric, referenceReviewAssignments]);
+  }, [
+    selectedReferenceAssignment,
+    selectedReferenceRubric,
+    referenceReviewAssignments,
+    referenceSubmissionsMap,
+    groupMembersByGroupId
+  ]);
 
   const buildGraderExclusionMap = useCallback(() => {
-    const exclusionMap = new Map<string, Set<string>>(); // student -> Set of graders to exclude
+    const exclusionMap = new Map<string, Set<string>>();
+    if (!selectedExclusionAssignment || !selectedExclusionRubric || !exclusionReviewAssignments) return exclusionMap;
 
-    if (!selectedExclusionAssignment || !selectedExclusionRubric || !exclusionReviewAssignments?.data) {
-      return exclusionMap;
-    }
-
-    exclusionReviewAssignments.data.forEach((reviewAssignment) => {
-      const submission = reviewAssignment.submissions;
-      if (submission) {
-        // Helper function to add exclusion
-        const addExclusion = (studentId: string, graderId: string) => {
-          if (!exclusionMap.has(studentId)) {
-            exclusionMap.set(studentId, new Set<string>());
-          }
-          exclusionMap.get(studentId)!.add(graderId);
-        };
-
-        // Handle individual submissions
-        if (submission.profile_id) {
-          addExclusion(submission.profile_id, reviewAssignment.assignee_profile_id);
-        }
-
-        // Handle group submissions
-        if (submission.assignment_groups?.assignment_groups_members) {
-          submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
-            addExclusion(member.profile_id, reviewAssignment.assignee_profile_id);
-          });
-        }
+    for (const ra of exclusionReviewAssignments) {
+      if (ra.rubric_id !== selectedExclusionRubric.id) continue;
+      const sub = exclusionSubmissionsMap[ra.submission_id];
+      if (!sub) continue;
+      const memberIds =
+        sub.assignment_group_id && groupMembersByGroupId.get(sub.assignment_group_id)
+          ? groupMembersByGroupId.get(sub.assignment_group_id)!
+          : sub.profile_id
+            ? [sub.profile_id]
+            : [];
+      for (const pid of memberIds) {
+        if (!exclusionMap.has(pid)) exclusionMap.set(pid, new Set<string>());
+        exclusionMap.get(pid)!.add(ra.assignee_profile_id);
       }
-    });
-
+    }
     return exclusionMap;
-  }, [selectedExclusionAssignment, selectedExclusionRubric, exclusionReviewAssignments]);
+  }, [
+    selectedExclusionAssignment,
+    selectedExclusionRubric,
+    exclusionReviewAssignments,
+    exclusionSubmissionsMap,
+    groupMembersByGroupId
+  ]);
 
   /**
    * Creates a list of the users who will be assigned submissions to grade based on category.
@@ -657,9 +783,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           // Create sticky assignment - this bypasses all optimization
           const submitters: UserRoleWithConflictsAndName[] = [];
           for (const member of groupMembers) {
-            const memberUserRole = userRoles?.data.find((item) => {
-              return item.private_profile_id === member.profile_id;
-            });
+            const memberUserRole = userRoles.find(
+              (item) => item.private_profile_id === member.profile_id
+            ) as unknown as UserRoleWithConflictsAndName | undefined;
             if (memberUserRole) {
               submitters.push(memberUserRole);
             }
@@ -817,16 +943,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    */
   const baseOnAllCalculator = useCallback(
     (historicalWorkload: Map<string, number>) => {
-      for (const submission of activeSubmissions?.data ?? []) {
-        for (const review of submission.review_assignments.filter((rev) => rev.rubric_id === selectedRubric?.id)) {
-          historicalWorkload.set(
-            review.assignee_profile_id,
-            (historicalWorkload.get(review.assignee_profile_id) ?? 0) + 1
-          );
+      for (const ra of currentReviewAssignments) {
+        if (selectedRubric && ra.rubric_id === selectedRubric.id) {
+          historicalWorkload.set(ra.assignee_profile_id, (historicalWorkload.get(ra.assignee_profile_id) ?? 0) + 1);
         }
       }
     },
-    [activeSubmissions, selectedRubric]
+    [currentReviewAssignments, selectedRubric]
   );
 
   /**
@@ -849,9 +972,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           // Find UserRoleWithConflictsAndName for each group member
           const submitters: UserRoleWithConflictsAndName[] = [];
           for (const member of groupMembers) {
-            const memberUserRole = userRoles?.data.find((item) => {
-              return item.private_profile_id === member.profile_id;
-            });
+            const memberUserRole = userRoles.find(
+              (item) => item.private_profile_id === member.profile_id
+            ) as unknown as UserRoleWithConflictsAndName | undefined;
             if (!memberUserRole) {
               toaster.error({
                 title: "Error drafting reviews",
@@ -1250,12 +1373,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                   setSelectedClassSections(e);
                 }}
                 value={selectedClassSections}
-                options={
-                  classSections?.data.map((section) => ({
-                    label: section.name,
-                    value: section
-                  })) || []
-                }
+                options={classSections.map((section) => ({ label: section.name, value: section }))}
               />
               <Field.HelperText>Only include submissions from students in these class sections</Field.HelperText>
             </Field.Root>
@@ -1569,12 +1687,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                             setSelectedReferenceAssignment(e?.value);
                             setSelectedReferenceRubric(undefined); // Reset rubric when assignment changes
                           }}
-                          options={
-                            allAssignments?.data.map((assign) => ({
-                              label: assign.title,
-                              value: assign
-                            })) || []
-                          }
+                          options={allAssignments.map((assign) => ({ label: assign.title, value: assign }))}
                           isClearable
                           placeholder="Select an assignment to copy from..."
                         />
@@ -1597,12 +1710,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                                 : undefined
                             }
                             onChange={(e) => setSelectedReferenceRubric(e?.value)}
-                            options={
-                              referenceRubrics?.data.map((rubric) => ({
-                                label: rubric.name,
-                                value: rubric
-                              })) || []
-                            }
+                            options={(referenceRubrics || []).map((rubric) => ({ label: rubric.name, value: rubric }))}
                             isClearable
                             placeholder="All rubrics (recommended)"
                           />
@@ -1640,12 +1748,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                             setSelectedExclusionAssignment(e?.value);
                             setSelectedExclusionRubric(undefined); // Reset rubric when assignment changes
                           }}
-                          options={
-                            allAssignments?.data.map((assign) => ({
-                              label: assign.title,
-                              value: assign
-                            })) || []
-                          }
+                          options={allAssignments.map((assign) => ({ label: assign.title, value: assign }))}
                           isClearable
                           placeholder="Select an assignment to exclude from..."
                         />
@@ -1667,12 +1770,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                                 : undefined
                             }
                             onChange={(e) => setSelectedExclusionRubric(e?.value)}
-                            options={
-                              exclusionRubrics?.data.map((rubric) => ({
-                                label: rubric.name,
-                                value: rubric
-                              })) || []
-                            }
+                            options={(exclusionRubrics || []).map((rubric) => ({ label: rubric.name, value: rubric }))}
                             placeholder="Select a rubric..."
                           />
                           <Field.HelperText>
