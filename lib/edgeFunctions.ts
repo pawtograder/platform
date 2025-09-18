@@ -4,6 +4,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
+import * as Sentry from "@sentry/nextjs";
 export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
   const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
     body: {
@@ -188,6 +189,14 @@ export async function activateSubmission(params: { submission_id: number }, supa
   if (ret.data) {
     return true;
   }
+  Sentry.addBreadcrumb({
+    message: "Failed to activate submission",
+    category: "error",
+    data: {
+      submission_id: params.submission_id,
+      response: ret
+    }
+  });
   throw new EdgeFunctionError({
     details: "Failed to activate submission",
     message: "Failed to activate submission",
