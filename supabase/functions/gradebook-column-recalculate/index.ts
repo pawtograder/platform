@@ -53,15 +53,16 @@ async function processRowsAll(
       rows.set(k, { primary: msg, duplicateMsgIds: [] });
     } else {
       existing.duplicateMsgIds.push(msg.msg_id);
+      console.log(`Found a duplicate message for ${k}`);
     }
   }
 
-  // Group by (class_id, gradebook_id)
+  // Group by (class_id, gradebook_id, is_private)
   type RowEntry = { key: string; msg: QueueMessage<RowMessage>; duplicateMsgIds: number[] };
   const gbToRows = new Map<string, RowEntry[]>();
   for (const [key, entry] of rows.entries()) {
-    const { class_id, gradebook_id } = entry.primary.message;
-    const gbKey = `${class_id}:${gradebook_id}`;
+    const { class_id, gradebook_id, is_private } = entry.primary.message;
+    const gbKey = `${class_id}:${gradebook_id}:${is_private}`;
     const arr = gbToRows.get(gbKey) ?? [];
     arr.push({ key, msg: entry.primary, duplicateMsgIds: entry.duplicateMsgIds });
     gbToRows.set(gbKey, arr);
@@ -69,9 +70,10 @@ async function processRowsAll(
 
   let didWork = false;
   for (const [gbKey, rowEntries] of gbToRows.entries()) {
-    const [classIdStr, gradebookIdStr] = gbKey.split(":");
+    const [classIdStr, gradebookIdStr, isPrivateStr] = gbKey.split(":");
     const classId = Number(classIdStr);
     const gradebook_id = Number(gradebookIdStr);
+    const is_private = isPrivateStr === "true";
     const gbScope = scope.clone();
     gbScope.setTag("class_id", classId);
     gbScope.setTag("gradebook_id", gradebook_id);
@@ -81,7 +83,6 @@ async function processRowsAll(
 
     if (isBulk) {
       const studentIds = rowEntries.map((e) => e.msg.message.student_id);
-      const is_private = rowEntries[0].msg.message.is_private;
 
       const allGcs: Array<{
         id: number;
@@ -127,11 +128,10 @@ async function processRowsAll(
         grouped.set(r.student_id as string, arr);
       }
 
-      const rowsInput = studentIds.map((sid) => ({ student_id: sid, gcsRows: grouped.get(sid) ?? [] }));
+      const rowsInput = studentIds.map((sid) => ({ student_id: sid, is_private, gcsRows: grouped.get(sid) ?? [] }));
       const updatesByStudent = await processGradebookRowsCalculation(adminSupabase, gbScope, {
         class_id: classId,
         gradebook_id,
-        is_private,
         rows: rowsInput
       });
 
@@ -228,7 +228,6 @@ async function processRowsAll(
     }
 
     const studentIds = rowEntries.map((e) => e.msg.message.student_id);
-    const is_private = rowEntries[0].msg.message.is_private;
     const { data: scopedGcs, error: scopedErr } = await adminSupabase
       .from("gradebook_column_students")
       .select(
@@ -250,11 +249,10 @@ async function processRowsAll(
       groupedScoped.set(r.student_id as string, arr);
     }
 
-    const rowsInputScoped = studentIds.map((sid) => ({ student_id: sid, gcsRows: groupedScoped.get(sid) ?? [] }));
+    const rowsInputScoped = studentIds.map((sid) => ({ student_id: sid, is_private, gcsRows: groupedScoped.get(sid) ?? [] }));
     const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, gbScope, {
       class_id: classId,
       gradebook_id,
-      is_private,
       rows: rowsInputScoped
     });
 

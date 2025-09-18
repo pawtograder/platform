@@ -257,6 +257,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
       return raw.map((v) => coerceRoundValue(v));
     }
     const ret = coerceRoundValue(raw);
+    console.log(`Ret for key ${key}, round ${requestedRound}: ${JSON.stringify(ret, null, 2)}`);
     return ret;
   }
 
@@ -344,6 +345,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
           publicByRound[round] = score === null ? undefined : (score as number);
         }
       }
+      console.log(`Private by round for ${slug}: ${JSON.stringify(privateByRound, null, 2)}`);
       results.push({
         key: slug,
         student_id: row.student_private_profile_id,
