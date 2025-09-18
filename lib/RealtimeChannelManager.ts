@@ -488,6 +488,8 @@ export class RealtimeChannelManager {
   }
 
   private _lastSessionRefreshTime: number = 0;
+  private _sessionRefreshPromise: Promise<void> | null = null;
+
   /**
    * Refresh the session token if needed and set it for Supabase Realtime
    */
@@ -499,8 +501,31 @@ export class RealtimeChannelManager {
       });
       return;
     }
+
+    // If there's already a refresh in progress, wait for it
+    if (this._sessionRefreshPromise) {
+      this._breadcrumb("auth", "session_refresh_awaiting_in_flight");
+      await this._sessionRefreshPromise;
+      return;
+    }
+
+    // Start the refresh process
     this._breadcrumb("auth", `time since last session refresh: ${Date.now() - this._lastSessionRefreshTime}`);
-    this._lastSessionRefreshTime = Date.now();
+    this._breadcrumb("auth", "session_refresh_attempting");
+
+    this._sessionRefreshPromise = this._performSessionRefresh(client);
+
+    try {
+      await this._sessionRefreshPromise;
+    } finally {
+      this._sessionRefreshPromise = null;
+    }
+  }
+
+  /**
+   * Performs the actual session refresh logic
+   */
+  private async _performSessionRefresh(client: SupabaseClient<Database>) {
     const { data, error } = await client.auth.getSession();
     if (error) {
       this._breadcrumb("auth", "getSession_error", { message: error.message }, "error");
@@ -514,6 +539,10 @@ export class RealtimeChannelManager {
       await client.realtime.setAuth(data.session.access_token);
       this._breadcrumb("auth", "realtime_auth_updated");
     }
+
+    // Only update the timestamp after successful completion
+    this._lastSessionRefreshTime = Date.now();
+    this._breadcrumb("auth", "session_refresh_completed");
   }
 
   /**

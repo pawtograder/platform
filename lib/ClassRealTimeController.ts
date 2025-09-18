@@ -1,8 +1,8 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
-import { RealtimeChannelManager } from "./RealtimeChannelManager";
 import * as Sentry from "@sentry/nextjs";
+import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
+import { RealtimeChannelManager } from "./RealtimeChannelManager";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -130,18 +130,19 @@ export class ClassRealTimeController {
     return true;
   }
 
+  private _authUnsubscriber?: ReturnType<typeof this._client.auth.onAuthStateChange>;
   private async _initializeChannels() {
     if (this._closed) {
       return;
     }
 
-    this._client.auth.onAuthStateChange((event, session) => {
+    this._authUnsubscriber = this._client.auth.onAuthStateChange((event, session) => {
       Sentry.addBreadcrumb({
         category: "realtime",
         message: `Auth state changed: ${event}`,
         data: {
           event,
-          session
+          session: { userId: session?.user?.id, expiresAt: session?.expires_at }
         }
       });
     });
@@ -456,6 +457,11 @@ export class ClassRealTimeController {
       unsubscriber();
     }
     this._channelUnsubscribers.clear();
+
+    if (this._authUnsubscriber) {
+      this._authUnsubscriber();
+      this._authUnsubscriber = undefined;
+    }
 
     this._closed = true;
     this._started = false;
