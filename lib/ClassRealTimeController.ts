@@ -135,7 +135,6 @@ export class ClassRealTimeController {
       return;
     }
 
-
     this._client.auth.onAuthStateChange((event, session) => {
       Sentry.addBreadcrumb({
         category: "realtime",
