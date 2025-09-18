@@ -44,17 +44,19 @@ async function processRowsAll(
   queueMessages: QueueMessage<RowMessage>[]
 ): Promise<boolean> {
   // Deduplicate by (gradebook_id, student_id, is_private)
+  // NOTE: When we de-duplicate, there seem to be some knock-on effects that cause incorrect calculations
+  // So, at the cost of repeated work we don't deduplicate anymore (to save the cost of more debugging!)
   const keyFor = (m: RowMessage) => `${m.gradebook_id}:${m.student_id}:${m.is_private}`;
   const rows = new Map<string, { primary: QueueMessage<RowMessage>; duplicateMsgIds: number[] }>();
   for (const msg of queueMessages) {
     const k = keyFor(msg.message);
-    const existing = rows.get(k);
-    if (!existing) {
-      rows.set(k, { primary: msg, duplicateMsgIds: [] });
-    } else {
-      existing.duplicateMsgIds.push(msg.msg_id);
-      console.log(`Found a duplicate message for ${k}`);
-    }
+    // const existing = rows.get(k);
+    // if (!existing) {
+    rows.set(k, { primary: msg, duplicateMsgIds: [] });
+    // } else {
+    // existing.duplicateMsgIds.push(msg.msg_id);
+    // console.log(`Found a duplicate message for ${k}`);
+    // }
   }
 
   // Group by (class_id, gradebook_id, is_private)
@@ -249,7 +251,11 @@ async function processRowsAll(
       groupedScoped.set(r.student_id as string, arr);
     }
 
-    const rowsInputScoped = studentIds.map((sid) => ({ student_id: sid, is_private, gcsRows: groupedScoped.get(sid) ?? [] }));
+    const rowsInputScoped = studentIds.map((sid) => ({
+      student_id: sid,
+      is_private,
+      gcsRows: groupedScoped.get(sid) ?? []
+    }));
     const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, gbScope, {
       class_id: classId,
       gradebook_id,

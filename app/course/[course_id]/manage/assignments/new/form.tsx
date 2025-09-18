@@ -381,8 +381,8 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
                   // Clear the minutes_due_after_lab field when unchecked
                   form.setValue("minutes_due_after_lab", null);
                 } else {
-                  // Set a default value when checked
-                  form.setValue("minutes_due_after_lab", 60);
+                  // Set a default value when checked - use string since valueAsNumber will convert it
+                  form.setValue("minutes_due_after_lab", "60");
                 }
               }}
             >

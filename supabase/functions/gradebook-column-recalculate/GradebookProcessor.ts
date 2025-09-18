@@ -367,9 +367,9 @@ export async function processGradebookRowCalculation(
             if (typeof argVal === "string" && (argVal as string).includes("*")) {
               const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
                 ._batchDependencySourceMap as Record<
-                  string,
-                  { expandKey: (params: { key: string; class_id: number }) => string[] }
-                >;
+                string,
+                { expandKey: (params: { key: string; class_id: number }) => string[] }
+              >;
               if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
                 const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id });
@@ -449,7 +449,9 @@ export async function processGradebookRowCalculation(
       try {
         const compiled = compiledById.get(columnId)!;
         const result = compiled.evaluate({ context });
-        console.log(`Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(result, null, 2)}`);
+        console.log(
+          `Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(result, null, 2)}`
+        );
         if (typeof result === "object" && result !== null && "entries" in (result as Record<string, unknown>)) {
           const lastEntry = (result as { entries: unknown[] }).entries[
             (result as { entries: unknown[] }).entries.length - 1
@@ -545,7 +547,19 @@ export async function processGradebookRowCalculation(
   clearRowOverrideValues(class_id, student_id, is_private);
   return updates;
 }
-
+type GCSRowsType = Pick<
+  Database["public"]["Tables"]["gradebook_column_students"]["Row"],
+  | "id"
+  | "gradebook_column_id"
+  | "is_missing"
+  | "is_excused"
+  | "is_droppable"
+  | "score_override"
+  | "score"
+  | "released"
+  | "score_override_note"
+  | "incomplete_values"
+>[];
 export async function processGradebookRowsCalculation(
   adminSupabase: SupabaseClient<Database>,
   scope: Sentry.Scope,
@@ -559,19 +573,7 @@ export async function processGradebookRowsCalculation(
     rows: {
       student_id: string;
       is_private: boolean;
-      gcsRows: Pick<
-        Database["public"]["Tables"]["gradebook_column_students"]["Row"],
-        | "id"
-        | "gradebook_column_id"
-        | "is_missing"
-        | "is_excused"
-        | "is_droppable"
-        | "score_override"
-        | "score"
-        | "released"
-        | "score_override_note"
-        | "incomplete_values"
-      >[];
+      gcsRows: GCSRowsType;
     }[];
   }
 ): Promise<Map<string, RowUpdate[]>> {
@@ -627,9 +629,9 @@ export async function processGradebookRowsCalculation(
             if (typeof argVal === "string" && (argVal as string).includes("*")) {
               const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
                 ._batchDependencySourceMap as Record<
-                  string,
-                  { expandKey: (params: { key: string; class_id: number }) => string[] }
-                >;
+                string,
+                { expandKey: (params: { key: string; class_id: number }) => string[] }
+              >;
               if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
                 const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id });
@@ -655,7 +657,7 @@ export async function processGradebookRowsCalculation(
   const result = new Map<string, RowUpdate[]>();
 
   for (const { student_id, gcsRows, is_private } of rows) {
-    const gcsByColumnId = new Map<number, GradebookColumnRow>();
+    const gcsByColumnId = new Map<number, GCSRowsType[number]>();
     for (const r of gcsRows) {
       gcsByColumnId.set(r.gradebook_column_id, r);
     }
@@ -711,7 +713,9 @@ export async function processGradebookRowsCalculation(
         try {
           const compiled = compiledById.get(columnId)!;
           const resultVal = compiled.evaluate({ context });
-          console.log(`Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(resultVal, null, 2)}`);
+          console.log(
+            `Result for column ${column.slug} ${column.id} ${column.score_expression}: ${JSON.stringify(resultVal, null, 2)}`
+          );
           if (
             typeof resultVal === "object" &&
             resultVal !== null &&
@@ -910,9 +914,9 @@ async function processCellBatch(
               // For wildcard patterns, expand them using the batch dependency sources
               const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
                 ._batchDependencySourceMap as Record<
-                  string,
-                  { expandKey: (params: { key: string; class_id: number }) => string[] }
-                >;
+                string,
+                { expandKey: (params: { key: string; class_id: number }) => string[] }
+              >;
               if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
                 const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id: column.class_id });

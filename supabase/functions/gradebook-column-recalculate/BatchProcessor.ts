@@ -3,7 +3,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processBatch } from "./index.ts";
-console.log(Deno.env.get("SUPABASE_URL"));
 export async function runHandler() {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,

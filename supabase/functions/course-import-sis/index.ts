@@ -1640,7 +1640,7 @@ export function createMockScope(): Sentry.Scope {
     setUser: () => {},
     captureException: (error: unknown) => console.error(`[Exception]`, error),
     captureMessage: () => {}
-  } as Sentry.Scope;
+  } as unknown as Sentry.Scope;
 }
 
 // function constructSemesterCode(term: string, year: number): string {

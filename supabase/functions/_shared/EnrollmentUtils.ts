@@ -60,14 +60,14 @@ export async function createUserInClass(
         email_confirm: true
       });
       if (newUser.error) {
-        throw new Error(newUser.error);
+        throw newUser.error;
       }
       console.log("Created user", newUser);
       userId = newUser.data.user!.id;
     } else {
       const newUser = await supabase.auth.admin.inviteUserByEmail(user.primary_email);
       if (newUser.error) {
-        throw new Error(newUser.error);
+        throw newUser.error;
       }
       console.log("Invited user", newUser);
       userId = newUser.data.user!.id;
