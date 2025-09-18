@@ -17,7 +17,7 @@ import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubr
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -303,6 +303,15 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const { time_zone } = useCourse();
   const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
+  const {dueDate} = useAssignmentDueDate(submission.assignments, {
+    studentPrivateProfileId: submission.profile_id ||undefined 
+  });
+  const isStaff = useIsGraderOrInstructor();
+  const disableActivationButton = dueDate && TZDate.tz(time_zone || "America/New_York") > new TZDate(dueDate, time_zone || "America/New_York") && !isStaff;
+  console.log(disableActivationButton);
+  console.log(dueDate);
+  console.log(new TZDate(dueDate, time_zone || "America/New_York"));
+  console.log(TZDate.tz(time_zone || "America/New_York"));
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
   }
@@ -402,6 +411,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                           <Button
                             variant="outline"
                             size="xs"
+                            disabled={disableActivationButton}
                             loading={isActivating}
                             onClick={async () => {
                               setIsActivating(true);
