@@ -227,7 +227,7 @@ export default function AssignmentsTable() {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (!row.original.lab_section_name) return values.includes("Not assigned");
-          return values.some((val) => row.original.lab_section_name!.toLowerCase().includes(val.toLowerCase()));
+          return values.some((val) => row.original.lab_section_name!.toLowerCase() === val.toLowerCase());
         }
       },
       {

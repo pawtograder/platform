@@ -383,7 +383,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorFn: (row: PopulatedReviewAssignment) => row.profiles?.name || row.assignee_profile_id,
         cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
           return row.original.profiles?.name ? (
-            <PersonName uid={row.original.assignee_profile_id} />
+            <PersonName uid={row.original.assignee_profile_id} showAvatar={false} />
           ) : (
             row.original.assignee_profile_id
           );
@@ -539,9 +539,12 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     ],
     [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
   );
-  const tableController = useMemo(() => {
-    const joinedSelect =
-      "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
+  const joinedSelect =
+    "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
+  const [tableController, setTableController] =
+    useState<TableController<"review_assignments", typeof joinedSelect, number>>();
+  useEffect(() => {
+    if (!classRealTimeController) return;
 
     const query = supabase
       .from("review_assignments")
@@ -549,13 +552,18 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       .eq("assignment_id", Number(assignmentId))
       .not("rubric_id", "eq", selfReviewRubric?.id || 0);
 
-    return new TableController<"review_assignments", typeof joinedSelect, number>({
+    const tc = new TableController<"review_assignments", typeof joinedSelect, number>({
       query,
       client: supabase,
       table: "review_assignments",
       classRealTimeController,
-      selectForSingleRow: joinedSelect
+      selectForSingleRow: joinedSelect,
+      debounceInterval: 1000
     });
+    setTableController(tc);
+    return () => {
+      tc.close();
+    };
   }, [classRealTimeController, supabase, assignmentId, selfReviewRubric]);
 
   const table = useTableControllerTable<
@@ -592,7 +600,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
   // Keep table in sync when related tables change in realtime
   useEffect(() => {
-    if (!classRealTimeController) return;
+    if (!classRealTimeController || !tableController) return;
     // When a submission_review changes, invalidate the matching review_assignment row (or refetch all as fallback)
     const unsubscribeSubmissionReviews = classRealTimeController.subscribeToTable("submission_reviews", (message) => {
       try {

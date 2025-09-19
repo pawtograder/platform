@@ -24,7 +24,7 @@ export interface UseTableControllerTableProps<
   TData = any
 > {
   columns: ColumnDef<TData>[];
-  tableController: TableController<RelationName, Query, IDType, TData>;
+  tableController?: TableController<RelationName, Query, IDType, TData>;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
 }
 
@@ -79,6 +79,7 @@ export function useTableControllerTable<
 
   // Subscribe to TableController data changes
   useEffect(() => {
+    if (!tableController) return;
     let unsubscribe: (() => void) | undefined;
 
     const initializeData = async () => {
@@ -118,6 +119,7 @@ export function useTableControllerTable<
   // Manual refetch function - since TableController manages its own state,
   // we just need to invalidate and let the subscription handle the update
   const refetch = useCallback(async () => {
+    if (!tableController) return;
     try {
       setError(null);
       // TableController doesn't have a global refetch, but we can trigger

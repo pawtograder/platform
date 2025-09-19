@@ -312,7 +312,7 @@ export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(con
         if (!cleanedUp) {
           setReady(false);
           // Optionally log the error
-          console.error("TableController readyPromise rejected:", err);
+          Sentry.captureException(err);
         }
       });
 
@@ -407,13 +407,17 @@ export default class TableController<
   private _selectForSingleRow: Query | undefined;
   private _isRefetching: boolean = false;
   private _refetchListeners: ((isRefetching: boolean) => void)[] = [];
-
+  private _debounceInterval: number;
   private _listDataListeners: ((
     data: ResultOne[],
     { entered, left }: { entered: ResultOne[]; left: ResultOne[] }
   ) => void)[] = [];
   private _itemDataListeners: Map<IDType, ((data: PossiblyTentativeResult<ResultOne> | undefined) => void)[]> =
     new Map();
+  // Batching state for debounced operations - single queue to maintain order
+  private _pendingOperations: BroadcastMessage[] = [];
+  private _debounceTimeout: NodeJS.Timeout | null = null;
+  private _isProcessingBatch: boolean = false;
 
   get table() {
     return this._table;
@@ -450,6 +454,133 @@ export default class TableController<
       throw error;
     }
     return data as unknown as ResultOne | undefined;
+  }
+
+  /**
+   * Schedule batched operations to be processed after debounce interval
+   */
+  private _scheduleBatchedOperations(): void {
+    if (this._debounceTimeout) {
+      clearTimeout(this._debounceTimeout);
+    }
+
+    this._debounceTimeout = setTimeout(async () => {
+      await this._processBatchedOperations();
+    }, this._debounceInterval);
+  }
+
+  /**
+   * Process all pending batched operations in chronological order
+   */
+  private async _processBatchedOperations(): Promise<void> {
+    if (this._closed) return;
+
+    // Prevent concurrent batch processing
+    if (this._isProcessingBatch) {
+      // If we're already processing, reschedule this batch for later
+      if (this._pendingOperations.length > 0) {
+        this._scheduleBatchedOperations();
+      }
+      return;
+    }
+
+    if (this._pendingOperations.length === 0) {
+      this._debounceTimeout = null;
+      return;
+    }
+
+    // Set processing flag and take snapshot of pending operations
+    this._isProcessingBatch = true;
+    const operations = [...this._pendingOperations];
+    this._pendingOperations = [];
+    this._debounceTimeout = null;
+
+    // Group consecutive operations of the same type to enable batching
+    // while preserving overall chronological order
+    const batches: { type: "INSERT" | "UPDATE" | "DELETE"; messages: BroadcastMessage[] }[] = [];
+    let currentBatch: { type: "INSERT" | "UPDATE" | "DELETE"; messages: BroadcastMessage[] } | null = null;
+
+    for (const operation of operations) {
+      if (
+        !operation.operation ||
+        (operation.operation !== "INSERT" && operation.operation !== "UPDATE" && operation.operation !== "DELETE")
+      ) {
+        continue;
+      }
+
+      if (!currentBatch || currentBatch.type !== operation.operation) {
+        // Start a new batch
+        currentBatch = { type: operation.operation, messages: [operation] };
+        batches.push(currentBatch);
+      } else {
+        // Add to current batch
+        currentBatch.messages.push(operation);
+      }
+    }
+
+    // Process batches in chronological order, awaiting each batch to complete
+    // before moving to the next to prevent race conditions
+    for (const batch of batches) {
+      try {
+        switch (batch.type) {
+          case "INSERT":
+            await this._handleInsertBatch(batch.messages);
+            break;
+          case "UPDATE":
+            await this._handleUpdateBatch(batch.messages);
+            break;
+          case "DELETE":
+            await this._handleDeleteBatch(batch.messages);
+            break;
+        }
+      } catch (error) {
+        // Log error but continue processing remaining batches
+        Sentry.captureException(error);
+      }
+    }
+
+    // Clear processing flag
+    this._isProcessingBatch = false;
+
+    // If more operations arrived while we were processing, schedule another batch
+    if (this._pendingOperations.length > 0) {
+      this._scheduleBatchedOperations();
+    }
+  }
+
+  /**
+   * Refetch multiple rows by their IDs using IN queries with batching
+   */
+  private async _refetchRowsByIds(ids: IDType[]): Promise<Map<IDType, ResultOne>> {
+    const results = new Map<IDType, ResultOne>();
+    const batchSize = 100;
+    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
+
+    // Process IDs in batches of 100
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const batch = ids.slice(i, i + batchSize);
+
+      try {
+        const { data, error } = await this._client.from(this._table).select(selectClause).in("id", batch);
+
+        if (error) {
+          Sentry.captureException(error);
+          continue;
+        }
+
+        if (data) {
+          for (const row of data) {
+            const typedRow = row as unknown as ResultOne;
+            const id = (typedRow as ResultOne & { id: IDType }).id;
+            results.set(id, typedRow);
+          }
+        }
+      } catch (error) {
+        Sentry.captureException(error);
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -540,8 +671,6 @@ export default class TableController<
       }
     } catch (error) {
       Sentry.captureException(error);
-      console.error(`Failed to refetch data for table ${this._table}:`);
-      console.error(error);
     } finally {
       // Set refetch state to false and notify listeners
       this._isRefetching = false;
@@ -564,6 +693,41 @@ export default class TableController<
       return;
     }
     await this._refetchAllData();
+  }
+
+  /**
+   * Public method to refetch specific rows by their IDs and update the controller state.
+   * Uses batched IN queries to efficiently fetch multiple rows at once.
+   * @param ids Array of row IDs to refetch
+   */
+  async refetchByIds(ids: IDType[]): Promise<void> {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call refetchByIds(). This indicates a stale reference is being used.`
+      );
+    }
+    if (ids.length === 0) {
+      return;
+    }
+
+    const refetchedRows = await this._refetchRowsByIds(ids);
+
+    // Update existing rows and add new ones
+    for (const [id, row] of refetchedRows) {
+      const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+
+      if (existingRow) {
+        this._updateRow(id, row as ResultOne & { id: IDType }, false);
+      } else {
+        // Check if the fetched row matches our realtime filter
+        if (this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
+          this._addRow({
+            ...row,
+            __db_pending: false
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -592,7 +756,8 @@ export default class TableController<
     selectForSingleRow,
     submissionId,
     officeHoursRealTimeController,
-    realtimeFilter
+    realtimeFilter,
+    debounceInterval
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -610,6 +775,7 @@ export default class TableController<
     submissionId?: number;
     /** Optional filter for real-time events to match only rows that would be included in the query */
     realtimeFilter?: RealtimeFilter<RelationName>;
+    debounceInterval?: number;
   }) {
     this._rows = [];
     this._client = client;
@@ -620,7 +786,7 @@ export default class TableController<
     this._submissionId = submissionId || null;
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
-
+    this._debounceInterval = debounceInterval || 500;
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
@@ -629,17 +795,10 @@ export default class TableController<
           if (message.table !== table) {
             return;
           }
-          // Handle different message types
-          switch (message.operation) {
-            case "INSERT":
-              this._handleInsert(message);
-              break;
-            case "UPDATE":
-              this._handleUpdate(message);
-              break;
-            case "DELETE":
-              this._handleDelete(message);
-              break;
+          // Add to single ordered queue for batched processing
+          if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "DELETE") {
+            this._pendingOperations.push(message);
+            this._scheduleBatchedOperations();
           }
         };
 
@@ -717,10 +876,139 @@ export default class TableController<
     if (this._statusUnsubscribe) {
       this._statusUnsubscribe();
     }
-    // Clear all listeners
+    if (this._debounceTimeout) {
+      clearTimeout(this._debounceTimeout);
+      this._debounceTimeout = null;
+    }
+    // Clear all listeners and pending operations
     this._refetchListeners = [];
     this._listDataListeners = [];
     this._itemDataListeners.clear();
+    this._pendingOperations = [];
+    this._isProcessingBatch = false;
+  }
+
+  private async _handleInsertBatch(messages: BroadcastMessage[]): Promise<void> {
+    if (this._closed) return;
+
+    const messagesWithData: BroadcastMessage[] = [];
+    const idsToRefetch: IDType[] = [];
+
+    // Separate messages with data from those requiring refetch
+    for (const message of messages) {
+      if (message.data) {
+        messagesWithData.push(message);
+      } else if (message.row_id) {
+        idsToRefetch.push(message.row_id as IDType);
+      }
+    }
+
+    // Process messages with full data synchronously first
+    for (const message of messagesWithData) {
+      this._handleInsert(message);
+    }
+
+    // Batch refetch for messages without data and await completion
+    if (idsToRefetch.length > 0) {
+      try {
+        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
+        for (const [id, row] of refetchedRows) {
+          if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id)) {
+            // Check if the fetched row matches our realtime filter
+            if (this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
+              // Check for pending tentative rows that might represent the same data
+              const pendingRow = this._rows.find((r) => {
+                const rowData = r as PossiblyTentativeResult<ResultOne>;
+                return (
+                  rowData.__db_pending && this._isPotentialMatch(rowData, row as unknown as Record<string, unknown>)
+                );
+              });
+
+              if (pendingRow) {
+                // Update the pending row with the real data instead of adding a duplicate
+                const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+                pendingRowWithId.id = id;
+                this._updateRow(id, row as ResultOne & { id: IDType }, false);
+              } else {
+                this._addRow({
+                  ...row,
+                  __db_pending: false
+                });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        Sentry.captureException(error);
+      }
+    }
+  }
+
+  private async _handleUpdateBatch(messages: BroadcastMessage[]): Promise<void> {
+    if (this._closed) return;
+
+    const messagesWithData: BroadcastMessage[] = [];
+    const idsToRefetch: IDType[] = [];
+
+    // Separate messages with data from those requiring refetch
+    for (const message of messages) {
+      if (message.data) {
+        messagesWithData.push(message);
+      } else if (message.row_id) {
+        idsToRefetch.push(message.row_id as IDType);
+      }
+    }
+
+    // Process messages with full data synchronously first
+    for (const message of messagesWithData) {
+      this._handleUpdate(message);
+    }
+
+    // Batch refetch for messages without data and await completion
+    if (idsToRefetch.length > 0) {
+      try {
+        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
+        for (const [id, row] of refetchedRows) {
+          const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+          const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
+
+          if (existingRow && !matchesFilter) {
+            // Row was updated but no longer matches our filter - remove it
+            this._removeRow(id);
+          } else if (existingRow && matchesFilter) {
+            this._updateRow(id, row as ResultOne & { id: IDType }, false);
+          } else if (!existingRow && matchesFilter) {
+            this._addRow({
+              ...row,
+              __db_pending: false
+            });
+          }
+        }
+      } catch (error) {
+        Sentry.captureException(error);
+      }
+    }
+  }
+
+  private async _handleDeleteBatch(messages: BroadcastMessage[]): Promise<void> {
+    if (this._closed) return;
+
+    const idsToDelete = new Set<IDType>();
+
+    // Collect all IDs to delete
+    for (const message of messages) {
+      if (message.data) {
+        const data = message.data as Record<string, unknown>;
+        idsToDelete.add(data.id as IDType);
+      } else if (message.row_id) {
+        idsToDelete.add(message.row_id as IDType);
+      }
+    }
+
+    // Remove all rows in batch (synchronous operation, no async needed)
+    for (const id of idsToDelete) {
+      this._removeRow(id);
+    }
   }
 
   private _handleInsert(message: BroadcastMessage) {

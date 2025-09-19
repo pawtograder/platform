@@ -7033,6 +7033,30 @@ export type Database = {
           }
         ];
       };
+      user_privileges: {
+        Row: {
+          class_id: number;
+          private_profile_id: string | null;
+          public_profile_id: string | null;
+          role: Database["public"]["Enums"]["app_role"];
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          private_profile_id?: string | null;
+          public_profile_id?: string | null;
+          role: Database["public"]["Enums"]["app_role"];
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          private_profile_id?: string | null;
+          public_profile_id?: string | null;
+          role?: Database["public"]["Enums"]["app_role"];
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       user_roles: {
         Row: {
           canvas_id: number | null;
@@ -8760,6 +8784,16 @@ export type Database = {
         Args: { profile_id: string };
         Returns: boolean;
       };
+      bulk_assign_reviews: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_draft_assignments: Json;
+          p_due_date: string;
+          p_rubric_id: number;
+        };
+        Returns: Json;
+      };
       calculate_effective_due_date: {
         Args: { assignment_id_param: number; student_profile_id_param: string };
         Returns: string;
@@ -8815,6 +8849,32 @@ export type Database = {
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
+      };
+      clear_all_incomplete_review_assignments: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: Json;
+      };
+      clear_incomplete_assignments_for_user: {
+        Args: {
+          p_assignee_profile_id: string;
+          p_assignment_id: number;
+          p_class_id: number;
+          p_rubric_id?: number;
+          p_rubric_part_ids?: number[];
+        };
+        Returns: Json;
+      };
+      clear_unfinished_review_assignments: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_class_section_ids?: number[];
+          p_lab_section_ids?: number[];
+          p_rubric_id: number;
+          p_rubric_part_ids?: number[];
+          p_student_tag_filters?: Json;
+        };
+        Returns: Json;
       };
       create_all_repos_for_assignment: {
         Args:
