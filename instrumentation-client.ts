@@ -17,6 +17,18 @@ Sentry.init({
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
           return null; // Discard the event
         }
+        
+        // Filter out network-related TypeErrors
+        if (exception.type === "TypeError" && exception.value) {
+          const errorMessage = exception.value;
+          if (
+            errorMessage.includes("NetworkError when attempting to fetch resource") ||
+            errorMessage.includes("Load failed") ||
+            errorMessage.includes("Failed to fetch")
+          ) {
+            return null; // Discard the event
+          }
+        }
       }
     }
     return event; // Send other events
