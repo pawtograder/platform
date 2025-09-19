@@ -11,7 +11,7 @@ CREATE OR REPLACE FUNCTION public.bulk_assign_reviews(
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public
 AS $$
 DECLARE
     v_result jsonb := jsonb_build_object('success', true);
@@ -26,6 +26,7 @@ DECLARE
     v_review_assignment record;
     v_draft_assignment jsonb;
     v_submission_review_id bigint;
+    v_sr_was_inserted boolean := false;
     v_assignee_profile_id uuid;
     v_submission_id bigint;
     v_rubric_part_id bigint;
@@ -39,7 +40,7 @@ BEGIN
 
     -- Validate that the assignment belongs to the class
     SELECT * INTO v_assignment 
-    FROM assignments 
+    FROM public.assignments 
     WHERE id = p_assignment_id AND class_id = p_class_id;
     
     IF NOT FOUND THEN
@@ -48,7 +49,7 @@ BEGIN
 
     -- Validate that the rubric exists and belongs to the assignment
     IF NOT EXISTS (
-        SELECT 1 FROM rubrics 
+        SELECT 1 FROM public.rubrics 
         WHERE id = p_rubric_id AND assignment_id = p_assignment_id
     ) THEN
         RAISE EXCEPTION 'Rubric % not found for assignment %', p_rubric_id, p_assignment_id;
@@ -67,7 +68,7 @@ BEGIN
         v_has_specific_parts := v_rubric_part_id IS NOT NULL;
 
         IF v_has_specific_parts THEN
-        PERFORM 1 FROM rubric_parts rp WHERE rp.id = v_rubric_part_id AND rp.rubric_id = p_rubric_id;
+        PERFORM 1 FROM public.rubric_parts rp WHERE rp.id = v_rubric_part_id AND rp.rubric_id = p_rubric_id;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'Rubric part % does not belong to rubric %', v_rubric_part_id, p_rubric_id
             USING ERRCODE = 'foreign_key_violation';
@@ -76,7 +77,7 @@ BEGIN
 
         -- Validate the submission belongs to this class/assignment and is active
         PERFORM 1
-        FROM submissions s
+        FROM public.submissions s
         WHERE s.id = v_submission_id
         AND s.assignment_id = p_assignment_id
         AND s.class_id = p_class_id
@@ -88,7 +89,7 @@ BEGIN
 
         -- Validate assignee is enrolled in class with grader/instructor role
         PERFORM 1
-        FROM user_roles ur
+        FROM public.user_roles ur
         WHERE ur.private_profile_id = v_assignee_profile_id
         AND ur.class_id = p_class_id
         AND ur.role IN ('grader','instructor');
@@ -98,37 +99,49 @@ BEGIN
         END IF;
 
 
-        -- Ensure submission_review exists
-        SELECT id INTO v_submission_review_id
-        FROM submission_reviews
-        WHERE submission_id = v_submission_id AND rubric_id = p_rubric_id;
+        -- Ensure submission_review exists (idempotent operation)
+        INSERT INTO public.submission_reviews (
+            submission_id,
+            rubric_id,
+            class_id,
+            name,
+            total_score,
+            total_autograde_score,
+            tweak
+        ) VALUES (
+            v_submission_id,
+            p_rubric_id,
+            p_class_id,
+            (SELECT name FROM public.rubrics WHERE id = p_rubric_id),
+            0,
+            0,
+            0
+        ) 
+        ON CONFLICT (submission_id, rubric_id) DO UPDATE SET 
+            tweak = public.submission_reviews.tweak
+        RETURNING id, (xmax = 0) AS was_inserted INTO v_submission_review_id, v_sr_was_inserted;
 
+        -- If INSERT returned NULL (shouldn't happen with proper RETURNING), fallback to SELECT
         IF v_submission_review_id IS NULL THEN
-            INSERT INTO submission_reviews (
-                submission_id,
-                rubric_id,
-                class_id,
-                name,
-                total_score,
-                total_autograde_score,
-                tweak
-            ) VALUES (
-                v_submission_id,
-                p_rubric_id,
-                p_class_id,
-                (SELECT name FROM rubrics WHERE id = p_rubric_id),
-                0,
-                0,
-                0
-            ) 
-            ON CONFLICT (submission_id, rubric_id) DO NOTHING
-            RETURNING id INTO v_submission_review_id;
-            
+            SELECT id INTO v_submission_review_id
+            FROM public.submission_reviews
+            WHERE submission_id = v_submission_id AND rubric_id = p_rubric_id;
+        END IF;
+
+        -- Only increment counter when an actual insert occurred
+        IF v_sr_was_inserted THEN
             v_submission_reviews_created := v_submission_reviews_created + 1;
         END IF;
 
+        -- Ensure we have a valid submission_review_id before proceeding
+        IF v_submission_review_id IS NULL THEN
+            RAISE EXCEPTION 'Failed to create or retrieve submission_review for submission_id % and rubric_id %', 
+                v_submission_id, p_rubric_id
+                USING ERRCODE = 'internal_error';
+        END IF;
+
         -- Use UPSERT with ON CONFLICT to handle duplicates elegantly
-        INSERT INTO review_assignments (
+        INSERT INTO public.review_assignments (
             assignee_profile_id,
             submission_id,
             submission_review_id,
@@ -163,11 +176,11 @@ BEGIN
         IF v_has_specific_parts THEN
             -- Check if this part assignment already exists
             IF NOT EXISTS (
-                SELECT 1 FROM review_assignment_rubric_parts
+                SELECT 1 FROM public.review_assignment_rubric_parts
                 WHERE review_assignment_id = v_review_assignment.id
                   AND rubric_part_id = v_rubric_part_id
             ) THEN
-                INSERT INTO review_assignment_rubric_parts (
+                INSERT INTO public.review_assignment_rubric_parts (
                     review_assignment_id,
                     rubric_part_id,
                     class_id
@@ -227,7 +240,7 @@ CREATE OR REPLACE FUNCTION public.clear_unfinished_review_assignments(
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public
 AS $$
 DECLARE
     v_result jsonb := jsonb_build_object('success', true);
@@ -244,7 +257,7 @@ BEGIN
 
     -- Validate that the assignment belongs to the class
     SELECT * INTO v_assignment 
-    FROM assignments 
+    FROM public.assignments 
     WHERE id = p_assignment_id AND class_id = p_class_id;
     
     IF NOT FOUND THEN
@@ -253,7 +266,7 @@ BEGIN
 
     -- Validate that the rubric exists and belongs to the assignment
     IF NOT EXISTS (
-        SELECT 1 FROM rubrics 
+        SELECT 1 FROM public.rubrics 
         WHERE id = p_rubric_id AND assignment_id = p_assignment_id
     ) THEN
         RAISE EXCEPTION 'Rubric % not found for assignment %', p_rubric_id, p_assignment_id;
@@ -262,11 +275,11 @@ BEGIN
     -- Get IDs of unfinished review assignments to delete, applying all filters
     SELECT ARRAY(
         SELECT DISTINCT ra.id 
-        FROM review_assignments ra
-        LEFT JOIN review_assignment_rubric_parts rarp ON ra.id = rarp.review_assignment_id
-        JOIN submissions s ON ra.submission_id = s.id
-        LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
-        LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+        FROM public.review_assignments ra
+        LEFT JOIN public.review_assignment_rubric_parts rarp ON ra.id = rarp.review_assignment_id
+        JOIN public.submissions s ON ra.submission_id = s.id
+        LEFT JOIN public.assignment_groups ag ON s.assignment_group_id = ag.id
+        LEFT JOIN public.assignment_groups_members agm ON ag.id = agm.assignment_group_id
         WHERE ra.assignment_id = p_assignment_id 
           AND ra.rubric_id = p_rubric_id 
           AND ra.class_id = p_class_id
@@ -278,7 +291,7 @@ BEGIN
               OR (
                   -- Either no specific parts assigned (whole rubric)
                   (NOT EXISTS (
-                      SELECT 1 FROM review_assignment_rubric_parts 
+                      SELECT 1 FROM public.review_assignment_rubric_parts 
                       WHERE review_assignment_id = ra.id
                   ))
                   OR
@@ -291,7 +304,7 @@ BEGIN
               p_class_section_ids IS NULL 
               OR array_length(p_class_section_ids, 1) = 0
               OR EXISTS (
-                  SELECT 1 FROM user_roles ur 
+                  SELECT 1 FROM public.user_roles ur 
                   WHERE ur.class_id = p_class_id 
                     AND ur.class_section_id = ANY(p_class_section_ids)
                     AND (
@@ -305,7 +318,7 @@ BEGIN
               p_lab_section_ids IS NULL 
               OR array_length(p_lab_section_ids, 1) = 0
               OR EXISTS (
-                  SELECT 1 FROM user_roles ur 
+                  SELECT 1 FROM public.user_roles ur 
                   WHERE ur.class_id = p_class_id 
                     AND ur.lab_section_id = ANY(p_lab_section_ids)
                     AND (
@@ -318,7 +331,7 @@ BEGIN
           AND (
               p_student_tag_filters IS NULL
               OR EXISTS (
-                  SELECT 1 FROM tags t
+                  SELECT 1 FROM public.tags t
                   WHERE t.class_id = p_class_id
                     AND (
                         t.profile_id = s.profile_id 
@@ -335,13 +348,13 @@ BEGIN
 
     -- Delete review assignment rubric parts first (foreign key constraint)
     IF array_length(v_assignment_ids, 1) > 0 THEN
-        DELETE FROM review_assignment_rubric_parts 
+        DELETE FROM public.review_assignment_rubric_parts 
         WHERE review_assignment_id = ANY(v_assignment_ids);
         
         GET DIAGNOSTICS v_parts_deleted = ROW_COUNT;
 
         -- Delete the review assignments
-        DELETE FROM review_assignments 
+        DELETE FROM public.review_assignments 
         WHERE id = ANY(v_assignment_ids);
         
         GET DIAGNOSTICS v_assignments_deleted = ROW_COUNT;
@@ -388,7 +401,7 @@ Requires instructor role for the class.';
 CREATE OR REPLACE FUNCTION "public"."update_review_assignments_on_submission_deactivation"()
 RETURNS "trigger"
 LANGUAGE "plpgsql" SECURITY DEFINER
-SET search_path TO public,pg_temp
+SET search_path TO public
 AS $$
 DECLARE
     new_active_submission_id bigint;
@@ -425,7 +438,7 @@ BEGIN
             -- Ensure a submission_reviews row exists for the new submission/rubric pairs
             INSERT INTO public.submission_reviews (submission_id, rubric_id, class_id, name, total_score, total_autograde_score, tweak)
             SELECT new_active_submission_id, ra.rubric_id, ra.class_id,
-                   (SELECT name FROM rubrics WHERE id = ra.rubric_id), 0, 0, 0
+                   (SELECT name FROM public.rubrics WHERE id = ra.rubric_id), 0, 0, 0
             FROM public.review_assignments ra
             WHERE ra.submission_id = OLD.id
             ON CONFLICT (submission_id, rubric_id) DO NOTHING;
@@ -470,7 +483,7 @@ COMMENT ON FUNCTION "public"."update_review_assignments_on_submission_deactivati
 
 -- Add unique constraint for review_assignments to prevent duplicates
 -- This ensures we can't have multiple review assignments for the same assignee/submission/assignment/rubric combination
-ALTER TABLE review_assignments 
+ALTER TABLE public.review_assignments 
 ADD CONSTRAINT review_assignments_unique_assignee_submission_assignment_rubric 
 UNIQUE (assignee_profile_id, submission_review_id, assignment_id, rubric_id);
 
@@ -484,7 +497,7 @@ CREATE OR REPLACE FUNCTION public.clear_all_incomplete_review_assignments(
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public
 AS $$
 DECLARE
     v_result jsonb := jsonb_build_object('success', true);
@@ -501,7 +514,7 @@ BEGIN
 
     -- Validate that the assignment belongs to the class
     SELECT * INTO v_assignment 
-    FROM assignments 
+    FROM public.assignments 
     WHERE id = p_assignment_id AND class_id = p_class_id;
     
     IF NOT FOUND THEN
@@ -511,7 +524,7 @@ BEGIN
     -- Get IDs of ALL unfinished review assignments for this assignment
     SELECT ARRAY(
         SELECT id 
-        FROM review_assignments 
+        FROM public.review_assignments 
         WHERE assignment_id = p_assignment_id 
           AND class_id = p_class_id
           AND completed_at IS NULL
@@ -519,13 +532,13 @@ BEGIN
 
     -- Delete review assignment rubric parts first (foreign key constraint)
     IF array_length(v_assignment_ids, 1) > 0 THEN
-        DELETE FROM review_assignment_rubric_parts 
+        DELETE FROM public.review_assignment_rubric_parts 
         WHERE review_assignment_id = ANY(v_assignment_ids);
         
         GET DIAGNOSTICS v_parts_deleted = ROW_COUNT;
 
         -- Delete the review assignments
-        DELETE FROM review_assignments 
+        DELETE FROM public.review_assignments 
         WHERE id = ANY(v_assignment_ids);
         
         GET DIAGNOSTICS v_assignments_deleted = ROW_COUNT;
@@ -574,7 +587,7 @@ CREATE OR REPLACE FUNCTION public.clear_incomplete_assignments_for_user(
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public
 AS $$
 DECLARE
     v_result jsonb := jsonb_build_object('success', true);
@@ -591,8 +604,8 @@ BEGIN
     -- Gather matching unfinished review assignments for the grader
     SELECT ARRAY(
         SELECT DISTINCT ra.id
-        FROM review_assignments ra
-        LEFT JOIN review_assignment_rubric_parts rarp ON rarp.review_assignment_id = ra.id
+        FROM public.review_assignments ra
+        LEFT JOIN public.review_assignment_rubric_parts rarp ON rarp.review_assignment_id = ra.id
         WHERE ra.class_id = p_class_id
           AND ra.assignment_id = p_assignment_id
           AND ra.assignee_profile_id = p_assignee_profile_id
@@ -603,7 +616,7 @@ BEGIN
           AND (
             p_rubric_part_ids IS NULL OR array_length(p_rubric_part_ids, 1) = 0 OR (
               -- Either whole-rubric assignments (no specific parts)
-              NOT EXISTS (SELECT 1 FROM review_assignment_rubric_parts WHERE review_assignment_id = ra.id)
+              NOT EXISTS (SELECT 1 FROM public.review_assignment_rubric_parts WHERE review_assignment_id = ra.id)
               OR
               -- Or any overlap with selected parts
               rarp.rubric_part_id = ANY(p_rubric_part_ids)
@@ -613,12 +626,12 @@ BEGIN
 
     IF array_length(v_assignment_ids, 1) > 0 THEN
         -- Delete associated rubric parts first
-        DELETE FROM review_assignment_rubric_parts
+        DELETE FROM public.review_assignment_rubric_parts
         WHERE review_assignment_id = ANY(v_assignment_ids);
         GET DIAGNOSTICS v_parts_deleted = ROW_COUNT;
 
         -- Delete the review assignments
-        DELETE FROM review_assignments
+        DELETE FROM public.review_assignments
         WHERE id = ANY(v_assignment_ids);
         GET DIAGNOSTICS v_assignments_deleted = ROW_COUNT;
     END IF;
