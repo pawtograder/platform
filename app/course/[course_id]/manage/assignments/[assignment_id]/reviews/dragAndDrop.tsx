@@ -110,9 +110,8 @@ function ExistingAssignmentItem({ submission, isCompleted, rubricPartName }: Exi
           <HStack gap={2} wrap="wrap">
             {submission.assignment_groups?.assignment_groups_members?.map((member: { profile_id: string }) => (
               <StudentInfoCard key={member.profile_id} private_profile_id={member.profile_id} />
-            )) ?? (
-              submission.profile_id && <StudentInfoCard private_profile_id={submission.profile_id} />
-            )}
+            )) ??
+              (submission.profile_id && <StudentInfoCard private_profile_id={submission.profile_id} />)}
           </HStack>
           {rubricPartName && (
             <Text fontSize="sm" color="text.muted">
@@ -128,7 +127,15 @@ function ExistingAssignmentItem({ submission, isCompleted, rubricPartName }: Exi
   );
 }
 
-function DroppableArea({ id, title, items, children, hasConflict, assignedCount, completedCount }: Omit<DroppableAreaProps, "isOver">) {
+function DroppableArea({
+  id,
+  title,
+  items,
+  children,
+  hasConflict,
+  assignedCount,
+  completedCount
+}: Omit<DroppableAreaProps, "isOver">) {
   const { isOver, setNodeRef } = useDroppable({
     id
   });
@@ -196,7 +203,13 @@ export default function DragAndDropExample({
   draftReviews: DraftReviewAssignment[];
   setDraftReviews: Dispatch<SetStateAction<DraftReviewAssignment[]>>;
   courseStaffWithConflicts: UserRoleWithConflictsAndName[];
-  currentReviewAssignments: { id: number; submission_id: number; rubric_id: number; assignee_profile_id: string; completed_at?: string | null }[];
+  currentReviewAssignments: {
+    id: number;
+    submission_id: number;
+    rubric_id: number;
+    assignee_profile_id: string;
+    completed_at?: string | null;
+  }[];
   selectedRubric?: RubricWithParts;
   allActiveSubmissions: { id: number; profile_id?: string | null; assignment_group_id?: number | null }[];
   groupMembersByGroupId: Map<number, string[]>;
@@ -210,36 +223,40 @@ export default function DragAndDropExample({
   // Process existing assignments for the selected rubric
   const existingAssignmentsByAssignee = useMemo(() => {
     if (!selectedRubric) return new Map();
-    
-    const assignmentMap = new Map<string, Array<{
-      submission: {
-        id: number;
-        profile_id?: string;
-        assignment_groups?: {
-          assignment_groups_members: { profile_id: string }[];
-        } | null;
-      };
-      isCompleted: boolean;
-      rubricPartName?: string;
-    }>>();
 
-    const relevantAssignments = currentReviewAssignments.filter(
-      ra => ra.rubric_id === selectedRubric.id
-    );
+    const assignmentMap = new Map<
+      string,
+      Array<{
+        submission: {
+          id: number;
+          profile_id?: string;
+          assignment_groups?: {
+            assignment_groups_members: { profile_id: string }[];
+          } | null;
+        };
+        isCompleted: boolean;
+        rubricPartName?: string;
+      }>
+    >();
+
+    const relevantAssignments = currentReviewAssignments.filter((ra) => ra.rubric_id === selectedRubric.id);
 
     for (const assignment of relevantAssignments) {
-      const submission = allActiveSubmissions.find(s => s.id === assignment.submission_id);
+      const submission = allActiveSubmissions.find((s) => s.id === assignment.submission_id);
       if (!submission) continue;
 
       // Build submission with group members for display
       const submissionWithMembers = {
         ...submission,
         profile_id: submission.profile_id || undefined,
-        assignment_groups: submission.assignment_group_id && groupMembersByGroupId.has(submission.assignment_group_id)
-          ? {
-              assignment_groups_members: groupMembersByGroupId.get(submission.assignment_group_id)!.map(pid => ({ profile_id: pid }))
-            }
-          : null
+        assignment_groups:
+          submission.assignment_group_id && groupMembersByGroupId.has(submission.assignment_group_id)
+            ? {
+                assignment_groups_members: groupMembersByGroupId
+                  .get(submission.assignment_group_id)!
+                  .map((pid) => ({ profile_id: pid }))
+              }
+            : null
       };
 
       if (!assignmentMap.has(assignment.assignee_profile_id)) {
@@ -347,7 +364,7 @@ export default function DragAndDropExample({
                       {getItemsByAssignee(category.id).map((item) => (
                         <DraggableItem key={getDraggableId(item)} item={item} />
                       ))}
-                      
+
                       {/* Existing assignments in accordion */}
                       {existingAssignments.length > 0 && (
                         <>
@@ -361,14 +378,29 @@ export default function DragAndDropExample({
                               </AccordionItemTrigger>
                               <AccordionItemContent>
                                 <VStack gap={2} align="stretch" mt={2}>
-                                  {existingAssignments.map((existingAssignment: { submission: { id: number; profile_id?: string; assignment_groups?: { assignment_groups_members: { profile_id: string }[] } | null }; isCompleted: boolean; rubricPartName?: string }, index: number) => (
-                                    <ExistingAssignmentItem
-                                      key={`existing-${category.id}-${index}`}
-                                      submission={existingAssignment.submission}
-                                      isCompleted={existingAssignment.isCompleted}
-                                      rubricPartName={existingAssignment.rubricPartName}
-                                    />
-                                  ))}
+                                  {existingAssignments.map(
+                                    (
+                                      existingAssignment: {
+                                        submission: {
+                                          id: number;
+                                          profile_id?: string;
+                                          assignment_groups?: {
+                                            assignment_groups_members: { profile_id: string }[];
+                                          } | null;
+                                        };
+                                        isCompleted: boolean;
+                                        rubricPartName?: string;
+                                      },
+                                      index: number
+                                    ) => (
+                                      <ExistingAssignmentItem
+                                        key={`existing-${category.id}-${index}`}
+                                        submission={existingAssignment.submission}
+                                        isCompleted={existingAssignment.isCompleted}
+                                        rubricPartName={existingAssignment.rubricPartName}
+                                      />
+                                    )
+                                  )}
                                 </VStack>
                               </AccordionItemContent>
                             </AccordionItem>

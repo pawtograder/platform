@@ -1047,7 +1047,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           data: { error: rpcError.message, code: rpcError.code },
           level: "error"
         });
-        
+
         toaster.error({
           title: "Error creating review assignments",
           description: rpcError.message || "Failed to create bulk assignments"
@@ -1102,7 +1102,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       if (typedResult.assignments_created > 0) details.push(`${typedResult.assignments_created} new assignments`);
       if (typedResult.assignments_updated > 0) details.push(`${typedResult.assignments_updated} updated assignments`);
       if (typedResult.parts_created > 0) details.push(`${typedResult.parts_created} rubric parts`);
-      if (typedResult.submission_reviews_created > 0) details.push(`${typedResult.submission_reviews_created} submission reviews`);
+      if (typedResult.submission_reviews_created > 0)
+        details.push(`${typedResult.submission_reviews_created} submission reviews`);
 
       toaster.success({
         title: "Reviews Assigned Successfully",
@@ -1117,7 +1118,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       const errMsg =
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         `An unexpected error occurred while confirming assignments, our team has been notified with error ID ${errId}`;
-      
+
       Sentry.addBreadcrumb({
         message: "Bulk assignment failed with exception",
         category: "bulk_assign",
@@ -1173,10 +1174,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           data: { error: rpcError.message, code: rpcError.code },
           level: "error"
         });
-        
+
         toaster.error({
           title: "Error clearing assignments",
-          description: rpcError.message || `Failed to clear unfinished assignments, our team has been notified with error ID ${errId}`
+          description:
+            rpcError.message ||
+            `Failed to clear unfinished assignments, our team has been notified with error ID ${errId}`
         });
         return false;
       }
@@ -1236,7 +1239,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       const errMsg =
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         "An unexpected error occurred while clearing assignments";
-      
+
       Sentry.addBreadcrumb({
         message: "Clear assignments failed with exception",
         category: "clear_assignments",
@@ -1887,8 +1890,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             </Button>
           </HStack>
           <Text fontSize="sm" color="text.muted" maxW="2xl">
-            Use &quot;Clear Unfinished Assignments&quot; to remove all incomplete review assignments for the selected rubric before creating new ones.
-            This is useful for starting fresh with a new assignment strategy.
+            Use &quot;Clear Unfinished Assignments&quot; to remove all incomplete review assignments for the selected
+            rubric before creating new ones. This is useful for starting fresh with a new assignment strategy.
           </Text>
         </VStack>
         {draftReviews.length > 0 && (
