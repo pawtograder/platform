@@ -15,7 +15,11 @@ import {
   useUserRolesWithProfiles
 } from "@/hooks/useCourseController";
 import useTags from "@/hooks/useTags";
-import TableController, { PossiblyTentativeResult, useListTableControllerValues, useTableControllerTableValues } from "@/lib/TableController";
+import TableController, {
+  PossiblyTentativeResult,
+  useListTableControllerValues,
+  useTableControllerTableValues
+} from "@/lib/TableController";
 import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -435,9 +439,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
 
     // Normalize empty selection to mean "all parts selected"
-    const selectedPartIds = selectedRubricPartsForFilter.length === 0 
-      ? selectedRubric.rubric_parts.map((p) => p.id)
-      : selectedRubricPartsForFilter.map((p) => p.value.id);
+    const selectedPartIds =
+      selectedRubricPartsForFilter.length === 0
+        ? selectedRubric.rubric_parts.map((p) => p.id)
+        : selectedRubricPartsForFilter.map((p) => p.value.id);
     const selectedClassSectionIds = new Set(selectedClassSections.map((s) => s.value.id));
     const selectedLabSectionIds = new Set(selectedLabSections.map((s) => s.value.id));
 
@@ -792,9 +797,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           }
 
           // Treat empty selection as selecting all parts
-          const isAllPartsSelected = selectedRubricPartsForFilter.length === 0 || 
+          const isAllPartsSelected =
+            selectedRubricPartsForFilter.length === 0 ||
             selectedRubricPartsForFilter.length === selectedRubric?.rubric_parts.length;
-          
+
           if (isAllPartsSelected) {
             // All rubric parts - create one assignment
             stickyAssignments.push({
@@ -867,9 +873,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
 
     // Treat empty selection as selecting all parts
-    const isAllPartsSelected = selectedRubricPartsForFilter.length === 0 || 
+    const isAllPartsSelected =
+      selectedRubricPartsForFilter.length === 0 ||
       selectedRubricPartsForFilter.length === selectedRubric?.rubric_parts.length;
-    
+
     if (isAllPartsSelected) {
       return toReview(result);
     } else {
@@ -890,11 +897,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       });
       return [];
     }
-    
+
     // Treat empty selection as selecting all parts
-    const selectedParts = selectedRubricPartsForFilter.length === 0 
-      ? selectedRubric.rubric_parts
-      : selectedRubricPartsForFilter.map((option) => option.value);
+    const selectedParts =
+      selectedRubricPartsForFilter.length === 0
+        ? selectedRubric.rubric_parts
+        : selectedRubricPartsForFilter.map((option) => option.value);
     if (selectedParts.length > users.length) {
       toaster.error({
         title: "Error drafting reviews",
@@ -1861,12 +1869,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           onClick={generateReviews}
           variant="subtle"
           colorPalette="green"
-          disabled={
-            !dueDate ||
-            !selectedRubric ||
-            !role ||
-            submissionsToDo?.length === 0
-          }
+          disabled={!dueDate || !selectedRubric || !role || submissionsToDo?.length === 0}
           loading={isGeneratingReviews}
         >
           Prepare Review Assignments

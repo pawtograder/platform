@@ -249,6 +249,7 @@ export async function createUserInClass({
       password: tempPassword,
       email_confirm: true
     });
+    userId = newUserData?.user?.id;
 
     if (userError) {
       // Check if error is due to user already existing
