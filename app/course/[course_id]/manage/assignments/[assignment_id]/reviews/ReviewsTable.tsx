@@ -14,7 +14,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { EmptyState, HStack, IconButton, Input, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useDelete, useCreate } from "@refinedev/core";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender, Row, Table as TanstackTable } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
@@ -122,10 +122,13 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   }, []);
 
   // Helper function to fetch all pages of data
-  const fetchAllPages = useCallback(async (queryBuilder: () => any, pageSize: number = 1000): Promise<any[]> => {
-    const allData: any[] = [];
-    let hasMore = true;
-    let page = 0;
+  const fetchAllPages = async function <T>(
+    queryBuilder: () => PostgrestFilterBuilder<any, any, T[]>,
+    pageSize: number = 1000
+  ): Promise<T[]> {
+    const allData: T[] = [];
+    let hasMore: boolean = true;
+    let page: number = 0;
 
     while (hasMore) {
       const { data: pageData, error } = await queryBuilder().range(page * pageSize, (page + 1) * pageSize - 1);
@@ -144,7 +147,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     }
 
     return allData;
-  }, []);
+  };
 
   // CSV Export function
   const exportToCSV = useCallback(async () => {
@@ -153,7 +156,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       // Fetch all review assignments data
       let csvData: PopulatedReviewAssignment[];
       try {
-        csvData = await fetchAllPages(() =>
+        csvData = await fetchAllPages<PopulatedReviewAssignment>(() =>
           supabase
             .from("review_assignments")
             .select(
@@ -178,9 +181,11 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             )
             .eq("assignment_id", Number(assignmentId))
             .not("rubric_id", "eq", selfReviewRubric?.id || 0)
+            .order("id", { ascending: true })
         );
-      } catch (error: any) {
-        toaster.error({ title: "Error fetching data for export", description: error.message });
+      } catch (error: unknown) {
+        const description = error instanceof Error ? error.message : "Unknown error";
+        toaster.error({ title: "Error fetching data for export", description });
         return;
       }
 
@@ -208,9 +213,9 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       });
 
       // Fetch all user emails
-      let emailData: any[];
+      let emailData: { private_profile_id: string; users: { email: string | null } }[];
       try {
-        emailData = await fetchAllPages(() =>
+        emailData = await fetchAllPages<{ private_profile_id: string; users: { email: string | null } }>(() =>
           supabase
             .from("user_roles")
             .select(
@@ -220,9 +225,11 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             `
             )
             .eq("class_id", course.classes.id)
+            .order("private_profile_id", { ascending: true })
         );
-      } catch (error: any) {
-        toaster.error({ title: "Error fetching emails", description: error.message });
+      } catch (error: unknown) {
+        const description = error instanceof Error ? error.message : "Unknown error";
+        toaster.error({ title: "Error fetching emails", description });
         emailData = [];
       }
 
@@ -235,13 +242,18 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       });
 
       // Fetch all extension data
-      let extensionData: any[];
+      let extensionData: Database["public"]["Tables"]["assignment_due_date_exceptions"]["Row"][];
       try {
-        extensionData = await fetchAllPages(() =>
-          supabase.from("assignment_due_date_exceptions").select("*").eq("assignment_id", Number(assignmentId))
+        extensionData = await fetchAllPages<Database["public"]["Tables"]["assignment_due_date_exceptions"]["Row"]>(() =>
+          supabase
+            .from("assignment_due_date_exceptions")
+            .select("*")
+            .eq("assignment_id", Number(assignmentId))
+            .order("id", { ascending: true })
         );
-      } catch (error: any) {
-        toaster.error({ title: "Error fetching extensions", description: error.message });
+      } catch (error: unknown) {
+        const description = error instanceof Error ? error.message : "Unknown error";
+        toaster.error({ title: "Error fetching extensions", description });
         extensionData = [];
       }
 
@@ -395,15 +407,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     } finally {
       setIsExporting(false);
     }
-  }, [
-    assignmentId,
-    supabase,
-    selfReviewRubric,
-    getReviewStatus,
-    course.classes.time_zone,
-    course.classes.id,
-    fetchAllPages
-  ]);
+  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone, course.classes.id]);
 
   // Helper function to create filter options from unique values
   const createFilterOptions = useCallback(
