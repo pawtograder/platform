@@ -13,11 +13,12 @@ import {
   useDroppable,
   UniqueIdentifier
 } from "@dnd-kit/core";
-import { Box, VStack, HStack, Text, Badge, Card, Flex, SimpleGrid, Separator } from "@chakra-ui/react";
+import { Box, VStack, HStack, Text, Badge, Card, Flex, SimpleGrid, Separator, Icon, AccordionItemIndicator } from "@chakra-ui/react";
 import { AccordionItem, AccordionItemContent, AccordionItemTrigger, AccordionRoot } from "@chakra-ui/react";
 import { CSS } from "@dnd-kit/utilities";
 import { DraftReviewAssignment, UserRoleWithConflictsAndName, RubricWithParts } from "./page";
 import StudentInfoCard from "@/components/ui/student-info-card";
+import { ChevronDown } from "lucide-react";
 
 function getDraggableId(item: DraftReviewAssignment): string {
   return item.part ? `submission-${item.submission.id}-part-${item.part.id}` : `submission-${item.submission.id}`;
@@ -75,8 +76,8 @@ function DraggableItem({ item }: DraggableItemProps) {
       border={isDragging ? "2px solid" : "1px solid"}
       borderColor={isDragging ? "blue.emphasized" : "border.emphasized"}
     >
-      <Card.Body p={0} m={2}>
-        <VStack gap={2} align="flex-start">
+      <Card.Body p={0} m={1}>
+        <VStack gap={0} align="flex-start">
           <HStack gap={2} wrap="wrap">
             {item.submitters.map((submitter) => (
               <StudentInfoCard key={submitter.private_profile_id} private_profile_id={submitter.private_profile_id} />
@@ -157,7 +158,7 @@ function DroppableArea({
   return (
     <Card.Root
       ref={setNodeRef}
-      p={4}
+      p={1}
       size="sm"
       width="xs"
       borderRadius="lg"
@@ -252,10 +253,10 @@ export default function DragAndDropExample({
         assignment_groups:
           submission.assignment_group_id && groupMembersByGroupId.has(submission.assignment_group_id)
             ? {
-                assignment_groups_members: groupMembersByGroupId
-                  .get(submission.assignment_group_id)!
-                  .map((pid) => ({ profile_id: pid }))
-              }
+              assignment_groups_members: groupMembersByGroupId
+                .get(submission.assignment_group_id)!
+                .map((pid) => ({ profile_id: pid }))
+            }
             : null
       };
 
@@ -302,11 +303,11 @@ export default function DragAndDropExample({
           draftReviews.map((item) =>
             getDraggableId(item) === active.id
               ? {
-                  ...item,
-                  assignee: courseStaffWithConflicts.find(
-                    (staff) => staff.private_profile_id == over?.id
-                  ) as DraftReviewAssignment["assignee"] // HERE
-                }
+                ...item,
+                assignee: courseStaffWithConflicts.find(
+                  (staff) => staff.private_profile_id == over?.id
+                ) as DraftReviewAssignment["assignee"] // HERE
+              }
               : item
           )
         );
@@ -372,8 +373,9 @@ export default function DragAndDropExample({
                           <AccordionRoot collapsible size="sm">
                             <AccordionItem value="existing-assignments">
                               <AccordionItemTrigger>
+                                <AccordionItemIndicator />
                                 <Text fontSize="sm" color="text.muted">
-                                  Existing ({workloadStats.completed}/{workloadStats.assigned})
+                                  Existing Reviews ({workloadStats.completed}/{workloadStats.assigned})
                                 </Text>
                               </AccordionItemTrigger>
                               <AccordionItemContent>

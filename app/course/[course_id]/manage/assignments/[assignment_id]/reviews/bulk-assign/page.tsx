@@ -45,6 +45,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
 import { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
+import ClearAssignmentsButton from "../ClearAssignmentsButton";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
 
@@ -146,7 +147,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const { role: classRole } = useClassProfiles();
   const course = classRole.classes;
   const { tags } = useTags();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const classSections = useClassSections();
   const allAssignments = useAssignments();
@@ -432,7 +433,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       const ras = currentReviewAssignments.filter(
         (ra) => ra.submission_id === submissionId && ra.rubric_id === selectedRubric.id
       );
-      
+
       // First check if any RA has no specific parts (whole rubric assigned)
       for (const ra of ras) {
         const parts = reviewAssignmentPartsById.get(ra.id) ?? [];
@@ -440,14 +441,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           return true; // whole rubric assigned
         }
       }
-      
+
       // Build union of all parts from all matching RAs
       const allAssignedParts = new Set<number>();
       for (const ra of ras) {
         const parts = reviewAssignmentPartsById.get(ra.id) ?? [];
-        parts.forEach(partId => allAssignedParts.add(partId));
+        parts.forEach((partId) => allAssignedParts.add(partId));
       }
-      
+
       // Check if every selected part is covered by the union
       return selectedPartIds.every((pid) => allAssignedParts.has(pid));
     };
@@ -939,7 +940,6 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const baseOnAllCalculator = useCallback(
     (historicalWorkload: Map<string, number>) => {
       for (const ra of currentReviewAssignments) {
-        console.log(`ra.rubric_id: ${ra.rubric_id}, selectedRubric.id: ${selectedRubric?.id}`);
         if (selectedRubric && ra.rubric_id === selectedRubric.id) {
           historicalWorkload.set(ra.assignee_profile_id, (historicalWorkload.get(ra.assignee_profile_id) ?? 0) + 1);
         }
@@ -1143,128 +1143,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
   };
 
-  /**
-   * Clears all unfinished review assignments for the selected rubric using the clear_unfinished_review_assignments RPC.
-   */
-  const clearUnfinishedAssignments = async () => {
-    try {
-      if (!selectedRubric) {
-        toaster.error({ title: "Error", description: "No rubric selected" });
-        return false;
-      } else if (!course_id) {
-        toaster.error({ title: "Error", description: "Failed to find current course" });
-        return false;
-      }
-
-      // Add Sentry breadcrumb for tracking
-      Sentry.addBreadcrumb({
-        message: "Starting clear unfinished assignments",
-        category: "clear_assignments",
-        data: {
-          course_id: Number(course_id),
-          assignment_id: Number(assignment_id),
-          rubric_id: selectedRubric.id
-        },
-        level: "info"
-      });
-
-      // Call the clear_unfinished_review_assignments RPC
-      const { data: result, error: rpcError } = await supabase.rpc("clear_unfinished_review_assignments", {
-        p_class_id: Number(course_id),
-        p_assignment_id: Number(assignment_id),
-        p_rubric_id: selectedRubric.id
-      });
-
-      if (rpcError) {
-        const errId = Sentry.captureException(rpcError);
-        Sentry.addBreadcrumb({
-          message: "Clear assignments RPC failed",
-          category: "clear_assignments",
-          data: { error: rpcError.message, code: rpcError.code },
-          level: "error"
-        });
-
-        toaster.error({
-          title: "Error clearing assignments",
-          description:
-            rpcError.message ||
-            `Failed to clear unfinished assignments, our team has been notified with error ID ${errId}`
-        });
-        return false;
-      }
-
-      // Type cast the result for proper access to properties
-      const typedResult = result as {
-        success: boolean;
-        error?: string;
-        assignments_deleted: number;
-        parts_deleted: number;
-        message?: string;
-      };
-
-      if (!typedResult?.success) {
-        Sentry.addBreadcrumb({
-          message: "Clear assignments RPC returned failure",
-          category: "clear_assignments",
-          data: { result: typedResult },
-          level: "error"
-        });
-
-        toaster.error({
-          title: "Error clearing assignments",
-          description: typedResult?.error || "Unknown error occurred while clearing assignments"
-        });
-        return false;
-      }
-
-      // Log successful operation
-      Sentry.addBreadcrumb({
-        message: "Clear assignments completed successfully",
-        category: "clear_assignments",
-        data: {
-          assignments_deleted: typedResult.assignments_deleted,
-          parts_deleted: typedResult.parts_deleted
-        },
-        level: "info"
-      });
-
-      // Show success message
-      if (typedResult.assignments_deleted === 0) {
-        toaster.create({
-          title: "No Assignments to Clear",
-          description: "No unfinished review assignments were found for this rubric",
-          type: "info"
-        });
-      } else {
-        toaster.success({
-          title: "Assignments Cleared",
-          description: typedResult.message || `Cleared ${typedResult.assignments_deleted} unfinished assignments`
-        });
-      }
-
-      handleReviewAssignmentChange();
-      return true;
-    } catch (e: unknown) {
-      const errMsg =
-        (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
-        "An unexpected error occurred while clearing assignments";
-
-      Sentry.addBreadcrumb({
-        message: "Clear assignments failed with exception",
-        category: "clear_assignments",
-        data: { error: errMsg },
-        level: "error"
-      });
-
-      toaster.error({
-        title: "Error clearing assignments",
-        description: errMsg
-      });
-      return false;
-    }
-  };
-
   // Note: submissionReviewIdForReview function removed - now handled by bulk_assign_reviews RPC
+  // Note: clearUnfinishedAssignments function moved to shared ClearAssignmentsButton component
 
   useEffect(() => {
     if (gradingRubric) {
@@ -1365,7 +1245,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               <Select
                 isMulti={true}
                 onChange={(e) => {
-                  setSelectedRubricPartsForFilter(e);
+                  setSelectedRubricPartsForFilter([...e]);
                 }}
                 value={selectedRubricPartsForFilter}
                 options={
@@ -1888,19 +1768,22 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             >
               Prepare Review Assignments
             </Button>
-            <Button
-              maxWidth={"md"}
-              onClick={clearUnfinishedAssignments}
-              variant="outline"
-              colorPalette="red"
-              disabled={!selectedRubric}
-            >
-              Clear Unfinished Assignments
-            </Button>
+          <ClearAssignmentsButton
+            selectedRubric={selectedRubric}
+            selectedRubricPartsForFilter={selectedRubricPartsForFilter}
+            selectedClassSections={selectedClassSections}
+            selectedLabSections={selectedLabSections}
+            selectedStudentTags={selectedStudentTags}
+            submissionsToDo={submissionsToDo}
+            course_id={course_id as string}
+            assignment_id={assignment_id as string}
+            onSuccess={handleReviewAssignmentChange}
+          />
           </HStack>
           <Text fontSize="sm" color="text.muted" maxW="2xl">
-            Use &quot;Clear Unfinished Assignments&quot; to remove all incomplete review assignments for the selected
-            rubric before creating new ones. This is useful for starting fresh with a new assignment strategy.
+            Use &quot;Clear Unfinished Assignments&quot; to remove incomplete review assignments for the selected rubric and rubric parts.
+            If no specific parts are selected, all incomplete assignments for the rubric will be cleared.
+            This is useful for starting fresh with a new assignment strategy.
           </Text>
         </VStack>
         {draftReviews.length > 0 && (
