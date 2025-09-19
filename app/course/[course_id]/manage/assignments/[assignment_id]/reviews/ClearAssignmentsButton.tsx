@@ -57,16 +57,16 @@ export default function ClearAssignmentsButton({
       // Build filter description for logging and user feedback
       const filters = [];
       if (selectedRubricPartsForFilter.length > 0) {
-        filters.push(`rubric parts: ${selectedRubricPartsForFilter.map(p => p.value.name).join(", ")}`);
+        filters.push(`rubric parts: ${selectedRubricPartsForFilter.map((p) => p.value.name).join(", ")}`);
       }
       if (selectedClassSections.length > 0) {
-        filters.push(`class sections: ${selectedClassSections.map(s => s.value.name).join(", ")}`);
+        filters.push(`class sections: ${selectedClassSections.map((s) => s.value.name).join(", ")}`);
       }
       if (selectedLabSections.length > 0) {
-        filters.push(`lab sections: ${selectedLabSections.map(s => s.value.name).join(", ")}`);
+        filters.push(`lab sections: ${selectedLabSections.map((s) => s.value.name).join(", ")}`);
       }
       if (selectedStudentTags.length > 0) {
-        filters.push(`student tags: ${selectedStudentTags.map(t => t.value.name).join(", ")}`);
+        filters.push(`student tags: ${selectedStudentTags.map((t) => t.value.name).join(", ")}`);
       }
 
       // Add Sentry breadcrumb for tracking
@@ -84,40 +84,32 @@ export default function ClearAssignmentsButton({
       });
 
       // Prepare rubric parts filter
-      const rubricPartIds = selectedRubricPartsForFilter.length === 0 
-        ? null // No filter - clear all parts
-        : selectedRubricPartsForFilter.map(part => part.value.id);
+      const rubricPartIds =
+        selectedRubricPartsForFilter.length === 0
+          ? null // No filter - clear all parts
+          : selectedRubricPartsForFilter.map((part) => part.value.id);
 
       // Prepare additional filters
-      const classSectionIds = selectedClassSections.length === 0 
-        ? null 
-        : selectedClassSections.map(section => section.value.id);
-      
-      const labSectionIds = selectedLabSections.length === 0 
-        ? null 
-        : selectedLabSections.map(section => section.value.id);
-      
-      const studentTagFilters = selectedStudentTags.length === 0 
-        ? null 
-        : selectedStudentTags.map(tag => ({ name: tag.value.name, color: tag.value.color }));
+      const classSectionIds =
+        selectedClassSections.length === 0 ? null : selectedClassSections.map((section) => section.value.id);
+
+      const labSectionIds =
+        selectedLabSections.length === 0 ? null : selectedLabSections.map((section) => section.value.id);
+
+      const studentTagFilters =
+        selectedStudentTags.length === 0
+          ? null
+          : selectedStudentTags.map((tag) => ({ name: tag.value.name, color: tag.value.color }));
 
       // Call the clear_unfinished_review_assignments RPC
       const { data: result, error: rpcError } = await supabase.rpc("clear_unfinished_review_assignments", {
         p_class_id: Number(course_id),
         p_assignment_id: Number(assignment_id),
         p_rubric_id: selectedRubric.id,
-        p_rubric_part_ids: rubricPartIds,
-        p_class_section_ids: classSectionIds,
-        p_lab_section_ids: labSectionIds,
+        p_rubric_part_ids: rubricPartIds ?? undefined,
+        p_class_section_ids: classSectionIds ?? undefined,
+        p_lab_section_ids: labSectionIds ?? undefined,
         p_student_tag_filters: studentTagFilters
-      } as { 
-        p_class_id: number; 
-        p_assignment_id: number; 
-        p_rubric_id: number; 
-        p_rubric_part_ids: number[] | null;
-        p_class_section_ids: number[] | null;
-        p_lab_section_ids: number[] | null;
-        p_student_tag_filters: { name: string; color: string }[] | null;
       });
 
       if (rpcError) {
@@ -127,7 +119,7 @@ export default function ClearAssignmentsButton({
           data: { error: rpcError.message, code: rpcError.code },
           level: "error"
         });
-        
+
         toaster.error({
           title: "Error clearing assignments",
           description: rpcError.message || "Failed to clear unfinished assignments"
@@ -172,18 +164,14 @@ export default function ClearAssignmentsButton({
 
       // Show success message
       if (typedResult.assignments_deleted === 0) {
-        const filterDescription = filters.length === 0 
-          ? "the current filters" 
-          : filters.join(", ");
+        const filterDescription = filters.length === 0 ? "the current filters" : filters.join(", ");
         toaster.create({
           title: "No Assignments to Clear",
           description: `No unfinished review assignments were found for ${filterDescription}`,
           type: "info"
         });
       } else {
-        const filterDescription = filters.length === 0 
-          ? "" 
-          : ` (filtered by: ${filters.join(", ")})`;
+        const filterDescription = filters.length === 0 ? "" : ` (filtered by: ${filters.join(", ")})`;
         toaster.success({
           title: "Assignments Cleared",
           description: `Cleared ${typedResult.assignments_deleted} unfinished assignments${filterDescription}`
@@ -197,7 +185,7 @@ export default function ClearAssignmentsButton({
       const errMsg =
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         "An unexpected error occurred while clearing assignments";
-      
+
       Sentry.addBreadcrumb({
         message: "Clear assignments failed with exception",
         category: "clear_assignments",
@@ -219,16 +207,16 @@ export default function ClearAssignmentsButton({
     if (matchingSubmissionsCount === 0) {
       return "No Matching Unfinished Assignments to Clear";
     }
-    
-    const submissionText = `${matchingSubmissionsCount} submission${matchingSubmissionsCount === 1 ? '' : 's'}`;
-    
+
+    const submissionText = `${matchingSubmissionsCount} submission${matchingSubmissionsCount === 1 ? "" : "s"}`;
+
     if (selectedRubricPartsForFilter.length === 0) {
       // No specific parts selected - clearing whole rubric
       return `Clear Unfinished Assignments from ${submissionText}`;
     } else {
       // Specific parts selected
       const partsCount = selectedRubricPartsForFilter.length;
-      const partsText = `${partsCount} rubric part${partsCount === 1 ? '' : 's'}`;
+      const partsText = `${partsCount} rubric part${partsCount === 1 ? "" : "s"}`;
       return `Clear Unfinished Assignments from ${submissionText}, ${partsText}`;
     }
   }, [matchingSubmissionsCount, selectedRubricPartsForFilter]);
@@ -237,12 +225,13 @@ export default function ClearAssignmentsButton({
     if (matchingSubmissionsCount === 0) {
       return "No assignments to clear with current filters.";
     }
-    
-    const submissionText = `${matchingSubmissionsCount} submission${matchingSubmissionsCount === 1 ? '' : 's'}`;
-    const partsText = selectedRubricPartsForFilter.length === 0 
-      ? "all rubric parts" 
-      : `${selectedRubricPartsForFilter.length} selected rubric part${selectedRubricPartsForFilter.length === 1 ? '' : 's'}`;
-    
+
+    const submissionText = `${matchingSubmissionsCount} submission${matchingSubmissionsCount === 1 ? "" : "s"}`;
+    const partsText =
+      selectedRubricPartsForFilter.length === 0
+        ? "all rubric parts"
+        : `${selectedRubricPartsForFilter.length} selected rubric part${selectedRubricPartsForFilter.length === 1 ? "" : "s"}`;
+
     return `This will clear all unfinished assignments from ${submissionText} for ${partsText}. This action cannot be undone.`;
   }, [matchingSubmissionsCount, selectedRubricPartsForFilter]);
 
@@ -269,20 +258,10 @@ export default function ClearAssignmentsButton({
               {confirmationText}
             </Text>
             <HStack gap={2} justify="flex-end">
-              <Button 
-                size="sm" 
-                variant="outline" 
-                onClick={() => setIsOpen(false)}
-                disabled={isClearing}
-              >
+              <Button size="sm" variant="outline" onClick={() => setIsOpen(false)} disabled={isClearing}>
                 Cancel
               </Button>
-              <Button 
-                size="sm" 
-                colorPalette="red" 
-                onClick={clearUnfinishedAssignments}
-                loading={isClearing}
-              >
+              <Button size="sm" colorPalette="red" onClick={clearUnfinishedAssignments} loading={isClearing}>
                 Clear Assignments
               </Button>
             </HStack>

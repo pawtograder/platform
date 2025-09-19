@@ -8,7 +8,11 @@ import { useActiveSubmissions, useAssignmentController } from "@/hooks/useAssign
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import useTags from "@/hooks/useTags";
-import TableController, { useListTableControllerValues, useTableControllerTableValues, PossiblyTentativeResult } from "@/lib/TableController";
+import TableController, {
+  useListTableControllerValues,
+  useTableControllerTableValues,
+  PossiblyTentativeResult
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -34,7 +38,6 @@ import { FaArrowLeft } from "react-icons/fa";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
-
 
 // Main Page Component
 export default function ReassignGradingPage() {
@@ -185,7 +188,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
 
       // Auto-select "grading rubric" if available and no rubric is currently selected
       if (!selectedRubric && rubrics.length > 0) {
-        const gradingRubric = rubrics.find(r => r.name.toLowerCase().includes('grading'));
+        const gradingRubric = rubrics.find((r) => r.name.toLowerCase().includes("grading"));
         if (gradingRubric) {
           setSelectedRubric(gradingRubric);
         }
@@ -196,7 +199,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
 
   const userRolesData = useUserRolesWithProfiles();
   const userRoles = useMemo(() => {
-    return { data: (userRolesData as unknown) as UserRoleWithConflictsAndName[] };
+    return { data: userRolesData as unknown as UserRoleWithConflictsAndName[] };
   }, [userRolesData]);
 
   function shuffle<T>(array: T[]): T[] {
@@ -221,14 +224,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
    */
   useEffect(() => {
     setDraftReviews([]);
-  }, [
-    selectedRubric,
-    role,
-    selectedUser,
-    dueDate,
-    selectedUsers,
-    originalRubricParts
-  ]);
+  }, [selectedRubric, role, selectedUser, dueDate, selectedUsers, originalRubricParts]);
 
   /**
    * Populate submissions to do for reassigning grading
@@ -267,9 +263,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
           submission_reviews: [],
           review_assignments: [],
           assignment_groups:
-            memberIds.length > 0
-              ? { assignment_groups_members: memberIds.map((profile_id) => ({ profile_id })) }
-              : null
+            memberIds.length > 0 ? { assignment_groups_members: memberIds.map((profile_id) => ({ profile_id })) } : null
         } as SubmissionWithGrading;
       });
 
@@ -287,8 +281,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       }
       const partIds = new Set<number>();
       rasForSubmission.forEach((ra) => (reviewAssignmentPartsById.get(ra.id) ?? []).forEach((pid) => partIds.add(pid)));
-      const parts: RubricPart[] = selectedRubric.rubric_parts
-        .filter((rp) => partIds.has(rp.id));
+      const parts: RubricPart[] = selectedRubric.rubric_parts.filter((rp) => partIds.has(rp.id));
       rubricPartsMap.set(submission.id, parts);
     });
     setOriginalRubricParts(rubricPartsMap);
@@ -300,7 +293,6 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     allActiveSubmissions,
     groupMembersByGroupId
   ]);
-
 
   /**
    * Creates a list of the users who will be assigned submissions to grade based on category.
@@ -416,18 +408,12 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
         ...user,
         profiles: {
           ...user.profiles,
-          grading_conflicts: Array.isArray(user.profiles.grading_conflicts) 
-            ? user.profiles.grading_conflicts 
-            : []
+          grading_conflicts: Array.isArray(user.profiles.grading_conflicts) ? user.profiles.grading_conflicts : []
         }
       }));
 
       // For "by_submission" mode, preserve the original rubric parts that were assigned
-      const reviewAssignments = generateReviewsByRubric(
-        usersWithConflicts,
-        submissionsToDo,
-        historicalWorkload
-      );
+      const reviewAssignments = generateReviewsByRubric(usersWithConflicts, submissionsToDo, historicalWorkload);
       setDraftReviews(reviewAssignments);
     } catch (e) {
       Sentry.captureException(e);
@@ -451,7 +437,6 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     }
     return toReviewWithOriginalParts(result);
   };
-
 
   /**
    * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them more work.
@@ -539,7 +524,6 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     },
     [userRoles, originalRubricParts]
   );
-
 
   /**
    * Creates the review assignments based on the draft reviews.
@@ -687,14 +671,18 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
             </Field.Root>
             <Field.Root>
               <Field.Label>Assignment method</Field.Label>
-              <Text fontSize="md" fontWeight="medium">By submission</Text>
+              <Text fontSize="md" fontWeight="medium">
+                By submission
+              </Text>
               <Field.HelperText>
-                Each grader will be assigned the same rubric parts that were originally assigned to the selected grader. This preserves the original part assignments.
+                Each grader will be assigned the same rubric parts that were originally assigned to the selected grader.
+                This preserves the original part assignments.
               </Field.HelperText>
             </Field.Root>
             <Text fontSize={"sm"}>
-              {`There are ${submissionsToDo?.length ?? 0} active submissions assigned ${selectedUser?.profiles.name ? `to ${selectedUser?.profiles.name}` : ""
-                } that are incomplete for this rubric on this assignment.`}
+              {`There are ${submissionsToDo?.length ?? 0} active submissions assigned ${
+                selectedUser?.profiles.name ? `to ${selectedUser?.profiles.name}` : ""
+              } that are incomplete for this rubric on this assignment.`}
             </Text>
             {originalRubricParts.size > 0 && (
               <Text fontSize={"sm"} color="blue.600" fontStyle="italic">
@@ -801,10 +789,10 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                 value={
                   dueDate
                     ? new Date(dueDate)
-                      .toLocaleString("sv-SE", {
-                        timeZone: course.time_zone ?? "America/New_York"
-                      })
-                      .replace(" ", "T")
+                        .toLocaleString("sv-SE", {
+                          timeZone: course.time_zone ?? "America/New_York"
+                        })
+                        .replace(" ", "T")
                     : ""
                 }
                 onChange={(e) => {
@@ -840,13 +828,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                 variant="subtle"
                 colorPalette="green"
                 loading={isGeneratingReviews}
-                disabled={
-                  !dueDate ||
-                  !selectedRubric ||
-                  !role ||
-                  !selectedUser ||
-                  submissionsToDo?.length === 0
-                }
+                disabled={!dueDate || !selectedRubric || !role || !selectedUser || submissionsToDo?.length === 0}
               >
                 Prepare Reassignments
               </Button>

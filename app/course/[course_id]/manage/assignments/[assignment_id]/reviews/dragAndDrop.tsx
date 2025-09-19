@@ -1,24 +1,37 @@
-import React, { Dispatch, SetStateAction, useState, useMemo } from "react";
+import StudentInfoCard from "@/components/ui/student-info-card";
 import {
-  DndContext,
+  AccordionItem,
+  AccordionItemContent,
+  AccordionItemIndicator,
+  AccordionItemTrigger,
+  AccordionRoot,
+  Badge,
+  Box,
+  Card,
+  Flex,
+  HStack,
+  Separator,
+  SimpleGrid,
+  Text,
+  VStack
+} from "@chakra-ui/react";
+import {
   closestCenter,
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
   KeyboardSensor,
   PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-  DragStartEvent,
-  DragOverlay,
+  UniqueIdentifier,
   useDraggable,
   useDroppable,
-  UniqueIdentifier
+  useSensor,
+  useSensors
 } from "@dnd-kit/core";
-import { Box, VStack, HStack, Text, Badge, Card, Flex, SimpleGrid, Separator, Icon, AccordionItemIndicator } from "@chakra-ui/react";
-import { AccordionItem, AccordionItemContent, AccordionItemTrigger, AccordionRoot } from "@chakra-ui/react";
 import { CSS } from "@dnd-kit/utilities";
-import { DraftReviewAssignment, UserRoleWithConflictsAndName, RubricWithParts } from "./page";
-import StudentInfoCard from "@/components/ui/student-info-card";
-import { ChevronDown } from "lucide-react";
+import React, { Dispatch, SetStateAction, useMemo, useState } from "react";
+import { DraftReviewAssignment, RubricWithParts, UserRoleWithConflictsAndName } from "./page";
 
 function getDraggableId(item: DraftReviewAssignment): string {
   return item.part ? `submission-${item.submission.id}-part-${item.part.id}` : `submission-${item.submission.id}`;
@@ -253,10 +266,10 @@ export default function DragAndDropExample({
         assignment_groups:
           submission.assignment_group_id && groupMembersByGroupId.has(submission.assignment_group_id)
             ? {
-              assignment_groups_members: groupMembersByGroupId
-                .get(submission.assignment_group_id)!
-                .map((pid) => ({ profile_id: pid }))
-            }
+                assignment_groups_members: groupMembersByGroupId
+                  .get(submission.assignment_group_id)!
+                  .map((pid) => ({ profile_id: pid }))
+              }
             : null
       };
 
@@ -303,11 +316,11 @@ export default function DragAndDropExample({
           draftReviews.map((item) =>
             getDraggableId(item) === active.id
               ? {
-                ...item,
-                assignee: courseStaffWithConflicts.find(
-                  (staff) => staff.private_profile_id == over?.id
-                ) as DraftReviewAssignment["assignee"] // HERE
-              }
+                  ...item,
+                  assignee: courseStaffWithConflicts.find(
+                    (staff) => staff.private_profile_id == over?.id
+                  ) as DraftReviewAssignment["assignee"] // HERE
+                }
               : item
           )
         );

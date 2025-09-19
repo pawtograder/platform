@@ -1768,22 +1768,22 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             >
               Prepare Review Assignments
             </Button>
-          <ClearAssignmentsButton
-            selectedRubric={selectedRubric}
-            selectedRubricPartsForFilter={selectedRubricPartsForFilter}
-            selectedClassSections={selectedClassSections}
-            selectedLabSections={selectedLabSections}
-            selectedStudentTags={selectedStudentTags}
-            submissionsToDo={submissionsToDo}
-            course_id={course_id as string}
-            assignment_id={assignment_id as string}
-            onSuccess={handleReviewAssignmentChange}
-          />
+            <ClearAssignmentsButton
+              selectedRubric={selectedRubric}
+              selectedRubricPartsForFilter={selectedRubricPartsForFilter}
+              selectedClassSections={selectedClassSections}
+              selectedLabSections={selectedLabSections}
+              selectedStudentTags={selectedStudentTags}
+              submissionsToDo={submissionsToDo}
+              course_id={course_id as string}
+              assignment_id={assignment_id as string}
+              onSuccess={handleReviewAssignmentChange}
+            />
           </HStack>
           <Text fontSize="sm" color="text.muted" maxW="2xl">
-            Use &quot;Clear Unfinished Assignments&quot; to remove incomplete review assignments for the selected rubric and rubric parts.
-            If no specific parts are selected, all incomplete assignments for the rubric will be cleared.
-            This is useful for starting fresh with a new assignment strategy.
+            Use &quot;Clear Unfinished Assignments&quot; to remove incomplete review assignments for the selected rubric
+            and rubric parts. If no specific parts are selected, all incomplete assignments for the rubric will be
+            cleared. This is useful for starting fresh with a new assignment strategy.
           </Text>
         </VStack>
         {draftReviews.length > 0 && (

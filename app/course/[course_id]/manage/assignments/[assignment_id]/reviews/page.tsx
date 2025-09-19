@@ -153,7 +153,7 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
       });
 
       // Call the clear_all_incomplete_review_assignments RPC
-      const { data: result, error: rpcError } = await (supabase as any).rpc("clear_all_incomplete_review_assignments", {
+      const { data: result, error: rpcError } = await supabase.rpc("clear_all_incomplete_review_assignments", {
         p_class_id: Number(course_id),
         p_assignment_id: Number(assignment_id)
       });
@@ -165,7 +165,7 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
           data: { error: rpcError.message, code: rpcError.code },
           level: "error"
         });
-        
+
         toaster.error({
           title: "Error Clearing Assignments",
           description: rpcError.message || "Failed to clear incomplete assignments"
@@ -217,7 +217,7 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
       setIsOpen(false);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Failed to clear assignments";
-      
+
       Sentry.addBreadcrumb({
         message: "Clear all assignments failed with exception",
         category: "clear_all_assignments",

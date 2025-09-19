@@ -463,7 +463,7 @@ export default class TableController<
     if (this._debounceTimeout) {
       clearTimeout(this._debounceTimeout);
     }
-    
+
     this._debounceTimeout = setTimeout(async () => {
       await this._processBatchedOperations();
     }, this._debounceInterval);
@@ -501,7 +501,10 @@ export default class TableController<
     let currentBatch: { type: "INSERT" | "UPDATE" | "DELETE"; messages: BroadcastMessage[] } | null = null;
 
     for (const operation of operations) {
-      if (!operation.operation || (operation.operation !== "INSERT" && operation.operation !== "UPDATE" && operation.operation !== "DELETE")) {
+      if (
+        !operation.operation ||
+        (operation.operation !== "INSERT" && operation.operation !== "UPDATE" && operation.operation !== "DELETE")
+      ) {
         continue;
       }
 
@@ -556,12 +559,9 @@ export default class TableController<
     // Process IDs in batches of 100
     for (let i = 0; i < ids.length; i += batchSize) {
       const batch = ids.slice(i, i + batchSize);
-      
+
       try {
-        const { data, error } = await this._client
-          .from(this._table)
-          .select(selectClause)
-          .in("id", batch);
+        const { data, error } = await this._client.from(this._table).select(selectClause).in("id", batch);
 
         if (error) {
           Sentry.captureException(error);
@@ -711,11 +711,11 @@ export default class TableController<
     }
 
     const refetchedRows = await this._refetchRowsByIds(ids);
-    
+
     // Update existing rows and add new ones
     for (const [id, row] of refetchedRows) {
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
-      
+
       if (existingRow) {
         this._updateRow(id, row as ResultOne & { id: IDType }, false);
       } else {
@@ -890,10 +890,10 @@ export default class TableController<
 
   private async _handleInsertBatch(messages: BroadcastMessage[]): Promise<void> {
     if (this._closed) return;
-    
+
     const messagesWithData: BroadcastMessage[] = [];
     const idsToRefetch: IDType[] = [];
-    
+
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.data) {
@@ -902,12 +902,12 @@ export default class TableController<
         idsToRefetch.push(message.row_id as IDType);
       }
     }
-    
+
     // Process messages with full data synchronously first
     for (const message of messagesWithData) {
       this._handleInsert(message);
     }
-    
+
     // Batch refetch for messages without data and await completion
     if (idsToRefetch.length > 0) {
       try {
@@ -919,7 +919,9 @@ export default class TableController<
               // Check for pending tentative rows that might represent the same data
               const pendingRow = this._rows.find((r) => {
                 const rowData = r as PossiblyTentativeResult<ResultOne>;
-                return rowData.__db_pending && this._isPotentialMatch(rowData, row as unknown as Record<string, unknown>);
+                return (
+                  rowData.__db_pending && this._isPotentialMatch(rowData, row as unknown as Record<string, unknown>)
+                );
               });
 
               if (pendingRow) {
@@ -944,10 +946,10 @@ export default class TableController<
 
   private async _handleUpdateBatch(messages: BroadcastMessage[]): Promise<void> {
     if (this._closed) return;
-    
+
     const messagesWithData: BroadcastMessage[] = [];
     const idsToRefetch: IDType[] = [];
-    
+
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.data) {
@@ -956,12 +958,12 @@ export default class TableController<
         idsToRefetch.push(message.row_id as IDType);
       }
     }
-    
+
     // Process messages with full data synchronously first
     for (const message of messagesWithData) {
       this._handleUpdate(message);
     }
-    
+
     // Batch refetch for messages without data and await completion
     if (idsToRefetch.length > 0) {
       try {
@@ -990,9 +992,9 @@ export default class TableController<
 
   private async _handleDeleteBatch(messages: BroadcastMessage[]): Promise<void> {
     if (this._closed) return;
-    
+
     const idsToDelete = new Set<IDType>();
-    
+
     // Collect all IDs to delete
     for (const message of messages) {
       if (message.data) {
@@ -1002,7 +1004,7 @@ export default class TableController<
         idsToDelete.add(message.row_id as IDType);
       }
     }
-    
+
     // Remove all rows in batch (synchronous operation, no async needed)
     for (const id of idsToDelete) {
       this._removeRow(id);
