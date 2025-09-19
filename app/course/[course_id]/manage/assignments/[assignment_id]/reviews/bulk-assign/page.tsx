@@ -432,15 +432,24 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       const ras = currentReviewAssignments.filter(
         (ra) => ra.submission_id === submissionId && ra.rubric_id === selectedRubric.id
       );
+      
+      // First check if any RA has no specific parts (whole rubric assigned)
       for (const ra of ras) {
         const parts = reviewAssignmentPartsById.get(ra.id) ?? [];
         if (parts.length === 0) {
           return true; // whole rubric assigned
         }
-        const coversAll = selectedPartIds.every((pid) => parts.includes(pid));
-        if (coversAll) return true;
       }
-      return false;
+      
+      // Build union of all parts from all matching RAs
+      const allAssignedParts = new Set<number>();
+      for (const ra of ras) {
+        const parts = reviewAssignmentPartsById.get(ra.id) ?? [];
+        parts.forEach(partId => allAssignedParts.add(partId));
+      }
+      
+      // Check if every selected part is covered by the union
+      return selectedPartIds.every((pid) => allAssignedParts.has(pid));
     };
 
     const filtered = allActiveSubmissions

@@ -1029,8 +1029,8 @@ export class DatabaseSeeder {
     );
 
     // Define tag types
-    // const studentTagTypes = defineTagTypes("Student", config.sectionsAndTagsConfig!.numStudentTags);
-    // const graderTagTypes = defineTagTypes("Grader", config.sectionsAndTagsConfig!.numGraderTags);
+    const studentTagTypes = defineTagTypes("Student", config.sectionsAndTagsConfig!.numStudentTags);
+    const graderTagTypes = defineTagTypes("Grader", config.sectionsAndTagsConfig!.numGraderTags);
 
     console.log(`✓ Created ${classSections?.length || 0} class sections and ${labSections?.length || 0} lab sections`);
 

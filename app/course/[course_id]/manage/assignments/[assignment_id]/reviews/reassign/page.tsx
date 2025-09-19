@@ -4,7 +4,11 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
+import { useActiveSubmissions, useAssignmentController } from "@/hooks/useAssignment";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import useTags from "@/hooks/useTags";
+import { useTableControllerTableValues } from "@/lib/TableController";
 import { RubricPart, Tag, Assignment } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -29,7 +33,6 @@ import { FaArrowLeft } from "react-icons/fa";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { GradingConflictWithPopulatedProfiles } from "../../../../course/grading-conflicts/gradingConflictsTable";
 import * as Sentry from "@sentry/nextjs";
 
@@ -74,6 +77,10 @@ export default function ReassignGradingPage() {
 
 function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
   const { course_id, assignment_id } = useParams();
+  const assignmentController = useAssignmentController();
+  const allActiveSubmissions = useActiveSubmissions();
+  const courseController = useCourseController();
+  const currentReviewAssignments = useTableControllerTableValues(assignmentController.reviewAssignments);
   const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
   const [role, setRole] = useState<string>("Graders");
@@ -108,6 +115,28 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   const [selectedExclusionAssignment, setSelectedExclusionAssignment] = useState<Assignment>();
   const [selectedExclusionRubric, setSelectedExclusionRubric] = useState<RubricWithParts>();
   const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
+
+  // Map of assignment_group_id -> member profile ids
+  const [groupMembersByGroupId, setGroupMembersByGroupId] = useState<Map<number, string[]>>(new Map());
+  useEffect(() => {
+    const buildMap = (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
+      const map = new Map<number, string[]>();
+      for (const row of rows) {
+        const members = row.assignment_groups_members?.map((m) => m.profile_id) ?? [];
+        map.set(row.id, members);
+      }
+      return map;
+    };
+    const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
+      (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
+        setGroupMembersByGroupId(buildMap(rows));
+      }
+    );
+    setGroupMembersByGroupId(
+      buildMap(data as Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>)
+    );
+    return unsubscribe;
+  }, [courseController]);
 
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
@@ -1443,6 +1472,10 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                   draftReviews={draftReviews}
                   setDraftReviews={setDraftReviews}
                   courseStaffWithConflicts={finalSelectedUsers() ?? []}
+                  currentReviewAssignments={currentReviewAssignments}
+                  selectedRubric={selectedRubric}
+                  allActiveSubmissions={allActiveSubmissions}
+                  groupMembersByGroupId={groupMembersByGroupId}
                 />
                 <Button maxWidth={"md"} variant="subtle" onClick={() => assignReviews()} float={"right"}>
                   Reassign
