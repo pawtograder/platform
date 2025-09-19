@@ -540,7 +540,8 @@ export default class TableController<
       }
     } catch (error) {
       Sentry.captureException(error);
-      console.error(`Failed to refetch data for table ${this._table}:`, error);
+      console.error(`Failed to refetch data for table ${this._table}:`);
+      console.error(error);
     } finally {
       // Set refetch state to false and notify listeners
       this._isRefetching = false;
