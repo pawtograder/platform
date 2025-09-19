@@ -163,19 +163,17 @@ export function OverrideScoreForm({
           </Box>
         )}
         <HStack justify="space-between">
-          {!showWarning && (
-            <HStack gap={4}>
-              <Checkbox {...register("is_droppable")} checked={watchedValues.is_droppable ?? false}>
-                Droppable
-              </Checkbox>
-              <Checkbox {...register("is_excused")} checked={watchedValues.is_excused ?? false}>
-                Excused
-              </Checkbox>
-              <Checkbox {...register("is_missing")} checked={watchedValues.is_missing ?? false}>
-                Missing
-              </Checkbox>
-            </HStack>
-          )}
+          <HStack gap={4}>
+            <Checkbox {...register("is_droppable")} checked={watchedValues.is_droppable ?? false}>
+              Droppable
+            </Checkbox>
+            <Checkbox {...register("is_excused")} checked={watchedValues.is_excused ?? false}>
+              Excused
+            </Checkbox>
+            <Checkbox {...register("is_missing")} checked={watchedValues.is_missing ?? false}>
+              Missing
+            </Checkbox>
+          </HStack>
           <Button
             type="submit"
             loading={isSubmitting}
