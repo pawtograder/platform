@@ -240,7 +240,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const matchingIncompleteRAs = currentReviewAssignments.filter((ra) => {
       if (ra.assignee_profile_id !== selectedUser.private_profile_id) return false;
       if (ra.rubric_id !== selectedRubric.id) return false;
-      if (ra.completed_by) return false; // Only not-yet-completed assignments
+      if (ra.completed_at) return false; // Only not-yet-completed assignments
       return true;
     });
 

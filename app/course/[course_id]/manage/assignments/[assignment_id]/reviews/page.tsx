@@ -141,27 +141,29 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
     try {
       // Add Sentry breadcrumb for tracking
       Sentry.addBreadcrumb({
-        message: "Starting clear all incomplete assignments",
-        category: "clear_all_assignments",
+        message: "Starting clear incomplete assignments for selected rubric",
+        category: "clear_rubric_assignments",
         data: {
           course_id: Number(course_id),
           assignment_id: Number(assignment_id),
+          rubric_id: selectedRubric.id,
           rubric_name: selectedRubric.name,
           incomplete_count: incompleteAssignments.length
         },
         level: "info"
       });
 
-      // Call the clear_all_incomplete_review_assignments RPC
-      const { data: result, error: rpcError } = await supabase.rpc("clear_all_incomplete_review_assignments", {
+      // Call the clear_unfinished_review_assignments RPC for the selected rubric
+      const { data: result, error: rpcError } = await supabase.rpc("clear_unfinished_review_assignments", {
         p_class_id: Number(course_id),
-        p_assignment_id: Number(assignment_id)
+        p_assignment_id: Number(assignment_id),
+        p_rubric_id: selectedRubric.id
       });
 
       if (rpcError) {
         Sentry.addBreadcrumb({
-          message: "Clear all assignments RPC failed",
-          category: "clear_all_assignments",
+          message: "Clear rubric assignments RPC failed",
+          category: "clear_rubric_assignments",
           data: { error: rpcError.message, code: rpcError.code },
           level: "error"
         });
@@ -184,8 +186,8 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
 
       if (!typedResult?.success) {
         Sentry.addBreadcrumb({
-          message: "Clear all assignments RPC returned failure",
-          category: "clear_all_assignments",
+          message: "Clear rubric assignments RPC returned failure",
+          category: "clear_rubric_assignments",
           data: { result: typedResult },
           level: "error"
         });
@@ -199,9 +201,11 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
 
       // Log successful operation
       Sentry.addBreadcrumb({
-        message: "Clear all assignments completed successfully",
-        category: "clear_all_assignments",
+        message: "Clear rubric assignments completed successfully",
+        category: "clear_rubric_assignments",
         data: {
+          rubric_id: selectedRubric.id,
+          rubric_name: selectedRubric.name,
           assignments_deleted: typedResult.assignments_deleted,
           parts_deleted: typedResult.parts_deleted
         },
@@ -210,7 +214,7 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
 
       toaster.success({
         title: "Assignments Cleared",
-        description: `Successfully cleared ${typedResult.assignments_deleted} incomplete assignments across all rubrics`
+        description: `Successfully cleared ${typedResult.assignments_deleted} incomplete assignments for ${selectedRubric.name}`
       });
 
       onAssignmentCleared();

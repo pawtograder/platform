@@ -120,7 +120,9 @@ BEGIN
                 0,
                 0,
                 0
-            ) RETURNING id INTO v_submission_review_id;
+            ) 
+            ON CONFLICT (submission_id, rubric_id) DO NOTHING
+            RETURNING id INTO v_submission_review_id;
             
             v_submission_reviews_created := v_submission_reviews_created + 1;
         END IF;
@@ -143,7 +145,7 @@ BEGIN
             p_rubric_id,
             p_class_id,
             p_due_date,
-            NULL  -- Always reset completed_at for new/updated assignments
+            NULL
         )
         ON CONFLICT (assignee_profile_id, submission_review_id, assignment_id, rubric_id)
         DO UPDATE SET
@@ -419,6 +421,15 @@ BEGIN
 
         -- If we found a new active submission, update review assignments and their linked submission_review
         IF new_active_submission_id IS NOT NULL THEN
+
+            -- Ensure a submission_reviews row exists for the new submission/rubric pairs
+            INSERT INTO public.submission_reviews (submission_id, rubric_id, class_id, name, total_score, total_autograde_score, tweak)
+            SELECT new_active_submission_id, ra.rubric_id, ra.class_id,
+                   (SELECT name FROM rubrics WHERE id = ra.rubric_id), 0, 0, 0
+            FROM public.review_assignments ra
+            WHERE ra.submission_id = OLD.id
+            ON CONFLICT (submission_id, rubric_id) DO NOTHING;
+
             -- Move review assignments to the new active submission and reset completion status
             UPDATE public.review_assignments
             SET submission_id = new_active_submission_id,
