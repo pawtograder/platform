@@ -22,6 +22,7 @@ import TableController, {
 } from "@/lib/TableController";
 import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
+import * as Sentry from "@sentry/nextjs";
 import {
   Box,
   Container,
@@ -180,31 +181,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   }, [courseController]);
 
   // Current assignment review assignments rows (live via TableController)
-  const [currentReviewAssignments, setCurrentReviewAssignments] = useState<
-    { id: number; submission_id: number; rubric_id: number; assignee_profile_id: string }[]
-  >([]);
-  useEffect(() => {
-    type MinimalRA = { id: number; submission_id: number; rubric_id: number; assignee_profile_id: string };
-    const { data, unsubscribe } = assignmentController.reviewAssignments.list((rows: MinimalRA[]) => {
-      setCurrentReviewAssignments(
-        rows.map((r) => ({
-          id: r.id,
-          submission_id: r.submission_id,
-          rubric_id: r.rubric_id,
-          assignee_profile_id: r.assignee_profile_id
-        }))
-      );
-    });
-    setCurrentReviewAssignments(
-      (data as MinimalRA[]).map((r) => ({
-        id: r.id,
-        submission_id: r.submission_id,
-        rubric_id: r.rubric_id,
-        assignee_profile_id: r.assignee_profile_id
-      }))
-    );
-    return unsubscribe;
-  }, [assignmentController]);
+  const currentReviewAssignments = useTableControllerTableValues(assignmentController.reviewAssignments);
 
   // Map of review_assignment_id -> assigned rubric_part_ids
   const [reviewAssignmentPartsById, setReviewAssignmentPartsById] = useState<Map<number, number[]>>(new Map());
@@ -274,6 +251,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   // Reference & Exclusion review_assignments via local TableControllers
   const referenceReviewAssignmentsController = useMemo(() => {
     if (!selectedReferenceAssignment) return null;
+    //Note EXPLICLTLY NOT REALTIME FOR THIS! Need to do bulk realtime updates to avoid herding, fix later...
     return new TableController({
       client: supabase,
       table: "review_assignments",
@@ -281,13 +259,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .from("review_assignments")
         .select("id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id")
         .eq("assignment_id", selectedReferenceAssignment.id)
-        .eq("class_id", Number(course_id)),
-      classRealTimeController: courseController.classRealTimeController,
-      realtimeFilter: { assignment_id: selectedReferenceAssignment.id, class_id: Number(course_id) }
+        .eq("class_id", Number(course_id))
     });
-  }, [supabase, selectedReferenceAssignment, course_id, courseController.classRealTimeController]);
+  }, [supabase, selectedReferenceAssignment, course_id]);
   const exclusionReviewAssignmentsController = useMemo(() => {
     if (!selectedExclusionAssignment) return null;
+    //Note EXPLICLTLY NOT REALTIME FOR THIS! Need to do bulk realtime updates to avoid herding, fix later...
     return new TableController({
       client: supabase,
       table: "review_assignments",
@@ -295,11 +272,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .from("review_assignments")
         .select("id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id")
         .eq("assignment_id", selectedExclusionAssignment.id)
-        .eq("class_id", Number(course_id)),
-      classRealTimeController: courseController.classRealTimeController,
-      realtimeFilter: { assignment_id: selectedExclusionAssignment.id, class_id: Number(course_id) }
+        .eq("class_id", Number(course_id))
     });
-  }, [supabase, selectedExclusionAssignment, course_id, courseController.classRealTimeController]);
+  }, [supabase, selectedExclusionAssignment, course_id]);
   const referenceReviewAssignments = useMemo(() => {
     if (!referenceReviewAssignmentsController)
       return [] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];
@@ -955,6 +930,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const baseOnAllCalculator = useCallback(
     (historicalWorkload: Map<string, number>) => {
       for (const ra of currentReviewAssignments) {
+        console.log(`ra.rubric_id: ${ra.rubric_id}, selectedRubric.id: ${selectedRubric?.id}`);
         if (selectedRubric && ra.rubric_id === selectedRubric.id) {
           historicalWorkload.set(ra.assignee_profile_id, (historicalWorkload.get(ra.assignee_profile_id) ?? 0) + 1);
         }
@@ -1018,7 +994,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   );
 
   /**
-   * Creates the review assignments based on the draft reviews.
+   * Creates the review assignments based on the draft reviews using the bulk_assign_reviews RPC.
    */
   const assignReviews = async () => {
     try {
@@ -1030,169 +1006,125 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         return false;
       }
 
-      const submissionReviewPromises = (draftReviews ?? []).map(async (review) => ({
-        review,
-        submissionReviewId: await submissionReviewIdForReview(review)
-      }));
-
-      const reviewsWithSubmissionIds = await Promise.all(submissionReviewPromises);
-
-      const validReviews = reviewsWithSubmissionIds.filter(({ submissionReviewId }) => submissionReviewId);
-
-      if (validReviews.length === 0) {
-        toaster.error({ title: "Error", description: "No valid reviews to assign" });
+      if (!draftReviews || draftReviews.length === 0) {
+        toaster.error({ title: "Error", description: "No draft reviews to assign" });
         return false;
       }
 
-      const { data: existingAssignments, error: existingAssignmentsError } = await supabase
-        .from("review_assignments")
-        .select(
-          "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
-        )
-        .eq("assignment_id", Number(assignment_id))
-        .eq("rubric_id", selectedRubric.id);
-
-      if (existingAssignmentsError) {
-        toaster.error({
-          title: "Error",
-          description: existingAssignmentsError.message || "Error fetching existing review assignments"
-        });
-        return false;
-      }
-
-      const assignmentsToUpdate = existingAssignments
-        .filter((assignment) => {
-          return validReviews.find(
-            ({ review, submissionReviewId }) =>
-              assignment.assignee_profile_id === review.assignee.private_profile_id &&
-              assignment.submission_review_id === submissionReviewId
-          );
-        })
-        .map((assignment) => assignment.id);
-
-      if (assignmentsToUpdate.length > 0) {
-        const { error: updateAssignmentsError } = await supabase
-          .from("review_assignments")
-          .update({ completed_at: null })
-          .in("id", assignmentsToUpdate);
-        if (updateAssignmentsError) {
-          toaster.error({
-            title: "Error updating review assignments",
-            description: updateAssignmentsError.message
-          });
-          return false;
-        }
-      }
-
-      const assignmentsToCreate = validReviews
-        .filter(({ review, submissionReviewId }) => {
-          return !existingAssignments.find(
-            (assignment) =>
-              assignment.assignee_profile_id === review.assignee.private_profile_id &&
-              assignment.submission_review_id === submissionReviewId
-          );
-        })
-        .map(({ review, submissionReviewId }) => ({
-          assignee_profile_id: review.assignee.private_profile_id,
-          submission_id: review.submission.id,
+      // Add Sentry breadcrumb for tracking
+      Sentry.addBreadcrumb({
+        message: "Starting bulk review assignment",
+        category: "bulk_assign",
+        data: {
+          course_id: Number(course_id),
           assignment_id: Number(assignment_id),
           rubric_id: selectedRubric.id,
-          class_id: Number(course_id),
-          submission_review_id: submissionReviewId,
-          due_date: new TZDate(dueDate, course.time_zone ?? "America/New_York").toISOString()
-        }));
+          draft_count: draftReviews.length
+        },
+        level: "info"
+      });
 
-      if (assignmentsToCreate.length > 0) {
-        const { error: insertAssignmentsError } = await supabase.from("review_assignments").insert(assignmentsToCreate);
-        if (insertAssignmentsError) {
-          toaster.error({ title: "Error creating review assignments", description: insertAssignmentsError.message });
-          return false;
-        }
-      }
+      // Transform draft reviews to the format expected by the RPC
+      const rpcDraftAssignments = draftReviews.map((review) => ({
+        assignee_profile_id: review.assignee.private_profile_id,
+        submission_id: review.submission.id,
+        rubric_part_id: review.part?.id || null
+      }));
 
-      const { data: allReviewAssignments, error: allReviewAssignmentsError } = await supabase
-        .from("review_assignments")
-        .select(
-          "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
-        )
-        .eq("assignment_id", Number(assignment_id))
-        .eq("rubric_id", selectedRubric.id);
+      // Call the bulk_assign_reviews RPC
+      const { data: result, error: rpcError } = await supabase.rpc("bulk_assign_reviews", {
+        p_class_id: Number(course_id),
+        p_assignment_id: Number(assignment_id),
+        p_rubric_id: selectedRubric.id,
+        p_draft_assignments: rpcDraftAssignments,
+        p_due_date: new TZDate(dueDate, course.time_zone ?? "America/New_York").toISOString()
+      });
 
-      if (allReviewAssignmentsError) {
+      if (rpcError) {
+        Sentry.addBreadcrumb({
+          message: "Bulk assignment RPC failed",
+          category: "bulk_assign",
+          data: { error: rpcError.message, code: rpcError.code },
+          level: "error"
+        });
+        
         toaster.error({
-          title: "Error",
-          description: allReviewAssignmentsError.message || "Error fetching all review assignments"
+          title: "Error creating review assignments",
+          description: rpcError.message || "Failed to create bulk assignments"
         });
         return false;
       }
 
-      //Now insert all the review assignment parts as needed (skip any that already exist)
-      const reviewAssignmentPartsToCreate = validReviews
-        .map(({ review, submissionReviewId }) => {
-          if (review.part) {
-            const assignment = allReviewAssignments.find(
-              (assignment) =>
-                assignment.assignee_profile_id === review.assignee.private_profile_id &&
-                assignment.submission_review_id === submissionReviewId
-            );
-            if (!assignment || !assignment.id) {
-              toaster.error({ title: "Error", description: "Error finding review assignment for review" });
-              return undefined;
-            }
-            // Skip if the part already exists on this review assignment
-            const alreadyHasPart = assignment.review_assignment_rubric_parts?.some(
-              (p) => p.rubric_part_id === review.part!.id
-            );
-            if (alreadyHasPart) {
-              return undefined;
-            }
-            return {
-              review_assignment_id: assignment.id,
-              rubric_part_id: review.part.id,
-              class_id: Number(course_id)
-            };
-          } else {
-            return undefined;
-          }
-        })
-        .filter((part) => part !== undefined) as Array<{
-        review_assignment_id: number;
-        rubric_part_id: number;
-        class_id: number;
-      }>;
+      // Type cast the result for proper access to properties
+      const typedResult = result as {
+        success: boolean;
+        error?: string;
+        assignments_created: number;
+        assignments_updated: number;
+        parts_created: number;
+        submission_reviews_created: number;
+        total_processed: number;
+      };
+      await exclusionReviewAssignmentsController?.refetchAll();
+      await referenceReviewAssignmentsController?.refetchAll();
 
-      // Ensure final payload only contains unique (review_assignment_id, rubric_part_id) pairs
-      const seenPairs = new Set<string>();
-      const uniqueReviewAssignmentPartsToCreate = reviewAssignmentPartsToCreate.filter((part) => {
-        const key = `${part.review_assignment_id}:${part.rubric_part_id}`;
-        if (seenPairs.has(key)) return false;
-        seenPairs.add(key);
-        return true;
-      });
+      if (!typedResult?.success) {
+        Sentry.addBreadcrumb({
+          message: "Bulk assignment RPC returned failure",
+          category: "bulk_assign",
+          data: { result: typedResult },
+          level: "error"
+        });
 
-      if (uniqueReviewAssignmentPartsToCreate.length > 0) {
-        const { error: insertPartsError } = await supabase
-          .from("review_assignment_rubric_parts")
-          .insert(uniqueReviewAssignmentPartsToCreate);
-        // Alternatively, if a unique constraint exists, prefer upsert with onConflict("review_assignment_id,rubric_part_id")
-        if (insertPartsError) {
-          toaster.error({ title: "Error creating review assignment parts", description: insertPartsError.message });
-          return false;
-        }
+        toaster.error({
+          title: "Error creating review assignments",
+          description: typedResult?.error || "Unknown error occurred during bulk assignment"
+        });
+        return false;
       }
 
+      // Log successful operation
+      Sentry.addBreadcrumb({
+        message: "Bulk assignment completed successfully",
+        category: "bulk_assign",
+        data: {
+          assignments_created: typedResult.assignments_created,
+          assignments_updated: typedResult.assignments_updated,
+          parts_created: typedResult.parts_created,
+          submission_reviews_created: typedResult.submission_reviews_created,
+          total_processed: typedResult.total_processed
+        },
+        level: "info"
+      });
+
+      // Show detailed success message
+      const details = [];
+      if (typedResult.assignments_created > 0) details.push(`${typedResult.assignments_created} new assignments`);
+      if (typedResult.assignments_updated > 0) details.push(`${typedResult.assignments_updated} updated assignments`);
+      if (typedResult.parts_created > 0) details.push(`${typedResult.parts_created} rubric parts`);
+      if (typedResult.submission_reviews_created > 0) details.push(`${typedResult.submission_reviews_created} submission reviews`);
+
       toaster.success({
-        title: "Reviews Assigned",
-        description: `Successfully assigned ${validReviews.length} review assignments`
+        title: "Reviews Assigned Successfully",
+        description: `Created ${details.join(", ")} from ${typedResult.total_processed} draft assignments`
       });
 
       handleReviewAssignmentChange();
       clearStateData();
       return true;
     } catch (e: unknown) {
+      const errId = Sentry.captureException(e);
       const errMsg =
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
-        "An unexpected error occurred while confirming assignments";
+        `An unexpected error occurred while confirming assignments, our team has been notified with error ID ${errId}`;
+      
+      Sentry.addBreadcrumb({
+        message: "Bulk assignment failed with exception",
+        category: "bulk_assign",
+        data: { error: errMsg },
+        level: "error"
+      });
+
       toaster.error({
         title: "Error confirming assignments",
         description: errMsg
@@ -1202,57 +1134,125 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   };
 
   /**
-   * Searches for the submission review id for this review assignment. If none found, creates a new submission
-   * review to use.
-   * @param review draft assignment to search
-   * @returns submission review id for review assignment creation
+   * Clears all unfinished review assignments for the selected rubric using the clear_unfinished_review_assignments RPC.
    */
-  const submissionReviewIdForReview = useCallback(
-    async (review: DraftReviewAssignment) => {
-      // 1) Prefer in-memory match for the selected rubric
-      const localMatch = review.submission.submission_reviews?.find((sr) => sr.rubric_id === selectedRubric?.id);
-      if (localMatch?.id) {
-        return Number(localMatch.id);
+  const clearUnfinishedAssignments = async () => {
+    try {
+      if (!selectedRubric) {
+        toaster.error({ title: "Error", description: "No rubric selected" });
+        return false;
+      } else if (!course_id) {
+        toaster.error({ title: "Error", description: "Failed to find current course" });
+        return false;
       }
 
-      // 2) Try fetching an existing row
-      const { data: sr, error: fetchErr } = await supabase
-        .from("submission_reviews")
-        .select("id")
-        .eq("submission_id", review.submission.id)
-        .eq("rubric_id", Number(selectedRubric?.id))
-        .single();
-      if (!fetchErr && sr?.id) {
-        return Number(sr.id);
-      }
+      // Add Sentry breadcrumb for tracking
+      Sentry.addBreadcrumb({
+        message: "Starting clear unfinished assignments",
+        category: "clear_assignments",
+        data: {
+          course_id: Number(course_id),
+          assignment_id: Number(assignment_id),
+          rubric_id: selectedRubric.id
+        },
+        level: "info"
+      });
 
-      // 3) Fallback: create it
-      const { data: created, error: insertErr } = await supabase
-        .from("submission_reviews")
-        .insert({
-          total_score: 0,
-          total_autograde_score: 0,
-          tweak: 0,
-          class_id: Number(course_id),
-          submission_id: review.submission.id,
-          name: selectedRubric?.name ?? "Review",
-          rubric_id: Number(selectedRubric?.id)
-        })
-        .select("id")
-        .single();
-      if (insertErr || !created?.id) {
-        toaster.error({
-          title: "Error creating submission review",
-          description:
-            insertErr?.message ??
-            `Failed to create submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}`
+      // Call the clear_unfinished_review_assignments RPC
+      const { data: result, error: rpcError } = await supabase.rpc("clear_unfinished_review_assignments", {
+        p_class_id: Number(course_id),
+        p_assignment_id: Number(assignment_id),
+        p_rubric_id: selectedRubric.id
+      });
+
+      if (rpcError) {
+        const errId = Sentry.captureException(rpcError);
+        Sentry.addBreadcrumb({
+          message: "Clear assignments RPC failed",
+          category: "clear_assignments",
+          data: { error: rpcError.message, code: rpcError.code },
+          level: "error"
         });
-        return 0;
+        
+        toaster.error({
+          title: "Error clearing assignments",
+          description: rpcError.message || `Failed to clear unfinished assignments, our team has been notified with error ID ${errId}`
+        });
+        return false;
       }
-      return Number(created.id);
-    },
-    [selectedRubric, supabase, course_id]
-  );
+
+      // Type cast the result for proper access to properties
+      const typedResult = result as {
+        success: boolean;
+        error?: string;
+        assignments_deleted: number;
+        parts_deleted: number;
+        message?: string;
+      };
+
+      if (!typedResult?.success) {
+        Sentry.addBreadcrumb({
+          message: "Clear assignments RPC returned failure",
+          category: "clear_assignments",
+          data: { result: typedResult },
+          level: "error"
+        });
+
+        toaster.error({
+          title: "Error clearing assignments",
+          description: typedResult?.error || "Unknown error occurred while clearing assignments"
+        });
+        return false;
+      }
+
+      // Log successful operation
+      Sentry.addBreadcrumb({
+        message: "Clear assignments completed successfully",
+        category: "clear_assignments",
+        data: {
+          assignments_deleted: typedResult.assignments_deleted,
+          parts_deleted: typedResult.parts_deleted
+        },
+        level: "info"
+      });
+
+      // Show success message
+      if (typedResult.assignments_deleted === 0) {
+        toaster.create({
+          title: "No Assignments to Clear",
+          description: "No unfinished review assignments were found for this rubric",
+          type: "info"
+        });
+      } else {
+        toaster.success({
+          title: "Assignments Cleared",
+          description: typedResult.message || `Cleared ${typedResult.assignments_deleted} unfinished assignments`
+        });
+      }
+
+      handleReviewAssignmentChange();
+      return true;
+    } catch (e: unknown) {
+      const errMsg =
+        (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
+        "An unexpected error occurred while clearing assignments";
+      
+      Sentry.addBreadcrumb({
+        message: "Clear assignments failed with exception",
+        category: "clear_assignments",
+        data: { error: errMsg },
+        level: "error"
+      });
+
+      toaster.error({
+        title: "Error clearing assignments",
+        description: errMsg
+      });
+      return false;
+    }
+  };
+
+  // Note: submissionReviewIdForReview function removed - now handled by bulk_assign_reviews RPC
 
   useEffect(() => {
     if (gradingRubric) {
@@ -1864,16 +1864,33 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
       {/* Action Buttons */}
       <VStack align="flex-start" gap={4}>
-        <Button
-          maxWidth={"md"}
-          onClick={generateReviews}
-          variant="subtle"
-          colorPalette="green"
-          disabled={!dueDate || !selectedRubric || !role || submissionsToDo?.length === 0}
-          loading={isGeneratingReviews}
-        >
-          Prepare Review Assignments
-        </Button>
+        <VStack align="flex-start" gap={2}>
+          <HStack gap={4}>
+            <Button
+              maxWidth={"md"}
+              onClick={generateReviews}
+              variant="subtle"
+              colorPalette="green"
+              disabled={!dueDate || !selectedRubric || !role || submissionsToDo?.length === 0}
+              loading={isGeneratingReviews}
+            >
+              Prepare Review Assignments
+            </Button>
+            <Button
+              maxWidth={"md"}
+              onClick={clearUnfinishedAssignments}
+              variant="outline"
+              colorPalette="red"
+              disabled={!selectedRubric}
+            >
+              Clear Unfinished Assignments
+            </Button>
+          </HStack>
+          <Text fontSize="sm" color="text.muted" maxW="2xl">
+            Use &quot;Clear Unfinished Assignments&quot; to remove all incomplete review assignments for the selected rubric before creating new ones.
+            This is useful for starting fresh with a new assignment strategy.
+          </Text>
+        </VStack>
         {draftReviews.length > 0 && (
           <Flex
             flexDir={"column"}
@@ -1895,6 +1912,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               draftReviews={draftReviews}
               setDraftReviews={setDraftReviews}
               courseStaffWithConflicts={finalSelectedUsers() ?? []}
+              currentReviewAssignments={currentReviewAssignments}
+              selectedRubric={selectedRubric}
+              allActiveSubmissions={allActiveSubmissions}
+              groupMembersByGroupId={groupMembersByGroupId}
             />
             <Flex justify="center" w="100%">
               <Button w={"lg"} variant="solid" colorPalette="green" onClick={() => assignReviews()}>

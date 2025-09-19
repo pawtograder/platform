@@ -1003,12 +1003,14 @@ export class DatabaseSeeder {
       name: `Section ${String(i + 1).padStart(2, "0")}`
     }));
 
+    console.log(`Creating ${sectionsData.length} class sections`);
     const { data: classSections } = await this.rateLimitManager.trackAndLimit(
       "class_sections",
       () => supabase.from("class_sections").insert(sectionsData).select("id, name"),
       sectionsData.length
     );
 
+    console.log(`Created ${classSections?.length || 0} class sections`);
     // Create lab sections
     const labSectionsData = Array.from({ length: config.sectionsAndTagsConfig!.numLabSections }, (_, i) => ({
       class_id: class_id,
@@ -1019,6 +1021,7 @@ export class DatabaseSeeder {
       lab_leader_id: instructors[i % instructors.length].private_profile_id
     }));
 
+    console.log(`Creating ${labSectionsData.length} lab sections`);
     const { data: labSections } = await this.rateLimitManager.trackAndLimit(
       "lab_sections",
       () => supabase.from("lab_sections").insert(labSectionsData).select("id, name"),
@@ -1026,8 +1029,8 @@ export class DatabaseSeeder {
     );
 
     // Define tag types
-    const studentTagTypes = defineTagTypes("Student", config.sectionsAndTagsConfig!.numStudentTags);
-    const graderTagTypes = defineTagTypes("Grader", config.sectionsAndTagsConfig!.numGraderTags);
+    // const studentTagTypes = defineTagTypes("Student", config.sectionsAndTagsConfig!.numStudentTags);
+    // const graderTagTypes = defineTagTypes("Grader", config.sectionsAndTagsConfig!.numGraderTags);
 
     console.log(`✓ Created ${classSections?.length || 0} class sections and ${labSections?.length || 0} lab sections`);
 
