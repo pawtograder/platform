@@ -13,7 +13,7 @@ export default async function SubmissionsLayout({
 }) {
   const { course_id, assignment_id } = await params;
   const client = await createClient();
-  const { data: assignment } = await client.from("assignments").select("*").eq("id", Number(assignment_id)).single();
+  const { data: assignment } = await client.from("assignments").select("*").eq("id", Number(assignment_id)).eq("class_id", Number(course_id)).single();
   if (!assignment) {
     return <div>Assignment not found</div>;
   }

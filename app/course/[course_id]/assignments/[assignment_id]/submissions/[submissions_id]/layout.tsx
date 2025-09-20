@@ -755,11 +755,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const assignment = useAssignmentController();
-  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment, {
-    studentPrivateProfileId: submission.profile_id || undefined
-  });
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(
+    assignment?.assignment || submission.assignments, 
+    {
+      studentPrivateProfileId: submission.profile_id || undefined,
+      assignmentGroupId: submission.assignment_group_id || undefined
+    }
+  );
+  const safeTimeZone = time_zone || 'UTC';
   const hasExtension = hoursExtended && hoursExtended > 0;
-  const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), time_zone));
+  const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;

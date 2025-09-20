@@ -29,9 +29,9 @@ set search_path = public
 as $$
 begin
   -- Authorization: only graders/instructors for this class
---   if not public.authorizeforclassgrader(p_class_id) then
---     raise exception 'Access denied: insufficient permissions for class %', p_class_id;
---   end if;
+  if not public.authorizeforclassgrader(p_class_id) then
+    raise exception 'Access denied: insufficient permissions for class %', p_class_id;
+  end if;
   -- Recently due in last 30 days
   return query
   with recent as (
@@ -81,8 +81,9 @@ begin
     select s.assignment_id, count(*)::bigint as graded_submissions
     from submissions s
     join recent on recent.assignment_id = s.assignment_id
-    join submission_reviews sr on sr.submission_id = s.id
+    join submission_reviews sr on sr.id = s.grading_review_id
     where sr.completed_at is not null and sr.completed_by is not null
+    and s.is_active = true
       and (
         (s.profile_id is not null and exists (
           select 1 from public.user_roles ur
@@ -125,7 +126,7 @@ begin
   valid_extensions as (
     -- Count students with extensions whose extended due date > now
     select ade.assignment_id,
-           count(*)::bigint as students_with_valid_extensions
+           count(distinct coalesce('g:'||ade.assignment_group_id::text, 'p:'||ade.profile_id::text))::bigint as students_with_valid_extensions
     from assignment_due_date_exceptions ade
     join recent on recent.assignment_id = ade.assignment_id
     join assignments a2 on a2.id = ade.assignment_id

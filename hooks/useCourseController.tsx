@@ -647,7 +647,7 @@ export class CourseController {
       );
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => {},
+          unsubscribe: () => { },
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -756,10 +756,10 @@ export class CourseController {
         unsubscribe: result.unsubscribe,
         data: result.data
           ? ({
-              ...result.data,
-              numReadDescendants: 0,
-              current_children_count: 0
-            } as DiscussionThreadReadWithAllDescendants)
+            ...result.data,
+            numReadDescendants: 0,
+            current_children_count: 0
+          } as DiscussionThreadReadWithAllDescendants)
           : null
       };
     }
@@ -1207,9 +1207,9 @@ export function useAssignmentDueDate(
         (e.assignment_id === assignment.id &&
           ((!options?.studentPrivateProfileId && !e.student_id) ||
             (options?.studentPrivateProfileId && e.student_id === options.studentPrivateProfileId)) &&
-          !options?.assignmentGroupId &&
-          !e.assignment_group_id) ||
-          (options?.assignmentGroupId && e.assignment_group_id === options.assignmentGroupId)
+          (!options?.assignmentGroupId &&
+            !e.assignment_group_id) ||
+          (options?.assignmentGroupId && e.assignment_group_id === options.assignmentGroupId))
       );
     },
     [assignment.id, options?.studentPrivateProfileId, options?.assignmentGroupId]
