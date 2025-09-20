@@ -8,14 +8,14 @@ import { Badge, Box, Button, HStack, Icon, IconButton, Spinner, Table, Text, VSt
 import * as Sentry from "@sentry/nextjs";
 import { useParams } from "next/navigation";
 import {
-    ColumnDef,
-    flexRender,
-    getCoreRowModel,
-    getFilteredRowModel,
-    getPaginationRowModel,
-    getSortedRowModel,
-    RowSelectionState,
-    useReactTable
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  RowSelectionState,
+  useReactTable
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatDistanceToNow } from "date-fns";
@@ -73,36 +73,40 @@ export default function NotificationsTable() {
     if (isHelpRequestMessage(n)) return body.message_preview ?? "";
     return "";
   }, []);
-  const openHelpRequest = useCallback((n: Notification) => {
-    try {
-      const body = (n.body || {}) as { help_request_id?: number | string; help_queue_name?: string };
-      const popOutUrl = `/course/${course_id}/office-hours/request/${String(body.help_request_id ?? "")}?popout=true`;
-      const newWindow = window.open(
-        popOutUrl,
-        `help-request-chat-${String(body.help_request_id ?? "")}`,
-        "width=800,height=600,scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no,status=no"
-      );
-      if (newWindow) {
-        newWindow.focus();
-        newWindow.addEventListener("load", () => {
-          const windowTitle = `Help Request #${String(body.help_request_id ?? "")} - ${String(body.help_queue_name ?? "")}`;
-          newWindow.document.title = windowTitle;
-        });
-      } else {
-        toaster.error({ title: "Pop-out blocked", description: "Enable pop-ups to open help request." });
+  const openHelpRequest = useCallback(
+    (n: Notification) => {
+      try {
+        const body = (n.body || {}) as { help_request_id?: number | string; help_queue_name?: string };
+        const popOutUrl = `/course/${course_id}/office-hours/request/${String(body.help_request_id ?? "")}?popout=true`;
+        const newWindow = window.open(
+          popOutUrl,
+          `help-request-chat-${String(body.help_request_id ?? "")}`,
+          "width=800,height=600,scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no,status=no"
+        );
+        if (newWindow) {
+          newWindow.focus();
+          newWindow.addEventListener("load", () => {
+            const windowTitle = `Help Request #${String(body.help_request_id ?? "")} - ${String(body.help_queue_name ?? "")}`;
+            newWindow.document.title = windowTitle;
+          });
+        } else {
+          toaster.error({ title: "Pop-out blocked", description: "Enable pop-ups to open help request." });
+        }
+      } catch (e) {
+        Sentry.captureException(e);
+        toaster.error({ title: "Failed to open", description: e instanceof Error ? e.message : String(e) });
       }
-    } catch (e) {
-      Sentry.captureException(e);
-      toaster.error({ title: "Failed to open", description: e instanceof Error ? e.message : String(e) });
-    }
-  }, [course_id]);
+    },
+    [course_id]
+  );
 
   const columns = useMemo<ColumnDef<Notification>[]>(
     () => [
       {
         id: "select",
         header: ({ table }) => {
-          const allPageSelected = table.getRowModel().rows.length > 0 && table.getRowModel().rows.every((r) => r.getIsSelected());
+          const allPageSelected =
+            table.getRowModel().rows.length > 0 && table.getRowModel().rows.every((r) => r.getIsSelected());
           const someSelected = table.getRowModel().rows.some((r) => r.getIsSelected());
           return (
             <HStack alignItems="center" gap={2}>
@@ -120,7 +124,12 @@ export default function NotificationsTable() {
           );
         },
         cell: ({ row }) => (
-          <input title={`Select row ${row.id}`} type="checkbox" checked={row.getIsSelected()} onChange={row.getToggleSelectedHandler()} />
+          <input
+            title={`Select row ${row.id}`}
+            type="checkbox"
+            checked={row.getIsSelected()}
+            onChange={row.getToggleSelectedHandler()}
+          />
         ),
         enableSorting: false,
         enableColumnFilter: false,
@@ -214,16 +223,19 @@ export default function NotificationsTable() {
         accessorFn: (row) => getType(row),
         cell: ({ getValue, row }) => {
           const type = getValue<string>();
-          const body = (row.original.body && typeof row.original.body === "object" ? (row.original.body as Record<string, unknown>) : undefined) || {};
+          const body =
+            (row.original.body && typeof row.original.body === "object"
+              ? (row.original.body as Record<string, unknown>)
+              : undefined) || {};
           const action = (body.action as string | undefined) || undefined;
           const label =
             type === "help_request" && action === "assigned"
               ? "assigned"
               : type === "help_request" && action === "status_changed"
-              ? "state change"
-              : type === "discussion_thread"
-              ? "mention"
-              : "author";
+                ? "state change"
+                : type === "discussion_thread"
+                  ? "mention"
+                  : "author";
           return (
             <Badge variant="subtle" colorPalette="gray" size="sm">
               {label}
@@ -257,7 +269,13 @@ export default function NotificationsTable() {
                 Mark read
               </Button>
             )}
-            <IconButton size="xs" variant="ghost" colorPalette="red" aria-label="Dismiss" onClick={() => dismiss(row.original)}>
+            <IconButton
+              size="xs"
+              variant="ghost"
+              colorPalette="red"
+              aria-label="Dismiss"
+              onClick={() => dismiss(row.original)}
+            >
               <Icon as={FaTrash} />
             </IconButton>
           </HStack>
@@ -463,7 +481,10 @@ export default function NotificationsTable() {
                               ...Array.from(
                                 table
                                   .getRowModel()
-                                  .rows.reduce((set, row) => set.add(getAssignee(row.original) || ""), new Set<string>())
+                                  .rows.reduce(
+                                    (set, row) => set.add(getAssignee(row.original) || ""),
+                                    new Set<string>()
+                                  )
                               )
                                 .filter((v) => v)
                                 .map((v) => ({ label: v, value: v })),
@@ -559,5 +580,3 @@ export default function NotificationsTable() {
     </VStack>
   );
 }
-
-

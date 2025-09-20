@@ -163,7 +163,7 @@ export default function NotificationsBox() {
                     Notifications
                   </Text>
                   <Link href={`/course/${course_id}/notifications`} color="fg.muted" mt="1">
-                      View all
+                    View all
                   </Link>
                   {unreadCount > 0 && (
                     <Text fontSize="sm" color="fg.muted" mt="1">

@@ -6,7 +6,7 @@ export function useDiscussionThreadLikes(thread_id: number) {
   const { data } = useList<DiscussionThreadLike>({
     resource: "discussion_thread_likes",
     pagination: {
-      pageSize: 1000,
+      pageSize: 1000
     },
     queryOptions: {
       enabled: !!private_profile_id
