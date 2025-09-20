@@ -34,6 +34,7 @@ import { useEffect, useState } from "react";
 import { MdClear } from "react-icons/md";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import AssignReviewModal from "./assignReviewModal";
+import EditReviewAssignmentModal from "./EditReviewAssignmentModal";
 import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
 
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -347,20 +348,32 @@ export default function ReviewAssignmentsPage() {
         openAssignModal={openAssignModal}
         onReviewAssignmentDeleted={handleReviewAssignmentChange}
       />
-      {isAssignModalOpen && (
-        <AssignReviewModal
-          isOpen={isAssignModalOpen}
-          onClose={closeAssignModal}
-          courseId={Number(course_id)}
-          assignmentId={Number(assignment_id)}
-          onSuccess={() => {
-            handleReviewAssignmentChange();
-            closeAssignModal();
-          }}
-          initialData={assignModalData}
-          isEditing={!!assignModalData}
-        />
-      )}
+      {isAssignModalOpen &&
+        (assignModalData ? (
+          <EditReviewAssignmentModal
+            isOpen={isAssignModalOpen}
+            onCloseAction={closeAssignModal}
+            courseId={Number(course_id)}
+            onSuccessAction={() => {
+              handleReviewAssignmentChange();
+              closeAssignModal();
+            }}
+            initialData={assignModalData}
+          />
+        ) : (
+          <AssignReviewModal
+            isOpen={isAssignModalOpen}
+            onClose={closeAssignModal}
+            courseId={Number(course_id)}
+            assignmentId={Number(assignment_id)}
+            onSuccess={() => {
+              handleReviewAssignmentChange();
+              closeAssignModal();
+            }}
+            initialData={assignModalData}
+            isEditing={!!assignModalData}
+          />
+        ))}
     </Container>
   );
 }
