@@ -47,8 +47,7 @@ export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: nu
     (ag: AssignmentGroupWithMembers) => {
       return (
         ag.assignment_id === assignment_id &&
-        (ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id) ||
-          ag.assignment_groups_members.length === 0)
+        ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id)
       );
     },
     [assignment_id, private_profile_id]

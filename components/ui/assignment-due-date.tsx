@@ -222,7 +222,7 @@ export function SelfReviewDueDate({
   showTimeZone?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.assignment_id });
+  const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
   const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
     studentPrivateProfileId: private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id

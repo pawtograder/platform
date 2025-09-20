@@ -1,7 +1,7 @@
 "use client";
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
 import { useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
-import { useAssignmentDueDate } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useAssignmentGroupForUser } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -62,8 +62,10 @@ function SelfReviewNoticeInner({
   enrollment: UserRole;
   activeSubmission?: Submission;
 }) {
+  const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
   const { dueDate, time_zone } = useAssignmentDueDate(assignment, {
-    assignmentGroupId: undefined
+    studentPrivateProfileId: enrollment.private_profile_id,
+    assignmentGroupId: ourAssignmentGroup?.id
   });
   const myReviewAssignments = useMyReviewAssignments();
   const selfReviewRubric = useRubric("self-review");
