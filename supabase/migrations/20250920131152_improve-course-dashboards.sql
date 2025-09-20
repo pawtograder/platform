@@ -126,7 +126,7 @@ begin
   valid_extensions as (
     -- Count students with extensions whose extended due date > now
     select ade.assignment_id,
-           count(distinct coalesce('g:'||ade.assignment_group_id::text, 'p:'||ade.profile_id::text))::bigint as students_with_valid_extensions
+           count(distinct coalesce('g:'||ade.assignment_group_id::text, 'p:'||ade.student_id::text))::bigint as students_with_valid_extensions
     from assignment_due_date_exceptions ade
     join recent on recent.assignment_id = ade.assignment_id
     join assignments a2 on a2.id = ade.assignment_id
