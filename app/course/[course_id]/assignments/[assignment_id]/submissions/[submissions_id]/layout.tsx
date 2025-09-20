@@ -33,9 +33,9 @@ import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
+import { tz, TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
-import { formatRelative } from "date-fns";
+import { formatRelative, isAfter, isBefore } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -60,6 +60,7 @@ import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import * as Sentry from "@sentry/nextjs";
+import { formatInTimeZone } from "date-fns-tz";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -754,6 +755,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const assignment = useAssignmentController();
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment, {
+    studentPrivateProfileId: submission.profile_id || undefined
+  });
+  const hasExtension = hoursExtended && hoursExtended > 0;
+  const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), time_zone));
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -763,6 +769,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
     <Flex direction="column" minW="0px">
+      {isGraderOrInstructor && dueDate && (
+        <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
+          Student&quot;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
+          {canStillSubmit && (
+            <Text fontSize="xs" color="fg.warning">
+              The student can still make a new submission, grading checks will not transfer.
+            </Text>
+          )}
+        </Box>
+      )}
       <SubmissionReviewToolbar />
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>

@@ -129,13 +129,6 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
                 </Button>
               ))}
             {isInstructor && (
-              <CreateGitHubRepos
-                courseId={Number.parseInt(course_id as string)}
-                assignmentId={Number.parseInt(assignment_id as string)}
-                releaseDate={assignment?.data?.release_date}
-              />
-            )}
-            {isInstructor && (
               <DeleteAssignmentButton
                 assignmentId={Number.parseInt(assignment_id as string)}
                 courseId={Number.parseInt(course_id as string)}
