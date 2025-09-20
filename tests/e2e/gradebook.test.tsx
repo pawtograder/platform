@@ -508,7 +508,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const finalCell = await waitForStableLocator(page, getFinalCell);
     await finalCell.click();
     await page.locator('input[name="score_override"]').fill("92");
-    await page.getByRole("button", { name: /^Save Override$/ }).click();
+    await page.getByRole("button", { name: /^Override$/ }).click();
 
     // Value should update to the override
     await expect(async () => {

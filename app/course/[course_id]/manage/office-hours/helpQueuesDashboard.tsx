@@ -45,7 +45,7 @@ export default function HelpQueuesDashboard() {
 
   // Filter unresolved requests (activeHelpRequests gives us open/in_progress, but we also need to check for resolved_by)
   const unresolvedRequests = useMemo(() => {
-    return allHelpRequests.filter((request) => request.resolved_by === null);
+    return allHelpRequests.filter((request) => request.status !== "resolved" && request.status !== "closed");
   }, [allHelpRequests]);
 
   // Group all active assignments by queue
