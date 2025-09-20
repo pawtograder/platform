@@ -1250,3 +1250,29 @@ export async function getRepo(org: string, repo: string, scope?: Sentry.Scope) {
   });
   return repoData.data;
 }
+export async function isUserInOrg(github_username: string, org: string) {
+  const octokit = await getOctoKit(org);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+
+  try {
+    // Check if the user is a member of the organization
+    await octokit.request("GET /orgs/{org}/members/{username}", {
+      org: org,
+      username: github_username
+    });
+    return true; // User is a member
+  } catch (error: any) {
+    // If the request fails with 404, the user is not a member or membership is private
+    // If it fails with 302, the membership is private (only visible to org members)
+    if (error.status === 404) {
+      return false; // User is not a member
+    } else if (error.status === 302) {
+      // Membership is private, but user exists in org
+      return true;
+    }
+    // For other errors, re-throw
+    throw error;
+  }
+}

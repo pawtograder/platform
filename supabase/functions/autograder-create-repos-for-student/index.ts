@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import { createRepo, isUserInOrg, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -20,7 +20,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   let githubUsername: string | null;
   let classId: number | undefined;
   let assignmentId: number | undefined;
-  let syncAllPermissions = true;
+  const syncAllPermissions = true;
 
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
@@ -127,14 +127,40 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     classesQuery = classesQuery.eq("class_id", classId);
   }
 
-  const { data: classes, error: classesError } = await classesQuery;
+  const { data: classData, error: classesError } = await classesQuery;
   if (classesError) {
     console.error(classesError);
     throw new UserVisibleError("Error fetching classes");
   }
-  if (!classes) {
+  if (!classData) {
     throw new UserVisibleError("User is not a student", 400);
   }
+  const allClasses = await Promise.all(
+    classData!.map(async (c) => {
+      const isInOrg = await isUserInOrg(githubUsername!, c.classes.github_org!);
+      return { ...c, isInOrg };
+    })
+  );
+  await Promise.all(
+    allClasses
+      .filter((c) => !c.isInOrg)
+      .map(async (c) => {
+        console.log(`User ${userId} is not in org ${c.classes.github_org}, updating user_roles`);
+        Sentry.addBreadcrumb({
+          category: "autograder-create-repos-for-student",
+          message: `User ${userId} is not in org ${c.classes.github_org}, updating user_roles`,
+          level: "info"
+        });
+        await reinviteToOrgTeam(c.classes.github_org!, c.classes.slug! + "-students", githubUsername!);
+        await adminSupabase
+          .from("user_roles")
+          .update({ github_org_confirmed: false, invitation_date: new Date().toISOString() })
+          .eq("class_id", c.class_id)
+          .eq("user_id", userId);
+      })
+  );
+
+  const classes = allClasses.filter((c) => c.isInOrg);
 
   const existingIndividualRepos = classes.flatMap((c) => c!.profiles!.repositories);
   const existingGroupRepos = classes.flatMap((c) =>
