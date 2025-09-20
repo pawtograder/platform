@@ -136,8 +136,52 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("User is not a student", 400);
   }
   const allClasses = await Promise.all(
-    classData!.map(async (c) => {
-      const isInOrg = await isUserInOrg(githubUsername!, c.classes.github_org!);
+    classData.map(async (c) => {
+      // Guard against missing github_org
+      if (!c.classes.github_org) {
+        console.warn(`Class ${c.class_id} has no github_org configured, setting isInOrg to false`);
+        Sentry.addBreadcrumb({
+          category: "autograder-create-repos-for-student",
+          message: `Class ${c.class_id} has no github_org configured`,
+          level: "warning",
+          data: { class_id: c.class_id }
+        });
+        return { ...c, isInOrg: false };
+      }
+
+      // Guard against missing githubUsername
+      if (!githubUsername) {
+        console.warn(`User ${userId} has no github_username, setting isInOrg to false`);
+        Sentry.addBreadcrumb({
+          category: "autograder-create-repos-for-student",
+          message: `User ${userId} has no github_username`,
+          level: "warning",
+          data: { user_id: userId }
+        });
+        return { ...c, isInOrg: false };
+      }
+
+      // Check if user is in org with error handling
+      let isInOrg = false;
+      try {
+        isInOrg = await isUserInOrg(githubUsername, c.classes.github_org);
+      } catch (error) {
+        console.error(`Error checking if user ${githubUsername} is in org ${c.classes.github_org}:`, error);
+        Sentry.captureException(error, {
+          tags: {
+            operation: "isUserInOrg",
+            org: c.classes.github_org,
+            github_username: githubUsername
+          },
+          extra: {
+            class_id: c.class_id,
+            user_id: userId
+          }
+        });
+        // Fail closed - assume user is not in org
+        isInOrg = false;
+      }
+
       return { ...c, isInOrg };
     })
   );
@@ -151,12 +195,44 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           message: `User ${userId} is not in org ${c.classes.github_org}, updating user_roles`,
           level: "info"
         });
-        await reinviteToOrgTeam(c.classes.github_org!, c.classes.slug! + "-students", githubUsername!);
-        await adminSupabase
-          .from("user_roles")
-          .update({ github_org_confirmed: false, invitation_date: new Date().toISOString() })
-          .eq("class_id", c.class_id)
-          .eq("user_id", userId);
+
+        try {
+          await reinviteToOrgTeam(c.classes.github_org!, c.classes.slug! + "-students", githubUsername!);
+        } catch (error) {
+          // Check if this is a non-fatal error (HTTP 422 - pending invite)
+          const isNonFatalError = error && typeof error === "object" && "status" in error && error.status === 422;
+
+          if (isNonFatalError) {
+            console.log(`Non-fatal error inviting user ${githubUsername} to org ${c.classes.github_org}: ${error}`);
+            Sentry.addBreadcrumb({
+              category: "autograder-create-repos-for-student",
+              message: `Non-fatal error inviting user ${githubUsername} to org ${c.classes.github_org}`,
+              level: "warning",
+              data: { error: error.message || String(error) }
+            });
+          } else {
+            // Log fatal errors to Sentry
+            console.error(`Fatal error inviting user ${githubUsername} to org ${c.classes.github_org}:`, error);
+            Sentry.captureException(error, {
+              tags: {
+                operation: "reinvite_to_org_team",
+                org: c.classes.github_org,
+                github_username: githubUsername
+              },
+              extra: {
+                class_id: c.class_id,
+                team_slug: c.classes.slug! + "-students"
+              }
+            });
+          }
+        } finally {
+          // Always update user_roles to persist invitation_date regardless of reinvite outcome
+          await adminSupabase
+            .from("user_roles")
+            .update({ github_org_confirmed: false, invitation_date: new Date().toISOString() })
+            .eq("class_id", c.class_id)
+            .eq("user_id", userId);
+        }
       })
   );
 

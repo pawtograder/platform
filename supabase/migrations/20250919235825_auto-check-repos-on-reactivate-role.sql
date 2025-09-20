@@ -34,17 +34,6 @@ begin
     if (OLD.role != 'student' and NEW.role = 'student') or
        (OLD.role = 'student' and NEW.role != 'student') then
       perform public.sync_student_github_team(NEW.class_id, NEW.user_id);
-      -- Also create repos when role changes to student and github_org_confirmed is true
-      if NEW.role = 'student' and NEW.github_org_confirmed = true then
-        perform public.create_repos_for_student(NEW.user_id, NEW.class_id);
-      end if;
-    end if;
-
-    -- If github_org_confirmed changed to true for a student
-    if NEW.role = 'student' and 
-       (OLD.github_org_confirmed is distinct from NEW.github_org_confirmed) and 
-       NEW.github_org_confirmed = true then
-      perform public.create_repos_for_student(NEW.user_id, NEW.class_id);
     end if;
 
     -- NEW: If student role is reactivated (disabled changes from true to false)
@@ -52,11 +41,30 @@ begin
        OLD.disabled = true and 
        NEW.disabled = false then
       perform public.sync_student_github_team(NEW.class_id, NEW.user_id);
-      -- Create repos for the reactivated student if github_org_confirmed is true
-      if NEW.github_org_confirmed = true then
+    end if;
+
+    -- Consolidated repo creation logic: create repos if any of these conditions are true:
+    -- 1. Role changed to student AND github_org_confirmed is true
+    -- 2. Role is student AND github_org_confirmed changed to true
+    -- 3. Student role was reactivated AND github_org_confirmed is true
+    declare
+      should_create_repos boolean := false;
+    begin
+      should_create_repos := (
+        NEW.role = 'student' and NEW.github_org_confirmed = true and (
+          -- Condition 1: Role changed to student
+          (OLD.role != 'student' and NEW.role = 'student') or
+          -- Condition 2: github_org_confirmed changed to true for existing student
+          (OLD.github_org_confirmed is distinct from NEW.github_org_confirmed) or
+          -- Condition 3: Student role was reactivated
+          (OLD.disabled = true and NEW.disabled = false)
+        )
+      );
+
+      if should_create_repos then
         perform public.create_repos_for_student(NEW.user_id, NEW.class_id);
       end if;
-    end if;
+    end;
 
     return NEW;
   end if;
