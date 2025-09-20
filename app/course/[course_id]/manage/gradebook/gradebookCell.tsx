@@ -195,7 +195,7 @@ export function OverrideScoreForm({
                 if (onSuccess) onSuccess();
               }}
             >
-              Reset 
+              Reset
             </Button>
           )}
         </HStack>
