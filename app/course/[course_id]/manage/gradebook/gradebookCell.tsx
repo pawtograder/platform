@@ -178,14 +178,14 @@ export function OverrideScoreForm({
             type="submit"
             loading={isSubmitting}
             colorPalette={showWarning ? "orange" : "green"}
-            size="sm"
+            size="xs"
             alignSelf="end"
           >
-            {showWarning ? "Save Override" : "Update"}
+            {showWarning ? "Override" : "Update"}
           </Button>
           {showWarning && (
             <Button
-              size="sm"
+              size="xs"
               colorPalette="orange"
               variant="surface"
               onClick={async () => {
@@ -195,7 +195,7 @@ export function OverrideScoreForm({
                 if (onSuccess) onSuccess();
               }}
             >
-              Clear Override
+              Reset 
             </Button>
           )}
         </HStack>
