@@ -38,6 +38,25 @@ import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
+export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: number }) {
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const { private_profile_id } = useClassProfiles();
+
+  type AssignmentGroupWithMembers = (typeof assignmentGroupsWithMembers.rows)[number];
+  const assignmentGroupFilter = useCallback(
+    (ag: AssignmentGroupWithMembers) => {
+      return (
+        ag.assignment_id === assignment_id &&
+        (ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id) ||
+          ag.assignment_groups_members.length === 0)
+      );
+    },
+    [assignment_id, private_profile_id]
+  );
+  const assignmentGroup = assignmentGroupsWithMembers.rows.find(assignmentGroupFilter);
+  return assignmentGroup;
+}
+
 export function useAllProfilesForClass() {
   const { profiles: controller } = useCourseController();
   const [profiles, setProfiles] = useState<UserProfile[]>([]);

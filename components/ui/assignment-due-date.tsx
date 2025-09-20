@@ -1,11 +1,16 @@
 "use client";
 
+import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
-import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
+import {
+  useAssignmentDueDate,
+  useAssignmentGroupForUser,
+  useCourseController,
+  useLateTokens
+} from "@/hooks/useCourseController";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
@@ -13,48 +18,22 @@ import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
-import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
-  const dueDate = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
   const lateTokens = useLateTokens();
   const [open, setOpen] = useState(false);
   const course = role.classes;
   const [isLoading, setIsLoading] = useState(false);
-  const { data: assignmentGroup } = useList<AssignmentGroup>({
-    resource: "assignment_groups",
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }]
+  const { assignmentDueDateExceptions } = useCourseController();
+  const assignment_group_id = useAssignmentGroupForUser({ assignment_id: assignment.id })?.id;
+  const dueDate = useAssignmentDueDate(assignment, {
+    studentPrivateProfileId: private_profile_id,
+    assignmentGroupId: assignment_group_id
   });
-  const assignment_group_id = assignmentGroup?.data?.[0]?.id;
-  const { mutateAsync: createAssignmentDueDateException } = useCreate<AssignmentDueDateException>({
-    resource: "assignment_due_date_exceptions"
-  });
-  const groupOrProfileFilter: CrudFilter = assignment_group_id
-    ? {
-        field: "assignment_group_id",
-        operator: "eq",
-        value: assignment_group_id
-      }
-    : {
-        field: "student_id",
-        operator: "eq",
-        value: private_profile_id
-      };
+  const hoursExtended = dueDate.hoursExtended;
 
-  const { data: exceptionsForProfile } = useList<AssignmentDueDateException>({
-    resource: "assignment_due_date_exceptions",
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: assignment.id
-      },
-      groupOrProfileFilter
-    ]
-  });
-
-  if (!lateTokens || !dueDate || !exceptionsForProfile) {
+  if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
   const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + (b.tokens_consumed > 0 ? b.tokens_consumed : 0), 0);
@@ -65,11 +44,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (course.late_tokens_per_student === 0) {
     return <Text>(No late submissions allowed)</Text>;
   }
-  if (
-    exceptionsForProfile.data.filter((exception) => {
-      return exception.hours * 60 + exception.minutes < 0;
-    }).length > 0
-  ) {
+  if (hoursExtended && hoursExtended < 0) {
     return (
       <Text fontSize="sm" color="fg.muted">
         (You may not extend the due date for this assignment as you finalized early)
@@ -116,8 +91,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Extend Due Date For {assignment.title}</Dialog.Title>
             <Dialog.Description>
+              <Dialog.Title>Extend Due Date For {assignment.title}</Dialog.Title>
               The course late policy grants each student {course.late_tokens_per_student} late tokens. Each token
               extends the due date by 24 hours, but are not automatically applied - to use them, you must use this form
               to apply them BEFORE the assignment is due. You can apply up to {assignment.max_late_tokens} tokens to
@@ -160,16 +135,14 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
               onClick={async () => {
                 try {
                   setIsLoading(true);
-                  await createAssignmentDueDateException({
-                    values: {
-                      assignment_id: assignment.id,
-                      assignment_group_id,
-                      class_id: course.id,
-                      student_id: assignment_group_id ? null : private_profile_id,
-                      hours: 24,
-                      tokens_consumed: 1,
-                      creator_id: private_profile_id
-                    }
+                  await assignmentDueDateExceptions.create({
+                    assignment_id: assignment.id,
+                    assignment_group_id,
+                    class_id: course.id,
+                    student_id: assignment_group_id ? null : private_profile_id,
+                    hours: 24,
+                    tokens_consumed: 1,
+                    creator_id: private_profile_id
                   });
                   setOpen(false);
                   toaster.create({
@@ -210,8 +183,10 @@ export function AssignmentDueDate({
   showDue?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
+  const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
   const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, {
-    studentPrivateProfileId: private_profile_id
+    studentPrivateProfileId: private_profile_id,
+    assignmentGroupId: ourAssignmentGroup?.id
   });
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
@@ -247,8 +222,10 @@ export function SelfReviewDueDate({
   showTimeZone?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
+  const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.assignment_id });
   const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
-    studentPrivateProfileId: private_profile_id
+    studentPrivateProfileId: private_profile_id,
+    assignmentGroupId: ourAssignmentGroup?.id
   });
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;

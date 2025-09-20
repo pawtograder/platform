@@ -152,8 +152,7 @@ begin
   left join regrades rg on rg.assignment_id = r.assignment_id
   left join valid_extensions ext on ext.assignment_id = r.assignment_id
   left join review_counts rc on rc.assignment_id = r.assignment_id
-
-  ;
+  order by r.due_date desc, r.assignment_id desc;
 
   -- Upcoming in the future (basic metrics)
   return query
@@ -223,7 +222,7 @@ begin
   from upcoming u
   left join submitters2 sub2 on sub2.assignment_id = u.assignment_id
   left join review_counts2 rc2 on rc2.assignment_id = u.assignment_id
-  ;
+  order by u.due_date asc, u.assignment_id asc
 
   return;
 end;
@@ -232,6 +231,6 @@ $$;
 comment on function public.get_instructor_dashboard_metrics(bigint, timestamptz)
 is 'Returns instructor dashboard assignment metrics split into sections: recently_due and upcoming. Metrics include total submitters (active student submissions by student or group), graded submissions, open/closed regrade requests, students with valid extensions, review assignment counts (total/completed/incomplete), and rubric part coverage (total/graded/not graded) for the grading rubric.';
 
-grant execute on function public.get_instructor_dashboard_metrics(bigint, timestamptz) to anon, authenticated; -- relies on RLS of underlying tables
+grant execute on function public.get_instructor_dashboard_metrics(bigint, timestamptz) to authenticated; -- relies on RLS of underlying tables
 
 

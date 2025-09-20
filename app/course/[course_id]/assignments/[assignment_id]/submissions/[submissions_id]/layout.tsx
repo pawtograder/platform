@@ -306,7 +306,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
   const { dueDate } = useAssignmentDueDate(submission.assignments, {
-    studentPrivateProfileId: submission.profile_id || undefined
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
   });
   const isStaff = useIsGraderOrInstructor();
   const disableActivationButton = Boolean(

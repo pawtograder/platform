@@ -62,7 +62,9 @@ function SelfReviewNoticeInner({
   enrollment: UserRole;
   activeSubmission?: Submission;
 }) {
-  const { dueDate, time_zone } = useAssignmentDueDate(assignment);
+  const { dueDate, time_zone } = useAssignmentDueDate(assignment, {
+    assignmentGroupId: undefined
+  });
   const myReviewAssignments = useMyReviewAssignments();
   const selfReviewRubric = useRubric("self-review");
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
