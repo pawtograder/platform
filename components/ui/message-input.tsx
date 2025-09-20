@@ -1,27 +1,30 @@
 "use client";
+import Markdown from "@/components/ui/markdown";
+import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useMentions } from "@/hooks/useMentions";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getLanguageFromFile, isTextFile } from "@/lib/utils";
+import { getCurrentCursorPosition } from "@/utils/cursorPosition";
+import { createClient } from "@/utils/supabase/client";
+import { Box, Button, Field, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
 import data from "@emoji-mart/data";
-import { useCallback, useRef, useState } from "react";
+import Picker from "@emoji-mart/react";
 import { IGif } from "@giphy/js-types";
 import MDEditor from "@uiw/react-md-editor";
-import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-import { Box, Button, Field, HStack, Textarea, VStack, Text } from "@chakra-ui/react";
-import Picker from "@emoji-mart/react";
+import { useParams } from "next/navigation";
+import { useCallback, useRef, useState } from "react";
 import { FaPaperclip, FaSmile, FaUserSecret } from "react-icons/fa";
 import { TbMathFunction } from "react-icons/tb";
 import { Checkbox } from "./checkbox";
 import GiphyPicker from "./giphy-picker";
-import Markdown from "@/components/ui/markdown";
-import { createClient } from "@/utils/supabase/client";
-import { useParams } from "next/navigation";
-import { Tooltip } from "./tooltip";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useUserProfile } from "@/hooks/useUserProfiles";
+import { MentionDropdown } from "./mention-dropdown";
 import { toaster } from "./toaster";
-import { isTextFile, getLanguageFromFile } from "@/lib/utils";
+import { Tooltip } from "./tooltip";
 
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   defaultSingleLine?: boolean;
-  sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
+  sendMessage?: (message: string, profile_id: string, close?: boolean) => Promise<void>;
   enableFilePicker?: boolean;
   enableGiphyPicker?: boolean;
   enableEmojiPicker?: boolean;
@@ -63,6 +66,7 @@ export default function MessageInput(props: MessageInputProps) {
     textAreaRef,
     onClose,
     closeButtonText,
+    onChange: editorOnChange,
     value: initialValue,
     ariaLabel,
     uploadFolder = "discussion",
@@ -79,9 +83,11 @@ export default function MessageInput(props: MessageInputProps) {
   const [anonymousMode, setAnonymousMode] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [cursorPosition, setCursorPosition] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mdEditorRef = useRef<{ codemirror?: { focus(): void } }>(null);
   const internalTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Callback ref to handle both internal and external refs
   const setTextAreaRef = useCallback(
@@ -97,20 +103,104 @@ export default function MessageInput(props: MessageInputProps) {
   const onChange = useCallback(
     (value: string) => {
       setValue(value);
-      props.onChange?.(value);
+      editorOnChange?.(value);
     },
-    [props]
+    [editorOnChange]
   );
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const public_profile = useUserProfile(public_profile_id);
   const private_profile = useUserProfile(private_profile_id);
   const profile_id = anonymousMode ? public_profile_id! : private_profile_id!;
 
+  // Mention functionality - declare early so callbacks can use it
+  const { mentionState, selectNext, selectPrevious, selectThread, dismissMentions } = useMentions(
+    value || "",
+    cursorPosition
+  );
+
   const toggleEmojiPicker = () => setShowEmojiPicker(!showEmojiPicker);
   const toggleAnonymousMode = () => setAnonymousMode(!anonymousMode);
 
+  const updateCursorPosition = useCallback((element: HTMLTextAreaElement) => {
+    const position = getCurrentCursorPosition(element);
+    setCursorPosition(position);
+  }, []);
+
+  const handleMentionSelect = useCallback(
+    (index?: number) => {
+      const result = selectThread(index);
+
+      if (result) {
+        const { replacement } = result;
+        setValue((oldValue) => {
+          if (!oldValue) return "";
+          const replacementText = `[${replacement.text}](${replacement.link}) `;
+          const newValue = oldValue.slice(0, replacement.start) + replacementText + oldValue.slice(replacement.end);
+          editorOnChange?.(newValue);
+
+          // Set cursor position after the replacement
+          const newCursorPos = replacement.start + replacementText.length;
+
+          if (singleLine && internalTextAreaRef.current) {
+            // For textarea mode
+            internalTextAreaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+            internalTextAreaRef.current.focus();
+            setCursorPosition(newCursorPos);
+          } else if (!singleLine) {
+            // For MDEditor mode - find the textarea inside the editor
+            const editorTextarea = containerRef.current?.querySelector("textarea");
+            if (editorTextarea) {
+              editorTextarea.setSelectionRange(newCursorPos, newCursorPos);
+              editorTextarea.focus();
+              setCursorPosition(newCursorPos);
+            } else {
+              if (mdEditorRef.current?.codemirror) {
+                // Fallback: just focus the editor
+                mdEditorRef.current.codemirror.focus();
+              }
+              setCursorPosition(newCursorPos);
+            }
+          }
+          return newValue;
+        });
+      }
+      dismissMentions();
+    },
+    [selectThread, dismissMentions, singleLine, props]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (mentionState.isActive) {
+        switch (e.key) {
+          case "ArrowDown":
+            e.preventDefault();
+            selectNext();
+            break;
+          case "ArrowUp":
+            e.preventDefault();
+            selectPrevious();
+            break;
+          case "Enter":
+          case "Tab":
+            e.preventDefault();
+            handleMentionSelect();
+            break;
+          case "Escape":
+            e.preventDefault();
+            dismissMentions();
+            break;
+        }
+      }
+    },
+    [mentionState.isActive, selectNext, selectPrevious, handleMentionSelect, dismissMentions]
+  );
+
   const fileUpload = useCallback(
     async (file: File) => {
+      if (!sendMessage) {
+        return null;
+      }
       // Check if this is a text/code file
       if (isTextFile(file)) {
         try {
@@ -196,7 +286,7 @@ export default function MessageInput(props: MessageInputProps) {
   );
   if (singleLine) {
     return (
-      <VStack align="stretch" spaceY="0" p="0" gap="2" w="100%">
+      <VStack align="stretch" spaceY="0" p="0" gap="2" w="100%" ref={containerRef} position="relative">
         {showMarkdownPreview && (
           <Box width="100%" p="2" bg="bg.muted" border={"1px solid"} borderColor="border.subtle" rounded="md" m="0">
             <Markdown>{value}</Markdown>
@@ -236,11 +326,24 @@ export default function MessageInput(props: MessageInputProps) {
           }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
+          onSelect={(e) => updateCursorPosition(e.target as HTMLTextAreaElement)}
+          onClick={(e) => updateCursorPosition(e.target as HTMLTextAreaElement)}
           variant="subtle"
           autoresize
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            onChange(e.target.value);
+            updateCursorPosition(e.target as HTMLTextAreaElement);
+          }}
           onKeyDown={(e) => {
+            handleKeyDown(e);
+            if (mentionState.isActive) {
+              // Mention handling is done in handleKeyDown
+              return;
+            }
+            if (!sendMessage) {
+              return;
+            }
             if (e.key === "Enter" && !(e.shiftKey || e.metaKey || !enterToSend)) {
               e.preventDefault();
               if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
@@ -270,6 +373,13 @@ export default function MessageInput(props: MessageInputProps) {
                 });
             }
           }}
+        />
+        <MentionDropdown
+          threads={mentionState.filteredThreads}
+          selectedIndex={mentionState.selectedIndex}
+          onSelect={handleMentionSelect}
+          position={{ top: 0, left: 0 }}
+          visible={mentionState.isActive}
         />
         {showEmojiPicker && (
           <Picker
@@ -358,6 +468,9 @@ export default function MessageInput(props: MessageInputProps) {
                     <GiphyPicker
                       onGifSelect={(gif: IGif) => {
                         setShowGiphyPicker(false);
+                        if (!sendMessage) {
+                          return;
+                        }
                         sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
                       }}
                     />
@@ -391,58 +504,102 @@ export default function MessageInput(props: MessageInputProps) {
               {closeButtonText ?? "Close"}
             </Button>
           )}
-          <Button
-            loading={isSending}
-            aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
-            onClick={async () => {
-              if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
-                toaster.create({
-                  title: "Empty message",
-                  description: "You must add a message to continue",
-                  type: "error"
-                });
-                return;
-              }
-              try {
-                setIsSending(true);
-                await sendMessage(value!, profile_id, true);
-                setValue("");
-                // Return focus to the textarea after sending (with small delay to ensure DOM update)
-                setTimeout(() => internalTextAreaRef?.current?.focus(), 0);
-              } catch (error) {
-                toaster.create({
-                  title: "Error sending message",
-                  description: error instanceof Error ? error.message : "Unknown error",
-                  type: "error"
-                });
-              } finally {
-                setIsSending(false);
-              }
-            }}
-            variant="solid"
-            colorPalette="green"
-            size="xs"
-            m={2}
-          >
-            {props.sendButtonText ? props.sendButtonText : "Send"}
-          </Button>
+          {sendMessage && (
+            <Button
+              loading={isSending}
+              aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
+              onClick={async () => {
+                if (!sendMessage) {
+                  return;
+                }
+                if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
+                  toaster.create({
+                    title: "Empty message",
+                    description: "You must add a message to continue",
+                    type: "error"
+                  });
+                  return;
+                }
+                try {
+                  setIsSending(true);
+                  await sendMessage(value!, profile_id, true);
+                  setValue("");
+                  // Return focus to the textarea after sending (with small delay to ensure DOM update)
+                  setTimeout(() => internalTextAreaRef?.current?.focus(), 0);
+                } catch (error) {
+                  toaster.create({
+                    title: "Error sending message",
+                    description: error instanceof Error ? error.message : "Unknown error",
+                    type: "error"
+                  });
+                } finally {
+                  setIsSending(false);
+                }
+              }}
+              variant="solid"
+              colorPalette="green"
+              size="xs"
+              m={2}
+            >
+              {props.sendButtonText ? props.sendButtonText : "Send"}
+            </Button>
+          )}
         </HStack>
       </VStack>
     );
   }
   return (
-    <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
+    <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%" ref={containerRef} position="relative">
       <MDEditor
         ref={mdEditorRef}
         value={value}
         textareaProps={{
-          disabled: isSending
+          disabled: isSending,
+          onKeyDown: handleKeyDown,
+          onInput: (e) => {
+            // Update cursor position on every keystroke
+            const textarea = e.target as HTMLTextAreaElement;
+            const position = getCurrentCursorPosition(textarea);
+            setCursorPosition(position);
+          },
+          onSelect: (e) => {
+            const textarea = e.target as HTMLTextAreaElement;
+            const position = getCurrentCursorPosition(textarea);
+            setCursorPosition(position);
+          },
+          onClick: (e) => {
+            const textarea = e.target as HTMLTextAreaElement;
+            const position = getCurrentCursorPosition(textarea);
+            setCursorPosition(position);
+          },
+          onKeyUp: (e) => {
+            // Also update on key up to catch cursor movements
+            const textarea = e.target as HTMLTextAreaElement;
+            const position = getCurrentCursorPosition(textarea);
+            setCursorPosition(position);
+          }
         }}
         onChange={(value) => {
+          console.log("onChange", value);
           setValue(value);
-          props.onChange?.(value);
+          editorOnChange?.(value);
+          // Update cursor position when text changes
+          setTimeout(() => {
+            const editorTextarea = containerRef.current?.querySelector("textarea");
+            if (editorTextarea) {
+              const position = getCurrentCursorPosition(editorTextarea);
+              setCursorPosition(position);
+            }
+          }, 0);
         }}
         {...editorProps}
+      />
+      <MentionDropdown
+        threads={mentionState.filteredThreads}
+        selectedIndex={mentionState.selectedIndex}
+        onSelect={handleMentionSelect}
+        position={{ top: 0, left: 0 }}
+        visible={mentionState.isActive}
       />
       <HStack justify="flex-end">
         <HStack spaceX="0" gap="0">
@@ -501,7 +658,7 @@ export default function MessageInput(props: MessageInputProps) {
               onChange={attachFile}
             />
           )}
-          {enableGiphyPicker && (
+          {enableGiphyPicker && sendMessage && (
             <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
               <PopoverTrigger asChild>
                 <Button
@@ -521,6 +678,9 @@ export default function MessageInput(props: MessageInputProps) {
                   <GiphyPicker
                     onGifSelect={(gif: IGif) => {
                       setShowGiphyPicker(false);
+                      if (!sendMessage) {
+                        return;
+                      }
                       sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
                     }}
                   />
@@ -528,7 +688,7 @@ export default function MessageInput(props: MessageInputProps) {
               </PopoverContent>
             </PopoverRoot>
           )}
-          {enableEmojiPicker && (
+          {enableEmojiPicker && sendMessage && (
             <Tooltip content="Toggle emoji picker">
               <Button
                 aria-label="Toggle emoji picker"
@@ -548,41 +708,43 @@ export default function MessageInput(props: MessageInputProps) {
             {closeButtonText ?? "Close"}
           </Button>
         )}
-        <Button
-          loading={isSending}
-          aria-label="Send message"
-          onClick={async () => {
-            if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
-              toaster.create({
-                title: "Empty message",
-                description: "You must add a message to continue",
-                type: "error"
-              });
-              return;
-            }
-            try {
-              setIsSending(true);
-              await sendMessage(value!, profile_id, true);
-              setValue("");
-              // Return focus to the MDEditor after sending
-              mdEditorRef?.current?.codemirror?.focus();
-            } catch (error) {
-              toaster.create({
-                title: "Error sending message",
-                description: error instanceof Error ? error.message : "Unknown error",
-                type: "error"
-              });
-            } finally {
-              setIsSending(false);
-            }
-          }}
-          variant="solid"
-          colorPalette="green"
-          size="xs"
-          ml={2}
-        >
-          {props.sendButtonText ? props.sendButtonText : "Send"}
-        </Button>
+        {sendMessage && (
+          <Button
+            loading={isSending}
+            aria-label="Send message"
+            onClick={async () => {
+              if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
+                toaster.create({
+                  title: "Empty message",
+                  description: "You must add a message to continue",
+                  type: "error"
+                });
+                return;
+              }
+              try {
+                setIsSending(true);
+                await sendMessage(value!, profile_id, true);
+                setValue("");
+                // Return focus to the MDEditor after sending
+                mdEditorRef?.current?.codemirror?.focus();
+              } catch (error) {
+                toaster.create({
+                  title: "Error sending message",
+                  description: error instanceof Error ? error.message : "Unknown error",
+                  type: "error"
+                });
+              } finally {
+                setIsSending(false);
+              }
+            }}
+            variant="solid"
+            colorPalette="green"
+            size="xs"
+            ml={2}
+          >
+            {props.sendButtonText ? props.sendButtonText : "Send"}
+          </Button>
+        )}
       </HStack>
     </VStack>
   );

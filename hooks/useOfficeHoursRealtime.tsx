@@ -64,7 +64,6 @@ export class OfficeHoursController {
     new Map();
 
   // TableControllers for all tables
-  readonly helpRequestReadReceipts: TableController<"help_request_message_read_receipts">;
   readonly helpRequests: TableController<"help_requests">;
   readonly helpQueues: TableController<"help_queues">;
   readonly helpRequestStudents: TableController<"help_request_students">;
@@ -84,14 +83,6 @@ export class OfficeHoursController {
   ) {
     this._client = client;
     this._officeHoursRealTimeController = officeHoursRealTimeController;
-
-    //TODO: Should be just for the current user, right?
-    this.helpRequestReadReceipts = new TableController({
-      client,
-      table: "help_request_message_read_receipts",
-      query: client.from("help_request_message_read_receipts").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
-    });
 
     this.helpRequests = new TableController({
       client,
@@ -284,7 +275,11 @@ export class OfficeHoursController {
         .select("*")
         .eq("class_id", this.classId)
         .eq("help_request_id", helpRequestId),
-      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined
+      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined,
+      realtimeFilter: {
+        class_id: this.classId,
+        help_request_id: helpRequestId
+      }
     });
 
     this._helpRequestMessageControllers.set(helpRequestId, controller);
@@ -345,7 +340,6 @@ export class OfficeHoursController {
     }
 
     // Close all TableControllers
-    this.helpRequestReadReceipts.close();
     this.helpRequests.close();
     this.helpQueues.close();
     this.helpRequestStudents.close();

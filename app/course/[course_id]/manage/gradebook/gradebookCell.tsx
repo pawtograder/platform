@@ -163,31 +163,29 @@ export function OverrideScoreForm({
           </Box>
         )}
         <HStack justify="space-between">
-          {!showWarning && (
-            <HStack gap={4}>
-              <Checkbox {...register("is_droppable")} checked={watchedValues.is_droppable ?? false}>
-                Droppable
-              </Checkbox>
-              <Checkbox {...register("is_excused")} checked={watchedValues.is_excused ?? false}>
-                Excused
-              </Checkbox>
-              <Checkbox {...register("is_missing")} checked={watchedValues.is_missing ?? false}>
-                Missing
-              </Checkbox>
-            </HStack>
-          )}
+          <HStack gap={4}>
+            <Checkbox {...register("is_droppable")} checked={watchedValues.is_droppable ?? false}>
+              Droppable
+            </Checkbox>
+            <Checkbox {...register("is_excused")} checked={watchedValues.is_excused ?? false}>
+              Excused
+            </Checkbox>
+            <Checkbox {...register("is_missing")} checked={watchedValues.is_missing ?? false}>
+              Missing
+            </Checkbox>
+          </HStack>
           <Button
             type="submit"
             loading={isSubmitting}
             colorPalette={showWarning ? "orange" : "green"}
-            size="sm"
+            size="xs"
             alignSelf="end"
           >
-            {showWarning ? "Save Override" : "Update"}
+            {showWarning ? "Override" : "Update"}
           </Button>
           {showWarning && (
             <Button
-              size="sm"
+              size="xs"
               colorPalette="orange"
               variant="surface"
               onClick={async () => {
@@ -197,7 +195,7 @@ export function OverrideScoreForm({
                 if (onSuccess) onSuccess();
               }}
             >
-              Clear Override
+              Reset
             </Button>
           )}
         </HStack>

@@ -34,8 +34,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!githubUsername) {
     throw new UserVisibleError("No github username found for user", 400);
   }
-  const intendedTeam = classData.slug + "-" + (enrollment?.role === "student" ? "students" : "staff");
-  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!);
+
+  // Fetch the target user's enrollment to determine their role
+  const { data: targetEnrollment, error: targetEnrollmentError } = await supabase
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", user_id)
+    .eq("class_id", course_id)
+    .single();
+
+  if (targetEnrollmentError) {
+    console.log("Error fetching target user enrollment:", targetEnrollmentError);
+    throw new UserVisibleError("Error fetching target user's enrollment");
+  }
+
+  if (!targetEnrollment) {
+    throw new UserVisibleError("Target user is not enrolled in this course", 400);
+  }
+
+  const intendedTeam = classData.slug + "-" + (targetEnrollment.role === "student" ? "students" : "staff");
+  console.log(`Inviting ${githubUsername.github_username} to ${intendedTeam}`);
+  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!, scope);
   if (!resp) {
     await supabase
       .from("user_roles")

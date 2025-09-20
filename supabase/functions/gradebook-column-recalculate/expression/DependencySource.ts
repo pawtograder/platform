@@ -626,8 +626,35 @@ export async function addDependencySourceFunctions({
     )
   );
 
-  type UnknownFn = (...args: unknown[]) => unknown;
-  const imports: Record<string, UnknownFn> = {};
+  // Union type for all possible import function signatures
+  type ImportFunction =
+    | ((context: ExpressionContext, ...args: unknown[]) => unknown) // Context functions
+    | ((
+        a: number | GradebookColumnStudentWithMaxScore,
+        b: number | GradebookColumnStudentWithMaxScore
+      ) => number | undefined) // Binary operations
+    | ((...values: (number | GradebookColumnStudentWithMaxScore)[]) => number | undefined) // Variadic functions like min
+    | ((context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => number | undefined) // sum
+    | ((value: number | GradebookColumnStudentWithMaxScore, threshold: number) => 0 | 1) // Comparison functions
+    | ((
+        context: ExpressionContext,
+        value: GradebookColumnStudentWithMaxScore[],
+        condition: (value: GradebookColumnStudentWithMaxScore) => boolean
+      ) => number | undefined) // countif
+    | ((
+        context: ExpressionContext,
+        value: GradebookColumnStudentWithMaxScore[],
+        weighted?: boolean
+      ) => number | undefined) // mean
+    | ((
+        context: ExpressionContext,
+        value: GradebookColumnStudentWithMaxScore[],
+        count: number
+      ) => GradebookColumnStudentWithMaxScore[]) // drop_lowest
+    | ((conditions: Matrix<unknown>) => number | undefined) // case_when
+    | (() => never); // Security functions that throw errors
+
+  const imports: Record<string, ImportFunction> = {};
   for (const dependencySourceProvider of Object.values(batchDependencySourceMap)) {
     const functionNames = dependencySourceProvider.getFunctionNames();
     for (const functionName of functionNames) {

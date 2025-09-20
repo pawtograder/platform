@@ -21,6 +21,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const lateTokens = useLateTokens();
   const [open, setOpen] = useState(false);
   const course = role.classes;
+  const [isLoading, setIsLoading] = useState(false);
   const { data: assignmentGroup } = useList<AssignmentGroup>({
     resource: "assignment_groups",
     filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }]
@@ -154,9 +155,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
               variant="solid"
               colorPalette="red"
               w="100%"
+              loading={isLoading}
               mt={4}
               onClick={async () => {
                 try {
+                  setIsLoading(true);
                   await createAssignmentDueDateException({
                     values: {
                       assignment_id: assignment.id,
@@ -182,6 +185,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                       "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists.",
                     type: "error"
                   });
+                } finally {
+                  setIsLoading(false);
                 }
               }}
             >

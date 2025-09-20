@@ -38,7 +38,6 @@ function CompleteReviewButton({
     <>
       {!reviewSubmissions || reviewSubmissions?.data.length == 0 ? (
         <Link
-          prefetch={true}
           href={`/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`}
         >
           <Button colorPalette="green" variant="surface">

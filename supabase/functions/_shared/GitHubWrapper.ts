@@ -847,6 +847,26 @@ export async function syncTeam(
     });
   }
 }
+async function getTeamAndCreateIfNeeded(org: string, team_slug: string, octokit: Octokit) {
+  try {
+    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
+      org,
+      team_slug
+    });
+    return team;
+  } catch (e) {
+    console.log(`Team ${team_slug} not found, creating it`);
+    if (e instanceof RequestError && e.message.includes("Not Found")) {
+      // Team doesn't exist, create it
+      const newTeam = await octokit.request("POST /orgs/{org}/teams", {
+        org,
+        name: team_slug
+      });
+      return newTeam;
+    }
+    throw e;
+  }
+}
 export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "reinvite_to_team");
   scope?.setTag("org", org);
@@ -857,10 +877,7 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
-  const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
-    org,
-    team_slug
-  });
+  const team = await getTeamAndCreateIfNeeded(org, team_slug, octokit);
   const user = await octokit.request("GET /users/{username}", {
     username: githubUsername
   });
@@ -1064,11 +1081,15 @@ async function updateUserRolesForGithubOrg({ github_username, org }: { github_us
   );
 
   // First, find the user by github_username
-  const { data: userData } = await adminSupabase
+  const { data: userData, error: userError } = await adminSupabase
     .from("users")
     .select("*")
     .eq("github_username", github_username)
     .single();
+
+  if (userError) {
+    throw new Error(`Error finding user with github_username ${github_username}: ${userError.message}`);
+  }
 
   if (!userData) {
     throw new Error(`User with github_username ${github_username} not found`);
@@ -1084,19 +1105,20 @@ async function updateUserRolesForGithubOrg({ github_username, org }: { github_us
   const classIds = classes.map((c) => c.id);
 
   // Update user_roles for this user in all classes with the specified org
-  const { data: updatedRoles, error } = await adminSupabase
-    .from("user_roles")
-    .update({ github_org_confirmed: true })
-    .eq("user_id", userData.user_id)
-    .in("class_id", classIds)
-    .select();
-
-  if (error) {
-    throw new Error(`Failed to update user roles: ${error.message}`);
+  for (const classId of classIds) {
+    const { error: updateError } = await adminSupabase
+      .from("user_roles")
+      .update({ github_org_confirmed: true })
+      .eq("user_id", userData.user_id)
+      .eq("class_id", classId)
+      .select();
+    if (updateError) {
+      throw new Error(`Failed to update user roles for class ${classId}: ${updateError.message}`);
+    }
   }
 
-  console.log(`Updated ${updatedRoles?.length || 0} user roles for ${github_username} in classes with org ${org}`);
-  return updatedRoles;
+  console.log(`Updated user roles for ${github_username} in classes with org ${org}`);
+  return;
 }
 
 export async function listCommits(
@@ -1249,4 +1271,30 @@ export async function getRepo(org: string, repo: string, scope?: Sentry.Scope) {
     repo
   });
   return repoData.data;
+}
+export async function isUserInOrg(github_username: string, org: string) {
+  const octokit = await getOctoKit(org);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+
+  try {
+    // Check if the user is a member of the organization
+    await octokit.request("GET /orgs/{org}/members/{username}", {
+      org: org,
+      username: github_username
+    });
+    return true; // User is a member
+  } catch (error: any) {
+    // If the request fails with 404, the user is not a member or membership is private
+    // If it fails with 302, the membership is private (only visible to org members)
+    if (error.status === 404) {
+      return false; // User is not a member
+    } else if (error.status === 302) {
+      // Membership is private, but user exists in org
+      return true;
+    }
+    // For other errors, re-throw
+    throw error;
+  }
 }

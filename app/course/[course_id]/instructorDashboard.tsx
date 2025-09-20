@@ -328,10 +328,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CompactCardRoot key={`${reviewSummary.assignment_id}`}>
                 <CardHeader>
                   <Flex justify="space-between" align="center">
-                    <Link
-                      prefetch={true}
-                      href={`/course/${course_id}/manage/assignments/${reviewSummary.assignment_id}`}
-                    >
+                    <Link href={`/course/${course_id}/manage/assignments/${reviewSummary.assignment_id}`}>
                       <Text fontWeight="semibold">{reviewSummary.assignment_title}</Text>
                     </Link>
                     <Badge colorScheme={(reviewSummary.incomplete_reviews ?? 0) > 0 ? "red" : "green"} size="sm">
@@ -404,7 +401,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CompactCardRoot key={assignment.id}>
                 <CardHeader>
                   <Flex justify="space-between" align="center">
-                    <Link prefetch={true} href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
+                    <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
                       <Text fontWeight="semibold">{assignment.title}</Text>
                     </Link>
                     <Badge colorScheme="gray" size="sm">
@@ -493,9 +490,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
             return (
               <CompactCardRoot key={assignment.id}>
                 <CardHeader>
-                  <Link prefetch={true} href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
-                    {assignment.title}
-                  </Link>
+                  <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
                 </CardHeader>
                 <CardBody>
                   <CompactDataListRoot orientation="horizontal">
@@ -540,7 +535,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               return <Skeleton key={thread.id} height="100px" />;
             }
             return (
-              <Link prefetch={true} href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
+              <Link href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
                 <DiscussionPostSummary thread={thread} topic={topic} />
               </Link>
             );
@@ -572,7 +567,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           <CompactCardRoot>
             <CardHeader>
               <Flex justify="space-between" align="center">
-                <Link prefetch={true} href={`/course/${course_id}/manage/workflow-runs`}>
+                <Link href={`/course/${course_id}/manage/workflow-runs`}>
                   <Text fontWeight="semibold">Last Hour</Text>
                 </Link>
                 <Badge colorScheme={hourStats.errorCount > 0 ? "red" : "green"} size="sm">
@@ -627,7 +622,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           <CompactCardRoot>
             <CardHeader>
               <Flex justify="space-between" align="center">
-                <Link prefetch={true} href={`/course/${course_id}/manage/workflow-runs`}>
+                <Link href={`/course/${course_id}/manage/workflow-runs`}>
                   <Text fontWeight="semibold">Last 24 Hours</Text>
                 </Link>
                 <Badge colorScheme={dayStats.errorCount > 0 ? "red" : "green"} size="sm">
@@ -691,7 +686,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CardHeader>
                 <Flex justify="space-between" align="center">
                   <Text fontWeight="semibold">Recent Errors</Text>
-                  <Link prefetch={true} href={`/course/${course_id}/manage/workflow-runs/errors`}>
+                  <Link href={`/course/${course_id}/manage/workflow-runs/errors`}>
                     <Badge colorScheme="orange" size="sm">
                       View All
                     </Badge>

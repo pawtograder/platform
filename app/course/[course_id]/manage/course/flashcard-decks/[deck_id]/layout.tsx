@@ -58,7 +58,7 @@ export default function FlashcardDeckLayout({ children }: { children: React.Reac
               justifyContent="flex-start"
               asChild
             >
-              <NextLink href={item.href} prefetch={true}>
+              <NextLink href={item.href}>
                 <HStack textAlign="left" w="100%" justify="flex-start">
                   {React.createElement(item.icon)}
                   {item.label}

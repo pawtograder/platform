@@ -3,6 +3,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
 import Link from "@/components/ui/link";
+import * as Sentry from "@sentry/nextjs";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
@@ -226,7 +227,7 @@ export default function AssignmentsTable() {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (!row.original.lab_section_name) return values.includes("Not assigned");
-          return values.some((val) => row.original.lab_section_name!.toLowerCase().includes(val.toLowerCase()));
+          return values.some((val) => row.original.lab_section_name!.toLowerCase() === val.toLowerCase());
         }
       },
       {
@@ -405,8 +406,13 @@ export default function AssignmentsTable() {
   );
 
   const tableController = useMemo(() => {
+    Sentry.addBreadcrumb({
+      category: "tableController",
+      message: "Fetching submissions_with_grades_for_assignment_nice",
+      level: "info"
+    });
     const query = supabase
-      .from("submissions_with_grades_for_assignment")
+      .from("submissions_with_grades_for_assignment_nice")
       .select("*")
       .eq("assignment_id", Number(assignment_id));
 
@@ -415,7 +421,7 @@ export default function AssignmentsTable() {
       query: query as any,
       client: supabase,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "submissions_with_grades_for_assignment" as any,
+      table: "submissions_with_grades_for_assignment_nice" as any,
       classRealTimeController
     });
   }, [supabase, assignment_id, classRealTimeController]);
@@ -1100,7 +1106,7 @@ async function exportGrades({
   mode: "csv" | "json";
 }) {
   const { data: latestSubmissionsWithGrades } = await supabase
-    .from("submissions_with_grades_for_assignment")
+    .from("submissions_with_grades_for_assignment_nice")
     .select("*")
     .eq("assignment_id", assignment_id)
     .order("created_at", { ascending: false });
@@ -1448,7 +1454,7 @@ function DownloadAllButton() {
 
       // 1) Get all students for this assignment with their active submission ids
       const { data: students, error: studentsError } = await supabase
-        .from("submissions_with_grades_for_assignment")
+        .from("submissions_with_grades_for_assignment_nice")
         .select("activesubmissionid, student_private_profile_id, name")
         .eq("assignment_id", assignmentIdNum);
 
