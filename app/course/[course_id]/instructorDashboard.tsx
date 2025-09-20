@@ -22,7 +22,6 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { getPrivateProfileId } from "@/lib/ssrUtils";
@@ -66,57 +65,42 @@ const CompactCardRoot = ({ children, ...props }: React.ComponentProps<typeof Car
   </CardRoot>
 );
 
-type RecentAssignment = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["assignments"]["Row"],
-  "assignments",
-  Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, repositories(id, profile_id, assignment_group_id), submissions(id, profile_id, assignment_group_id, is_active, submission_reviews!submissions_grading_review_id_fkey(id, completed_at, total_score, completed_by, grader)), submission_regrade_requests(id, status), assignment_due_date_exceptions(id, student_id, assignment_group_id, hours, minutes), classes(time_zone)"
->;
+type InstructorDashboardMetricRow = {
+  section: "recently_due" | "upcoming";
+  assignment_id: number;
+  title: string;
+  due_date: string;
+  time_zone: string;
+  total_submitters: number;
+  graded_submissions: number;
+  open_regrade_requests: number;
+  closed_or_resolved_regrade_requests: number;
+  students_with_valid_extensions: number;
+  review_assignments_total: number;
+  review_assignments_completed: number;
+  review_assignments_incomplete: number;
+  rubric_parts_total: number;
+  rubric_parts_graded: number;
+  rubric_parts_not_graded: number;
+};
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
 
   // Get current user's private profile ID for review assignments
   const private_profile_id = await getPrivateProfileId(course_id);
 
-  // Get recently due assignments (due in last 30 days)
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-  const { data: recentAssignments, error: assignmentsError } = await supabase
-    .from("assignments")
-    .select(
-      `
-      *,
-      repositories(id, profile_id, assignment_group_id),
-      submissions(id, profile_id, assignment_group_id, is_active, submission_reviews!submissions_grading_review_id_fkey(id, completed_at, total_score, completed_by, grader)),
-      submission_regrade_requests(id, status),
-      assignment_due_date_exceptions(id, student_id, assignment_group_id, hours, minutes),
-      classes(time_zone)
-    `
-    )
-    .eq("class_id", course_id)
-    .lte("due_date", new Date().toISOString())
-    .gte("due_date", thirtyDaysAgo.toISOString())
-    .order("due_date", { ascending: false })
-    .limit(10);
-
-  if (assignmentsError) {
-    Sentry.captureException(assignmentsError);
+  // Get dashboard metrics via RPC
+  // Types for this RPC are not yet in generated Supabase types
+  // @ts-expect-error typed via migration, not in generated types yet
+  const { data: metricsRaw, error: metricsError } = await supabase.rpc("get_instructor_dashboard_metrics", {
+    p_class_id: course_id
+  });
+  if (metricsError) {
+    Sentry.captureException(metricsError);
   }
-
-  // Get upcoming assignments for comparison
-  const { data: upcomingAssignments, error: upcomingAssignmentsError } = await supabase
-    .from("assignments")
-    .select("*,repositories(id), submissions(profile_id, grader_results(score,max_score)), classes(time_zone)")
-    .eq("class_id", course_id)
-    .gte("due_date", new Date().toISOString())
-    .order("due_date", { ascending: true })
-    .limit(5);
-
-  if (upcomingAssignmentsError) {
-    Sentry.captureException(upcomingAssignmentsError);
-  }
+  const metrics = (Array.isArray(metricsRaw) ? metricsRaw : []) as unknown as InstructorDashboardMetricRow[];
+  const recentMetrics = metrics.filter((m) => m.section === "recently_due");
+  const upcomingMetrics = metrics.filter((m) => m.section === "upcoming");
 
   const { data: topics, error: topicsError } = await supabase
     .from("discussion_topics")
@@ -167,63 +151,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const reviewAssignmentsSummary = allReviewAssignmentsSummary
     ?.filter((summary) => (summary.incomplete_reviews ?? 0) > 0)
     .concat(allReviewAssignmentsSummary?.filter((summary) => (summary.incomplete_reviews ?? 0) === 0).slice(0, 2));
-
-  const calculateAssignmentStatistics = (assignment: RecentAssignment) => {
-    // Calculate unique submitters (students or groups who have submitted)
-    const uniqueSubmitters = new Set();
-    assignment.submissions?.forEach((submission) => {
-      if (submission.is_active) {
-        if (submission.profile_id) {
-          uniqueSubmitters.add(submission.profile_id);
-        } else if (submission.assignment_group_id) {
-          uniqueSubmitters.add(`group_${submission.assignment_group_id}`);
-        }
-      }
-    });
-
-    // Calculate graded submissions
-    const gradedSubmissions =
-      assignment.submissions?.filter(
-        (submission) =>
-          submission.submission_reviews?.completed_at !== null && submission.submission_reviews?.completed_by !== null
-      ).length || 0;
-
-    // Calculate regrade requests
-    const openRegradeRequests =
-      assignment.submission_regrade_requests?.filter((request) => request.status === "opened").length || 0;
-
-    const closedRegradeRequests =
-      assignment.submission_regrade_requests?.filter(
-        (request) => request.status === "closed" || request.status === "resolved"
-      ).length || 0;
-
-    // Calculate students who can still submit (have extensions that extend past now)
-    const now = new Date();
-    const dueDate = new Date(assignment.due_date);
-    let studentsWithValidExtensions = 0;
-
-    assignment.assignment_due_date_exceptions?.forEach((exception) => {
-      const extensionHours = exception.hours;
-      const extensionMinutes = exception.minutes;
-      const extendedDueDate = new Date(dueDate.getTime() + (extensionHours * 60 + extensionMinutes) * 60 * 1000);
-
-      if (extendedDueDate > now) {
-        studentsWithValidExtensions++;
-      }
-    });
-
-    // Calculate total repositories (students who accepted assignment)
-    const totalRepositories = assignment.repositories?.length || 0;
-
-    return {
-      totalSubmissions: uniqueSubmitters.size,
-      gradedSubmissions,
-      totalRepositories,
-      openRegradeRequests,
-      closedRegradeRequests,
-      studentsWithValidExtensions
-    };
-  };
   const { data: course, error: courseError } = await supabase
     .from("classes")
     .select("time_zone")
@@ -395,43 +322,34 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           Recently Due Assignments
         </Heading>
         <Stack spaceY={4}>
-          {recentAssignments?.map((assignment: RecentAssignment) => {
-            const stats = calculateAssignmentStatistics(assignment);
+          {recentMetrics.map((metric) => {
             return (
-              <CompactCardRoot key={assignment.id}>
+              <CompactCardRoot key={metric.assignment_id}>
                 <CardHeader>
                   <Flex justify="space-between" align="center">
-                    <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
-                      <Text fontWeight="semibold">{assignment.title}</Text>
+                    <Link href={`/course/${course_id}/manage/assignments/${metric.assignment_id}`}>
+                      <Text fontWeight="semibold">{metric.title}</Text>
                     </Link>
                     <Badge colorScheme="gray" size="sm">
                       Due{" "}
-                      {formatInTimeZone(
-                        new TZDate(assignment.due_date),
-                        assignment.classes.time_zone || "America/New_York",
-                        "MMM d"
-                      )}
+                      {formatInTimeZone(new TZDate(metric.due_date), metric.time_zone || "America/New_York", "MMM d")}
                     </Badge>
                   </Flex>
                 </CardHeader>
                 <CardBody>
                   <CompactDataListRoot orientation="horizontal">
                     <DataListItem>
-                      <DataListItemLabel>Students accepted</DataListItemLabel>
-                      <DataListItemValue>{stats.totalRepositories}</DataListItemValue>
-                    </DataListItem>
-                    <DataListItem>
                       <DataListItemLabel>Submissions</DataListItemLabel>
-                      <DataListItemValue>{stats.totalSubmissions}</DataListItemValue>
+                      <DataListItemValue>{metric.total_submitters}</DataListItemValue>
                     </DataListItem>
                     <DataListItem>
                       <DataListItemLabel>Graded/Total</DataListItemLabel>
                       <DataListItemValue>
                         <Flex align="center" gap={2}>
                           <Text>
-                            {stats.gradedSubmissions}/{stats.totalSubmissions}
+                            {metric.graded_submissions}/{metric.total_submitters}
                           </Text>
-                          {stats.gradedSubmissions === stats.totalSubmissions && stats.totalSubmissions > 0 ? (
+                          {metric.graded_submissions === metric.total_submitters && metric.total_submitters > 0 ? (
                             <Badge colorScheme="green" size="sm">
                               Complete
                             </Badge>
@@ -444,11 +362,49 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>
+                      <DataListItemLabel>Review Assignments</DataListItemLabel>
+                      <DataListItemValue>
+                        <Flex align="center" gap={2}>
+                          <Text>
+                            {metric.review_assignments_completed}/{metric.review_assignments_total}
+                          </Text>
+                          {metric.review_assignments_incomplete > 0 ? (
+                            <Badge colorScheme="orange" size="sm">
+                              {metric.review_assignments_incomplete} pending
+                            </Badge>
+                          ) : (
+                            <Badge colorScheme="green" size="sm">
+                              ✓
+                            </Badge>
+                          )}
+                        </Flex>
+                      </DataListItemValue>
+                    </DataListItem>
+                    <DataListItem>
+                      <DataListItemLabel>Rubric parts graded</DataListItemLabel>
+                      <DataListItemValue>
+                        <Flex align="center" gap={2}>
+                          <Text>
+                            {metric.rubric_parts_graded}/{metric.rubric_parts_total}
+                          </Text>
+                          {metric.rubric_parts_not_graded > 0 ? (
+                            <Badge colorScheme="yellow" size="sm">
+                              {metric.rubric_parts_not_graded} remaining
+                            </Badge>
+                          ) : (
+                            <Badge colorScheme="green" size="sm">
+                              ✓
+                            </Badge>
+                          )}
+                        </Flex>
+                      </DataListItemValue>
+                    </DataListItem>
+                    <DataListItem>
                       <DataListItemLabel>Can still submit</DataListItemLabel>
                       <DataListItemValue>
-                        {stats.studentsWithValidExtensions > 0 ? (
+                        {metric.students_with_valid_extensions > 0 ? (
                           <Badge colorScheme="blue" size="sm">
-                            {stats.studentsWithValidExtensions}
+                            {metric.students_with_valid_extensions}
                           </Badge>
                         ) : (
                           <Text>0</Text>
@@ -459,17 +415,19 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <DataListItemLabel>Regrade requests</DataListItemLabel>
                       <DataListItemValue>
                         <Flex gap={2}>
-                          {stats.openRegradeRequests > 0 && (
+                          {metric.open_regrade_requests > 0 && (
                             <Badge colorScheme="red" size="sm">
-                              {stats.openRegradeRequests} open
+                              {metric.open_regrade_requests} open
                             </Badge>
                           )}
-                          {stats.closedRegradeRequests > 0 && (
+                          {metric.closed_or_resolved_regrade_requests > 0 && (
                             <Badge colorScheme="green" size="sm">
-                              {stats.closedRegradeRequests} resolved
+                              {metric.closed_or_resolved_regrade_requests} resolved
                             </Badge>
                           )}
-                          {stats.openRegradeRequests === 0 && stats.closedRegradeRequests === 0 && <Text>None</Text>}
+                          {metric.open_regrade_requests === 0 && metric.closed_or_resolved_regrade_requests === 0 && (
+                            <Text>None</Text>
+                          )}
                         </Flex>
                       </DataListItemValue>
                     </DataListItem>
@@ -486,35 +444,25 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           Upcoming Assignments
         </Heading>
         <Stack spaceY={4}>
-          {upcomingAssignments?.map((assignment) => {
+          {upcomingMetrics.map((metric) => {
             return (
-              <CompactCardRoot key={assignment.id}>
+              <CompactCardRoot key={metric.assignment_id}>
                 <CardHeader>
-                  <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
+                  <Link href={`/course/${course_id}/manage/assignments/${metric.assignment_id}`}>{metric.title}</Link>
                 </CardHeader>
                 <CardBody>
                   <CompactDataListRoot orientation="horizontal">
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
-                        {assignment.due_date
-                          ? formatInTimeZone(
-                              new TZDate(assignment.due_date),
-                              assignment.classes.time_zone || "America/New_York",
-                              "Pp"
-                            )
+                        {metric.due_date
+                          ? formatInTimeZone(new TZDate(metric.due_date), metric.time_zone || "America/New_York", "Pp")
                           : "No due date"}
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>
-                      <DataListItemLabel>Students who have accepted the assignment</DataListItemLabel>
-                      <DataListItemValue>{assignment.repositories.length}</DataListItemValue>
-                    </DataListItem>
-                    <DataListItem>
                       <DataListItemLabel>Students who have submitted</DataListItemLabel>
-                      <DataListItemValue>
-                        {new Set(assignment.submissions.map((s) => s.profile_id)).size}
-                      </DataListItemValue>
+                      <DataListItemValue>{metric.total_submitters}</DataListItemValue>
                     </DataListItem>
                   </CompactDataListRoot>
                 </CardBody>

@@ -777,23 +777,19 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
 
   // Create object URL when artifactData changes and cleanup previous URL
   useEffect(() => {
+    let newObjectUrl: string | null = null;
     if (artifactData && artifact.data.format === "png") {
-      // Revoke previous URL if it exists
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-      // Create new object URL
-      const newObjectUrl = URL.createObjectURL(artifactData);
+      newObjectUrl = URL.createObjectURL(artifactData);
       setObjectUrl(newObjectUrl);
     }
 
     return () => {
       // Cleanup on unmount or when artifactData changes
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
+      if (newObjectUrl) {
+        URL.revokeObjectURL(newObjectUrl);
       }
     };
-  }, [artifactData, artifact.data?.format, objectUrl]);
+  }, [artifactData, artifact.data?.format]);
 
   if (artifact.data.format === "png") {
     if (objectUrl) {
