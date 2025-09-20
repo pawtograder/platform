@@ -35,7 +35,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("No github username found for user", 400);
   }
   const intendedTeam = classData.slug + "-" + (enrollment?.role === "student" ? "students" : "staff");
-  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!);
+  console.log(`Inviting ${githubUsername.github_username} to ${intendedTeam}`);
+  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!, scope);
   if (!resp) {
     await supabase
       .from("user_roles")
