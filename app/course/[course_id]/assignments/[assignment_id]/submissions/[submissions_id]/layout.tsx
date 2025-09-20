@@ -16,6 +16,7 @@ import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
 import {
@@ -32,10 +33,13 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
-import { tz, TZDate } from "@date-fns/tz";
+import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
-import { formatRelative, isAfter, isBefore } from "date-fns";
+import * as Sentry from "@sentry/nextjs";
+import { formatRelative, isAfter } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -56,11 +60,7 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
-import { useAssignmentController } from "@/hooks/useAssignment";
-import * as Sentry from "@sentry/nextjs";
-import { formatInTimeZone } from "date-fns-tz";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
