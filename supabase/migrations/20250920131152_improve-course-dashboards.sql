@@ -222,7 +222,7 @@ begin
   from upcoming u
   left join submitters2 sub2 on sub2.assignment_id = u.assignment_id
   left join review_counts2 rc2 on rc2.assignment_id = u.assignment_id
-  order by u.due_date asc, u.assignment_id asc
+  order by u.due_date asc, u.assignment_id asc;
 
   return;
 end;
