@@ -61,7 +61,8 @@ function AdjustDueDateDialogContent({
   const studentOrGroup = group ? "group" : "student";
 
   const dueDateInfo = useAssignmentDueDate(assignment, {
-    studentPrivateProfileId: student_id
+    studentPrivateProfileId: student_id,
+    assignmentGroupId: group?.id
   });
   const { time_zone } = useCourse();
   const originalDueDate = new TZDate(assignment.due_date!);

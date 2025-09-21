@@ -1,3 +1,4 @@
+import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import AssignmentGradingToolbar from "@/components/ui/assignment-grading-toolbar";
 import { isInstructorOrGrader } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
@@ -14,10 +15,14 @@ export default async function SubmissionsLayout({
   const client = await createClient();
   const { data: assignment } = await client
     .from("assignments")
-    .select("*, assignment_self_review_settings(*)")
+    .select("*")
     .eq("id", Number(assignment_id))
+    .eq("class_id", Number(course_id))
     .single();
-  const showGradingToolbar = await isInstructorOrGrader(Number(course_id));
+  if (!assignment) {
+    return <div>Assignment not found</div>;
+  }
+  const instructorOrGrader = await isInstructorOrGrader(Number(course_id));
   return (
     <VStack w="100%" gap={0} alignItems="flex-start">
       <HStack
@@ -30,8 +35,11 @@ export default async function SubmissionsLayout({
         borderBottomRadius={0}
       >
         <Heading size="lg">{assignment?.title}</Heading>
+        {!instructorOrGrader && (
+          <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} showDue={true} />
+        )}
       </HStack>
-      {showGradingToolbar && <AssignmentGradingToolbar />}
+      {instructorOrGrader && <AssignmentGradingToolbar />}
 
       <Box borderColor="border.muted" borderWidth="2px" w="100%" borderTopRadius={0} borderBottomRadius="md">
         {children}

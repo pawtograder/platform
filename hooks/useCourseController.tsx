@@ -38,6 +38,24 @@ import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
+export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: number }) {
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const { private_profile_id } = useClassProfiles();
+
+  type AssignmentGroupWithMembers = (typeof assignmentGroupsWithMembers.rows)[number];
+  const assignmentGroupFilter = useCallback(
+    (ag: AssignmentGroupWithMembers) => {
+      return (
+        ag.assignment_id === assignment_id &&
+        ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id)
+      );
+    },
+    [assignment_id, private_profile_id]
+  );
+  const assignmentGroup = assignmentGroupsWithMembers.rows.find(assignmentGroupFilter);
+  return assignmentGroup;
+}
+
 export function useAllProfilesForClass() {
   const { profiles: controller } = useCourseController();
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
@@ -1193,25 +1211,31 @@ export function formatWithTimeZone(date: string, timeZone: string) {
 
 export function useAssignmentDueDate(
   assignment: Assignment,
-  options?: { studentPrivateProfileId?: string; labSectionId?: number }
+  options?: { studentPrivateProfileId?: string; labSectionId?: number; assignmentGroupId?: number }
 ) {
   const controller = useCourseController();
   const course = useCourse();
   const time_zone = course.time_zone;
-  const [dueDateExceptions, setDueDateExceptions] = useState<AssignmentDueDateException[]>();
   const [labSections, setLabSections] = useState<LabSection[]>();
   const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
 
-  useEffect(() => {
-    if (assignment.due_date) {
-      const { data, unsubscribe } = controller.assignmentDueDateExceptions.list((data) => {
-        const filtered = data.filter((e) => e.assignment_id === assignment.id);
-        setDueDateExceptions(filtered);
-      });
-      setDueDateExceptions(data.filter((e) => e.assignment_id === assignment.id));
-      return unsubscribe;
-    }
-  }, [assignment, controller]);
+  const dueDateExceptionsFilter = useCallback(
+    (e: AssignmentDueDateException) => {
+      return Boolean(
+        (e.assignment_id === assignment.id &&
+          ((!options?.studentPrivateProfileId && !e.student_id) ||
+            (options?.studentPrivateProfileId && e.student_id === options.studentPrivateProfileId)) &&
+          !options?.assignmentGroupId &&
+          !e.assignment_group_id) ||
+          (options?.assignmentGroupId && e.assignment_group_id === options.assignmentGroupId)
+      );
+    },
+    [assignment.id, options?.studentPrivateProfileId, options?.assignmentGroupId]
+  );
+  const dueDateExceptions = useListTableControllerValues(
+    controller.assignmentDueDateExceptions,
+    dueDateExceptionsFilter
+  );
 
   useEffect(() => {
     const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>

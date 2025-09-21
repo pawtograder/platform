@@ -16,6 +16,7 @@ import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
 import {
@@ -32,10 +33,13 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
-import { formatRelative } from "date-fns";
+import * as Sentry from "@sentry/nextjs";
+import { formatRelative, isAfter } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -56,10 +60,7 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
-import { useAssignmentController } from "@/hooks/useAssignment";
-import * as Sentry from "@sentry/nextjs";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -305,7 +306,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
   const { dueDate } = useAssignmentDueDate(submission.assignments, {
-    studentPrivateProfileId: submission.profile_id || undefined
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
   });
   const isStaff = useIsGraderOrInstructor();
   const disableActivationButton = Boolean(
@@ -754,6 +756,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const assignment = useAssignmentController();
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment || submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
+  });
+  const safeTimeZone = time_zone || "UTC";
+  const hasExtension = hoursExtended && hoursExtended > 0;
+  const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -763,6 +772,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
     <Flex direction="column" minW="0px">
+      {isGraderOrInstructor && dueDate && (
+        <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
+          Student&quot;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
+          {canStillSubmit && (
+            <Text fontSize="xs" color="fg.warning">
+              The student can still make a new submission, grading checks will not transfer.
+            </Text>
+          )}
+        </Box>
+      )}
       <SubmissionReviewToolbar />
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
