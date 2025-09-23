@@ -235,7 +235,6 @@ USING (
         SELECT 1 FROM "public"."user_privileges" up
         WHERE up.user_id = auth.uid()
           AND up.class_id = r.class_id
-          AND COALESCE(up.disabled, false) = false
       )
       AND r.is_private = false
       AND (
@@ -253,7 +252,6 @@ USING (
                   SELECT 1 FROM "public"."user_privileges" ur
                   WHERE ur.user_id = auth.uid()
                     AND ur.private_profile_id = s.profile_id
-                    AND COALESCE(ur.disabled, false) = false
                 )
                 OR (
                   s.assignment_group_id IS NOT NULL
@@ -263,7 +261,6 @@ USING (
                     JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                     WHERE mem.assignment_group_id = s.assignment_group_id
                       AND ur.user_id = auth.uid()
-                      AND COALESCE(ur.disabled, false) = false
                   )
                 )
               )
@@ -283,7 +280,6 @@ USING (
                     SELECT 1 FROM "public"."user_privileges" ur
                     WHERE ur.user_id = auth.uid()
                       AND ur.private_profile_id = s.profile_id
-                      AND COALESCE(ur.disabled, false) = false
                   )
                   OR (
                     s.assignment_group_id IS NOT NULL
@@ -293,7 +289,6 @@ USING (
                       JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                       WHERE mem.assignment_group_id = s.assignment_group_id
                         AND ur.user_id = auth.uid()
-                        AND COALESCE(ur.disabled, false) = false
                     )
                   )
                 )
@@ -309,7 +304,6 @@ USING (
                     SELECT 1 FROM "public"."user_privileges" ur
                     WHERE ur.user_id = auth.uid()
                       AND ur.private_profile_id = s.profile_id
-                      AND COALESCE(ur.disabled, false) = false
                   )
                   OR (
                     s.assignment_group_id IS NOT NULL
@@ -319,7 +313,6 @@ USING (
                       JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                       WHERE mem.assignment_group_id = s.assignment_group_id
                         AND ur.user_id = auth.uid()
-                        AND COALESCE(ur.disabled, false) = false
                     )
                   )
                 )
@@ -336,7 +329,6 @@ USING (
                     SELECT 1 FROM "public"."user_privileges" ur
                     WHERE ur.user_id = auth.uid()
                       AND ur.private_profile_id = s.profile_id
-                      AND COALESCE(ur.disabled, false) = false
                   )
                   OR (
                     s.assignment_group_id IS NOT NULL
@@ -346,7 +338,6 @@ USING (
                       JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                       WHERE mem.assignment_group_id = s.assignment_group_id
                         AND ur.user_id = auth.uid()
-                        AND COALESCE(ur.disabled, false) = false
                     )
                   )
                 )
