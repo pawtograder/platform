@@ -9117,6 +9117,24 @@ export type Database = {
         Args: { class_id: number };
         Returns: Json;
       };
+      get_instructor_dashboard_metrics: {
+        Args: { p_class_id: number; p_now?: string };
+        Returns: {
+          assignment_id: number;
+          closed_or_resolved_regrade_requests: number;
+          due_date: string;
+          graded_submissions: number;
+          open_regrade_requests: number;
+          review_assignments_completed: number;
+          review_assignments_incomplete: number;
+          review_assignments_total: number;
+          section: string;
+          students_with_valid_extensions: number;
+          time_zone: string;
+          title: string;
+          total_submitters: number;
+        }[];
+      };
       get_llm_tags_breakdown: {
         Args: Record<PropertyKey, never>;
         Returns: Json;
@@ -9235,6 +9253,10 @@ export type Database = {
           p_status: string;
         };
         Returns: undefined;
+      };
+      import_gradebook_scores: {
+        Args: { p_class_id: number; p_updates: Json };
+        Returns: boolean;
       };
       intval: {
         Args: { "": string };
