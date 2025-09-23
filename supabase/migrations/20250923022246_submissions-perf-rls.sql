@@ -21,129 +21,6 @@ CREATE INDEX IF NOT EXISTS idx_submissions_assignment_group
 ON public.submissions (assignment_id, assignment_group_id)
 INCLUDE (id);
 
--- Set-based, inline RLS for rubric_checks using user_privileges (no functions, no user_roles)
-ALTER POLICY "students see only based on visibility" ON "public"."rubric_checks"
-USING (
-  EXISTS (
-    SELECT 1
-    FROM public.rubric_criteria rc
-    JOIN public.rubrics r ON r.id = rc.rubric_id
-    WHERE rc.id = rubric_checks.rubric_criteria_id
-      AND r.is_private = false
-      AND EXISTS (
-        SELECT 1 FROM public.user_privileges up
-        WHERE up.user_id = auth.uid() AND up.class_id = r.class_id
-      )
-      AND (
-        rubric_checks.student_visibility = 'always'
-        OR (
-          rubric_checks.student_visibility = 'if_released'
-          AND EXISTS (
-            SELECT 1
-            FROM public.submissions s
-            JOIN public.submission_reviews sr
-              ON sr.submission_id = s.id AND sr.released
-            WHERE s.assignment_id = r.assignment_id
-              AND (
-                s.profile_id IN (
-                  SELECT up.private_profile_id
-                  FROM public.user_privileges up
-                  WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
-                )
-                OR (
-                  s.assignment_group_id IS NOT NULL
-                  AND s.assignment_group_id IN (
-                    SELECT DISTINCT agm.assignment_group_id
-                    FROM public.assignment_groups_members agm
-                    JOIN public.user_privileges upg
-                      ON upg.private_profile_id = agm.profile_id
-                    WHERE upg.user_id = auth.uid()
-                  )
-                )
-              )
-          )
-        )
-        OR (
-          rubric_checks.student_visibility = 'if_applied'
-          AND (
-            EXISTS (
-              SELECT 1
-              FROM public.submission_comments sc
-              JOIN public.submissions s ON s.id = sc.submission_id
-              WHERE sc.rubric_check_id = rubric_checks.id
-                AND sc.released = true
-                AND (
-                  s.profile_id IN (
-                    SELECT up.private_profile_id
-                    FROM public.user_privileges up
-                    WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
-                  )
-                  OR (
-                    s.assignment_group_id IS NOT NULL
-                    AND s.assignment_group_id IN (
-                      SELECT DISTINCT agm.assignment_group_id
-                      FROM public.assignment_groups_members agm
-                      JOIN public.user_privileges upg
-                        ON upg.private_profile_id = agm.profile_id
-                      WHERE upg.user_id = auth.uid()
-                    )
-                  )
-                )
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM public.submission_file_comments sfc
-              JOIN public.submissions s ON s.id = sfc.submission_id
-              WHERE sfc.rubric_check_id = rubric_checks.id
-                AND sfc.released = true
-                AND (
-                  s.profile_id IN (
-                    SELECT up.private_profile_id
-                    FROM public.user_privileges up
-                    WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
-                  )
-                  OR (
-                    s.assignment_group_id IS NOT NULL
-                    AND s.assignment_group_id IN (
-                      SELECT DISTINCT agm.assignment_group_id
-                      FROM public.assignment_groups_members agm
-                      JOIN public.user_privileges upg
-                        ON upg.private_profile_id = agm.profile_id
-                      WHERE upg.user_id = auth.uid()
-                    )
-                  )
-                )
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM public.submission_artifact_comments sac
-              JOIN public.submissions s ON s.id = sac.submission_id
-              JOIN public.submission_reviews sr ON sr.submission_id = s.id
-              WHERE sac.rubric_check_id = rubric_checks.id
-                AND sr.released = true
-                AND (
-                  s.profile_id IN (
-                    SELECT up.private_profile_id
-                    FROM public.user_privileges up
-                    WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
-                  )
-                  OR (
-                    s.assignment_group_id IS NOT NULL
-                    AND s.assignment_group_id IN (
-                      SELECT DISTINCT agm.assignment_group_id
-                      FROM public.assignment_groups_members agm
-                      JOIN public.user_privileges upg
-                        ON upg.private_profile_id = agm.profile_id
-                      WHERE upg.user_id = auth.uid()
-                    )
-                  )
-                )
-            )
-          )
-        )
-      )
-  )
-);
 
 -- Replace submissions SELECT RLS with set-based, user_privileges-only policy
 ALTER POLICY "Instructors and graders can view all submissions in class, stud" ON public.submissions
@@ -375,7 +252,6 @@ USING (
                   SELECT 1 FROM "public"."user_privileges" ur
                   WHERE ur.user_id = auth.uid()
                     AND ur.private_profile_id = s.profile_id
-                    AND ur.disabled = false
                 )
                 OR (
                   s.assignment_group_id IS NOT NULL
@@ -385,7 +261,6 @@ USING (
                     JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                     WHERE mem.assignment_group_id = s.assignment_group_id
                       AND ur.user_id = auth.uid()
-                      AND ur.disabled = false
                   )
                 )
               )
@@ -405,7 +280,6 @@ USING (
                     SELECT 1 FROM "public"."user_privileges" ur
                     WHERE ur.user_id = auth.uid()
                       AND ur.private_profile_id = s.profile_id
-                      AND ur.disabled = false
                   )
                   OR (
                     s.assignment_group_id IS NOT NULL
@@ -415,7 +289,6 @@ USING (
                       JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                       WHERE mem.assignment_group_id = s.assignment_group_id
                         AND ur.user_id = auth.uid()
-                        AND ur.disabled = false
                     )
                   )
                 )
@@ -431,7 +304,6 @@ USING (
                     SELECT 1 FROM "public"."user_privileges" ur
                     WHERE ur.user_id = auth.uid()
                       AND ur.private_profile_id = s.profile_id
-                      AND ur.disabled = false
                   )
                   OR (
                     s.assignment_group_id IS NOT NULL
@@ -441,7 +313,6 @@ USING (
                       JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                       WHERE mem.assignment_group_id = s.assignment_group_id
                         AND ur.user_id = auth.uid()
-                        AND ur.disabled = false
                     )
                   )
                 )
@@ -458,7 +329,6 @@ USING (
                     SELECT 1 FROM "public"."user_privileges" ur
                     WHERE ur.user_id = auth.uid()
                       AND ur.private_profile_id = s.profile_id
-                      AND ur.disabled = false
                   )
                   OR (
                     s.assignment_group_id IS NOT NULL
@@ -468,7 +338,6 @@ USING (
                       JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                       WHERE mem.assignment_group_id = s.assignment_group_id
                         AND ur.user_id = auth.uid()
-                        AND ur.disabled = false
                     )
                   )
                 )
@@ -495,7 +364,6 @@ USING ((
             SELECT 1 FROM "public"."user_privileges" ur
             WHERE ur.user_id = auth.uid()
               AND ur.private_profile_id = s.profile_id
-              AND ur.disabled = false
           )
           OR (
             s.assignment_group_id IS NOT NULL AND EXISTS (
@@ -503,7 +371,6 @@ USING ((
               JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
               WHERE mem.assignment_group_id = s.assignment_group_id
                 AND ur.user_id = auth.uid()
-                AND ur.disabled = false
             )
           )
         )
@@ -522,7 +389,6 @@ USING ((
               SELECT 1 FROM "public"."user_privileges" ur
               WHERE ur.user_id = auth.uid()
                 AND ur.private_profile_id = s.profile_id
-                AND ur.disabled = false
             )
             OR (
               s.assignment_group_id IS NOT NULL AND EXISTS (
@@ -530,7 +396,6 @@ USING ((
                 JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                 WHERE mem.assignment_group_id = s.assignment_group_id
                   AND ur.user_id = auth.uid()
-                  AND ur.disabled = false
               )
             )
           )
@@ -562,7 +427,6 @@ USING ((
             SELECT 1 FROM "public"."user_privileges" ur
             WHERE ur.user_id = auth.uid()
               AND ur.private_profile_id = s.profile_id
-              AND ur.disabled = false
           )
           OR (
             s.assignment_group_id IS NOT NULL AND EXISTS (
@@ -570,7 +434,6 @@ USING ((
               JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
               WHERE mem.assignment_group_id = s.assignment_group_id
                 AND ur.user_id = auth.uid()
-                AND ur.disabled = false
             )
           )
         )
@@ -588,7 +451,6 @@ USING ((
               SELECT 1 FROM "public"."user_privileges" ur
               WHERE ur.user_id = auth.uid()
                 AND ur.private_profile_id = s.profile_id
-                AND ur.disabled = false
             )
             OR (
               s.assignment_group_id IS NOT NULL AND EXISTS (
@@ -596,7 +458,6 @@ USING ((
                 JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                 WHERE mem.assignment_group_id = s.assignment_group_id
                   AND ur.user_id = auth.uid()
-                  AND ur.disabled = false
               )
             )
           )
@@ -627,7 +488,6 @@ USING ((
             SELECT 1 FROM "public"."user_privileges" ur
             WHERE ur.user_id = auth.uid()
               AND ur.private_profile_id = s.profile_id
-              AND ur.disabled = false
           )
           OR (
             s.assignment_group_id IS NOT NULL AND EXISTS (
@@ -635,7 +495,6 @@ USING ((
               JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
               WHERE mem.assignment_group_id = s.assignment_group_id
                 AND ur.user_id = auth.uid()
-                AND ur.disabled = false
             )
           )
         )
@@ -653,7 +512,6 @@ USING ((
               SELECT 1 FROM "public"."user_privileges" ur
               WHERE ur.user_id = auth.uid()
                 AND ur.private_profile_id = s.profile_id
-                AND ur.disabled = false
             )
             OR (
               s.assignment_group_id IS NOT NULL AND EXISTS (
@@ -661,7 +519,6 @@ USING ((
                 JOIN "public"."user_privileges" ur ON ur.private_profile_id = mem.profile_id
                 WHERE mem.assignment_group_id = s.assignment_group_id
                   AND ur.user_id = auth.uid()
-                  AND ur.disabled = false
               )
             )
           )
