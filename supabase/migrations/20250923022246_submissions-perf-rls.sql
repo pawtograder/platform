@@ -235,7 +235,6 @@ USING (
         SELECT 1 FROM "public"."user_privileges" up
         WHERE up.user_id = auth.uid()
           AND up.class_id = r.class_id
-          AND COALESCE(up.disabled, false) = false
       )
       AND r.is_private = false
       AND (
