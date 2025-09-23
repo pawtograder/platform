@@ -13,6 +13,7 @@ import { FaExternalLinkAlt, FaTrash } from "react-icons/fa";
 
 function getType(n: Notification): string {
   const body = n.body && typeof n.body === "object" ? (n.body as { type?: string }) : undefined;
+  console.log(body);
   return body?.type ?? "unknown";
 }
 
@@ -61,7 +62,7 @@ export default function NotificationsTable() {
   const isLoading = notifications === undefined;
 
   const officeHoursMessages = useMemo(
-    () => (notifications || []).filter((n) => getType(n) === "help_request_message"),
+    () => (notifications || []).filter((n) => getType(n) === "help_request_message" || getType(n) === "help_request"),
     [notifications]
   );
   const discussion = useMemo(

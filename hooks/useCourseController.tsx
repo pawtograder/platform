@@ -353,6 +353,7 @@ export class CourseController {
   private _assignments?: TableController<"assignments">;
   private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
   private _repositories?: TableController<"repositories">;
+  private _notifications?: TableController<"notifications">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -383,6 +384,7 @@ export class CourseController {
     void this.studentDeadlineExtensions; // Triggers lazy creation
     void this.assignments; // Triggers lazy creation
     void this.assignmentGroupsWithMembers; // Triggers lazy creation
+    void this.notifications; // Triggers lazy creation
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -393,6 +395,19 @@ export class CourseController {
   }
 
   // Lazy getters
+
+  get notifications(): TableController<"notifications"> {
+    if (!this._notifications) {
+      this._notifications = new TableController({
+        client: this._client,
+        table: "notifications",
+        query: this._client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._notifications;
+  }
+
   get profiles(): TableController<"profiles"> {
     if (!this._profiles) {
       this._profiles = new TableController({
