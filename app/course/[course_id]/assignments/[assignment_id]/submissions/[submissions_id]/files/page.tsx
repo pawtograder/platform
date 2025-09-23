@@ -1030,7 +1030,6 @@ export default function FilesView() {
     window.addEventListener("pawto:files-select", handleSelect as EventListener);
     return () => window.removeEventListener("pawto:files-select", handleSelect as EventListener);
   }, [updateUrl, selectedFileId, selectedArtifactId, scrollToHash]);
-  
 
   const handleSelectFile = useCallback(
     (id: number) => {
@@ -1064,8 +1063,8 @@ export default function FilesView() {
     curFileIndex !== -1
       ? submissionData?.submission_files[curFileIndex]
       : submissionData?.submission_files && submissionData.submission_files.length > 0
-      ? submissionData.submission_files[0]
-      : undefined;
+        ? submissionData.submission_files[0]
+        : undefined;
 
   const curArtifactIndex =
     submissionData?.submission_artifacts?.findIndex(
@@ -1075,8 +1074,8 @@ export default function FilesView() {
     curArtifactIndex !== -1
       ? submissionData?.submission_artifacts?.[curArtifactIndex]
       : submissionData?.submission_artifacts && submissionData.submission_artifacts.length > 0
-      ? submissionData.submission_artifacts[0]
-      : undefined;
+        ? submissionData.submission_artifacts[0]
+        : undefined;
 
   const isLoading =
     isLoadingSubmission || isLoadingReviewAssignment || (!!reviewAssignment && isLoadingSubmissionReviewList);

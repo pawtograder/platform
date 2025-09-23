@@ -432,7 +432,7 @@ export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFile
     return <></>;
   }
   const shortFileName = path.basename(file.name);
-  const queryParams = new URLSearchParams(existingSearchParams);
+  const queryParams = new URLSearchParams(existingSearchParams.toString());
   queryParams.set("file_id", comment.submission_file_id.toString());
 
   const baseUrl = linkToSubPage(pathname, "files", queryParams);
@@ -1048,7 +1048,6 @@ export function RubricCheckGlobal({
 
                 {linkedFileId && submission && (
                   <Link
-
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
