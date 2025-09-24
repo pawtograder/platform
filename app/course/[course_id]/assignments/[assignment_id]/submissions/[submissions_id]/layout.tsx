@@ -577,8 +577,22 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
         loading={updatingReview}
         onClick={async () => {
           setUpdatingReview(true);
-          await submissionController.submission_reviews.update(submissionReviewId, { released: false });
-          setUpdatingReview(false);
+          try {
+            await submissionController.submission_reviews.update(submissionReviewId, { released: false });
+            toaster.create({
+              title: "Review unreleased",
+              type: "success"
+            });
+          } catch (error) {
+            const errorId = Sentry.captureException(error);
+            toaster.create({
+              title: "Error unreleasing review",
+              description: `Failed to unrelease the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+              type: "error"
+            });
+          } finally {
+            setUpdatingReview(false);
+          }
         }}
       >
         Unrelease
@@ -593,8 +607,22 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
         loading={updatingReview}
         onClick={async () => {
           setUpdatingReview(true);
-          await submissionController.submission_reviews.update(submissionReviewId, { released: true });
-          setUpdatingReview(false);
+          try {
+            await submissionController.submission_reviews.update(submissionReviewId, { released: true });
+            toaster.create({
+              title: "Review released",
+              type: "success"
+            });
+          } catch (error) {
+            const errorId = Sentry.captureException(error);
+            toaster.create({
+              title: "Error releasing review",
+              description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+              type: "error"
+            });
+          } finally {
+            setUpdatingReview(false);
+          }
         }}
       >
         Release
@@ -827,10 +855,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
           Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
-          <AdjustDueDateDialog
-            student_id={submission.profile_id || ""}
-            assignment={assignment?.assignment || undefined}
-          />
+          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={submission.assignments} />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Alert status="warning">

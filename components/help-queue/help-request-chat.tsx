@@ -651,7 +651,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
                             <HStack key={fileRef?.id}>
                               <Icon as={BsFileEarmark} color="fg.muted" />
                               <Link
-                                href={`/course/${request.class_id}/assignments/${fileRef?.assignment_id}/submissions/${fileRef?.submission_id}/files?file_id=${fileRef?.submission_file_id}#L${fileRef?.line_number}`}
+                                href={`/course/${request.class_id}/assignments/${fileRef?.assignment_id}/submissions/${fileRef?.submission_id}/files?file_id=${fileRef?.submission_file_id}${fileRef?.line_number ? `#L${fileRef.line_number}` : ""}`}
                                 key={fileRef?.id}
                               >
                                 <Text fontSize="sm" _hover={{ textDecoration: "underline" }}>
