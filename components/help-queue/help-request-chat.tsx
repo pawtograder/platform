@@ -2,7 +2,19 @@
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { Assignment, HelpRequest, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
-import { AvatarGroup, Badge, Box, Card, Flex, HStack, Icon, IconButton, Input, Stack, Text } from "@chakra-ui/react";
+import {
+  Accordion,
+  AvatarGroup,
+  Badge,
+  Box,
+  Flex,
+  HStack,
+  Icon,
+  IconButton,
+  Input,
+  Stack,
+  Text
+} from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -12,6 +24,7 @@ import {
   BsClipboardCheck,
   BsClipboardCheckFill,
   BsCode,
+  BsChevronDown,
   BsFileEarmark,
   BsPencil,
   BsPeople,
@@ -460,207 +473,209 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
   }
 
   return (
-    <Card.Root variant="outline" m={4}>
-      <Card.Header>
-        <HStack justify="space-between">
-          <HStack>
-            <Icon as={BsCode} />
-            <Text fontWeight="medium">Referenced Code</Text>
+    <Accordion.Root collapsible defaultValue={isEditing ? ["help-request-file-refs"] : []}>
+      <Accordion.Item value="help-request-file-refs">
+        <Accordion.ItemTrigger px={2} py={1} _hover={{ bg: "transparent" }}>
+          <HStack gap={2} justifyContent="space-between" w="100%">
+            <HStack gap={2}>
+              <Icon as={BsCode} />
+              <Text fontWeight="medium" fontSize="sm">
+                Referenced Code
+              </Text>
+            </HStack>
+            <HStack gap={1}>
+              {canEdit && request.status !== "resolved" && request.status !== "closed" && !isEditing && (
+                <Tooltip content="Edit code references" showArrow>
+                  <IconButton aria-label="Edit code references" size="xs" variant="ghost" onClick={handleEditClick}>
+                    <Icon as={BsPencil} />
+                  </IconButton>
+                </Tooltip>
+              )}
+              <Accordion.ItemIndicator>
+                <Icon as={BsChevronDown} />
+              </Accordion.ItemIndicator>
+            </HStack>
           </HStack>
-          {canEdit && request.status !== "resolved" && request.status !== "closed" && !isEditing && (
-            <Tooltip content="Edit code references" showArrow>
-              <IconButton aria-label="Edit code references" size="sm" variant="ghost" onClick={handleEditClick}>
-                <Icon as={BsPencil} />
-              </IconButton>
-            </Tooltip>
-          )}
-        </HStack>
-      </Card.Header>
-      <Card.Body>
-        <Stack spaceY={3}>
-          {isEditing ? (
-            /* Edit Mode */
-            <Box>
-              {/* Submission Selection */}
-              <Box mb={4}>
-                <Text fontSize="sm" fontWeight="medium" mb={2}>
-                  Referenced Submission:
-                </Text>
-                <Select
-                  placeholder="Select a submission to reference (optional)"
-                  isClearable={true}
-                  value={
-                    editingSubmissionId && editingSubmission
-                      ? {
-                          label: `${editingSubmission.repository} (Run #${editingSubmission.run_number}) - ${new Date(editingSubmission.created_at).toLocaleDateString()}`,
-                          value: editingSubmissionId.toString()
-                        }
-                      : null
-                  }
-                  options={
-                    userSubmissions?.data
-                      ?.filter((submission) => submission.id)
-                      .map((submission) => ({
-                        label: `${submission.repository} (Run #${submission.run_number}) - ${new Date(submission.created_at).toLocaleDateString()}`,
-                        value: submission.id!.toString()
-                      })) || []
-                  }
-                  onChange={(option: { label: string; value: string } | null) => {
-                    const submissionId = option?.value ? Number.parseInt(option.value) : null;
-                    handleSubmissionChange(submissionId);
-                  }}
-                />
-              </Box>
-
-              {/* File References */}
-              {editingSubmissionId && (
+        </Accordion.ItemTrigger>
+        <Accordion.ItemContent>
+          <Accordion.ItemBody px={2} py={2}>
+            <Stack spaceY={3}>
+              {isEditing ? (
                 <Box>
-                  <Text fontSize="sm" fontWeight="medium" mb={2}>
-                    Specific Files (Optional):
-                  </Text>
+                  <Box mb={4}>
+                    <Text fontSize="sm" fontWeight="medium" mb={2}>
+                      Referenced Submission:
+                    </Text>
+                    <Select
+                      placeholder="Select a submission to reference (optional)"
+                      isClearable={true}
+                      value={
+                        editingSubmissionId && editingSubmission
+                          ? {
+                              label: `${editingSubmission.repository} (Run #${editingSubmission.run_number}) - ${new Date(editingSubmission.created_at).toLocaleDateString()}`,
+                              value: editingSubmissionId.toString()
+                            }
+                          : null
+                      }
+                      options={
+                        userSubmissions?.data
+                          ?.filter((submission) => submission.id)
+                          .map((submission) => ({
+                            label: `${submission.repository} (Run #${submission.run_number}) - ${new Date(submission.created_at).toLocaleDateString()}`,
+                            value: submission.id!.toString()
+                          })) || []
+                      }
+                      onChange={(option: { label: string; value: string } | null) => {
+                        const submissionId = option?.value ? Number.parseInt(option.value) : null;
+                        handleSubmissionChange(submissionId);
+                      }}
+                    />
+                  </Box>
 
-                  {/* Current file references being edited */}
-                  {editingReferences.length > 0 && (
-                    <Stack spaceY={2} mb={4}>
-                      {editingReferences.map((ref, index) => {
-                        const fileName =
-                          submissionFiles?.data?.find((f) => f.id === ref.submission_file_id)?.name || "Unknown";
-                        return (
-                          <Box
-                            key={`editing-ref-${index}-${ref.submission_file_id}`}
-                            p={3}
-                            border="1px solid"
-                            borderColor="gray.200"
-                            borderRadius="md"
-                          >
-                            <HStack justify="space-between" align="center">
-                              <HStack flex={1}>
-                                <Icon as={BsFileEarmark} color="fg.muted" />
-                                <Text fontWeight="medium">{fileName}</Text>
-                              </HStack>
-                              <HStack>
-                                <Input
-                                  placeholder="Line number (optional)"
-                                  type="number"
-                                  value={ref.line_number || ""}
-                                  onChange={(e) => {
-                                    const lineNumber = e.target.value ? Number.parseInt(e.target.value) : undefined;
-                                    handleUpdateLineNumber(index, lineNumber);
-                                  }}
-                                  width="150px"
-                                  min={1}
-                                  size="sm"
-                                />
-                                <IconButton
-                                  aria-label="Remove file reference"
-                                  size="sm"
-                                  colorPalette="red"
-                                  onClick={() => handleRemoveFileReference(index)}
-                                >
-                                  <Icon as={BsTrash} />
-                                </IconButton>
-                              </HStack>
-                            </HStack>
-                          </Box>
-                        );
-                      })}
-                    </Stack>
+                  {editingSubmissionId && (
+                    <Box>
+                      <Text fontSize="sm" fontWeight="medium" mb={2}>
+                        Specific Files (Optional):
+                      </Text>
+
+                      {editingReferences.length > 0 && (
+                        <Stack spaceY={2} mb={4}>
+                          {editingReferences.map((ref, index) => {
+                            const fileName =
+                              submissionFiles?.data?.find((f) => f.id === ref.submission_file_id)?.name || "Unknown";
+                            return (
+                              <Box
+                                key={`editing-ref-${index}-${ref.submission_file_id}`}
+                                p={3}
+                                border="1px solid"
+                                borderColor="gray.200"
+                                borderRadius="md"
+                              >
+                                <HStack justify="space-between" align="center">
+                                  <HStack flex={1}>
+                                    <Icon as={BsFileEarmark} color="fg.muted" />
+                                    <Text fontWeight="medium">{fileName}</Text>
+                                  </HStack>
+                                  <HStack>
+                                    <Input
+                                      placeholder="Line number (optional)"
+                                      type="number"
+                                      value={ref.line_number || ""}
+                                      onChange={(e) => {
+                                        const lineNumber = e.target.value ? Number.parseInt(e.target.value) : undefined;
+                                        handleUpdateLineNumber(index, lineNumber);
+                                      }}
+                                      width="150px"
+                                      min={1}
+                                      size="sm"
+                                    />
+                                    <IconButton
+                                      aria-label="Remove file reference"
+                                      size="sm"
+                                      colorPalette="red"
+                                      onClick={() => handleRemoveFileReference(index)}
+                                    >
+                                      <Icon as={BsTrash} />
+                                    </IconButton>
+                                  </HStack>
+                                </HStack>
+                              </Box>
+                            );
+                          })}
+                        </Stack>
+                      )}
+
+                      {availableFiles.length > 0 && (
+                        <Box mb={4}>
+                          <Text fontSize="sm" fontWeight="medium" mb={2}>
+                            Add specific file:
+                          </Text>
+                          <Select
+                            placeholder="Select a file to add"
+                            options={availableFiles.map((file) => ({
+                              label: file.name,
+                              value: file.id.toString()
+                            }))}
+                            onChange={(option: { label: string; value: string } | null) => {
+                              if (option) {
+                                handleAddFileReference(Number.parseInt(option.value));
+                              }
+                            }}
+                            value={null}
+                            isClearable={false}
+                          />
+                        </Box>
+                      )}
+                    </Box>
                   )}
 
-                  {/* Add new file reference */}
-                  {availableFiles.length > 0 && (
-                    <Box mb={4}>
+                  <HStack>
+                    <Button size="sm" onClick={handleCancelEdit}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" colorPalette="green" onClick={handleSaveChanges} loading={false}>
+                      Save Changes
+                    </Button>
+                  </HStack>
+                </Box>
+              ) : (
+                <Box>
+                  {request.referenced_submission_id && referencedSubmission?.data?.[0] && (
+                    <Box>
                       <Text fontSize="sm" fontWeight="medium" mb={2}>
-                        Add specific file:
+                        Submission:
                       </Text>
-                      <Select
-                        placeholder="Select a file to add"
-                        options={availableFiles.map((file) => ({
-                          label: file.name,
-                          value: file.id.toString()
-                        }))}
-                        onChange={(option: { label: string; value: string } | null) => {
-                          if (option) {
-                            handleAddFileReference(Number.parseInt(option.value));
-                          }
-                        }}
-                        value={null}
-                        isClearable={false}
-                      />
+                      <HStack>
+                        <Badge colorPalette="blue">{referencedSubmission.data[0].repository}</Badge>
+                        <Link
+                          href={`/course/${request.class_id}/assignments/${referencedSubmission.data[0].assignment_id}/submissions/${referencedSubmission.data[0].id}`}
+                        >
+                          <Text fontSize="sm" color="fg.muted" _hover={{ textDecoration: "underline" }}>
+                            Run #{referencedSubmission.data[0].run_number} •{" "}
+                            {new Date(referencedSubmission.data[0].created_at).toLocaleDateString()}
+                          </Text>
+                        </Link>
+                      </HStack>
+                    </Box>
+                  )}
+
+                  {referencedFiles?.data && referencedFiles.data.length > 0 && (
+                    <Box>
+                      <Text fontSize="sm" fontWeight="medium" mb={2}>
+                        Files:
+                      </Text>
+                      <Stack spaceY={2}>
+                        {referencedFiles.data.map((file) => {
+                          const fileRef = currentFileReferences?.find((ref) => ref.submission_file_id === file.id);
+                          return (
+                            <HStack key={fileRef?.id}>
+                              <Icon as={BsFileEarmark} color="fg.muted" />
+                              <Link
+                                href={`/course/${request.class_id}/assignments/${fileRef?.assignment_id}/submissions/${fileRef?.submission_id}/files?file_id=${fileRef?.submission_file_id}#L${fileRef?.line_number}`}
+                                key={fileRef?.id}
+                              >
+                                <Text fontSize="sm" _hover={{ textDecoration: "underline" }}>
+                                  {file.name}
+                                </Text>
+                              </Link>
+                              {fileRef?.line_number && (
+                                <Badge size="sm" variant="outline">
+                                  Line {fileRef.line_number}
+                                </Badge>
+                              )}
+                            </HStack>
+                          );
+                        })}
+                      </Stack>
                     </Box>
                   )}
                 </Box>
               )}
-
-              {/* Edit actions */}
-              <HStack>
-                <Button size="sm" onClick={handleCancelEdit}>
-                  Cancel
-                </Button>
-                <Button size="sm" colorPalette="green" onClick={handleSaveChanges} loading={false}>
-                  Save Changes
-                </Button>
-              </HStack>
-            </Box>
-          ) : (
-            /* Display Mode */
-            <Box>
-              {/* Referenced Submission */}
-              {request.referenced_submission_id && referencedSubmission?.data?.[0] && (
-                <Box>
-                  <Text fontSize="sm" fontWeight="medium" mb={2}>
-                    Submission:
-                  </Text>
-                  <HStack>
-                    <Badge colorPalette="blue">{referencedSubmission.data[0].repository}</Badge>
-                    <Link
-                      href={`/course/${request.class_id}/assignments/${referencedSubmission.data[0].assignment_id}/submissions/${referencedSubmission.data[0].id}`}
-                    >
-                      <Text fontSize="sm" color="fg.muted" _hover={{ textDecoration: "underline" }}>
-                        Run #{referencedSubmission.data[0].run_number} •{" "}
-                        {new Date(referencedSubmission.data[0].created_at).toLocaleDateString()}
-                      </Text>
-                    </Link>
-                  </HStack>
-                </Box>
-              )}
-
-              {/* Referenced Files */}
-              {referencedFiles?.data && referencedFiles.data.length > 0 && (
-                <Box>
-                  <Text fontSize="sm" fontWeight="medium" mb={2}>
-                    Files:
-                  </Text>
-                  <Stack spaceY={2}>
-                    {referencedFiles.data.map((file) => {
-                      const fileRef = currentFileReferences?.find((ref) => ref.submission_file_id === file.id);
-                      return (
-                        <HStack key={fileRef?.id}>
-                          <Icon as={BsFileEarmark} color="fg.muted" />
-                          <Link
-                            href={`/course/${request.class_id}/assignments/${fileRef?.assignment_id}/submissions/${fileRef?.submission_id}/files?file_id=${fileRef?.submission_file_id}#L${fileRef?.line_number}`}
-                            key={fileRef?.id}
-                          >
-                            <Text fontSize="sm" _hover={{ textDecoration: "underline" }}>
-                              {file.name}
-                            </Text>
-                          </Link>
-                          {fileRef?.line_number && (
-                            <Badge size="sm" variant="outline">
-                              Line {fileRef.line_number}
-                            </Badge>
-                          )}
-                        </HStack>
-                      );
-                    })}
-                  </Stack>
-                </Box>
-              )}
-            </Box>
-          )}
-        </Stack>
-      </Card.Body>
-    </Card.Root>
+            </Stack>
+          </Accordion.ItemBody>
+        </Accordion.ItemContent>
+      </Accordion.Item>
+    </Accordion.Root>
   );
 };
 

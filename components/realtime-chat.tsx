@@ -424,31 +424,31 @@ export const RealtimeChat = ({
                     </HStack>
                   )}
                   <Box
-                  ref={(el: HTMLDivElement | null) => {
-                    if (el && "id" in message && typeof message.id === "number") {
-                      messageRefs.current.set(message.id, el);
-                    }
-                  }}
-                  data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
-                  data-message-author-id={getCurrentMessageAuthor(message)}
-                  style={{
-                    animation: "slideInFromBottom 0.3s ease-out"
-                  }}
-                >
-                  <ChatMessageItem
-                    message={message}
-                    isOwnMessage={
-                      getCurrentMessageAuthor(message) === private_profile_id ||
-                      getCurrentMessageAuthor(message) === (user?.id || "")
-                    }
-                    showHeader={showHeader}
-                    replyToMessage={replyToMsg}
-                    readReceipts={readReceipts}
-                    onReply={handleReply}
-                    allMessages={allMessages}
-                    currentUserId={private_profile_id}
-                    helpRequestStudentIds={helpRequestStudentIds}
-                  />
+                    ref={(el: HTMLDivElement | null) => {
+                      if (el && "id" in message && typeof message.id === "number") {
+                        messageRefs.current.set(message.id, el);
+                      }
+                    }}
+                    data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
+                    data-message-author-id={getCurrentMessageAuthor(message)}
+                    style={{
+                      animation: "slideInFromBottom 0.3s ease-out"
+                    }}
+                  >
+                    <ChatMessageItem
+                      message={message}
+                      isOwnMessage={
+                        getCurrentMessageAuthor(message) === private_profile_id ||
+                        getCurrentMessageAuthor(message) === (user?.id || "")
+                      }
+                      showHeader={showHeader}
+                      replyToMessage={replyToMsg}
+                      readReceipts={readReceipts}
+                      onReply={handleReply}
+                      allMessages={allMessages}
+                      currentUserId={private_profile_id}
+                      helpRequestStudentIds={helpRequestStudentIds}
+                    />
                   </Box>
                 </Box>
               );
