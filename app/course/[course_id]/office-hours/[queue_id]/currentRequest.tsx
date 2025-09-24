@@ -68,7 +68,7 @@ export default function CurrentRequest({ request, position }: { request: HelpReq
         maxW={{ base: "md", md: "full" }}
         mx="auto"
       >
-        <HelpRequestChat request={request} />
+        <HelpRequestChat request_id={request.id} />
       </Flex>
     </Box>
   );

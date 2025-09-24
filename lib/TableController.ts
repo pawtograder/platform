@@ -335,12 +335,13 @@ export function useTableControllerTableValues<
     Query
   >
 >(controller: TableController<T, Query, IDType, ResultType>): PossiblyTentativeResult<ResultType>[] {
-  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>([]);
+  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>(() => {
+    return controller.list().data.map((row) => row as PossiblyTentativeResult<ResultType>);
+  });
   useEffect(() => {
-    const { unsubscribe, data } = controller.list((data) => {
+    const { unsubscribe } = controller.list((data) => {
       setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     });
-    setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     return unsubscribe;
   }, [controller]);
   return values;
@@ -639,34 +640,67 @@ export default class TableController<
         __db_pending: false
       })) as PossiblyTentativeResult<ResultOne>[];
 
-      // Update internal state
-      this._rows = newRows;
-
       // Calculate changes for list listeners
       const oldIds = new Set(oldRows.map((r) => (r as ResultOne & { id: IDType }).id));
       const newIds = new Set(newRows.map((r) => (r as ResultOne & { id: IDType }).id));
 
       const entered = newRows.filter((r) => !oldIds.has((r as ResultOne & { id: IDType }).id)) as ResultOne[];
       const left = oldRows.filter((r) => !newIds.has((r as ResultOne & { id: IDType }).id)) as ResultOne[];
+      // If membership (by id) has not changed, avoid replacing the array and avoid list notifications.
+      if (entered.length === 0 && left.length === 0) {
+        const nextById = new Map<IDType, PossiblyTentativeResult<ResultOne>>(
+          newRows.map((r) => [(r as ResultOne & { id: IDType }).id, r])
+        );
 
-      // Notify list listeners
-      this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
-
-      // Notify item listeners for all items
-      for (const row of newRows) {
-        const id = (row as ResultOne & { id: IDType }).id;
-        const listeners = this._itemDataListeners.get(id);
-        if (listeners) {
-          listeners.forEach((listener) => listener(row));
+        // Update existing rows in place and notify item listeners
+        for (let i = 0; i < this._rows.length; i++) {
+          const current = this._rows[i] as unknown as ResultOne & { id: IDType };
+          const updated = nextById.get(current.id);
+          if (updated) {
+            // Only notify if deeply different
+            if (!this._deepEqualObjects(current, updated)) {
+              this._rows[i] = updated as PossiblyTentativeResult<ResultOne>;
+              const listeners = this._itemDataListeners.get(current.id);
+              if (listeners) {
+                listeners.forEach((listener) => listener(this._rows[i]));
+              }
+            }
+          }
         }
-      }
+      } else {
+        // Membership changed: replace rows and notify list + item listeners accordingly
+        this._rows = newRows;
 
-      // Notify item listeners for removed items
-      for (const row of left) {
-        const id = (row as ResultOne & { id: IDType }).id;
-        const listeners = this._itemDataListeners.get(id);
-        if (listeners) {
-          listeners.forEach((listener) => listener(undefined));
+        // Notify list listeners
+        this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
+
+        // Notify item listeners only for newly entered or changed items
+        const oldById = new Map<IDType, PossiblyTentativeResult<ResultOne>>(
+          oldRows.map((r) => [(r as ResultOne & { id: IDType }).id, r as PossiblyTentativeResult<ResultOne>])
+        );
+        const enteredIdSet = new Set<IDType>(entered.map((r) => (r as ResultOne & { id: IDType }).id));
+
+        for (const row of newRows) {
+          const id = (row as ResultOne & { id: IDType }).id;
+          const listeners = this._itemDataListeners.get(id);
+          if (!listeners) continue;
+          if (enteredIdSet.has(id)) {
+            listeners.forEach((listener) => listener(row));
+            continue;
+          }
+          const previous = oldById.get(id);
+          if (!this._deepEqualObjects(previous as unknown, row as unknown)) {
+            listeners.forEach((listener) => listener(row));
+          }
+        }
+
+        // Notify item listeners for removed items
+        for (const row of left) {
+          const id = (row as ResultOne & { id: IDType }).id;
+          const listeners = this._itemDataListeners.get(id);
+          if (listeners) {
+            listeners.forEach((listener) => listener(undefined));
+          }
         }
       }
     } catch (error) {
@@ -1229,6 +1263,66 @@ export default class TableController<
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Shallow equality check for two plain objects. Returns true if they have
+   * the same set of keys and all corresponding values are strictly equal.
+   */
+  private _shallowEqualObjects(objA: unknown, objB: unknown): boolean {
+    if (objA === objB) return true;
+    if (!objA || !objB) return false;
+    if (typeof objA !== "object" || typeof objB !== "object") return false;
+
+    const a = objA as Record<string, unknown>;
+    const b = objB as Record<string, unknown>;
+
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      if (a[key] !== b[key]) return false;
+    }
+    return true;
+  }
+
+  /** Deep equality for JSON-like values (objects/arrays/primitives). */
+  private _deepEqualObjects(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    if (typeof a !== typeof b) return false;
+
+    // Dates: compare time value
+    if (a instanceof Date && b instanceof Date) {
+      return a.getTime() === b.getTime();
+    }
+
+    // Arrays
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (!this._deepEqualObjects(a[i], b[i])) return false;
+      }
+      return true;
+    }
+
+    // Objects
+    if (typeof a === "object" && typeof b === "object") {
+      const aObj = a as Record<string, unknown>;
+      const bObj = b as Record<string, unknown>;
+      const aKeys = Object.keys(aObj);
+      const bKeys = Object.keys(bObj);
+      if (aKeys.length !== bKeys.length) return false;
+      for (const key of aKeys) {
+        if (!Object.prototype.hasOwnProperty.call(bObj, key)) return false;
+        if (!this._deepEqualObjects(aObj[key], bObj[key])) return false;
+      }
+      return true;
+    }
+
+    // Fallback strict equality for primitives and mismatched types
+    return false;
   }
 
   /**

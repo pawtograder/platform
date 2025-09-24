@@ -101,27 +101,19 @@ export default function HelpRequestPage() {
     }
   }, [title]);
 
-  if (realtimeLoading || !request) {
+  if (!request) {
     return <Skeleton />;
   }
 
   return (
     <Box>
-      {/* Connection Status Indicator */}
-      {!isConnected && (
-        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
-          Help request updates may not appear immediately. Connection status: {connectionStatus?.overall}
-        </Alert>
-      )}
-
       <Box transition="opacity 0.2s ease-in-out">
         <VStack gap={4} align="stretch" mb={4}>
           <HStack justify="space-between" align="center">
             <HelpRequestStatusIndicator status={request.status} />
           </HStack>
         </VStack>
-
-        <HelpRequestChat request={request} />
+        <HelpRequestChat request_id={request.id} />
       </Box>
     </Box>
   );

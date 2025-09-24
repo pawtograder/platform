@@ -211,7 +211,7 @@ export default function HelpRequestHistory({
 
                 {expandedRequest === request.id && (
                   <Box mt={4} pt={4} borderTopWidth="1px">
-                    <HelpRequestChat request={request} />
+                    <HelpRequestChat request_id={request.id} />
                   </Box>
                 )}
               </Card.Body>

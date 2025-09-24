@@ -50,6 +50,7 @@ import VideoCallControls from "./video-call-controls";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import {
+  useHelpRequest,
   useHelpRequestFeedback,
   useHelpRequestFileReferences,
   useHelpRequestMessages,
@@ -853,22 +854,26 @@ const HelpRequestStudents = ({
  * @param request - The help request object
  * @returns JSX element for the chat interface with controls
  */
-export default function HelpRequestChat({ request }: { request: HelpRequest }) {
+export default function HelpRequestChat({ request_id }: { request_id: number }) {
+  const request = useHelpRequest(request_id);
   const { private_profile_id, role } = useClassProfiles();
   const profiles = useAllProfilesForClass();
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const readOnly = request.status === "resolved" || request.status === "closed";
+  const readOnly = request?.status === "resolved" || request?.status === "closed";
 
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";
 
   // Get data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
-  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
-  const helpRequestMessages = useHelpRequestMessages(request.id);
+  const helpRequestStudentData = useMemo(
+    () => allHelpRequestStudents.filter((student) => student.help_request_id === request?.id),
+    [allHelpRequestStudents, request?.id]
+  );
+  const helpRequestMessages = useHelpRequestMessages(request_id);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -884,8 +889,8 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         try {
           await studentHelpActivity.create({
             student_profile_id: student.profile_id,
-            class_id: request.class_id,
-            help_request_id: request.id,
+            class_id: Number(params.course_id),
+            help_request_id: request_id,
             activity_type: activityType,
             activity_description: description
           });
@@ -897,7 +902,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         }
       }
     },
-    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
+    [params.course_id, request_id, studentHelpActivity, helpRequestStudentData]
   );
 
   // Note: helpRequestMessages and helpRequestStudentData are already defined above
@@ -908,9 +913,9 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   // Check if this specific help request has feedback from the currently-logged in student
   const hasExistingFeedback = useMemo(() => {
     return allFeedback.some(
-      (feedback) => feedback.help_request_id === request.id && feedback.student_profile_id === private_profile_id
+      (feedback) => feedback.help_request_id === request_id && feedback.student_profile_id === private_profile_id
     );
-  }, [allFeedback, request.id, private_profile_id]);
+  }, [allFeedback, request_id, private_profile_id]);
 
   // Get student profiles for display - memoized to prevent unnecessary recalculations
   const { studentIds, students } = useMemo(() => {
@@ -942,11 +947,12 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   // Check if current user can access video controls (join/start video calls)
   const canAccessVideoControls = useMemo(() => {
     return (
-      isInstructorOrGrader ||
-      (!request.is_private && role.role === "student") ||
-      (request.is_private && studentIds.includes(private_profile_id!))
+      request &&
+      (isInstructorOrGrader ||
+        (!request.is_private && role.role === "student") ||
+        (request.is_private && studentIds.includes(private_profile_id!)))
     );
-  }, [isInstructorOrGrader, request.is_private, role.role, studentIds, private_profile_id]);
+  }, [isInstructorOrGrader, request, role.role, studentIds, private_profile_id]);
 
   // Check if current user can access request management controls (resolve/close)
   const canAccessRequestControls = useMemo(() => {
@@ -1003,7 +1009,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
    */
   const handleFeedbackSuccess = useCallback(async () => {
     const action = feedbackModal.modalData?.action;
-    if (!action) return;
+    if (!action || !request) return;
 
     try {
       // Only update request status if it's not already resolved/closed
@@ -1030,7 +1036,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         description: `Failed to ${action} the request: ${error instanceof Error ? error.message : String(error)}`
       });
     }
-  }, [feedbackModal, helpRequests, request.id, private_profile_id, logActivityForAllStudents, request.status]);
+  }, [feedbackModal, helpRequests, request, private_profile_id, logActivityForAllStudents]);
 
   const resolveRequest = useCallback(async () => {
     // For students, show feedback modal first
@@ -1040,13 +1046,13 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     }
 
     // For instructors/graders, resolve directly
-    await helpRequests.update(request.id, {
+    await helpRequests.update(request_id, {
       resolved_by: private_profile_id,
       resolved_at: new Date().toISOString(),
       status: "resolved"
     });
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [helpRequests, request.id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
+  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
 
   const closeRequest = useCallback(async () => {
     // For students, show feedback modal first
@@ -1056,11 +1062,11 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     }
 
     // For instructors/graders, close directly
-    await helpRequests.update(request.id, {
+    await helpRequests.update(request_id, {
       status: "closed"
     });
     await logActivityForAllStudents("request_updated", "Request closed by instructor");
-  }, [helpRequests, request.id, logActivityForAllStudents, role.role, feedbackModal]);
+  }, [helpRequests, request_id, logActivityForAllStudents, role.role, feedbackModal]);
 
   /**
    * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
@@ -1074,7 +1080,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
    */
   const popOutChat = useCallback(() => {
     const courseId = params.course_id;
-    const requestId = request.id;
+    const requestId = request_id;
 
     // Construct the URL for the popped out chat
     const popOutUrl = `/course/${courseId}/office-hours/request/${requestId}?popout=true`;
@@ -1100,7 +1106,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         description: "Please allow pop-ups for this site to use the pop-out feature."
       });
     }
-  }, [params.course_id, request.id, requestTitle]);
+  }, [params.course_id, request_id, requestTitle]);
 
   return (
     <Flex
@@ -1124,12 +1130,14 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           <Stack spaceY="2">
             <Text fontWeight="medium">{requestTitle}</Text>
             {/* Students Management */}
-            <HelpRequestStudents
-              request={request}
-              students={students}
-              currentUserCanEdit={!readOnly && canAccessRequestControls}
-              currentAssociations={helpRequestStudentData}
-            />
+            {request && (
+              <HelpRequestStudents
+                request={request}
+                students={students}
+                currentUserCanEdit={!readOnly && canAccessRequestControls}
+                currentAssociations={helpRequestStudentData}
+              />
+            )}
           </Stack>
 
           {/* Control Buttons */}
@@ -1144,15 +1152,15 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
             )}
 
             {/* Help Request Watch Button - Available to all users */}
-            <HelpRequestWatchButton helpRequestId={request.id} variant="ghost" size="sm" />
+            <HelpRequestWatchButton helpRequestId={request_id} variant="ghost" size="sm" />
 
             {/* Video Call Controls - Available to all users with video access (disabled in read-only mode) */}
-            {!readOnly && canAccessVideoControls && (
+            {!readOnly && canAccessVideoControls && request && (
               <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
             )}
 
             {/* Request Management Controls - Available to Instructors/Graders and Students Associated with Request (disabled in read-only mode) */}
-            {!readOnly && canAccessRequestControls && (
+            {!readOnly && canAccessRequestControls && request && (
               <>
                 {/* Instructor/Grader Only Controls */}
                 {isInstructorOrGrader && (
@@ -1239,7 +1247,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
       {/* File References Section */}
       <Box width="100%" px={{ base: 2, md: 4 }} borderBottomWidth="1px">
-        <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
+        {request && <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />}
       </Box>
 
       <Flex
@@ -1250,7 +1258,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         align={{ base: "stretch", md: "center" }}
       >
         <RealtimeChat
-          helpRequest={request}
+          request_id={request_id}
           helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
           readOnly={readOnly}
         />
@@ -1279,8 +1287,8 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           isOpen={feedbackModal.isOpen}
           onClose={feedbackModal.closeModal}
           onSuccess={handleFeedbackSuccess}
-          helpRequestId={request.id}
-          classId={request.class_id}
+          helpRequestId={request_id}
+          classId={Number(params.course_id)}
           studentProfileId={private_profile_id!}
         />
       )}
