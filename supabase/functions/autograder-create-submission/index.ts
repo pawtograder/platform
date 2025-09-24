@@ -126,7 +126,9 @@ function detectRateLimitType(error: unknown): {
   const remaining = headers ? parseInt(headers["x-ratelimit-remaining"] || "", 10) : NaN;
   const msg = (err?.message || "").toLowerCase();
   const resetHeader = headers?.["x-ratelimit-reset"];
-  const untilResetSec = resetHeader ? Math.max(0, parseInt(resetHeader, 10) - Math.floor(Date.now() / 1000)) : undefined;
+  const untilResetSec = resetHeader
+    ? Math.max(0, parseInt(resetHeader, 10) - Math.floor(Date.now() / 1000))
+    : undefined;
 
   if (status === 429) return { type: "secondary", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
   if (status === 403) {
