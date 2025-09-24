@@ -41,7 +41,6 @@ function getCreateRepoLimiter(org: string): Bottleneck {
   const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
   const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
   if (upstashUrl && upstashToken) {
-    console.log("Using Upstash Redis for create_repo rate limiting", upstashUrl);
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
@@ -196,8 +195,6 @@ function detectRateLimitType(error: unknown): {
   const retryAfter = headers ? parseInt(headers["retry-after"] || "", 10) : NaN;
   const remaining = headers ? parseInt(headers["x-ratelimit-remaining"] || "", 10) : NaN;
   const msg = (err?.message || "").toLowerCase();
-  console.log("detectRateLimitType msg", msg);
-  console.log("detectRateLimitType status", status);
   if (status === 429) return { type: "secondary", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
   if (status === 403) {
     if (
@@ -379,7 +376,7 @@ export async function processEnvelope(
           //No action, no metrics, no logging
           return true;
         }
-        console.log(`Syncing student team for user ${args.userId}`);
+        Sentry.addBreadcrumb({ message: `Syncing student team for user ${args.userId}`, level: "info" });
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
@@ -468,6 +465,7 @@ export async function processEnvelope(
           //No action, no metrics, no logging
           return true;
         }
+        Sentry.addBreadcrumb({ message: `Syncing staff team for org ${args.org}`, level: "info" });
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
@@ -558,10 +556,12 @@ export async function processEnvelope(
           //No action, no metrics, no logging
           return true;
         }
+        Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateRepoLimiter(org);
         const headSha = await limiter.schedule(() =>
           github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
+        Sentry.addBreadcrumb({message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}`})
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
 
         // Update repository record using the repo_id if provided (preferred method)
@@ -615,6 +615,7 @@ export async function processEnvelope(
           //No action, no metrics, no logging
           return true;
         }
+        Sentry.addBreadcrumb({ message: `Syncing repo permissions for ${repo} in org ${org}`, level: "info" });
         await github.syncRepoPermissions(org, repo, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
@@ -636,6 +637,7 @@ export async function processEnvelope(
           //No action, no metrics, no logging
           return true;
         }
+        Sentry.addBreadcrumb({ message: `Archiving repo ${repo} for org ${org}`, level: "info" });
         await github.archiveRepoAndLock(org, repo, scope);
         recordMetric(
           adminSupabase,
@@ -658,9 +660,9 @@ export async function processEnvelope(
     // Handle GitHub rate limits by re-queueing with a visibility delay
     console.trace(error);
     const rt = detectRateLimitType(error);
-    console.log("rt", rt.type);
     scope.setTag("rate_limit_type", rt.type);
-    Sentry.captureException(error, scope);
+    const errorId = Sentry.captureException(error, scope);
+    console.log(`Recorded error with ID: ${errorId}`);
 
     // Extract org for error tracking and circuit breaker logic
     const org = ((): string | undefined => {
