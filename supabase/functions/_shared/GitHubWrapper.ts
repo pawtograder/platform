@@ -552,6 +552,7 @@ export async function createRepo(
     scope?.setTag("template_owner", owner);
     scope?.setTag("repo_name", repoName);
     scope?.setTag("org", org);
+    console.log("Creating repo", template_repo, owner, repoName, org);
     const resp = await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
