@@ -1,45 +1,64 @@
 "use client";
 
+import { Tooltip } from "@/components/ui/tooltip";
 import type { IconButtonProps } from "@chakra-ui/react";
 import { ClientOnly, IconButton, Skeleton } from "@chakra-ui/react";
 import type { ThemeProviderProps } from "next-themes";
 import { ThemeProvider, useTheme } from "next-themes";
 import * as React from "react";
 import { useEffect } from "react";
-import { LuMoon, LuSun } from "react-icons/lu";
+import { LuMoon, LuSun, LuSunMoon } from "react-icons/lu";
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface ColorModeProviderProps extends ThemeProviderProps {}
 
 export function ColorModeProvider(props: ColorModeProviderProps) {
-  return <ThemeProvider attribute="class" disableTransitionOnChange {...props} />;
+  return <ThemeProvider attribute="class" disableTransitionOnChange defaultTheme="system" enableSystem {...props} />;
 }
+const USER_COLOR_MODE_OVERRIDE_KEY = "user-color-mode";
+type UserColorMode = "light" | "dark" | "system";
+
+function readUserColorModeOverride(): UserColorMode {
+  if (typeof window === "undefined") return "system";
+  const stored = window.localStorage.getItem(USER_COLOR_MODE_OVERRIDE_KEY);
+  return stored === "light" || stored === "dark" ? (stored as UserColorMode) : "system";
+}
+
+function writeUserColorModeOverride(mode: UserColorMode) {
+  if (typeof window === "undefined") return;
+  if (mode === "system") {
+    window.localStorage.removeItem(USER_COLOR_MODE_OVERRIDE_KEY);
+  } else {
+    window.localStorage.setItem(USER_COLOR_MODE_OVERRIDE_KEY, mode);
+  }
+}
+
 export function ColorModeWatcher() {
-  const { setColorMode } = useColorMode();
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e: MediaQueryListEvent) => {
-      setColorMode(e.matches ? "dark" : "light");
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [setColorMode]);
-  useEffect(() => {
-    const currentTheme = document.documentElement.getAttribute("data-theme");
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    if (!currentTheme) {
-      setColorMode(mediaQuery.matches ? "dark" : "light");
-    }
-    // This is intentional, if you want to add setColorMode, also make sure that it is indeed possible to change the color mode in the GUI :)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Intentional no-op: next-themes handles system changes; our hook applies overrides
   return <></>;
 }
 export function useColorMode() {
   const { resolvedTheme, setTheme } = useTheme();
-  const toggleColorMode = () => {
-    setTheme(resolvedTheme === "light" ? "dark" : "light");
+  const [userColorMode, setUserColorMode] = React.useState<UserColorMode>("system");
+
+  useEffect(() => {
+    const override = readUserColorModeOverride();
+    setUserColorMode(override);
+    setTheme(override === "system" ? "system" : override);
+  }, [setTheme]);
+
+  const setColorMode = (mode: UserColorMode) => {
+    setUserColorMode(mode);
+    writeUserColorModeOverride(mode);
+    setTheme(mode === "system" ? "system" : mode);
   };
-  return { colorMode: resolvedTheme, setColorMode: setTheme, toggleColorMode };
+
+  const toggleColorMode = () => {
+    const nextMode: UserColorMode = userColorMode === "light" ? "dark" : userColorMode === "dark" ? "system" : "light";
+    console.log("nextMode", nextMode);
+    setColorMode(nextMode);
+  };
+
+  return { colorMode: resolvedTheme, userColorMode, setColorMode, toggleColorMode };
 }
 
 export function useColorModeValue<T>(light: T, dark: T) {
@@ -48,29 +67,34 @@ export function useColorModeValue<T>(light: T, dark: T) {
 }
 
 export function ColorModeIcon() {
-  const { colorMode } = useColorMode();
-  return colorMode === "light" ? <LuSun /> : <LuMoon />;
+  const { userColorMode } = useColorMode();
+  if (userColorMode === "system") return <LuSunMoon />;
+  return userColorMode === "light" ? <LuSun /> : <LuMoon />;
 }
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface ColorModeButtonProps extends Omit<IconButtonProps, "aria-label"> {}
 
 export const ColorModeButton = React.forwardRef<HTMLButtonElement, ColorModeButtonProps>(
   function ColorModeButton(props, ref) {
-    const { toggleColorMode } = useColorMode();
+    const { toggleColorMode, userColorMode } = useColorMode();
 
     return (
       <ClientOnly fallback={<Skeleton boxSize="8" />}>
-        <IconButton
-          onClick={toggleColorMode}
-          variant="ghost"
-          aria-label="Toggle color mode"
-          size="sm"
-          ref={ref}
-          {...props}
-          css={{ _icon: { width: "5", height: "5" } }}
+        <Tooltip
+          content={userColorMode === "system" ? "System mode" : userColorMode === "light" ? "Light mode" : "Dark mode"}
         >
-          <ColorModeIcon />
-        </IconButton>
+          <IconButton
+            onClick={toggleColorMode}
+            variant="ghost"
+            aria-label="Toggle color mode"
+            size="sm"
+            ref={ref}
+            {...props}
+            css={{ _icon: { width: "5", height: "5" } }}
+          >
+            <ColorModeIcon />
+          </IconButton>
+        </Tooltip>
       </ClientOnly>
     );
   }
