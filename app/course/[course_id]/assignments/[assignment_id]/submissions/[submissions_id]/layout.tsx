@@ -61,6 +61,7 @@ import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { linkToSubPage } from "./utils";
+import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -774,7 +775,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     <Flex direction="column" minW="0px">
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
-          Student&quot;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          <AdjustDueDateDialog
+            student_id={submission.profile_id || ""}
+            assignment={assignment?.assignment || undefined}
+          />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Text fontSize="xs" color="fg.warning">
