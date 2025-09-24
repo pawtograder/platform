@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourseController, useStudentRoster, useCourse } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse, useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -92,7 +92,7 @@ function AdjustDueDateDialogContent({
     watch,
     reset,
     setError,
-    formState: { errors, isSubmitting, isSubmitted, dirtyFields }
+    formState: { errors, isSubmitting }
   } = useForm<AdjustDueDateInsert>({
     defaultValues: {
       hours: 0,

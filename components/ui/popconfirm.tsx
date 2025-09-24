@@ -1,4 +1,4 @@
-import { HStack, Icon, IconButton, PopoverRootProps, Text } from "@chakra-ui/react";
+import { HStack, Icon, IconButton, Text } from "@chakra-ui/react";
 import { useCallback, useRef, useState } from "react";
 import { BsCheck, BsX } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot, PopoverTrigger } from "./popover";
@@ -10,7 +10,7 @@ export const PopConfirm = ({
   confirmText,
   onConfirm,
   onCancel,
-  placement = "bottom"
+  placement = "bottom-start"
 }: {
   triggerLabel: string;
   trigger: React.ReactNode;
