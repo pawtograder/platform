@@ -262,7 +262,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("classes.user_roles.user_id", userId)
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
-    .lte("release_date", new Date().toISOString())
     .limit(1000);
   if (assignmentsError) {
     console.error(assignmentsError);
