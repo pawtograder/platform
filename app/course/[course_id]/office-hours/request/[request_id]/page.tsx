@@ -107,7 +107,7 @@ function StudentHelpRequestPageInner() {
           </HStack>
         </VStack>
 
-        <HelpRequestChat request={request} />
+        <HelpRequestChat request_id={request.id} />
       </Box>
     </Box>
   );

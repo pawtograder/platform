@@ -5,7 +5,8 @@ import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
   PossiblyTentativeResult,
   useFindTableControllerValue,
-  useListTableControllerValues
+  useListTableControllerValues,
+  useTableControllerTableValues
 } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -57,16 +58,8 @@ export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: nu
 }
 
 export function useAllProfilesForClass() {
-  const { profiles: controller } = useCourseController();
-  const [profiles, setProfiles] = useState<UserProfile[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.list((data) => {
-      setProfiles(data);
-    });
-    setProfiles(data);
-    return unsubscribe;
-  }, [controller]);
-  return profiles;
+  const { profiles } = useCourseController();
+  return useTableControllerTableValues(profiles);
 }
 
 /**
@@ -93,23 +86,13 @@ export function useAllStudentProfiles() {
 }
 export function useGradersAndInstructors() {
   const { userRolesWithProfiles: controller } = useCourseController();
-  const [gradersAndInstructors, setGradersAndInstructors] = useState<UserProfile[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.list((data) => {
-      const gradersAndInstructors = data.filter((r) => r.role === "grader" || r.role === "instructor");
-      setGradersAndInstructors((old) => {
-        if (old && old.length == gradersAndInstructors.length) {
-          if (old.every((r) => gradersAndInstructors.some((s) => s.private_profile_id === r.id))) {
-            return old;
-          }
-        }
-        return gradersAndInstructors.map((r) => r.profiles);
-      });
-    });
-    setGradersAndInstructors(data.filter((r) => r.role === "grader" || r.role === "instructor").map((r) => r.profiles));
-    return unsubscribe;
-  }, [controller]);
-  return gradersAndInstructors;
+  const filter = useCallback(
+    (r: UserRoleWithPrivateProfileAndUser) => r.role === "grader" || r.role === "instructor",
+    []
+  );
+  const roles = useListTableControllerValues(controller, filter);
+  const profiles = useMemo(() => roles.map((r) => r.profiles), [roles]);
+  return profiles;
 }
 
 export function useAllStudentRoles() {

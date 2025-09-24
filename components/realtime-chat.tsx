@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
+import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { toaster } from "@/components/ui/toaster";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
@@ -8,22 +9,22 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
+  useHelpRequest,
   useHelpRequestMessages,
   useOfficeHoursController,
   useRealtimeChat,
   type ChatMessage
 } from "@/hooks/useOfficeHoursRealtime";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { X } from "lucide-react";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "@/components/ui/markdown";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
-  helpRequest: HelpRequest;
+  request_id: number;
   helpRequestStudentIds?: string[];
   readOnly?: boolean;
 }
@@ -106,13 +107,15 @@ const ReplyPreview = ({
  */
 export const RealtimeChat = ({
   onMessage,
-  helpRequest,
+  request_id,
   helpRequestStudentIds = [],
   readOnly = false
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
-  const moderationStatus = useModerationStatus(helpRequest.class_id);
-  const messages = useHelpRequestMessages(helpRequest.id);
+  const helpRequest = useHelpRequest(request_id);
+  const { course_id } = useParams();
+  const moderationStatus = useModerationStatus(Number(course_id));
+  const messages = useHelpRequestMessages(request_id);
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
@@ -132,8 +135,8 @@ export const RealtimeChat = ({
   // Use the new realtime chat hook for chat functionality
   const { sendMessage, markMessageAsRead, isConnected, isValidating, isAuthorized, connectionError, readReceipts } =
     useRealtimeChat({
-      helpRequestId: helpRequest.id,
-      classId: helpRequest.class_id,
+      helpRequestId: request_id,
+      classId: Number(course_id),
       enableChat: true
     });
 
@@ -248,8 +251,8 @@ export const RealtimeChat = ({
             await createStudentActivity({
               values: {
                 student_profile_id: private_profile_id,
-                class_id: helpRequest.class_id,
-                help_request_id: helpRequest.id,
+                class_id: Number(course_id),
+                help_request_id: request_id,
                 activity_type: "message_sent",
                 activity_description: `Student sent a message in help request chat${replyToId ? " (reply)" : ""}`
               }
