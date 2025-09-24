@@ -61,8 +61,8 @@ BEGIN
       USING ERRCODE = 'foreign_key_violation';
   END IF;
 
-  -- Update score_override for computed columns
-  WITH parsed AS (
+  -- Single UPDATE with deterministic deduplication using DISTINCT ON
+  WITH parsed_with_ordinality AS (
     SELECT
       (col_elem->>'gradebook_column_id')::bigint AS gradebook_column_id,
       (entry_elem->>'student_id')::uuid AS student_id,
@@ -70,11 +70,19 @@ BEGIN
         WHEN entry_elem ? 'score' THEN NULLIF(entry_elem->>'score','')::numeric
         WHEN entry_elem ? 'value' THEN NULLIF(entry_elem->>'value','')::numeric
         ELSE NULL
-      END AS new_score
-    FROM jsonb_array_elements(p_updates) AS col_elem
+      END AS new_score,
+      col_ordinality * 1000 + entry_ordinality AS ordinality
+    FROM jsonb_array_elements(p_updates) WITH ORDINALITY AS col_elem(col_elem, col_ordinality)
     CROSS JOIN LATERAL jsonb_array_elements(
       COALESCE(col_elem->'entries', col_elem->'student_scores', '[]'::jsonb)
-    ) AS entry_elem
+    ) WITH ORDINALITY AS entry_elem(entry_elem, entry_ordinality)
+  ), parsed AS (
+    SELECT DISTINCT ON (gradebook_column_id, student_id)
+      gradebook_column_id,
+      student_id,
+      new_score
+    FROM parsed_with_ordinality
+    ORDER BY gradebook_column_id, student_id, ordinality DESC
   ), target_rows AS (
     SELECT gcs.id, gcs.gradebook_column_id, gcs.student_id
     FROM parsed p
@@ -90,44 +98,17 @@ BEGIN
       AND id IN (SELECT DISTINCT gradebook_column_id FROM parsed)
   )
   UPDATE public.gradebook_column_students g
-  SET score_override = p.new_score
+  SET 
+    score = CASE 
+      WHEN c.score_expression IS NULL THEN p.new_score 
+      ELSE g.score 
+    END,
+    score_override = CASE 
+      WHEN c.score_expression IS NOT NULL THEN p.new_score 
+      ELSE g.score_override 
+    END
   FROM target_rows tr
-  JOIN cols c ON c.id = tr.gradebook_column_id AND c.score_expression IS NOT NULL
-  JOIN parsed p ON p.gradebook_column_id = tr.gradebook_column_id AND p.student_id = tr.student_id
-  WHERE g.id = tr.id;
-
-  -- Update score for non-computed columns
-  WITH parsed AS (
-    SELECT
-      (col_elem->>'gradebook_column_id')::bigint AS gradebook_column_id,
-      (entry_elem->>'student_id')::uuid AS student_id,
-      CASE
-        WHEN entry_elem ? 'score' THEN NULLIF(entry_elem->>'score','')::numeric
-        WHEN entry_elem ? 'value' THEN NULLIF(entry_elem->>'value','')::numeric
-        ELSE NULL
-      END AS new_score
-    FROM jsonb_array_elements(p_updates) AS col_elem
-    CROSS JOIN LATERAL jsonb_array_elements(
-      COALESCE(col_elem->'entries', col_elem->'student_scores', '[]'::jsonb)
-    ) AS entry_elem
-  ), target_rows AS (
-    SELECT gcs.id, gcs.gradebook_column_id, gcs.student_id
-    FROM parsed p
-    JOIN public.gradebook_column_students gcs
-      ON gcs.gradebook_column_id = p.gradebook_column_id
-     AND gcs.student_id = p.student_id
-     AND gcs.class_id = p_class_id
-     AND gcs.is_private = true
-  ), cols AS (
-    SELECT id, score_expression
-    FROM public.gradebook_columns
-    WHERE class_id = p_class_id
-      AND id IN (SELECT DISTINCT gradebook_column_id FROM parsed)
-  )
-  UPDATE public.gradebook_column_students g
-  SET score = p.new_score
-  FROM target_rows tr
-  JOIN cols c ON c.id = tr.gradebook_column_id AND c.score_expression IS NULL
+  JOIN cols c ON c.id = tr.gradebook_column_id
   JOIN parsed p ON p.gradebook_column_id = tr.gradebook_column_id AND p.student_id = tr.student_id
   WHERE g.id = tr.id;
 
@@ -135,6 +116,7 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.import_gradebook_scores(bigint, jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.import_gradebook_scores(bigint, jsonb) TO authenticated;
 
 COMMENT ON FUNCTION public.import_gradebook_scores(bigint, jsonb) IS
