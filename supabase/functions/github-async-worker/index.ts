@@ -561,7 +561,7 @@ export async function processEnvelope(
         const headSha = await limiter.schedule(() =>
           github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
-        Sentry.addBreadcrumb({message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}`})
+        Sentry.addBreadcrumb({ message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}` });
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
 
         // Update repository record using the repo_id if provided (preferred method)
@@ -745,21 +745,6 @@ export async function processEnvelope(
         }
 
         // For immediate circuit breaker, requeue with 30-second delay
-        // Update API log/metrics for this failure
-        const status =
-          typeof (error as { status?: number })?.status === "number" ? (error as { status?: number }).status! : 500;
-        recordMetric(
-          adminSupabase,
-          {
-            method: envelope.method,
-            status_code: status,
-            class_id: envelope.class_id,
-            debug_id: envelope.debug_id,
-            enqueued_at: meta.enqueued_at,
-            log_id: envelope.log_id
-          },
-          scope
-        );
         await requeueWithDelay(adminSupabase, envelope, delay, scope);
         await archiveMessage(adminSupabase, meta.msg_id, scope);
         return false;
