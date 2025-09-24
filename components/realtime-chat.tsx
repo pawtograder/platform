@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
+import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { toaster } from "@/components/ui/toaster";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
@@ -14,13 +15,11 @@ import {
   useRealtimeChat,
   type ChatMessage
 } from "@/hooks/useOfficeHoursRealtime";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "@/components/ui/markdown";
 import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
