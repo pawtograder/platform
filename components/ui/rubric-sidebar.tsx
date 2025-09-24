@@ -66,7 +66,7 @@ import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
@@ -405,24 +405,56 @@ export function SubmissionArtifactCommentLink({ comment }: { comment: Submission
   const queryParams = new URLSearchParams();
   queryParams.set("artifact_id", comment.submission_artifact_id.toString());
 
-  return <Link href={`${baseUrl}?${queryParams.toString()}`}>@ {shortFileName}</Link>;
+  return (
+    <Link
+      href={`${baseUrl}?${queryParams.toString()}`}
+      prefetch={true}
+      onClick={(e) => {
+        // If already on files tab, switch client-side without navigation; otherwise allow normal navigation
+        if (pathname.includes("/files")) {
+          e.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("pawto:files-select", {
+              detail: { artifactId: comment.submission_artifact_id }
+            })
+          );
+        }
+      }}
+    >
+      @ {shortFileName}
+    </Link>
+  );
 }
 
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
   const submission = useSubmissionMaybe();
   const pathname = usePathname();
+  const existingSearchParams = useSearchParams();
   const file = submission?.submission_files.find((file) => file.id === comment.submission_file_id);
   if (!file || !submission) {
     return <></>;
   }
   const shortFileName = path.basename(file.name);
-
-  const baseUrl = linkToSubPage(pathname, "files");
-  const queryParams = new URLSearchParams();
+  const queryParams = new URLSearchParams(existingSearchParams.toString());
   queryParams.set("file_id", comment.submission_file_id.toString());
 
+  const baseUrl = linkToSubPage(pathname, "files", queryParams);
+
   return (
-    <Link href={`${baseUrl}?${queryParams.toString()}#L${comment.line}`}>
+    <Link
+      href={`${baseUrl}#L${comment.line}`}
+      prefetch={true}
+      onClick={(e) => {
+        if (pathname.includes("/files")) {
+          e.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("pawto:files-select", {
+              detail: { fileId: comment.submission_file_id, hash: `L${comment.line}` }
+            })
+          );
+        }
+      }}
+    >
       @ {shortFileName}:{comment.line}
     </Link>
   );
@@ -521,6 +553,7 @@ export function RubricCheckComment({
               {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check?.file && (
                 <Box flexShrink={1}>
                   <Link
+                    prefetch={true}
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
@@ -536,6 +569,7 @@ export function RubricCheckComment({
                 check?.artifact && (
                   <Box flexShrink={1}>
                     <Link
+                      prefetch={true}
                       href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
                     >
                       <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
@@ -882,7 +916,6 @@ export function RubricCheckGlobal({
 
   const points = check.points === 0 ? "" : criteria.is_additive ? `+${check.points}` : `-${check.points}`;
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
-  const showOptions = isGrader && hasOptions;
   const gradingIsRequired = reviewForThisRubric && check.is_required && rubricCheckComments.length == 0;
   const gradingIsPermitted =
     (isGrader ||
@@ -892,6 +925,7 @@ export function RubricCheckGlobal({
     reviewForThisRubric &&
     (criteria.max_checks_per_submission === null ||
       criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
+  const showOptions = (gradingIsPermitted || isPreviewMode) && hasOptions;
 
   const isApplied = rubricCheckComments.length > 0;
   const isReleased = reviewForThisRubric?.released || false;
@@ -927,6 +961,7 @@ export function RubricCheckGlobal({
                 </Markdown>
                 {linkedFileId && submission && (
                   <Link
+                    prefetch={true}
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
@@ -936,6 +971,7 @@ export function RubricCheckGlobal({
                 )}
                 {linkedAritfactId && submission && (
                   <Link
+                    prefetch={true}
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
@@ -1026,6 +1062,7 @@ export function RubricCheckGlobal({
                 )}
                 {linkedAritfactId && submission && (
                   <Link
+                    prefetch={true}
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
@@ -1062,6 +1099,7 @@ export function RubricCheckGlobal({
                 </HStack>
                 {linkedFileId && submission && (
                   <Link
+                    prefetch={true}
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
@@ -1071,6 +1109,7 @@ export function RubricCheckGlobal({
                 )}
                 {linkedAritfactId && submission && (
                   <Link
+                    prefetch={true}
                     href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
                   >
                     <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>

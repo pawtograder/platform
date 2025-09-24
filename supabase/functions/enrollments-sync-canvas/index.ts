@@ -11,7 +11,7 @@ import * as Sentry from "npm:@sentry/deno";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { course_id } = (await req.json()) as { course_id: number };
   if (!course_id) {
-    throw new UserVisibleError("Course ID is required");
+    throw new UserVisibleError("Course ID is required", 400);
   }
   scope?.setTag("function", "enrollments-sync-canvas");
   scope?.setTag("course_id", course_id.toString());

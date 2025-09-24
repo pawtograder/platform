@@ -14,6 +14,8 @@ import {
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
+import { createClient } from "@/utils/supabase/client";
+import * as Sentry from "@sentry/nextjs";
 import {
   ReviewAssignmentParts,
   ReviewAssignments,
@@ -25,13 +27,14 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Container, Field, Heading, HStack, List, Separator, Text, VStack } from "@chakra-ui/react";
-import { useDelete, useInvalidate, useList } from "@refinedev/core";
+import { useInvalidate, useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { MdClear } from "react-icons/md";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import AssignReviewModal from "./assignReviewModal";
+import EditReviewAssignmentModal from "./EditReviewAssignmentModal";
 import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
 
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -69,7 +72,7 @@ export type RubricWithParts = Rubric & { rubric_parts: RubricPart[] };
 // Clear Assignments Dialog Component
 function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: () => void }) {
   const { course_id, assignment_id } = useParams();
-  const { mutateAsync: deleteAssignment } = useDelete();
+  const supabase = createClient();
   const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
   const [isClearing, setIsClearing] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
@@ -137,27 +140,99 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
 
     setIsClearing(true);
     try {
-      // Delete all incomplete review assignments for the selected rubric
-      await Promise.all(
-        incompleteAssignments.map((assignment) =>
-          deleteAssignment({
-            resource: "review_assignments",
-            id: assignment.id
-          })
-        )
-      );
+      // Add Sentry breadcrumb for tracking
+      Sentry.addBreadcrumb({
+        message: "Starting clear incomplete assignments for selected rubric",
+        category: "clear_rubric_assignments",
+        data: {
+          course_id: Number(course_id),
+          assignment_id: Number(assignment_id),
+          rubric_id: selectedRubric.id,
+          rubric_name: selectedRubric.name,
+          incomplete_count: incompleteAssignments.length
+        },
+        level: "info"
+      });
+
+      // Call the clear_unfinished_review_assignments RPC for the selected rubric
+      const { data: result, error: rpcError } = await supabase.rpc("clear_unfinished_review_assignments", {
+        p_class_id: Number(course_id),
+        p_assignment_id: Number(assignment_id),
+        p_rubric_id: selectedRubric.id
+      });
+
+      if (rpcError) {
+        Sentry.addBreadcrumb({
+          message: "Clear rubric assignments RPC failed",
+          category: "clear_rubric_assignments",
+          data: { error: rpcError.message, code: rpcError.code },
+          level: "error"
+        });
+
+        toaster.error({
+          title: "Error Clearing Assignments",
+          description: rpcError.message || "Failed to clear incomplete assignments"
+        });
+        return;
+      }
+
+      // Type cast the result for proper access to properties
+      const typedResult = result as {
+        success: boolean;
+        error?: string;
+        assignments_deleted: number;
+        parts_deleted: number;
+        message?: string;
+      };
+
+      if (!typedResult?.success) {
+        Sentry.addBreadcrumb({
+          message: "Clear rubric assignments RPC returned failure",
+          category: "clear_rubric_assignments",
+          data: { result: typedResult },
+          level: "error"
+        });
+
+        toaster.error({
+          title: "Error Clearing Assignments",
+          description: typedResult?.error || "Unknown error occurred while clearing assignments"
+        });
+        return;
+      }
+
+      // Log successful operation
+      Sentry.addBreadcrumb({
+        message: "Clear rubric assignments completed successfully",
+        category: "clear_rubric_assignments",
+        data: {
+          rubric_id: selectedRubric.id,
+          rubric_name: selectedRubric.name,
+          assignments_deleted: typedResult.assignments_deleted,
+          parts_deleted: typedResult.parts_deleted
+        },
+        level: "info"
+      });
 
       toaster.success({
         title: "Assignments Cleared",
-        description: `Successfully cleared ${incompleteAssignments.length} incomplete assignments for ${selectedRubric.name}`
+        description: `Successfully cleared ${typedResult.assignments_deleted} incomplete assignments for ${selectedRubric.name}`
       });
 
       onAssignmentCleared();
       setIsOpen(false);
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Failed to clear assignments";
+
+      Sentry.addBreadcrumb({
+        message: "Clear all assignments failed with exception",
+        category: "clear_all_assignments",
+        data: { error: errMsg },
+        level: "error"
+      });
+
       toaster.error({
         title: "Error Clearing Assignments",
-        description: error instanceof Error ? error.message : "Failed to clear assignments"
+        description: errMsg
       });
     } finally {
       setIsClearing(false);
@@ -273,20 +348,32 @@ export default function ReviewAssignmentsPage() {
         openAssignModal={openAssignModal}
         onReviewAssignmentDeleted={handleReviewAssignmentChange}
       />
-      {isAssignModalOpen && (
-        <AssignReviewModal
-          isOpen={isAssignModalOpen}
-          onClose={closeAssignModal}
-          courseId={Number(course_id)}
-          assignmentId={Number(assignment_id)}
-          onSuccess={() => {
-            handleReviewAssignmentChange();
-            closeAssignModal();
-          }}
-          initialData={assignModalData}
-          isEditing={!!assignModalData}
-        />
-      )}
+      {isAssignModalOpen &&
+        (assignModalData ? (
+          <EditReviewAssignmentModal
+            isOpen={isAssignModalOpen}
+            onCloseAction={closeAssignModal}
+            courseId={Number(course_id)}
+            onSuccessAction={() => {
+              handleReviewAssignmentChange();
+              closeAssignModal();
+            }}
+            initialData={assignModalData}
+          />
+        ) : (
+          <AssignReviewModal
+            isOpen={isAssignModalOpen}
+            onClose={closeAssignModal}
+            courseId={Number(course_id)}
+            assignmentId={Number(assignment_id)}
+            onSuccess={() => {
+              handleReviewAssignmentChange();
+              closeAssignModal();
+            }}
+            initialData={assignModalData}
+            isEditing={!!assignModalData}
+          />
+        ))}
     </Container>
   );
 }

@@ -4,6 +4,8 @@ import * as Sentry from "npm:@sentry/deno";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
+import Bottleneck from "https://esm.sh/bottleneck?target=deno";
+import { Redis } from "https://esm.sh/ioredis?target=deno";
 import type {
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
@@ -29,6 +31,47 @@ type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
+
+const createRepoLimiters = new Map<string, Bottleneck>();
+function getCreateRepoLimiter(org: string): Bottleneck {
+  const key = org || "unknown";
+  const existing = createRepoLimiters.get(key);
+  if (existing) return existing;
+  let limiter: Bottleneck;
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+  if (upstashUrl && upstashToken) {
+    console.log("Using Upstash Redis for create_repo rate limiting", upstashUrl);
+    const host = upstashUrl.replace("https://", "");
+    const password = upstashToken;
+    limiter = new Bottleneck({
+      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 60,
+      reservoirRefreshAmount: 60,
+      reservoirRefreshInterval: 60_000,
+      datastore: "ioredis",
+      clearDatastore: false,
+      clientOptions: {
+        host,
+        password,
+        username: "default",
+        tls: {},
+        port: 6379
+      },
+      Redis
+    });
+    limiter.on("error", (err: Error) => console.error(err));
+  } else {
+    limiter = new Bottleneck({
+      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 80,
+      reservoirRefreshAmount: 80,
+      reservoirRefreshInterval: 60_000
+    });
+  }
+  createRepoLimiters.set(key, limiter);
+  return limiter;
+}
 
 function toMsLatency(enqueuedAt: string): number {
   try {
@@ -332,6 +375,10 @@ export async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
+        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         console.log(`Syncing student team for user ${args.userId}`);
         if (args.userId) {
           //Make sure that the student has been invited to the org
@@ -417,7 +464,10 @@ export async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
-        console.log("sync_staff_team args", args);
+        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
@@ -426,7 +476,8 @@ export async function processEnvelope(
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
-            .maybeSingle();
+            .in("role", ["instructor", "grader"])
+            .single();
           if (error) throw error;
           if (
             data &&
@@ -451,7 +502,8 @@ export async function processEnvelope(
               .from("user_roles")
               .select("users(github_username)")
               .eq("class_id", envelope.class_id || 0)
-              .or("role.eq.instructor,role.eq.grader")
+              .in("role", ["instructor", "grader"])
+              .eq("github_org_confirmed", true)
               .limit(5000);
             if (error) throw error;
             return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
@@ -499,15 +551,16 @@ export async function processEnvelope(
       case "create_repo": {
         const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
           envelope.args as CreateRepoArgs;
-        if (org === "pawtograder-playground" && (repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))) {
+        if (
+          org === "pawtograder-playground" &&
+          (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
+        ) {
+          //No action, no metrics, no logging
           return true;
         }
-        const headSha = await github.createRepo(
-          org,
-          repoName,
-          templateRepo,
-          { is_template_repo: isTemplateRepo },
-          scope
+        const limiter = getCreateRepoLimiter(org);
+        const headSha = await limiter.schedule(() =>
+          github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
 
@@ -558,6 +611,10 @@ export async function processEnvelope(
       }
       case "sync_repo_permissions": {
         const { org, repo, courseSlug, githubUsernames } = envelope.args as SyncRepoPermissionsArgs;
+        if (org === "pawtograder-playground" && courseSlug?.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         await github.syncRepoPermissions(org, repo, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
@@ -575,6 +632,10 @@ export async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
+        if (org === "pawtograder-playground" && repo?.startsWith("e2e-ignore-")) {
+          //No action, no metrics, no logging
+          return true;
+        }
         await github.archiveRepoAndLock(org, repo, scope);
         recordMetric(
           adminSupabase,
@@ -673,7 +734,7 @@ export async function processEnvelope(
           Sentry.captureException(e, scope);
         }
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
-        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+        const circuitTripped = org ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope) : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
           await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours

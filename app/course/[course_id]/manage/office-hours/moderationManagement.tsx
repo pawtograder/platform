@@ -18,7 +18,7 @@ import { Badge, Box, Flex, Heading, HStack, Icon, IconButton, Stack, Text, VStac
 import { useDelete } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { BsBan, BsClock, BsExclamationTriangle, BsEye, BsPlus, BsShield, BsTrash } from "react-icons/bs";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
 
@@ -78,10 +78,10 @@ export default function ModerationManagement() {
       }));
   }, [moderationData, classHelpRequests, profilesMap, course_id]);
 
-  const handleCreateSuccess = () => {
+  const handleCreateSuccess = useCallback(() => {
     createModal.closeModal();
     // No need to refetch - realtime updates will handle this automatically
-  };
+  }, [createModal]);
 
   const handleDeleteModerationAction = async (actionId: number) => {
     await deleteModerationAction(

@@ -263,10 +263,7 @@ async function handleGitHubApiCall<T>(
       const retryAfter = rt.retryAfter;
       // Defaults: primary=60s, secondary=180s, extreme=43200s (12h)
       const baseDefault = rt.type === "primary" ? 60 : rt.type === "secondary" ? 180 : 43200;
-      const delay =
-        rt.type === "extreme"
-          ? baseDefault
-          : computeBackoffSeconds(retryAfter ?? baseDefault, retryCount);
+      const delay = rt.type === "extreme" ? baseDefault : computeBackoffSeconds(retryAfter ?? baseDefault, retryCount);
       const type = rt.type;
       scope.setTag("rate_limit", type);
       scope.setContext("rate_limit_detail", {
@@ -394,12 +391,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-submission");
   const token = req.headers.get("Authorization");
   if (!token) {
-    throw new UserVisibleError("No token provided");
+    throw new UserVisibleError("No token provided", 400);
   }
   // Check if this is part of an
   const decoded = await validateOIDCTokenOrAllowE2E(token);
   const { repository, sha, workflow_ref, run_id, run_attempt } = decoded;
   const isE2ERun = repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
+  const isPawtograderTriggered = decoded.actor === "pawtograder[bot]" || decoded.actor === "pawtograder-next[bot]";
+  scope?.setTag("actor", decoded.actor);
   scope?.setTag("repository", repository);
   scope?.setTag("sha", sha);
   scope?.setTag("workflow_ref", workflow_ref);
@@ -412,10 +411,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  
+
   const org = repository.split("/")[0];
   scope?.setTag("org", org);
-  
+
   try {
     const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
     if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
@@ -427,7 +426,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           reason: row.reason || "Circuit breaker active",
           open_until: row.open_until
         });
-        
+
         // Circuit breaker is open - fail fast with user-visible error
         const openUntil = row.open_until ? new Date(row.open_until) : new Date(Date.now() + 3600000); // 1 hour default
         throw new UserVisibleError(
@@ -591,12 +590,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           }
           //List check runs for reference from github
           const fetchedCheckRuns = await handleGitHubApiCall(
-            () => octokit.rest.checks.listForRef({
-              owner: repository.split("/")[0],
-              repo: repository.split("/")[1],
-              ref: sha,
-              check_name: "pawtograder"
-            }),
+            () =>
+              octokit.rest.checks.listForRef({
+                owner: repository.split("/")[0],
+                repo: repository.split("/")[1],
+                ref: sha,
+                check_name: "pawtograder"
+              }),
             org,
             "listForRef",
             adminSupabase,
@@ -740,7 +740,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // Validate that the submission can be created
       if (
         !checkRun.user_roles ||
-        (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader")
+        (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader" && !isPawtograderTriggered)
       ) {
         // Check if it's too late to submit using the lab-aware due date calculation
         console.log(`Timezone: ${timeZone}`);
@@ -760,6 +760,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
 
         const finalDueDate = new TZDate(finalDueDateResult);
+        //Convert to course time zone for display purposes
+        const finalDueDateInCourseTimeZone = new TZDate(finalDueDateResult, timeZone);
+        console.log(`Final due date in course time zone: ${finalDueDateInCourseTimeZone.toLocaleString()}`);
         const currentDate = TZDate.tz(timeZone);
 
         if (isAfter(currentDate, finalDueDate)) {
@@ -770,17 +773,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // Update check run to indicate this is a NOT-GRADED submission
             if (!isE2ERun) {
               await handleGitHubApiCall(
-                () => updateCheckRun({
-                  owner: repository.split("/")[0],
-                  repo: repository.split("/")[1],
-                  check_run_id: checkRun.check_run_id,
-                  status: "in_progress",
-                  output: {
-                    title: "NOT-GRADED submission",
-                    summary: "This submission will not be graded but you can see feedback.",
-                    text: `You submitted with #NOT-GRADED in your commit message. This submission will not be graded and cannot become your active submission, but you can still see autograder feedback.`
-                  }
-                }),
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "in_progress",
+                    output: {
+                      title: "NOT-GRADED submission",
+                      summary: "This submission will not be graded but you can see feedback.",
+                      text: `You submitted with #NOT-GRADED in your commit message. This submission will not be graded and cannot become your active submission, but you can still see autograder feedback.`
+                    }
+                  }),
                 org,
                 "updateCheckRun",
                 adminSupabase,
@@ -791,18 +795,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // Student tried to use NOT-GRADED but assignment doesn't allow it
             if (!isE2ERun) {
               await handleGitHubApiCall(
-                () => updateCheckRun({
-                  owner: repository.split("/")[0],
-                  repo: repository.split("/")[1],
-                  check_run_id: checkRun.check_run_id,
-                  status: "completed",
-                  conclusion: "failure",
-                  output: {
-                    title: "NOT-GRADED not allowed",
-                    summary: "This assignment does not allow NOT-GRADED submissions.",
-                    text: `You included #NOT-GRADED in your commit message, but this assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.`
-                  }
-                }),
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "NOT-GRADED not allowed",
+                      summary: "This assignment does not allow NOT-GRADED submissions.",
+                      text: `You included #NOT-GRADED in your commit message, but this assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.`
+                    }
+                  }),
                 org,
                 "updateCheckRun",
                 adminSupabase,
@@ -810,33 +815,66 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               );
             }
             throw new UserVisibleError(
-              "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension."
+              "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.",
+              400
             );
           } else {
             //Fail the check run
+
+            //For usability, we should check to see if the user finalized their submission early, and if so, show THAT message
+            let query = adminSupabase
+              .from("assignment_due_date_exceptions")
+              .select("*")
+              .eq("assignment_id", repoData.assignment_id);
+            if (repoData.assignment_group_id) {
+              query = query.eq("assignment_group_id", repoData.assignment_group_id);
+            } else if (repoData.profile_id) {
+              query = query.eq("student_id", repoData.profile_id!);
+            } else {
+              throw new UserVisibleError("No assignment group or profile ID found for submission.");
+            }
+            const { data: negativeDueDateExceptions, error: negativeDueDateExceptionsError } = await query.limit(1000);
+            if (negativeDueDateExceptionsError) {
+              throw new UserVisibleError(
+                `Internal error: Failed to find negative due date exceptions: ${negativeDueDateExceptionsError.message}`
+              );
+            }
+            let checkRunMessage = `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`;
+            let checkRunSummary = "You cannot submit after the due date.";
+            let errorMessage = `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`;
+            if (negativeDueDateExceptions && negativeDueDateExceptions.length > 0) {
+              const hasNegativeException = negativeDueDateExceptions.some(
+                (exception) => exception.hours < 0 || exception.minutes < 0
+              );
+              if (hasNegativeException) {
+                checkRunMessage = `You have already finalized your submission for this assignment by clicking the "Finalize Submission Early" button. You cannot submit additional code after finalization.`;
+                checkRunSummary = "You have already finalized your submission for this assignment.";
+                errorMessage =
+                  "You have already finalized your submission for this assignment. You cannot submit additional code after finalization.";
+              }
+            }
             if (!isE2ERun) {
               await handleGitHubApiCall(
-                () => updateCheckRun({
-                  owner: repository.split("/")[0],
-                  repo: repository.split("/")[1],
-                  check_run_id: checkRun.check_run_id,
-                  status: "completed",
-                  conclusion: "failure",
-                  output: {
-                    title: "Submission failed",
-                    summary: "You cannot submit after the due date.",
-                    text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
-                  }
-                }),
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "Submission failed",
+                      summary: checkRunSummary,
+                      text: checkRunMessage
+                    }
+                  }),
                 org,
                 "updateCheckRun",
                 adminSupabase,
                 scope
               );
             }
-            throw new UserVisibleError(
-              `You cannot submit after the due date. Your due date: ${finalDueDate.toLocaleString()}, current time: ${currentDate.toLocaleString()}`
-            );
+            throw new UserVisibleError(errorMessage, 400);
           }
         }
         // Check the max submissions per-time
@@ -878,25 +916,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             //Update the check run status
             if (!isE2ERun) {
               await handleGitHubApiCall(
-                () => updateCheckRun({
-                  owner: repository.split("/")[0],
-                  repo: repository.split("/")[1],
-                  check_run_id: checkRun.check_run_id,
-                  status: "completed",
-                  conclusion: "failure",
-                  output: {
-                    title: "Submission limit reached",
-                    summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
-                    text: `Reached max limit (${repoData.assignments.autograder!.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder!.max_submissions_period_secs!)})`
-                  },
-                  actions: [
-                    {
-                      label: "Submit",
-                      description: "Try to submit again",
-                      identifier: "submit"
-                    }
-                  ]
-                }),
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "Submission limit reached",
+                      summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
+                      text: `Reached max limit (${repoData.assignments.autograder!.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder!.max_submissions_period_secs!)})`
+                    },
+                    actions: [
+                      {
+                        label: "Submit",
+                        description: "Try to submit again",
+                        identifier: "submit"
+                      }
+                    ]
+                  }),
                 org,
                 "updateCheckRun",
                 adminSupabase,
@@ -904,7 +943,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               );
             }
             throw new UserVisibleError(
-              `Submission limit reached (max ${repoData.assignments.autograder!.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder!.max_submissions_period_secs!)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`
+              `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
+              400
             );
           }
         }
@@ -951,18 +991,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           })
           .eq("id", checkRun.id);
         await handleGitHubApiCall(
-          () => updateCheckRun({
-            owner: repository.split("/")[0],
-            repo: repository.split("/")[1],
-            check_run_id: checkRun.check_run_id,
-            status: "in_progress",
-            details_url: `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}/submissions/${submission_id}`,
-            output: {
-              title: "Grading in progress",
-              summary: "Autograder is running",
-              text: "Details may be available in the 'Submit and Grade Assignment' action."
-            }
-          }),
+          () =>
+            updateCheckRun({
+              owner: repository.split("/")[0],
+              repo: repository.split("/")[1],
+              check_run_id: checkRun.check_run_id,
+              status: "in_progress",
+              details_url: `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}/submissions/${submission_id}`,
+              output: {
+                title: "Grading in progress",
+                summary: "Autograder is running",
+                text: "Details may be available in the 'Submit and Grade Assignment' action."
+              }
+            }),
           org,
           "updateCheckRun",
           adminSupabase,
@@ -991,7 +1032,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const contents = await workflowFile?.buffer();
         if (!contents) {
           throw new UserVisibleError(
-            "Failed to read workflow file in repository. Instructor: please be sure that the .github/workflows/grade.yml file is present and readable."
+            "Failed to read workflow file in repository. Instructor: please be sure that the .github/workflows/grade.yml file is present and readable.",
+            400
           );
         }
         const contentsStr = contents.toString("utf-8");
@@ -1029,12 +1071,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
         if (!pawtograderConfig) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
+            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`,
+            400
           );
         }
         if (!pawtograderConfig.submissionFiles) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
+            400
           );
         }
         const expectedFiles = [
@@ -1044,7 +1088,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (expectedFiles.length === 0) {
           throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
+            400
           );
         }
         const submittedFiles = zip.files.filter(
@@ -1059,7 +1104,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
         if (!allNonGlobFilesPresent) {
           throw new UserVisibleError(
-            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`,
+            400
           );
         }
 
@@ -1092,7 +1138,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
         if (!config.grader_repo) {
           throw new UserVisibleError(
-            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
+            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment.",
+            400
           );
         }
         const { download_link: grader_url, sha: grader_sha } = await handleGitHubApiCall(

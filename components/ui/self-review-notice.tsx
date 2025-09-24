@@ -1,7 +1,7 @@
 "use client";
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
 import { useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
-import { useAssignmentDueDate } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useAssignmentGroupForUser } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -38,7 +38,6 @@ function CompleteReviewButton({
     <>
       {!reviewSubmissions || reviewSubmissions?.data.length == 0 ? (
         <Link
-          prefetch={true}
           href={`/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`}
         >
           <Button colorPalette="green" variant="surface">
@@ -63,7 +62,11 @@ function SelfReviewNoticeInner({
   enrollment: UserRole;
   activeSubmission?: Submission;
 }) {
-  const { dueDate, time_zone } = useAssignmentDueDate(assignment);
+  const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
+  const { dueDate, time_zone } = useAssignmentDueDate(assignment, {
+    studentPrivateProfileId: enrollment.private_profile_id,
+    assignmentGroupId: ourAssignmentGroup?.id
+  });
   const myReviewAssignments = useMyReviewAssignments();
   const selfReviewRubric = useRubric("self-review");
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);

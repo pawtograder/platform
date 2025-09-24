@@ -1,61 +1,56 @@
 "use client";
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
+import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
-import useAuthState from "@/hooks/useAuthState";
+import { useAssignmentController } from "@/hooks/useAssignment";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import {
-  Assignment,
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
-  UserRole,
-  UserRoleWithCourse
+  UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
 import { format } from "date-fns";
 import { useParams } from "next/navigation";
+import { useMemo } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
-import LinkAccount from "@/components/github/link-account";
-import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
-  const { user } = useAuthState();
-  const { data: enrollmentData } = useList<UserRoleWithCourse>({
-    resource: "user_roles",
-    meta: {
-      select: "*, classes(time_zone)",
-      limit: 1
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "user_id", operator: "eq", value: user?.id }
-    ],
-    queryOptions: {
-      enabled: !!user
+  const { private_profile_id } = useClassProfiles();
+  const { role: enrollment } = useClassProfiles();
+  const { assignment } = useAssignmentController();
+  const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
+  type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
+  const ourAssignmentGroupPredicate = useMemo(() => {
+    return (group: AssignmentGroup) =>
+      group.assignment_groups_members.some((member) => member.profile_id === private_profile_id);
+  }, [private_profile_id]);
+  const assignmentGroup = useFindTableControllerValue(assignmentGroupsWithMembers, ourAssignmentGroupPredicate);
+  const repositoriesPredicate = useMemo(() => {
+    return (repository: Repository) => repository.assignment_id === Number(assignment_id);
+  }, [assignment_id]);
+  const repositories = useListTableControllerValues(repositoriesController, repositoriesPredicate);
+  const submissionsFilters = useMemo(() => {
+    const filters: CrudFilter[] = [];
+    filters.push({ field: "assignment_id", operator: "eq", value: assignment_id });
+    if (assignmentGroup) {
+      filters.push({ field: "assignment_group_id", operator: "eq", value: assignmentGroup.id });
+    } else {
+      filters.push({ field: "profile_id", operator: "eq", value: private_profile_id });
     }
-  });
-  const enrollment = enrollmentData && enrollmentData.data.length > 0 ? enrollmentData.data[0] : null;
-
-  const { data: assignmentData } = useList<Assignment>({
-    resource: "assignments",
-    meta: {
-      select: "*",
-      limit: 1
-    },
-    filters: [
-      {
-        field: "id",
-        operator: "eq",
-        value: assignment_id
-      }
-    ]
-  });
+    return filters;
+  }, [assignment_id, assignmentGroup, private_profile_id]);
   const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -63,9 +58,9 @@ export default function AssignmentPage() {
       order: "created_at, { ascending: false }"
     },
     pagination: {
-      pageSize: 500
+      pageSize: 1000
     },
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
+    filters: submissionsFilters,
     sorters: [
       {
         field: "created_at",
@@ -73,62 +68,12 @@ export default function AssignmentPage() {
       }
     ]
   });
-  const { data: groupData } = useList({
-    resource: "assignment_groups_members",
-    meta: {
-      select: "*, assignment_groups!id(*)"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: assignment_id
-      },
-      {
-        field: "profile_id",
-        operator: "eq",
-        value: enrollment?.private_profile_id
-      }
-    ],
-    queryOptions: {
-      enabled: assignmentData?.data[0].group_config !== "individual" && !!enrollment?.private_profile_id
-    }
-  });
 
-  const assignment_group_id: number | undefined =
-    groupData && groupData.data.length > 0 ? groupData.data[0].assignment_group_id : null;
-
-  const filters: CrudFilter[] = [{ field: "assignment_id", operator: "eq", value: assignment_id }];
-  if (assignment_group_id) {
-    filters.push({ field: "assignment_group_id", operator: "eq", value: assignment_group_id });
-  } else if (enrollment?.private_profile_id) {
-    filters.push({ field: "profile_id", operator: "eq", value: enrollment?.private_profile_id });
-  }
-  const { data: repositoriesData } = useList<Repository>({ resource: "repositories", filters });
-
-  const { data: reviewSettingsData } = useList<SelfReviewSettings>({
-    resource: "assignment_self_review_settings",
-    meta: {
-      select: "*",
-      limit: 1
-    },
-    filters: [{ field: "id", operator: "eq", value: assignmentData?.data[0].self_review_setting_id }],
-    queryOptions: {
-      enabled: !!assignmentData && assignmentData.data.length !== 0
-    }
-  });
-
-  if (!assignmentData || assignmentData.data.length === 0) {
-    return <div>Assignment not found</div>;
-  }
-
-  const assignment = assignmentData.data[0];
-  const repositories = repositoriesData?.data;
   const submissions = submissionsData?.data;
-  const review_settings = reviewSettingsData && reviewSettingsData.data.length > 0 ? reviewSettingsData.data[0] : null;
-  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
+  const review_settings = assignment.assignment_self_review_settings;
+  const timeZone = course?.time_zone || "America/New_York";
 
-  if (!enrollment) {
+  if (!assignment) {
     return <Skeleton height="40" width="100%" />;
   }
   return (
@@ -171,7 +116,7 @@ export default function AssignmentPage() {
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
         assignment={assignment}
-        assignment_group_id={assignment_group_id}
+        assignment_group_id={assignmentGroup?.id}
         profile_id={enrollment?.private_profile_id}
       />
       <Table.Root maxW="2xl">
@@ -191,7 +136,7 @@ export default function AssignmentPage() {
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                   {submission.is_active ? <ActiveSubmissionIcon /> : ""}
                   {submission.is_not_graded ? <NotGradedSubmissionIcon /> : ""}
-                  {!assignment_group_id || submission.assignment_group_id
+                  {!assignmentGroup || submission.assignment_group_id
                     ? submission.ordinal
                     : `(Old #${submission.ordinal})`}
                 </Link>

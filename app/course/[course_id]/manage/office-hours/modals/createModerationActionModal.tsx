@@ -53,7 +53,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
       action_type: "warning",
       reason: "",
       duration_minutes: null,
-      help_request_id: undefined as unknown as number,
+      help_request_id: undefined,
       message_id: null,
       is_permanent: false
     }

@@ -31,7 +31,7 @@ import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
 import { Fragment, useId, useState, useMemo } from "react";
-import { FaPlus, FaHeart } from "react-icons/fa";
+import { FaPlus, FaHeart, FaThumbtack } from "react-icons/fa";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
@@ -62,7 +62,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
   const isUnread = readStatus === null || readStatus?.read_at === null;
   return (
     <Box position="relative" width={props.width || "100%"}>
-      <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
+      <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
           {isUnread && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
         </Box>
@@ -85,13 +85,16 @@ export const DiscussionThreadTeaser = (props: Props) => {
             </Tooltip>
           </Box>
           <Stack spaceY="0" fontSize="sm" flex="1" truncate>
-            <Text
-              fontWeight="medium"
-              flex="1"
-              css={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}
-            >
-              #{thread?.ordinal} {thread?.subject}
-            </Text>
+            <HStack>
+              {thread?.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="3" />}
+              <Text
+                fontWeight="medium"
+                flex="1"
+                css={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}
+              >
+                #{thread?.ordinal} {thread?.subject}
+              </Text>
+            </HStack>
             {thread?.is_question && !is_answered && (
               <Box>
                 <Badge colorPalette="red">Unanswered</Badge>
@@ -195,13 +198,33 @@ export default function DiscussionThreadList() {
 
     const sortedList = [...filteredList];
     if (sortOption === "newest") {
-      sortedList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      sortedList.sort((a, b) => {
+        // Pinned threads always come first
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
     } else if (sortOption === "oldest") {
-      sortedList.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      sortedList.sort((a, b) => {
+        // Pinned threads always come first
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
     } else if (sortOption === "replies") {
-      sortedList.sort((a, b) => (b.children_count ?? 0) - (a.children_count ?? 0));
+      sortedList.sort((a, b) => {
+        // Pinned threads always come first
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return (b.children_count ?? 0) - (a.children_count ?? 0);
+      });
     } else if (sortOption === "likes") {
-      sortedList.sort((a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0));
+      sortedList.sort((a, b) => {
+        // Pinned threads always come first
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return (b.likes_count ?? 0) - (a.likes_count ?? 0);
+      });
     }
 
     return sortedList;
@@ -248,7 +271,7 @@ export default function DiscussionThreadList() {
           Discussion Feed
         </Heading>
         <Button asChild size="sm" variant="surface" colorPalette="green" mb="4" width="100%">
-          <NextLink prefetch={true} href={`/course/${course_id}/discussion/new`}>
+          <NextLink href={`/course/${course_id}/discussion/new`}>
             <Icon as={FaPlus} mr="1" />
             New Thread
           </NextLink>

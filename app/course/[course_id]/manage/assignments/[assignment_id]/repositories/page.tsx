@@ -1,46 +1,91 @@
 "use client";
 
+import { toaster } from "@/components/ui/toaster";
 import { useCourseController } from "@/hooks/useCourseController";
-import TableController from "@/lib/TableController";
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import { createClient } from "@/utils/supabase/client";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import Link from "next/link";
+import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
+import TableController from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
+  Button,
   HStack,
   Icon,
-  Table,
-  Text,
-  VStack,
-  Button,
   Input,
   NativeSelect,
-  NativeSelectField
+  NativeSelectField,
+  Table,
+  Text,
+  VStack
 } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
-import { FaTimes, FaExternalLinkAlt } from "react-icons/fa";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { FaExternalLinkAlt, FaTimes } from "react-icons/fa";
 
 type RepositoryRow = GetResult<
   Database["public"],
   Database["public"]["Tables"]["repositories"]["Row"],
   "repositories",
   Database["public"]["Tables"]["repositories"]["Relationships"],
-  "*, assignment_groups(*), profiles(*)"
+  "*, assignment_groups(*), profiles(*), user_roles(*)"
 >;
+
+function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: number }) {
+  const [isResending, setIsResending] = useState(false);
+  const [inviteSent, setInviteSent] = useState(false);
+  if (!userId || !classId) {
+    return null;
+  }
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      loading={isResending}
+      disabled={inviteSent}
+      onClick={async () => {
+        const supabase = createClient();
+        try {
+          setIsResending(true);
+          await resendOrgInvitation({ course_id: classId, user_id: userId }, supabase);
+          toaster.success({
+            title: "Invitation resent",
+            description: "The student should receive an email from GitHub shortly."
+          });
+          setIsResending(false);
+          setInviteSent(true);
+        } catch (error) {
+          setIsResending(false);
+          if (error instanceof EdgeFunctionError) {
+            toaster.error({ title: "Error", description: error.message + " " + error.details });
+          } else {
+            console.error(error);
+            toaster.error({ title: "Error", description: "Failed to resend invitation." });
+          }
+        }
+      }}
+    >
+      Resend invitation
+    </Button>
+  );
+}
 
 export default function RepositoriesPage() {
   const { assignment_id } = useParams();
   const courseController = useCourseController();
-  const joinedSelect = "*, assignment_groups(*), profiles(*)";
+  const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
   const repositories: TableController<"repositories", typeof joinedSelect, number> = useMemo(() => {
     const client = createClient();
-    const query = client.from("repositories").select(joinedSelect).eq("assignment_id", Number(assignment_id));
+    const query = client
+      .from("repositories")
+      .select(joinedSelect)
+      .eq("assignment_id", Number(assignment_id))
+      .eq("user_roles.disabled", false);
     const controller = new TableController({
       query,
       client: client,
@@ -109,7 +154,17 @@ export default function RepositoriesPage() {
             ) : (
               <>
                 <Icon as={FaTimes} color="red.500" />
-                <Text color="red.600">Not Ready</Text>
+                {row.original.user_roles?.github_org_confirmed ? (
+                  <Text color="fg.muted">Not Ready, pending creation</Text>
+                ) : (
+                  <VStack gap={0} alignItems="flex-start">
+                    <Text color="red.600">Not Ready, blocked: student has not joined course org</Text>
+                    <ResendOrgInvitation
+                      userId={row.original.user_roles?.user_id}
+                      classId={row.original.user_roles?.class_id}
+                    />
+                  </VStack>
+                )}
               </>
             )}
           </HStack>
@@ -142,7 +197,7 @@ export default function RepositoriesPage() {
     initialState: {
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 1000
       }
     }
   });
@@ -308,7 +363,7 @@ export default function RepositoriesPage() {
                 setPageSize(Number(e.target.value));
               }}
             >
-              {[25, 50, 100, 200, 500].map((pageSizeOption) => (
+              {[25, 50, 100, 200, 500, 1000].map((pageSizeOption) => (
                 <option key={pageSizeOption} value={pageSizeOption}>
                   Show {pageSizeOption}
                 </option>

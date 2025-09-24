@@ -231,7 +231,7 @@ const DiscussionThreadContent = memo(
       }
     }, [is_answer, updateThread, thread, root_thread]);
 
-    const isAnswered = root_thread?.answer !== undefined;
+    const isAnswered = root_thread?.answer !== undefined && root_thread?.answer !== null;
     const descendant = thread.children.length > 0;
 
     return (
@@ -309,6 +309,8 @@ const DiscussionThreadContent = memo(
                         });
                         setIsEditing(false);
                       }}
+                      onClose={() => setIsEditing(false)}
+                      closeButtonText="Cancel"
                       enableEmojiPicker={true}
                       enableFilePicker={true}
                       enableGiphyPicker={true}
@@ -335,7 +337,7 @@ const DiscussionThreadContent = memo(
                   )}
                   {root_thread?.is_question && canEdit && !isAnswered && (
                     <Button variant="surface" onClick={toggleAnswered} size="xs" colorPalette="green">
-                      Accept as Answer
+                      Mark as Answer
                     </Button>
                   )}
                   {canEdit && root_thread?.answer === thread.id && (

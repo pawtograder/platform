@@ -22,7 +22,9 @@ type GradrResultTestWithGraderResults = GetResult<
           submissions!inner (
             id,
             class_id,
-            assignment_id
+            assignment_id,
+            profile_id,
+            assignment_group_id
           )
         )
       `
@@ -158,24 +160,24 @@ async function checkRateLimits(
 
   // Check assignment total limit
   if (rateLimit.assignment_total) {
-    // First get all submissions for this assignment
-    const { data: assignmentSubmissions } = await serviceSupabase
-      .from("submissions")
-      .select("id")
-      .eq("assignment_id", assignmentId);
+    // Count usage across all matching submissions for this assignment using a single query
+    const query = serviceSupabase
+      .from("llm_inference_usage")
+      .select("*", { count: "exact", head: true })
+      .eq("submissions.assignment_id", assignmentId)
+      .neq("submission_id", submissionId);
 
-    if (assignmentSubmissions && assignmentSubmissions.length > 0) {
-      const submissionIds = assignmentSubmissions.map((s) => s.id);
+    if (testResult.grader_results.submissions.profile_id) {
+      query.eq("submissions.profile_id", testResult.grader_results.submissions.profile_id);
+    }
+    if (testResult.grader_results.submissions.assignment_group_id) {
+      query.eq("submissions.assignment_group_id", testResult.grader_results.submissions.assignment_group_id);
+    }
 
-      // Count usage across all submissions for this assignment
-      const { count: assignmentUsageCount } = await serviceSupabase
-        .from("llm_inference_usage")
-        .select("*", { count: "exact", head: true })
-        .in("submission_id", submissionIds);
+    const { count: assignmentUsageCount } = await query;
 
-      if (assignmentUsageCount && assignmentUsageCount >= rateLimit.assignment_total) {
-        return `Rate limit: Maximum number of Feedbot responses (${rateLimit.assignment_total}) for this assignment has been reached.`;
-      }
+    if (assignmentUsageCount && assignmentUsageCount >= rateLimit.assignment_total) {
+      return `Rate limit: Maximum number of Feedbot responses (${rateLimit.assignment_total}) for this assignment has been reached.`;
     }
   }
 
@@ -230,7 +232,9 @@ export async function POST(request: NextRequest) {
           submissions!inner (
             id,
             class_id,
-            assignment_id
+            assignment_id,
+            profile_id,
+            assignment_group_id
           )
         )
       `

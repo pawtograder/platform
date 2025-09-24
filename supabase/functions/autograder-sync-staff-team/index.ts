@@ -46,7 +46,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .from("user_roles")
           .select("github_org_confirmed, users(github_username)")
           .eq("class_id", course_id)
-          .or("role.eq.instructor,role.eq.grader")
+          .in("role", ["instructor", "grader"])
+          .eq("github_org_confirmed", true)
           .limit(1000);
         if (staffError) {
           console.error(staffError);
@@ -83,7 +84,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .from("user_roles")
           .select("github_org_confirmed, users(github_username)")
           .eq("class_id", course_id)
-          .or("role.eq.instructor,role.eq.grader")
+          .in("role", ["instructor", "grader"])
           .eq("github_org_confirmed", true)
           .limit(1000);
         if (staffError) {

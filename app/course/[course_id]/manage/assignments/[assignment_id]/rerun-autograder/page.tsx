@@ -2,7 +2,10 @@
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { rerunGrader } from "@/lib/edgeFunctions";
+import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithRegressionTestResults,
@@ -20,7 +23,6 @@ import {
   Icon,
   Input,
   List,
-  NativeSelect,
   Skeleton,
   Table,
   Text,
@@ -28,17 +30,10 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useList, useOne } from "@refinedev/core";
-import { useTable } from "@refinedev/react-table";
-import {
-  CellContext,
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel
-} from "@tanstack/react-table";
+import * as Sentry from "@sentry/nextjs";
+import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
 function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string }) {
@@ -46,7 +41,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   const { role } = useClassProfiles();
   const course = role.classes;
   const timeZone = course.time_zone || "America/New_York";
-  const [pageCount, setPageCount] = useState(0);
   const renderAsLinkToSubmission = useCallback(
     (props: CellContext<ActiveSubmissionsWithRegressionTestResults, unknown>) => {
       const row = props.row;
@@ -76,6 +70,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         }
       },
       {
+        id: "activesubmissionid",
+        accessorKey: "activesubmissionid",
+        header: "Active Submission ID",
+        cell: renderAsLinkToSubmission
+      },
+      {
         id: "name",
         accessorKey: "name",
         header: "Student",
@@ -84,7 +84,8 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           if (!row.original.name) return false;
           const filterString = String(filterValue).toLowerCase();
           return row.original.name.toLowerCase().includes(filterString);
-        }
+        },
+        cell: renderAsLinkToSubmission
       },
       {
         id: "groupname",
@@ -158,56 +159,39 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     ],
     [timeZone, autograder_repo, renderAsLinkToSubmission]
   );
-  const {
-    getHeaderGroups,
-    getRowModel,
-    getState,
-    getRowCount,
-    setPageIndex,
-    getCanPreviousPage,
-    getPageCount,
-    getCanNextPage,
-    nextPage,
-    previousPage,
-    setPageSize
-  } = useTable({
+
+  const supabase = useMemo(() => createClient(), []);
+  const { classRealTimeController } = useCourseController();
+  const tableController = useMemo(() => {
+    Sentry.addBreadcrumb({
+      category: "tableController",
+      message: "Fetching submissions_with_grades_for_assignment_and_regression_test",
+      level: "info"
+    });
+    const query = supabase
+      .from("submissions_with_grades_for_assignment_and_regression_test")
+      .select("*")
+      .eq("assignment_id", Number(assignment_id));
+
+    return new TableController({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      query: query as any,
+      client: supabase,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      table: "submissions_with_grades_for_assignment_and_regression_test" as any,
+      classRealTimeController
+    });
+  }, [supabase, assignment_id, classRealTimeController]);
+  const { getHeaderGroups, getRowModel, getRowCount } = useTableControllerTable({
     columns,
+    tableController,
     initialState: {
-      columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
-      pagination: {
-        pageIndex: 0,
-        pageSize: 50
-      },
       sorting: [{ id: "name", desc: false }]
-    },
-    manualPagination: false,
-    manualFiltering: false,
-    getPaginationRowModel: getPaginationRowModel(),
-    pageCount,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    refineCoreProps: {
-      resource: "submissions_with_grades_for_assignment_and_regression_test",
-      syncWithLocation: false,
-      pagination: {
-        mode: "off"
-      },
-      filters: {
-        mode: "off"
-      },
-      meta: {
-        select: "*"
-      }
     }
   });
-  const nRows = getRowCount();
-  const pageSize = getState().pagination.pageSize;
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
   const [regrading, setRegrading] = useState<boolean>(false);
 
-  useEffect(() => {
-    setPageCount(Math.ceil(nRows / pageSize));
-  }, [nRows, pageSize]);
   return (
     <VStack>
       <Toaster />
@@ -343,55 +327,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
               })}
           </Table.Body>
         </Table.Root>
-        <HStack>
-          <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
-            {"<<"}
-          </Button>
-          <Button id="previous-button" onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
-            {"<"}
-          </Button>
-          <Button id="next-button" onClick={() => nextPage()} disabled={!getCanNextPage()}>
-            {">"}
-          </Button>
-          <Button onClick={() => setPageIndex(getPageCount() - 1)} disabled={!getCanNextPage()}>
-            {">>"}
-          </Button>
-          <VStack>
-            <Text>Page</Text>
-            <Text>
-              {getState().pagination.pageIndex + 1} of {getPageCount()}
-            </Text>
-          </VStack>
-          <VStack>
-            | Go to page:
-            <input
-              title="Go to page"
-              type="number"
-              defaultValue={getState().pagination.pageIndex + 1}
-              onChange={(e) => {
-                const page = e.target.value ? Number(e.target.value) - 1 : 0;
-                setPageIndex(page);
-              }}
-            />
-          </VStack>
-          <VStack>
-            <Text>Show</Text>
-            <NativeSelect.Root title="Select page size">
-              <NativeSelect.Field
-                value={"" + getState().pagination.pageSize}
-                onChange={(event) => {
-                  setPageSize(Number(event.target.value));
-                }}
-              >
-                {[25, 50, 100, 200, 500].map((pageSize) => (
-                  <option key={pageSize} value={pageSize}>
-                    Show {pageSize}
-                  </option>
-                ))}
-              </NativeSelect.Field>
-            </NativeSelect.Root>
-          </VStack>
-        </HStack>
         <div>{getRowCount()} Rows</div>
       </VStack>
       <Box
@@ -414,7 +349,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             loading={regrading}
             onClick={async () => {
               setRegrading(true);
-              const supabase = createClient();
               try {
                 await rerunGrader(
                   {
@@ -425,7 +359,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 );
                 toaster.success({
                   title: "Regrading started",
-                  description: "This may take a while..."
+                  description: "This may take a while... Be advised that this page will NOT automatically refresh."
                 });
               } catch (error) {
                 toaster.error({
@@ -477,6 +411,11 @@ export default function RerunAutograderPage() {
   return (
     <Box>
       <Heading size="md">Rerun Autograder</Heading>
+      <Text fontSize="sm" color="fg.muted">
+        This table will allow you to rerun the autograder (potentially using a newer version) on the currently active
+        submissions for students, overriding any due dates. Note that doing so will create a NEW submission for each
+        student.
+      </Text>
       <Box fontSize="sm" border="1px solid" borderColor="border.info" borderRadius="md" p={4}>
         <Heading size="sm">How to debug and rerun the autograder</Heading>
         Student submissions are automatically graded using the most recent revision of the autograder

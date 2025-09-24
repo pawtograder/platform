@@ -9,7 +9,8 @@ export const PopConfirm = ({
   confirmHeader,
   confirmText,
   onConfirm,
-  onCancel
+  onCancel,
+  placement = "bottom-start"
 }: {
   triggerLabel: string;
   trigger: React.ReactNode;
@@ -17,6 +18,15 @@ export const PopConfirm = ({
   confirmText: string;
   onConfirm: () => Promise<void>;
   onCancel?: () => Promise<void>;
+  placement?:
+    | "bottom-start"
+    | "bottom-end"
+    | "top-start"
+    | "top-end"
+    | "left-start"
+    | "left-end"
+    | "right-start"
+    | "right-end";
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -94,7 +104,12 @@ export const PopConfirm = ({
   );
 
   return (
-    <PopoverRoot closeOnInteractOutside={true} open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
+    <PopoverRoot
+      closeOnInteractOutside={true}
+      open={isOpen}
+      onOpenChange={(details) => setIsOpen(details.open)}
+      positioning={{ placement }}
+    >
       <PopoverTrigger aria-label={triggerLabel} asChild>
         {trigger}
       </PopoverTrigger>

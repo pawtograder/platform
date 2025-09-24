@@ -46,24 +46,42 @@ const LinkItems = (courseID: number) => [
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/assignments`
   },
-  { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
-  { name: "Flashcards", icon: TbCards, student_only: true, target: `/course/${courseID}/flashcards` },
+  { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion`, feature_flag: "discussion" },
+  {
+    name: "Flashcards",
+    icon: TbCards,
+    student_only: true,
+    target: `/course/${courseID}/flashcards`,
+    feature_flag: "flashcards"
+  },
   {
     name: "Office Hours",
     student_only: true,
     icon: FiMessageSquare,
-    target: `/course/${courseID}/office-hours`
-    // feature_flag: "office-hours"
+    target: `/course/${courseID}/office-hours`,
+    feature_flag: "office-hours"
   },
   {
     name: "Office Hours",
     instructors_or_graders_only: true,
     icon: FiClipboard,
-    target: `/course/${courseID}/manage/office-hours`
-    // feature_flag: "office-hours"
+    target: `/course/${courseID}/manage/office-hours`,
+    feature_flag: "office-hours"
   },
-  { name: "Gradebook", icon: FiBookOpen, student_only: true, target: `/course/${courseID}/gradebook` },
-  { name: "Gradebook", icon: FiBookOpen, instructor_only: true, target: `/course/${courseID}/manage/gradebook` },
+  {
+    name: "Gradebook",
+    icon: FiBookOpen,
+    student_only: true,
+    target: `/course/${courseID}/gradebook`,
+    feature_flag: "gradebook"
+  },
+  {
+    name: "Gradebook",
+    icon: FiBookOpen,
+    instructor_only: true,
+    target: `/course/${courseID}/manage/gradebook`,
+    feature_flag: "gradebook"
+  },
   {
     name: "Course Settings",
     icon: FiSettings,
@@ -85,10 +103,10 @@ const LinkItems = (courseID: number) => [
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
-        name: "Due Date Exceptions",
+        name: "Due Date Extensions",
         instructors_only: true,
         icon: FiClock,
-        target: `/course/${courseID}/manage/course/due-date-exceptions`
+        target: `/course/${courseID}/manage/course/due-date-extensions`
       },
       { name: "Audit Log", instructors_only: true, icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
       {
@@ -206,7 +224,11 @@ export default function DynamicCourseNav() {
         (!link.student_only || !isInstructorOrGrader) &&
         (!link.instructor_only || isInstructor)
     )
-    .filter((link) => !("feature_flag" in link) || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
+    .filter((link) => {
+      if (!("feature_flag" in link)) return true;
+      const feature = course.features?.find((f) => f.name === link.feature_flag);
+      return feature ? feature.enabled : true; // Default to enabled if feature not found
+    });
 
   return (
     <Box
@@ -275,7 +297,7 @@ export default function DynamicCourseNav() {
                                 .filter((submenu) => !submenu.instructors_only || isInstructor)
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                    <NextLink prefetch={true} href={submenu.target || "#"}>
+                                    <NextLink href={submenu.target || "#"}>
                                       {React.createElement(submenu.icon)}
                                       {submenu.name}
                                     </NextLink>
@@ -305,7 +327,7 @@ export default function DynamicCourseNav() {
                         whiteSpace="nowrap"
                         asChild
                       >
-                        <NextLink prefetch={true} href={link.target || "#"}>
+                        <NextLink href={link.target || "#"}>
                           <HStack gap={1}>
                             {React.createElement(link.icon, { size: 14 })}
                             <Text>{link.name}</Text>
@@ -368,7 +390,7 @@ export default function DynamicCourseNav() {
                                 .filter((submenu) => !submenu.instructors_only || isInstructor)
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                    <NextLink prefetch={true} href={submenu.target || "#"}>
+                                    <NextLink href={submenu.target || "#"}>
                                       {React.createElement(submenu.icon)}
                                       {submenu.name}
                                     </NextLink>
@@ -388,7 +410,7 @@ export default function DynamicCourseNav() {
                       borderColor="orange.600"
                     >
                       <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                        <NextLink prefetch={true} href={link.target || "#"}>
+                        <NextLink href={link.target || "#"}>
                           <Flex align="center" role="group">
                             <HStack>
                               {React.createElement(link.icon)}

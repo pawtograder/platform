@@ -70,7 +70,6 @@ export default function ResendOrgInvitation() {
   const [isResending, setIsResending] = useState(false);
   const [inviteSent, setInviteSent] = useState(false);
 
-  const supabase = createClient();
   if (role.github_org_confirmed || !role.users.github_username) {
     return null;
   }
@@ -132,6 +131,7 @@ export default function ResendOrgInvitation() {
                 onClick={async () => {
                   try {
                     setIsResending(true);
+                    const supabase = createClient();
                     await resendOrgInvitation({ course_id: role.class_id, user_id: role.users.user_id }, supabase);
                     toaster.success({
                       title: "Invitation resent",

@@ -8,6 +8,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
+import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
@@ -15,9 +16,10 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
-import { Toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
+import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -25,6 +27,7 @@ import {
   useSubmission,
   useSubmissionComments,
   useSubmissionController,
+  useSubmissionReview,
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
@@ -32,10 +35,13 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
-import { formatRelative } from "date-fns";
+import * as Sentry from "@sentry/nextjs";
+import { formatRelative, isAfter } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -56,9 +62,8 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
-import { useAssignmentController } from "@/hooks/useAssignment";
+import { Alert } from "@/components/ui/alert";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -271,7 +276,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       }
     ],
     pagination: {
-      pageSize: 500
+      pageSize: 1000
     }
   });
   useList<Submission>({
@@ -301,8 +306,19 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     }
   });
   const { time_zone } = useCourse();
-  const supabase = createClient();
+  const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
+  const { dueDate } = useAssignmentDueDate(submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
+  });
+  const isStaff = useIsGraderOrInstructor();
+  const disableActivationButton = Boolean(
+    dueDate &&
+      TZDate.tz(time_zone ?? "America/New_York").getTime() >
+        new TZDate(dueDate, time_zone ?? "America/New_York").getTime() &&
+      !isStaff
+  );
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
   }
@@ -339,6 +355,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
               }
             }}
           >
+            <Toaster />
             <Table.Root>
               <Table.Header>
                 <Table.Row>
@@ -402,10 +419,29 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                           <Button
                             variant="outline"
                             size="xs"
+                            disabled={disableActivationButton}
+                            loading={isActivating}
                             onClick={async () => {
-                              await activateSubmission({ submission_id: historical_submission.id }, supabase);
-                              invalidate({ resource: "submissions", invalidates: ["list"] });
-                              router.push(link);
+                              setIsActivating(true);
+                              try {
+                                const supabase = createClient();
+                                await activateSubmission({ submission_id: historical_submission.id }, supabase);
+                                invalidate({ resource: "submissions", invalidates: ["list"] });
+                                toaster.create({
+                                  title: "Active submission changed",
+                                  type: "success"
+                                });
+                                router.push(link);
+                              } catch (error) {
+                                const errorId = Sentry.captureException(error);
+                                toaster.create({
+                                  title: "Error activating submission",
+                                  description: `We have recorded this error with trace ID: ${errorId}`,
+                                  type: "error"
+                                });
+                              } finally {
+                                setIsActivating(false);
+                              }
                             }}
                           >
                             <Icon as={FaCheckCircle} />
@@ -493,12 +529,23 @@ function ReviewStats() {
   const mostRecentGrader = allRubricInstances.find(
     (instance) => Date.parse(instance.created_at) === mostRecentCreationOrEdit
   )?.author;
+  const isInstructor = useIsInstructor();
   if (!review) {
     return <Skeleton height="20px" />;
   }
   return (
     <DataListRoot orientation="horizontal">
-      <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />
+      {isInstructor && (
+        <DataListItem
+          label="Released to student"
+          value={
+            <HStack>
+              {review.released ? "Yes" : "No"} <ReleaseOrUnreleaseReviewButton submissionReviewId={review.id} />
+            </HStack>
+          }
+        />
+      )}
+      {!isInstructor && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
       {completed_by && <DataListItem label="Completed by" value={<PersonName size="2xs" uid={completed_by} />} />}
       {completed_at && <DataListItem label="Completed at" value={formatRelative(completed_at, new Date())} />}
       {checked_by && <DataListItem label="Checked by" value={<PersonName size="2xs" uid={checked_by} />} />}
@@ -517,7 +564,72 @@ function ReviewStats() {
     </DataListRoot>
   );
 }
-
+function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionReviewId: number }) {
+  const review = useSubmissionReview(submissionReviewId);
+  const submissionController = useSubmissionController();
+  const [updatingReview, setUpdatingReview] = useState(false);
+  if (review?.released) {
+    return (
+      <Button
+        size="xs"
+        variant="outline"
+        colorPalette="red"
+        loading={updatingReview}
+        onClick={async () => {
+          setUpdatingReview(true);
+          try {
+            await submissionController.submission_reviews.update(submissionReviewId, { released: false });
+            toaster.create({
+              title: "Review unreleased",
+              type: "success"
+            });
+          } catch (error) {
+            const errorId = Sentry.captureException(error);
+            toaster.create({
+              title: "Error unreleasing review",
+              description: `Failed to unrelease the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+              type: "error"
+            });
+          } finally {
+            setUpdatingReview(false);
+          }
+        }}
+      >
+        Unrelease
+      </Button>
+    );
+  } else {
+    return (
+      <Button
+        size="xs"
+        variant="outline"
+        colorPalette="green"
+        loading={updatingReview}
+        onClick={async () => {
+          setUpdatingReview(true);
+          try {
+            await submissionController.submission_reviews.update(submissionReviewId, { released: true });
+            toaster.create({
+              title: "Review released",
+              type: "success"
+            });
+          } catch (error) {
+            const errorId = Sentry.captureException(error);
+            toaster.create({
+              title: "Error releasing review",
+              description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+              type: "error"
+            });
+          } finally {
+            setUpdatingReview(false);
+          }
+        }}
+      >
+        Release
+      </Button>
+    );
+  }
+}
 function ReviewActions() {
   const submission = useSubmission();
   const reviewId = submission.grading_review_id;
@@ -525,10 +637,11 @@ function ReviewActions() {
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
-  const { private_profile_id } = useClassProfiles();
-  const submissionController = useSubmissionController();
-  const [updatingReview, setUpdatingReview] = useState(false);
-  const isInstructor = useIsGraderOrInstructor();
+
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+  const showCompleteReviewButton = assignedRubricParts.length == 0 && isInstructorOrGrader;
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -536,12 +649,12 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      {isInstructor && (!review.completed_at || (review.completed_at && !review.checked_at)) && (
+      {showCompleteReviewButton && !review.completed_at && (
         <VStack>
           <Heading size="md">Submission Review Actions</Heading>
           <HStack w="100%" justify="space-between">
             {!review.completed_at && <CompleteReviewButton />}
-            {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
+            {/* {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
               <Button
                 variant="surface"
                 loading={updatingReview}
@@ -559,7 +672,7 @@ function ReviewActions() {
               >
                 Mark as Checked
               </Button>
-            )}
+            )} */}
           </HStack>
         </VStack>
       )}
@@ -723,6 +836,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const assignment = useAssignmentController();
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment || submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
+  });
+  const safeTimeZone = time_zone || "UTC";
+  const hasExtension = hoursExtended && hoursExtended > 0;
+  const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -732,6 +852,19 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
     <Flex direction="column" minW="0px">
+      {isGraderOrInstructor && dueDate && (
+        <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
+          Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={submission.assignments} />
+          {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
+          {canStillSubmit && (
+            <Alert status="warning">
+              The student can still make a new submission, grading checks will not transfer. Only begin grading this
+              submission if you are certain that the student will not make new submissions.
+            </Alert>
+          )}
+        </Box>
+      )}
       <SubmissionReviewToolbar />
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
@@ -793,13 +926,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         bg="bg.muted"
         defaultValue="results"
       >
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "results", searchParams)}>
+        <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "files", searchParams)}>
+        <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
           <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files

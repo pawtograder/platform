@@ -1072,7 +1072,43 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
             } else {
               updatedSectionAssignmentsCount++;
             }
+            continue;
           }
+
+          // If there is an expired SIS-managed invitation and the user is back in SIS,
+          // reactivate it by setting status back to pending and updating role/sections
+          if (existingInvitation.status === "expired" && existingInvitation.sis_managed !== false) {
+            console.log(`Reactivating expired invitation for user ${sisUserId}`);
+            const { error: unexpireError } = await adminSupabase
+              .from("invitations")
+              .update({
+                status: "pending",
+                role: userData.role,
+                class_section_id: classSectionId,
+                lab_section_id: labSectionId,
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", existingInvitation.id);
+
+            if (unexpireError) {
+              console.error(unexpireError);
+              scope?.addBreadcrumb({
+                message: `Failed to reactivate expired invitation for user ${sisUserId}`,
+                category: "error",
+                data: { error: unexpireError, classId: classData.id }
+              });
+              throw unexpireError;
+            } else {
+              scope?.addBreadcrumb({
+                message: `Reactivated expired invitation -> pending for user ${sisUserId}`,
+                category: "info",
+                data: { classId: classData.id, invitationId: existingInvitation.id }
+              });
+            }
+            continue;
+          }
+
+          // For any other existing invitation statuses, do not create a new one
           continue;
         }
 
@@ -1604,7 +1640,7 @@ export function createMockScope(): Sentry.Scope {
     setUser: () => {},
     captureException: (error: unknown) => console.error(`[Exception]`, error),
     captureMessage: () => {}
-  } as Sentry.Scope;
+  } as unknown as Sentry.Scope;
 }
 
 // function constructSemesterCode(term: string, year: number): string {

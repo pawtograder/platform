@@ -313,14 +313,14 @@ export function validateInvitationRequest(
   maxInvitations?: number
 ): void {
   if (!courseId) {
-    throw new UserVisibleError("Course ID is required");
+    throw new UserVisibleError("Course ID is required", 400);
   }
 
   if (!invitations || !Array.isArray(invitations) || invitations.length === 0) {
-    throw new UserVisibleError("At least one invitation is required");
+    throw new UserVisibleError("At least one invitation is required", 400);
   }
 
   if (maxInvitations && invitations.length > maxInvitations) {
-    throw new UserVisibleError(`Maximum ${maxInvitations} invitations can be created at once`);
+    throw new UserVisibleError(`Maximum ${maxInvitations} invitations can be created at once`, 400);
   }
 }

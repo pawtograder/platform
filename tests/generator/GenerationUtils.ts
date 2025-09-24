@@ -129,6 +129,10 @@ export class RateLimitManager {
       } catch (error) {
         lastError = error as Error;
 
+        if (lastError.message.includes("A user with this email address has already been registered")) {
+          throw error;
+        }
+
         if (attempt === maxRetries) {
           // Final attempt failed, throw the error
           throw lastError;

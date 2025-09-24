@@ -669,29 +669,12 @@ export default function ImportGradebookColumns() {
                                   return true;
                                 })
                             );
-                            // 2. For each column, update all student scores
-                            await Promise.all(
-                              previewData.previewCols.map(async (col) => {
+                            // 2. Build a single batched payload and call RPC to update scores server-side
+                            const updatesPayload = previewData.previewCols
+                              .map((col) => {
                                 const colId = col.isNew ? col.newColId : col.existingCol?.id;
                                 if (!colId) return null;
-                                // Only update for students in the roster
-                                const studentsToUpdate = col.students.filter((s) => {
-                                  if (previewData.idType === "email") {
-                                    return courseController
-                                      .getRosterWithUserInfo()
-                                      .data.some((r) => r.users.email === s.identifier);
-                                  } else if (previewData.idType === "sid") {
-                                    const trimmedIdentifier = (s.identifier ?? "").trim();
-                                    const sid = parseInt(trimmedIdentifier, 10);
-                                    if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
-                                      return false;
-                                    }
-                                    return courseController.getProfileBySisId(sid)?.id != null;
-                                  }
-                                  return false;
-                                });
-                                // Build update payloads by finding the existing gradebook_column_students row
-                                const updateRows = studentsToUpdate
+                                const entries = col.students
                                   .map((s) => {
                                     let studentPrivateProfileId: string | null = null;
                                     if (previewData.idType === "email") {
@@ -702,71 +685,58 @@ export default function ImportGradebookColumns() {
                                     } else if (previewData.idType === "sid") {
                                       const trimmedIdentifier = (s.identifier ?? "").trim();
                                       const sid = parseInt(trimmedIdentifier, 10);
-                                      if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
-                                        studentPrivateProfileId = null;
-                                      } else {
+                                      if (!isNaN(sid) && isFinite(sid) && sid > 0) {
                                         studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
                                       }
                                     }
                                     if (!studentPrivateProfileId) return null;
-                                    // Find the gradebook_column_students row for this student/column
-                                    const column = gradebookController.gradebook_columns.rows.find(
-                                      (c) => c.id === colId
-                                    );
-                                    const gcs = col.isNew
-                                      ? col.newGradebookColumnStudents?.find(
-                                          (g) => g.student_id === studentPrivateProfileId && g.is_private
-                                        )
-                                      : gradebookController.getGradebookColumnStudent(
-                                          col.existingCol?.id ?? 0,
-                                          studentPrivateProfileId
-                                        );
-                                    if (!gcs) return null;
-                                    let score: number | undefined = undefined;
+                                    // Determine new score
+                                    let newScore: number | null = null;
                                     if (
                                       s.newValue !== "" &&
                                       s.newValue !== null &&
                                       s.newValue !== undefined &&
                                       !isNaN(Number(s.newValue))
                                     ) {
-                                      score = Number(s.newValue);
+                                      newScore = Number(s.newValue);
                                     }
-                                    let updateObj: {
-                                      id: number;
-                                      update: { score?: number; score_override?: number };
-                                    } | null = null;
-                                    if (column?.score_expression) {
-                                      // Only update score_override
-                                      updateObj = {
-                                        id: gcs.id,
-                                        update: { score_override: score }
-                                      };
-                                    } else {
-                                      // Update score, clear any overrides
-                                      updateObj = {
-                                        id: gcs.id,
-                                        update: { score: score }
-                                      };
+                                    // Determine old score (effective)
+                                    let oldScore: number | null = null;
+                                    if (
+                                      s.oldValue !== "" &&
+                                      s.oldValue !== null &&
+                                      s.oldValue !== undefined &&
+                                      !isNaN(Number(s.oldValue as number))
+                                    ) {
+                                      oldScore = Number(s.oldValue as number);
                                     }
-                                    return updateObj;
+                                    // Skip no-ops: both null/empty or numerically equal
+                                    const bothNull = newScore === null && oldScore === null;
+                                    const bothEqual =
+                                      newScore !== null && oldScore !== null && Number(newScore) === Number(oldScore);
+                                    if (bothNull || bothEqual) return null;
+                                    return { student_id: studentPrivateProfileId, score: newScore };
                                   })
-                                  .filter(
-                                    (r): r is { id: number; update: { score?: number; score_override?: number } } =>
-                                      r !== null
-                                  );
-                                if (updateRows.length === 0) return null;
-                                await Promise.all(
-                                  updateRows.map(async (row) => {
-                                    const { error } = await supabase
-                                      .from("gradebook_column_students")
-                                      .update(row.update)
-                                      .eq("id", row.id);
-                                    if (error) throw new Error(error.message);
-                                  })
-                                );
-                                return true;
+                                  .filter((e): e is { student_id: string; score: number | null } => e !== null);
+                                if (entries.length === 0) return null;
+                                return { gradebook_column_id: colId, entries };
                               })
-                            );
+                              .filter(
+                                (
+                                  u
+                                ): u is {
+                                  gradebook_column_id: number;
+                                  entries: { student_id: string; score: number | null }[];
+                                } => u !== null
+                              );
+
+                            if (updatesPayload.length > 0) {
+                              const { error: rpcError } = await supabase.rpc("import_gradebook_scores", {
+                                p_class_id: gradebookController.class_id,
+                                p_updates: updatesPayload
+                              });
+                              if (rpcError) throw new Error(rpcError.message);
+                            }
                             invalidate({ resource: "gradebook_columns", invalidates: ["all"] });
                             toaster.success({
                               title: "Import successful!",

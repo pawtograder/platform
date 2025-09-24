@@ -48,7 +48,7 @@ export function useRealtimeChat({
 
   // Get messages and read receipts using individual hooks
   const messages = useHelpRequestMessages(helpRequestId);
-  const allReadReceipts = useHelpRequestReadReceipts();
+  const allReadReceipts = useHelpRequestReadReceipts(helpRequestId);
 
   // Filter read receipts for this help request and exclude current user
   const readReceipts = useMemo(() => {
@@ -73,8 +73,6 @@ export function useRealtimeChat({
       unsubscribe();
     };
   }, [helpRequestId, classId, controller]);
-
-  const { helpRequestReadReceipts } = controller;
 
   // Get connection status from controller
   const connectionStatus = controller.getConnectionStatus();
@@ -147,7 +145,8 @@ export function useRealtimeChat({
       }
 
       try {
-        await helpRequestReadReceipts.create({
+        const readReceiptsController = controller.loadReadReceiptsForHelpRequest(helpRequestId);
+        await readReceiptsController.create({
           message_id: messageId,
           viewer_id: private_profile_id,
           class_id: classId,
@@ -160,7 +159,7 @@ export function useRealtimeChat({
         throw error;
       }
     },
-    [enableChat, user, private_profile_id, classId, allReadReceipts, helpRequestReadReceipts, controller, helpRequestId]
+    [enableChat, user, private_profile_id, classId, allReadReceipts, controller, helpRequestId]
   );
 
   return {

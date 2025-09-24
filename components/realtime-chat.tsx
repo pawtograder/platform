@@ -157,6 +157,25 @@ export const RealtimeChat = ({
     });
   }, [messages]);
 
+  // Human-friendly date label for separators
+  const formatMessageDateLabel = useCallback((timestamp: string): string => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const atMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayDiff = Math.round((atMidnight - todayMidnight) / (1000 * 60 * 60 * 24));
+
+    if (dayDiff === 0) return "Today";
+    if (dayDiff === -1) return "Yesterday";
+
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    }).format(date);
+  }, []);
+
   // Notify parent component when messages change
   useEffect(() => {
     if (onMessage) {
@@ -387,35 +406,50 @@ export const RealtimeChat = ({
               const messageKey = getUniqueKey(message, index);
               const replyToId = getReplyToId(message);
               const replyToMsg = getReplyToMessage(replyToId);
+              const currentDateStr = new Date(getMessageTimestamp(message)).toDateString();
+              const prevDateStr = prevMessage ? new Date(getMessageTimestamp(prevMessage)).toDateString() : null;
+              const showDateSeparator = !prevMessage || currentDateStr !== prevDateStr;
 
               return (
-                <Box
-                  key={messageKey}
-                  ref={(el: HTMLDivElement | null) => {
-                    if (el && "id" in message && typeof message.id === "number") {
-                      messageRefs.current.set(message.id, el);
-                    }
-                  }}
-                  data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
-                  data-message-author-id={getCurrentMessageAuthor(message)}
-                  style={{
-                    animation: "slideInFromBottom 0.3s ease-out"
-                  }}
-                >
-                  <ChatMessageItem
-                    message={message}
-                    isOwnMessage={
-                      getCurrentMessageAuthor(message) === private_profile_id ||
-                      getCurrentMessageAuthor(message) === (user?.id || "")
-                    }
-                    showHeader={showHeader}
-                    replyToMessage={replyToMsg}
-                    readReceipts={readReceipts}
-                    onReply={handleReply}
-                    allMessages={allMessages}
-                    currentUserId={private_profile_id}
-                    helpRequestStudentIds={helpRequestStudentIds}
-                  />
+                <Box key={messageKey}>
+                  {showDateSeparator && (
+                    <HStack my={3} justify="center">
+                      <Box flex="1" height="1px" bg="border.emphasized" />
+                      <Box px={2} py={0.5} bg="bg.muted" borderRadius="md" border="1px" borderColor="border.emphasized">
+                        <Text fontSize="xs" color="fg.muted">
+                          {formatMessageDateLabel(getMessageTimestamp(message))}
+                        </Text>
+                      </Box>
+                      <Box flex="1" height="1px" bg="border.emphasized" />
+                    </HStack>
+                  )}
+                  <Box
+                    ref={(el: HTMLDivElement | null) => {
+                      if (el && "id" in message && typeof message.id === "number") {
+                        messageRefs.current.set(message.id, el);
+                      }
+                    }}
+                    data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
+                    data-message-author-id={getCurrentMessageAuthor(message)}
+                    style={{
+                      animation: "slideInFromBottom 0.3s ease-out"
+                    }}
+                  >
+                    <ChatMessageItem
+                      message={message}
+                      isOwnMessage={
+                        getCurrentMessageAuthor(message) === private_profile_id ||
+                        getCurrentMessageAuthor(message) === (user?.id || "")
+                      }
+                      showHeader={showHeader}
+                      replyToMessage={replyToMsg}
+                      readReceipts={readReceipts}
+                      onReply={handleReply}
+                      allMessages={allMessages}
+                      currentUserId={private_profile_id}
+                      helpRequestStudentIds={helpRequestStudentIds}
+                    />
+                  </Box>
                 </Box>
               );
             })}

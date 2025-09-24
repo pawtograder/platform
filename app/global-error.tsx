@@ -1,11 +1,12 @@
 "use client";
 
 import * as Sentry from "@sentry/nextjs";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
+  const [errorID, setErrorID] = useState<string | null>(null);
   useEffect(() => {
-    Sentry.captureException(error);
+    setErrorID(Sentry.captureException(error));
   }, [error]);
 
   const handleGoBack = () => {
@@ -104,6 +105,20 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               It looks like a husky encountered a bug and buried it... a little too well! This error has been
               automatically reported to our pack of developers.
             </p>
+            {errorID && (
+              <p style={{ fontSize: "1rem", color: "#4a5568", marginBottom: "1.5rem", lineHeight: "1.6" }}>
+                If you continue to experience this error, please{" "}
+                <a
+                  href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  report it on our issue tracker
+                </a>
+                , and include the error ID: {errorID}. Any additional information that you can provide about how you
+                reached this error will help us fix it faster.
+              </p>
+            )}
             <button type="button" onClick={() => window.location.reload()} className="error-button-primary">
               Try Again
             </button>

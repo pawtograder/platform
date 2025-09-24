@@ -42,7 +42,8 @@ async function insertComments({
         if (profileError) {
           console.error(profileError);
           throw new UserVisibleError(
-            `Failed to find profile for comment: ${comment.author.name}, ${profileError.message}`
+            `Failed to find profile for comment: ${comment.author.name}, ${profileError.message}`,
+            400
           );
         }
         if (profile) {
@@ -191,7 +192,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     : undefined;
 
   if (!token) {
-    throw new UserVisibleError("No token provided");
+    throw new UserVisibleError("No token provided", 400);
   }
   const decoded = await validateOIDCToken(token);
   // Find the corresponding submission
@@ -226,7 +227,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       run_number: Number.parseInt(run_id),
       run_attempt: Number.parseInt(run_attempt),
       class_id: class_id,
-      regression_test_id: autograder_regression_test_id ?? null,
+      autograder_regression_test_id: autograder_regression_test_id ?? null,
       submission_id: submission_id ?? null,
       repository_id: repository_id ?? null,
       name,
@@ -254,7 +255,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     }
     if (!regressionTestRun.autograder.assignments.class_id) {
       throw new UserVisibleError(
-        `Regression test class ID not found: ${autograder_regression_test_id}, grader repo: ${repository}`
+        `Regression test class ID not found: ${autograder_regression_test_id}, grader repo: ${repository}`,
+        400
       );
     }
     class_id = regressionTestRun.autograder.assignments.class_id;
@@ -289,7 +291,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   scope?.setTag("checkRun", checkRun ? JSON.stringify(checkRun) : "(null)");
   try {
     //Resolve the action SHA
-    const action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
+    let action_sha: string | undefined = undefined;
+    try {
+      action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
+    } catch (e) {
+      console.error(e);
+    }
     const score =
       requestBody.feedback.score ||
       requestBody.feedback.tests
