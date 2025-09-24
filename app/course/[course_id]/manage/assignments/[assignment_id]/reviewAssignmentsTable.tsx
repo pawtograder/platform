@@ -38,7 +38,6 @@ type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["R
 export default function ReviewAssignmentsTable() {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
-  const supabase = createClient();
   const { private_profile_id } = useClassProfiles();
   const { classRealTimeController } = useCourseController();
 
@@ -52,6 +51,7 @@ export default function ReviewAssignmentsTable() {
 
   // Create a TableController with the necessary joins for populated data
   const tableController = useMemo(() => {
+    const supabase = createClient();
     const query = supabase
       .from("review_assignments")
       .select(
@@ -79,7 +79,7 @@ export default function ReviewAssignmentsTable() {
       table: "review_assignments",
       classRealTimeController
     });
-  }, [supabase, assignment_id, classRealTimeController, private_profile_id]);
+  }, [assignment_id, classRealTimeController, private_profile_id]);
 
   const columns = useMemo<ColumnDef<ReviewAssignmentRow>[]>(
     () => [

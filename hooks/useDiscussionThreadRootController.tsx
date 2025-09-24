@@ -125,7 +125,6 @@ export class DiscussionThreadsController {
   }
 }
 function DiscussionThreadChildrenProvider({ controller }: { controller: DiscussionThreadsController }) {
-  const { user } = useAuthState();
   const { data } = useList<DiscussionThread>({
     resource: "discussion_threads",
     meta: {
@@ -140,6 +139,7 @@ function DiscussionThreadChildrenProvider({ controller }: { controller: Discussi
     },
     queryOptions: {
       cacheTime: Infinity,
+      enabled: !!controller.root_id,
       staleTime: Infinity // Realtime data
     },
     sorters: [

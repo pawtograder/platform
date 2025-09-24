@@ -5,6 +5,7 @@
     "npm:@sentry/deno@*": "10.1.0",
     "npm:@supabase/postgrest-js@^1.19.4": "1.21.1",
     "npm:@types/node@*": "22.15.15",
+    "npm:bottleneck@2.19.5": "2.19.5",
     "npm:mathjs@^14.5.2": "14.6.0",
     "npm:minimatch@^10.0.3": "10.0.3",
     "npm:openai@^4.52.5": "4.104.0"
@@ -84,6 +85,9 @@
     },
     "asynckit@0.4.0": {
       "integrity": "sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q=="
+    },
+    "bottleneck@2.19.5": {
+      "integrity": "sha512-VHiNCbI1lKdl44tGrhNfU3lup0Tj/ZBMJB5/2ZbNXRCPuRCO7ed2mgcK4r17y+KB2EfuYuRaVlwNbAeaWGSpbw=="
     },
     "call-bind-apply-helpers@1.0.2": {
       "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",

@@ -111,6 +111,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const decoded = await validateOIDCTokenOrAllowE2E(token);
   const { repository, sha, workflow_ref, run_id, run_attempt } = decoded;
   const isE2ERun = repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
+  const isPawtograderTriggered = decoded.actor === "pawtograder[bot]" || decoded.actor === "pawtograder-next[bot]";
+  scope?.setTag("actor", decoded.actor);
   scope?.setTag("repository", repository);
   scope?.setTag("sha", sha);
   scope?.setTag("workflow_ref", workflow_ref);
@@ -386,7 +388,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // Validate that the submission can be created
       if (
         !checkRun.user_roles ||
-        (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader")
+        (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader" && !isPawtograderTriggered)
       ) {
         // Check if it's too late to submit using the lab-aware due date calculation
         console.log(`Timezone: ${timeZone}`);

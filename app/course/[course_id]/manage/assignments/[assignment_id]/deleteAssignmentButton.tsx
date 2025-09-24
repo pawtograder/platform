@@ -17,12 +17,11 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
   const [isLoading, setIsLoading] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
 
   const handleDeleteAssignment = async () => {
     try {
       setIsLoading(true);
-
+      const supabase = createClient();
       const result = await assignmentDelete(
         {
           assignment_id: assignmentId,

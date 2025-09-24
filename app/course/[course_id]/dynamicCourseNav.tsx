@@ -297,7 +297,7 @@ export default function DynamicCourseNav() {
                                 .filter((submenu) => !submenu.instructors_only || isInstructor)
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                    <NextLink prefetch={true} href={submenu.target || "#"}>
+                                    <NextLink href={submenu.target || "#"}>
                                       {React.createElement(submenu.icon)}
                                       {submenu.name}
                                     </NextLink>
@@ -327,7 +327,7 @@ export default function DynamicCourseNav() {
                         whiteSpace="nowrap"
                         asChild
                       >
-                        <NextLink prefetch={true} href={link.target || "#"}>
+                        <NextLink href={link.target || "#"}>
                           <HStack gap={1}>
                             {React.createElement(link.icon, { size: 14 })}
                             <Text>{link.name}</Text>
@@ -390,7 +390,7 @@ export default function DynamicCourseNav() {
                                 .filter((submenu) => !submenu.instructors_only || isInstructor)
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                    <NextLink prefetch={true} href={submenu.target || "#"}>
+                                    <NextLink href={submenu.target || "#"}>
                                       {React.createElement(submenu.icon)}
                                       {submenu.name}
                                     </NextLink>
@@ -410,7 +410,7 @@ export default function DynamicCourseNav() {
                       borderColor="orange.600"
                     >
                       <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                        <NextLink prefetch={true} href={link.target || "#"}>
+                        <NextLink href={link.target || "#"}>
                           <Flex align="center" role="group">
                             <HStack>
                               {React.createElement(link.icon)}

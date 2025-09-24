@@ -15,9 +15,10 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
-import { Toaster } from "@/components/ui/toaster";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -32,10 +33,13 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
+import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
-import { formatRelative } from "date-fns";
+import * as Sentry from "@sentry/nextjs";
+import { formatRelative, isAfter } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -56,9 +60,7 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { linkToSubPage } from "./utils";
-import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -301,8 +303,19 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     }
   });
   const { time_zone } = useCourse();
-  const supabase = createClient();
+  const [isActivating, setIsActivating] = useState(false);
   const isGraderInterface = pathname.includes("/grade");
+  const { dueDate } = useAssignmentDueDate(submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
+  });
+  const isStaff = useIsGraderOrInstructor();
+  const disableActivationButton = Boolean(
+    dueDate &&
+      TZDate.tz(time_zone ?? "America/New_York").getTime() >
+        new TZDate(dueDate, time_zone ?? "America/New_York").getTime() &&
+      !isStaff
+  );
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
   }
@@ -339,6 +352,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
               }
             }}
           >
+            <Toaster />
             <Table.Root>
               <Table.Header>
                 <Table.Row>
@@ -402,10 +416,29 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                           <Button
                             variant="outline"
                             size="xs"
+                            disabled={disableActivationButton}
+                            loading={isActivating}
                             onClick={async () => {
-                              await activateSubmission({ submission_id: historical_submission.id }, supabase);
-                              invalidate({ resource: "submissions", invalidates: ["list"] });
-                              router.push(link);
+                              setIsActivating(true);
+                              try {
+                                const supabase = createClient();
+                                await activateSubmission({ submission_id: historical_submission.id }, supabase);
+                                invalidate({ resource: "submissions", invalidates: ["list"] });
+                                toaster.create({
+                                  title: "Active submission changed",
+                                  type: "success"
+                                });
+                                router.push(link);
+                              } catch (error) {
+                                const errorId = Sentry.captureException(error);
+                                toaster.create({
+                                  title: "Error activating submission",
+                                  description: `We have recorded this error with trace ID: ${errorId}`,
+                                  type: "error"
+                                });
+                              } finally {
+                                setIsActivating(false);
+                              }
                             }}
                           >
                             <Icon as={FaCheckCircle} />
@@ -723,6 +756,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const assignment = useAssignmentController();
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment || submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
+  });
+  const safeTimeZone = time_zone || "UTC";
+  const hasExtension = hoursExtended && hoursExtended > 0;
+  const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -732,6 +772,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
     <Flex direction="column" minW="0px">
+      {isGraderOrInstructor && dueDate && (
+        <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
+          Student&quot;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
+          {canStillSubmit && (
+            <Text fontSize="xs" color="fg.warning">
+              The student can still make a new submission, grading checks will not transfer.
+            </Text>
+          )}
+        </Box>
+      )}
       <SubmissionReviewToolbar />
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
@@ -793,13 +844,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         bg="bg.muted"
         defaultValue="results"
       >
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "results", searchParams)}>
+        <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "files", searchParams)}>
+        <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
           <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files

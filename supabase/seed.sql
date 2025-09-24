@@ -1,4 +1,4 @@
-INSERT into public.classes(id,name, term, slug, is_demo, github_org, time_zone) VALUES (1, 'Demo Class', '202410', 'demo-class', true, 'autograder-dev', 'America/New_York');
+INSERT into public.classes(id,name, term, slug, is_demo, github_org, time_zone) VALUES (1, 'Demo Class', '202410', 'e2e-ignore-demo-class', true, 'pawtograder-playground', 'America/New_York');
 
 DO $$
 DECLARE 

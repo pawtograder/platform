@@ -11,14 +11,16 @@ import useDiscussionThreadChildren, {
 import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, Text, VStack } from "@chakra-ui/react";
-import { useList, useOne, useUpdate } from "@refinedev/core";
+import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
+import { useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { FaEye, FaEyeSlash, FaPencilAlt, FaReply } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaPencilAlt, FaReply, FaThumbtack } from "react-icons/fa";
 import Markdown from "@/components/ui/markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
+import { useTableControllerValueById } from "@/lib/TableController";
+import { Radio } from "@/components/ui/radio";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -34,7 +36,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
           ) : (
             <SkeletonCircle width="20px" height="20px" />
           )}
-          <VStack gap="0" alignSelf="flex-start" align="start">
+          <VStack gap="1" alignSelf="flex-start" align="start">
             {thread.instructors_only && <Badge colorPalette="blue">Viewable by poster and staff only</Badge>}
             <Flex wrap="wrap">
               {userProfile ? (
@@ -45,7 +47,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
               ) : (
                 <Skeleton width="100px" />
               )}
-              <Text fontSize="sm" color="text.muted">
+              <Text fontSize="sm" color="text.muted" px="1">
                 {thread.is_question ? "Asked question" : "Posted note"} #{thread.ordinal} to{" "}
               </Text>
               {topic ? (
@@ -83,11 +85,20 @@ function ThreadActions({
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
+  const { discussionThreadTeasers } = useCourseController();
   const canEdit =
     thread.author === public_profile_id ||
     thread.author === private_profile_id ||
     role.role === "instructor" ||
     role.role === "grader";
+  const canPin = role.role === "instructor" || role.role === "grader";
+
+  const handleTogglePin = useCallback(async () => {
+    await discussionThreadTeasers.update(thread.id, {
+      pinned: !thread.pinned
+    });
+  }, [thread.id, thread.pinned, discussionThreadTeasers]);
+
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
       <Tooltip content="Watch">
@@ -97,6 +108,19 @@ function ThreadActions({
         <Tooltip content="Edit">
           <Button aria-label="Edit" onClick={() => setEditing(!editing)} variant="ghost" size="sm">
             <FaPencilAlt />
+          </Button>
+        </Tooltip>
+      )}
+      {canPin && (
+        <Tooltip content={thread.pinned ? "Unpin from top of feed" : "Pin to top of feed"}>
+          <Button
+            aria-label={thread.pinned ? "Unpin" : "Pin"}
+            onClick={handleTogglePin}
+            variant="ghost"
+            size="sm"
+            color={thread.pinned ? "orange.fg" : "inherit"}
+          >
+            <FaThumbtack />
           </Button>
         </Tooltip>
       )}
@@ -137,19 +161,13 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
     meta: { select: "*" },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
-  const { data: rootThread, isLoading } = useOne<DiscussionThreadType>({
-    resource: "discussion_threads",
-    id: root_id.toString(),
-    meta: {
-      //Avoid selecting the children count so that the page is stable during replies
-      select:
-        "answer, author, body, class_id, created_at, draft, edited_at, id, instructors_only, is_question, ordinal, parent, root, root_class_id, subject, topic_id"
-    },
-    queryOptions: { enabled: !!root_id, staleTime: Infinity, cacheTime: Infinity },
-    liveMode: "auto"
-  });
-  const { mutateAsync: updateThread } = useUpdate({ resource: "discussion_threads" });
+  const { discussionThreadTeasers } = useCourseController();
+  const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
   const [editing, setEditing] = useState(false);
+  const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
+  useEffect(() => {
+    setVisibility(rootThread?.instructors_only ? "instructors_only" : "all");
+  }, [rootThread?.instructors_only]);
 
   const { readStatus, setUnread } = useDiscussionThreadReadStatus(root_id);
 
@@ -160,42 +178,57 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
   }, [readStatus, setUnread, root_id]);
   const sendMessage = useCallback(
     async (message: string) => {
-      await updateThread({
-        id: root_id.toString(),
-        values: { body: message, edited_at: new Date().toISOString() }
+      await discussionThreadTeasers.update(root_id, {
+        body: message,
+        edited_at: new Date().toISOString(),
+        instructors_only: visibility === "instructors_only"
       });
       setEditing(false);
-      // OMG refine.dev mutateAsync is not stable!?
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [root_id]
+    [root_id, discussionThreadTeasers, visibility]
   );
+  const onClose = useCallback(() => {
+    setEditing(false);
+  }, [setEditing]);
 
-  if (isLoading || !discussion_topics?.data || !rootThread?.data) {
+  if (!discussion_topics?.data || !rootThread) {
     return <Skeleton height="100px" />;
   }
   return (
     <>
-      <ThreadHeader
-        thread={rootThread.data}
-        topic={discussion_topics?.data.find((t) => t.id === rootThread.data.topic_id)}
-      />
+      <ThreadHeader thread={rootThread} topic={discussion_topics?.data.find((t) => t.id === rootThread.topic_id)} />
       <Box>
         {editing ? (
-          <MessageInput
-            sendMessage={sendMessage}
-            enableEmojiPicker={true}
-            enableFilePicker={true}
-            enableGiphyPicker={true}
-            sendButtonText="Edit"
-            value={rootThread.data.body}
-          />
+          <>
+            <HStack>
+              <Heading size="sm">Thread visibility:</Heading>
+              <RadioGroup.Root
+                value={visibility}
+                onValueChange={(value) => {
+                  setVisibility(value.value as unknown as "instructors_only" | "all");
+                }}
+              >
+                <Radio value="instructors_only">Staff only</Radio>
+                <Radio value="all">Entire Class</Radio>
+              </RadioGroup.Root>
+            </HStack>
+            <MessageInput
+              sendMessage={sendMessage}
+              enableEmojiPicker={true}
+              enableFilePicker={true}
+              enableGiphyPicker={true}
+              sendButtonText="Edit"
+              closeButtonText="Cancel"
+              onClose={onClose}
+              value={rootThread.body}
+            />
+          </>
         ) : (
-          <Markdown>{rootThread.data.body}</Markdown>
+          <Markdown>{rootThread.body}</Markdown>
         )}
       </Box>
-      {rootThread.data.answer && <DiscussionThreadAnswer answer_id={rootThread.data.answer} />}
-      <ThreadActions thread={rootThread.data} editing={editing} setEditing={setEditing} />
+      {rootThread.answer && <DiscussionThreadAnswer answer_id={rootThread.answer} />}
+      <ThreadActions thread={rootThread} editing={editing} setEditing={setEditing} />
     </>
   );
 }

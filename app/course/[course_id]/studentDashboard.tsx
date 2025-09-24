@@ -82,9 +82,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
             return (
               <CardRoot key={assignment.id}>
                 <CardHeader>
-                  <Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}`}>
-                    {assignment.title}
-                  </Link>
+                  <Link href={`/course/${course_id}/assignments/${assignment.id}`}>{assignment.title}</Link>
                 </CardHeader>
                 <CardBody>
                   <DataListRoot>
@@ -127,7 +125,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
               return <Skeleton key={thread.id} height="100px" />;
             }
             return (
-              <Link prefetch={true} href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
+              <Link href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
                 <DiscussionPostSummary thread={thread} topic={topic} />
               </Link>
             );

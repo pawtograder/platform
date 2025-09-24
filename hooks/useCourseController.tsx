@@ -38,6 +38,24 @@ import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
+export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: number }) {
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const { private_profile_id } = useClassProfiles();
+
+  type AssignmentGroupWithMembers = (typeof assignmentGroupsWithMembers.rows)[number];
+  const assignmentGroupFilter = useCallback(
+    (ag: AssignmentGroupWithMembers) => {
+      return (
+        ag.assignment_id === assignment_id &&
+        ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id)
+      );
+    },
+    [assignment_id, private_profile_id]
+  );
+  const assignmentGroup = assignmentGroupsWithMembers.rows.find(assignmentGroupFilter);
+  return assignmentGroup;
+}
+
 export function useAllProfilesForClass() {
   const { profiles: controller } = useCourseController();
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
@@ -155,7 +173,8 @@ export function useUpdateThreadTeaser() {
         });
       }
     },
-    [updateThread]
+    // TODO: remove refine.dev, it is so annoying that mutate is not stable!
+    [] // eslint-disable-line react-hooks/exhaustive-deps
   );
 }
 export function useRootDiscussionThreadReadStatuses(threadId: number) {
@@ -240,6 +259,7 @@ type DiscussionThreadTeaser = Pick<
   | "body"
   | "ordinal"
   | "answer"
+  | "pinned"
 >;
 
 export function useDiscussionThreadTeasers() {
@@ -257,7 +277,12 @@ export function useDiscussionThreadTeasers() {
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
 export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
   const controller = useCourseController();
-  const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(undefined);
+  const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(() => {
+    if (id === undefined) {
+      return undefined;
+    }
+    return controller.discussionThreadTeasers.getById(id).data;
+  });
   useEffect(() => {
     if (id === undefined) {
       setTeaser(undefined);
@@ -345,6 +370,7 @@ export class CourseController {
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
   private _assignments?: TableController<"assignments">;
   private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
+  private _repositories?: TableController<"repositories">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -558,6 +584,18 @@ export class CourseController {
       });
     }
     return this._assignmentGroupsWithMembers;
+  }
+
+  get repositories(): TableController<"repositories"> {
+    if (!this._repositories) {
+      this._repositories = new TableController({
+        client: this._client,
+        table: "repositories",
+        query: this._client.from("repositories").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._repositories;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -794,24 +832,22 @@ export class CourseController {
     data: UserRoleWithUser[];
   } {
     const mapToStudentUserRoles = (data: unknown[]): UserRoleWithUser[] =>
-      (data as UserRoleWithPrivateProfileAndUser[])
-        .filter((role) => role.role === "student")
-        .map((role) => role as unknown as UserRoleWithUser);
+      (data as UserRoleWithPrivateProfileAndUser[]).filter((role) => role.role === "student").map((role) => role);
 
     if (callback) {
       const result = this.userRolesWithProfiles.list((data) => {
-        callback(mapToStudentUserRoles(data as unknown[]));
+        callback(mapToStudentUserRoles(data));
       });
       return {
         unsubscribe: result.unsubscribe,
-        data: mapToStudentUserRoles(result.data as unknown[])
+        data: mapToStudentUserRoles(result.data)
       };
     }
 
     const result = this.userRolesWithProfiles.list();
     return {
       unsubscribe: result.unsubscribe,
-      data: mapToStudentUserRoles(result.data as unknown[])
+      data: mapToStudentUserRoles(result.data)
     };
   }
 
@@ -1000,7 +1036,8 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     liveMode: "manual",
     queryOptions: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: Infinity,
+      enabled: !!user?.id
     },
     pagination: {
       pageSize: 1000
@@ -1024,7 +1061,8 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     resource: "discussion_thread_watchers",
     queryOptions: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: Infinity,
+      enabled: !!user?.id
     },
     filters: [
       {
@@ -1056,7 +1094,8 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     resource: "help_request_watchers",
     queryOptions: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: Infinity,
+      enabled: !!user?.id
     },
     filters: [
       {
@@ -1172,25 +1211,31 @@ export function formatWithTimeZone(date: string, timeZone: string) {
 
 export function useAssignmentDueDate(
   assignment: Assignment,
-  options?: { studentPrivateProfileId?: string; labSectionId?: number }
+  options?: { studentPrivateProfileId?: string; labSectionId?: number; assignmentGroupId?: number }
 ) {
   const controller = useCourseController();
   const course = useCourse();
   const time_zone = course.time_zone;
-  const [dueDateExceptions, setDueDateExceptions] = useState<AssignmentDueDateException[]>();
   const [labSections, setLabSections] = useState<LabSection[]>();
   const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
 
-  useEffect(() => {
-    if (assignment.due_date) {
-      const { data, unsubscribe } = controller.assignmentDueDateExceptions.list((data) => {
-        const filtered = data.filter((e) => e.assignment_id === assignment.id);
-        setDueDateExceptions(filtered);
-      });
-      setDueDateExceptions(data.filter((e) => e.assignment_id === assignment.id));
-      return unsubscribe;
-    }
-  }, [assignment, controller]);
+  const dueDateExceptionsFilter = useCallback(
+    (e: AssignmentDueDateException) => {
+      return Boolean(
+        (e.assignment_id === assignment.id &&
+          ((!options?.studentPrivateProfileId && !e.student_id) ||
+            (options?.studentPrivateProfileId && e.student_id === options.studentPrivateProfileId)) &&
+          !options?.assignmentGroupId &&
+          !e.assignment_group_id) ||
+          (options?.assignmentGroupId && e.assignment_group_id === options.assignmentGroupId)
+      );
+    },
+    [assignment.id, options?.studentPrivateProfileId, options?.assignmentGroupId]
+  );
+  const dueDateExceptions = useListTableControllerValues(
+    controller.assignmentDueDateExceptions,
+    dueDateExceptionsFilter
+  );
 
   useEffect(() => {
     const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>

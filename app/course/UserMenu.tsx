@@ -29,7 +29,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useInvalidate, useList, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
+import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { RiChatSettingsFill } from "react-icons/ri";
 import { FaCircleUser } from "react-icons/fa6";
@@ -40,6 +40,17 @@ import { signOutAction } from "../actions";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 
 function SupportMenu() {
+  const buildNumber = useMemo(() => {
+    const str =
+      process.env.SENTRY_RELEASE ??
+      process.env.VERCEL_GIT_COMMIT_SHA ??
+      process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
+      process.env.npm_package_version;
+    if (str) {
+      return str.substring(0, 7);
+    }
+    return "Unknown";
+  }, []);
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
@@ -81,6 +92,9 @@ function SupportMenu() {
                 View open bugs
               </Link>
             </Menu.Item>
+            <Menu.Item value="current-version">
+              <Text>Build: {buildNumber}</Text>
+            </Menu.Item>
           </Menu.Content>
         </Menu.Positioner>
       </Portal>
@@ -100,7 +114,7 @@ const DropBoxAvatar = ({
   profile: UserProfile | null;
 }) => {
   const [isHovered, setIsHovered] = useState<boolean>(false);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const { course_id } = useParams();
   const { user } = useAuthState();
 
@@ -245,7 +259,7 @@ const DropBoxAvatar = ({
 const ProfileChangesMenu = () => {
   const [publicAvatarLink, setPublicAvatarLink] = useState<string | null>(null);
   const [privateAvatarLink, setPrivateAvatarLink] = useState<string | null>(null);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const { course_id } = useParams();
   const { user } = useAuthState();
   const invalidate = useInvalidate();
@@ -461,7 +475,6 @@ const NotificationPreferencesMenu = () => {
 
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
-  const supabase = createClient();
   const { user } = useAuthState();
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
   const { private_profile_id } = useClassProfiles();
@@ -494,6 +507,7 @@ function UserSettingsMenu() {
   }, [dbUser]);
 
   const unlinkGitHub = useCallback(async () => {
+    const supabase = createClient();
     const identities = await supabase.auth.getUserIdentities();
     const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
     if (!githubIdentity) {
@@ -504,8 +518,9 @@ function UserSettingsMenu() {
       throw new Error(error.message);
     }
     setGitHubUsername(null);
-  }, [supabase]);
+  }, []);
   const linkGitHub = useCallback(async () => {
+    const supabase = createClient();
     const { error } = await supabase.auth.linkIdentity({
       provider: "github",
       options: { redirectTo: `${window.location.href}` }
@@ -513,7 +528,7 @@ function UserSettingsMenu() {
     if (error) {
       throw new Error(error.message);
     }
-  }, [supabase]);
+  }, []);
 
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>

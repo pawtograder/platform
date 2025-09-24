@@ -1,6 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
+import * as Sentry from "@sentry/nextjs";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
@@ -8,10 +9,13 @@ type TablesThatHaveAnIDField = {
   [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
 }[keyof DatabaseTableTypes];
 
+// Extend known broadcast tables to include row-level recalculation state
+type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
+
 type BroadcastMessage = {
   type: "table_change" | "channel_created" | "system" | "staff_data_change";
   operation?: "INSERT" | "UPDATE" | "DELETE";
-  table?: TablesThatHaveAnIDField;
+  table?: KnownBroadcastTables;
   row_id?: number | string;
   data?: Record<string, unknown>;
   submission_id?: number;
@@ -21,7 +25,7 @@ type BroadcastMessage = {
 };
 
 type MessageFilter = {
-  table?: TablesThatHaveAnIDField;
+  table?: KnownBroadcastTables;
   submission_id?: number;
   operation?: "INSERT" | "UPDATE" | "DELETE";
 };
@@ -100,6 +104,13 @@ export class ClassRealTimeController {
     this._initializationPromise = this._initializeChannels();
   }
 
+  get isStaff(): boolean {
+    return this._isStaff;
+  }
+
+  get profileId(): string {
+    return this._profileId;
+  }
   /**
    * Start the realtime controller with enhanced features
    * Returns true when initialization is complete
@@ -119,20 +130,29 @@ export class ClassRealTimeController {
     return true;
   }
 
+  private _authUnsubscriber?: ReturnType<typeof this._client.auth.onAuthStateChange>;
   private async _initializeChannels() {
     if (this._closed) {
       return;
     }
 
-    // Session refresh is now handled by the channel manager
+    this._authUnsubscriber = this._client.auth.onAuthStateChange((event, session) => {
+      Sentry.addBreadcrumb({
+        category: "realtime",
+        message: `Auth state changed: ${event}`,
+        data: {
+          event,
+          session: { userId: session?.user?.id, expiresAt: session?.expires_at }
+        }
+      });
+    });
+
+    await this._subscribeToUserChannel();
 
     // Initialize staff channel if user is staff
     if (this._isStaff) {
       await this._subscribeToStaffChannel();
     }
-
-    // Initialize user channel (all users get their own channel)
-    await this._subscribeToUserChannel();
   }
 
   /**
@@ -359,7 +379,7 @@ export class ClassRealTimeController {
   /**
    * Subscribe to all messages for a specific table
    */
-  subscribeToTable(table: TablesThatHaveAnIDField, callback: MessageCallback): () => void {
+  subscribeToTable(table: KnownBroadcastTables, callback: MessageCallback): () => void {
     return this.subscribe({ table }, callback);
   }
 
@@ -437,6 +457,11 @@ export class ClassRealTimeController {
       unsubscriber();
     }
     this._channelUnsubscribers.clear();
+
+    if (this._authUnsubscriber) {
+      this._authUnsubscriber.data.subscription.unsubscribe();
+      this._authUnsubscriber = undefined;
+    }
 
     this._closed = true;
     this._started = false;
@@ -516,6 +541,13 @@ export class ClassRealTimeController {
    */
   private _notifyStatusChange() {
     const status = this.getConnectionStatus();
+    Sentry.addBreadcrumb({
+      category: "realtime",
+      message: "Connection status changed",
+      data: {
+        status
+      }
+    });
     this._statusChangeListeners.forEach((callback) => callback(status));
   }
 

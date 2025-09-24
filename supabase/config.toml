@@ -706,3 +706,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/github-async-worker/deno.json"
 entrypoint = "./functions/github-async-worker/index.ts"
+
+[functions.gradebook-column-inserted]
+enabled = true
+verify_jwt = false
+import_map = "./functions/gradebook-column-inserted/deno.json"
+entrypoint = "./functions/gradebook-column-inserted/index.ts"

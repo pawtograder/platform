@@ -75,7 +75,7 @@ import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icon
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useActiveRubricId } from "@/hooks/useSubmissionReview";
 
-function FilePicker({ curFile }: { curFile: number }) {
+function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
   const submission = useSubmission();
   const comments = useSubmissionFileComments({});
   const showCommentsFeature = true; //submission.released !== null || isGraderOrInstructor;
@@ -117,6 +117,10 @@ function FilePicker({ curFile }: { curFile: number }) {
                 <Link
                   variant={curFile === idx ? "underline" : undefined}
                   href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?file_id=${file.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onSelect(file.id);
+                  }}
                 >
                   {file.name}
                 </Link>
@@ -131,7 +135,7 @@ function FilePicker({ curFile }: { curFile: number }) {
     </Box>
   );
 }
-function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
+function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSelect: (artifactId: number) => void }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const comments = useSubmissionArtifactComments({});
@@ -177,6 +181,10 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
                 <Link
                   variant={curArtifact === idx ? "underline" : undefined}
                   href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?artifact_id=${artifact.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onSelect(artifact.id);
+                  }}
                 >
                   {artifact.name}
                 </Link>
@@ -735,8 +743,8 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     let isMounted = true;
 
     async function loadArtifact() {
+      const client = createClient();
       if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
-        const client = createClient();
         const data = await client.functions.invoke("submission-serve-artifact", {
           body: JSON.stringify({
             classId: artifact.class_id,
@@ -746,7 +754,6 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
         });
         setSiteUrl(data.data.url);
       }
-      const client = createClient();
       const data = await client.storage.from("submission-artifacts").download(artifactKey);
 
       if (!isMounted) return; // Component unmounted, exit early
@@ -778,23 +785,19 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
 
   // Create object URL when artifactData changes and cleanup previous URL
   useEffect(() => {
+    let newObjectUrl: string | null = null;
     if (artifactData && artifact.data.format === "png") {
-      // Revoke previous URL if it exists
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-      // Create new object URL
-      const newObjectUrl = URL.createObjectURL(artifactData);
+      newObjectUrl = URL.createObjectURL(artifactData);
       setObjectUrl(newObjectUrl);
     }
 
     return () => {
       // Cleanup on unmount or when artifactData changes
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
+      if (newObjectUrl) {
+        URL.revokeObjectURL(newObjectUrl);
       }
     };
-  }, [artifactData, artifact.data?.format, objectUrl]);
+  }, [artifactData, artifact.data?.format]);
 
   if (artifact.data.format === "png") {
     if (objectUrl) {
@@ -927,31 +930,200 @@ export default function FilesView() {
     ? (reviewAssignment?.submission_review_id ?? currentSubmissionReviewRecordId)
     : writableSubmissionReviews?.[0]?.id;
 
-  const fileId = searchParams.get("file_id");
-  const artifactId = searchParams.get("artifact_id");
+  const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<number | null>(null);
+  const [isSwitching, setIsSwitching] = useState<boolean>(false);
+  const scrolledTargetsRef = useRef<Set<string>>(new Set());
 
-  const curFileIndex = submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === Number(fileId));
-  const selectedFile =
-    curFileIndex !== undefined && curFileIndex !== -1
-      ? submissionData?.submission_files[curFileIndex]
-      : submissionData?.submission_files[0];
+  const updateUrl = useCallback((next: { fileId?: number | null; artifactId?: number | null; hash?: string }) => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (next.fileId !== undefined) {
+      if (next.fileId === null) url.searchParams.delete("file_id");
+      else url.searchParams.set("file_id", String(next.fileId));
+      url.searchParams.delete("artifact_id");
+    }
+    if (next.artifactId !== undefined) {
+      if (next.artifactId === null) url.searchParams.delete("artifact_id");
+      else url.searchParams.set("artifact_id", String(next.artifactId));
+      url.searchParams.delete("file_id");
+    }
+    url.hash = next.hash || "";
+    window.history.replaceState({}, "", url.toString());
+  }, []);
 
-  const curArtifactIndex = submissionData?.submission_artifacts?.findIndex(
-    (artifact: Tables<"submission_artifacts">) => artifact.id === Number(artifactId)
+  const getScrollableAncestor = useCallback((element: HTMLElement | null): HTMLElement | null => {
+    let node: HTMLElement | null = element;
+    while (node) {
+      const style = window.getComputedStyle(node);
+      const overflowY = style.overflowY;
+      const canScroll = (overflowY === "auto" || overflowY === "scroll") && node.scrollHeight > node.clientHeight;
+      if (canScroll) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }, []);
+
+  const preciseScrollTo = useCallback(
+    (element: HTMLElement, marginTop = 80) => {
+      const container = getScrollableAncestor(element);
+      if (container) {
+        const containerRect = container.getBoundingClientRect();
+        const elRect = element.getBoundingClientRect();
+        const newTop = container.scrollTop + (elRect.top - containerRect.top) - marginTop;
+        container.scrollTo({ top: newTop });
+      } else {
+        const elTop = element.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({ top: elTop - marginTop });
+      }
+    },
+    [getScrollableAncestor]
   );
+
+  const scrollToHash = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash;
+    if (!hash) return;
+    const id = hash.startsWith("#") ? hash.slice(1) : hash;
+    requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      if (el) preciseScrollTo(el);
+    });
+  }, [preciseScrollTo]);
+
+  useEffect(() => {
+    const fileIdParam = searchParams.get("file_id");
+    const artifactIdParam = searchParams.get("artifact_id");
+    setSelectedFileId(fileIdParam ? Number(fileIdParam) : null);
+    setSelectedArtifactId(artifactIdParam ? Number(artifactIdParam) : null);
+    // Only run once on mount; subsequent changes are managed locally without navigation
+  }, [searchParams]);
+
+  useEffect(() => {
+    function handleSelect(event: Event) {
+      const detail = (event as CustomEvent).detail as { fileId?: number; artifactId?: number; hash?: string };
+      if (detail && Object.prototype.hasOwnProperty.call(detail, "fileId")) {
+        const nextId = detail.fileId ?? null;
+        const isSame = nextId === selectedFileId && selectedArtifactId === null;
+        updateUrl({ fileId: nextId, hash: detail.hash });
+        if (isSame) {
+          // Only hash changed or same file; no skeleton, just scroll if provided
+          if (detail.hash) scrollToHash();
+        } else {
+          setIsSwitching(true);
+          setSelectedFileId(nextId);
+          setSelectedArtifactId(null);
+        }
+      } else if (detail && Object.prototype.hasOwnProperty.call(detail, "artifactId")) {
+        const nextId = detail.artifactId ?? null;
+        const isSame = nextId === selectedArtifactId && selectedFileId === null;
+        updateUrl({ artifactId: nextId, hash: detail.hash });
+        if (isSame) {
+          if (detail.hash) scrollToHash();
+        } else {
+          setIsSwitching(true);
+          setSelectedArtifactId(nextId);
+          setSelectedFileId(null);
+        }
+      }
+    }
+    window.addEventListener("pawto:files-select", handleSelect as EventListener);
+    return () => window.removeEventListener("pawto:files-select", handleSelect as EventListener);
+  }, [updateUrl, selectedFileId, selectedArtifactId, scrollToHash]);
+
+  const handleSelectFile = useCallback(
+    (id: number) => {
+      const isSame = id === selectedFileId && selectedArtifactId === null;
+      updateUrl({ fileId: id, hash: "" });
+      if (!isSame) {
+        setIsSwitching(true);
+        setSelectedFileId(id);
+        setSelectedArtifactId(null);
+      }
+    },
+    [updateUrl, selectedFileId, selectedArtifactId]
+  );
+
+  const handleSelectArtifact = useCallback(
+    (id: number) => {
+      const isSame = id === selectedArtifactId && selectedFileId === null;
+      updateUrl({ artifactId: id, hash: "" });
+      if (!isSame) {
+        setIsSwitching(true);
+        setSelectedArtifactId(id);
+        setSelectedFileId(null);
+      }
+    },
+    [updateUrl, selectedArtifactId, selectedFileId]
+  );
+
+  const curFileIndex =
+    submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === (selectedFileId ?? -1)) ?? -1;
+  const selectedFile =
+    curFileIndex !== -1
+      ? submissionData?.submission_files[curFileIndex]
+      : submissionData?.submission_files && submissionData.submission_files.length > 0
+        ? submissionData.submission_files[0]
+        : undefined;
+
+  const curArtifactIndex =
+    submissionData?.submission_artifacts?.findIndex(
+      (artifact: Tables<"submission_artifacts">) => artifact.id === (selectedArtifactId ?? -1)
+    ) ?? -1;
   const selectedArtifact =
-    curArtifactIndex !== undefined && curArtifactIndex !== -1
+    curArtifactIndex !== -1
       ? submissionData?.submission_artifacts?.[curArtifactIndex]
-      : submissionData?.submission_artifacts?.[0];
+      : submissionData?.submission_artifacts && submissionData.submission_artifacts.length > 0
+        ? submissionData.submission_artifacts[0]
+        : undefined;
 
   const isLoading =
     isLoadingSubmission || isLoadingReviewAssignment || (!!reviewAssignment && isLoadingSubmissionReviewList);
 
   // Resolve prop types
-  const filePickerDisplayIndex = curFileIndex === undefined || curFileIndex === -1 ? 0 : curFileIndex;
-  const artifactPickerDisplayIndex = curArtifactIndex === undefined || curArtifactIndex === -1 ? 0 : curArtifactIndex;
+  const filePickerDisplayIndex = curFileIndex === -1 ? 0 : curFileIndex;
+  const artifactPickerDisplayIndex = curArtifactIndex === -1 ? 0 : curArtifactIndex;
   const finalActiveSubmissionReviewId =
     activeSubmissionReviewIdToUse === null ? undefined : activeSubmissionReviewIdToUse;
+
+  // Scroll to line anchors when hash is present and relevant content is rendered
+  useEffect(() => {
+    scrollToHash();
+  }, [selectedFileId, selectedArtifactId, scrollToHash]);
+
+  // After switching to a new file, wait for content to render and then scroll to the hash exactly once per file+hash
+  useEffect(() => {
+    if (isSwitching) return; // Still switching, wait until content area is shown
+    if (!selectedFileId) return; // Only applies to file views
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash;
+    if (!hash) return;
+    const targetId = hash.startsWith("#") ? hash.slice(1) : hash;
+    const key = `${selectedFileId}:${targetId}`;
+    if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
+
+    let attempts = 0;
+    const maxAttempts = 60; // up to ~3s at 50ms
+    const tryScroll = () => {
+      const el = document.getElementById(targetId);
+      if (el) {
+        preciseScrollTo(el);
+        scrolledTargetsRef.current.add(key);
+        return;
+      }
+      if (attempts++ < maxAttempts) {
+        setTimeout(tryScroll, 50);
+      }
+    };
+    tryScroll();
+  }, [isSwitching, selectedFileId, preciseScrollTo]);
+
+  // Briefly show a loading skeleton when switching files/artifacts
+  useEffect(() => {
+    if (!isSwitching) return;
+    const timeout = setTimeout(() => setIsSwitching(false), 150);
+    return () => clearTimeout(timeout);
+  }, [isSwitching]);
 
   if (isLoading) {
     return <Spinner />;
@@ -967,26 +1139,28 @@ export default function FilesView() {
     <>
       <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
         <Box w={"100%"} minW={"100%"}>
-          <FilePicker curFile={filePickerDisplayIndex} />
+          <FilePicker curFile={filePickerDisplayIndex} onSelect={handleSelectFile} />
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
-            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} />
+            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
           )}
         </Box>
         <Separator orientation={{ base: "horizontal", md: "vertical" }} />
         <Box w={"100%"}>
-          {fileId ||
-          (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
-            selectedFile && <CodeFile file={selectedFile} />
-          ) : selectedArtifact ? (
+          {isSwitching ? (
+            <Skeleton height="70vh" width="100%" />
+          ) : selectedArtifact && selectedArtifactId !== null ? (
             selectedArtifact.data !== null ? (
               <ArtifactWithComments
+                key={selectedArtifact.id}
                 artifact={selectedArtifact as SubmissionArtifact}
                 reviewAssignmentId={activeReviewAssignmentId}
                 submissionReviewId={finalActiveSubmissionReviewId}
               />
             ) : (
-              <ArtifactView artifact={selectedArtifact as SubmissionArtifact} />
+              <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
             )
+          ) : selectedFile ? (
+            <CodeFile key={selectedFile.id} file={selectedFile} />
           ) : (
             <Text>Select a file or artifact to view.</Text>
           )}
