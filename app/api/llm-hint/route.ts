@@ -102,7 +102,7 @@ class OpenAISDKAdapter {
 
 // This is a bit clumsy, but not sure of a better option.
 function isReasoningModel(model: string): boolean {
-  return model.startsWith("o");
+  return /^o[134](-[a-z]+)*$/.test(model);
 }
 
 async function getChatModel({
@@ -365,16 +365,20 @@ export async function POST(request: NextRequest) {
     let response;
     if (isReasoningModel(modelName)) {
       // For reasoning models, bypass LangChain prompt template and call directly
-      response = await chatModel.invoke({
+      response = await (chatModel as OpenAISDKAdapter).invoke({
         input: extraData.llm.prompt
       });
     } else {
       // For regular models, use LangChain prompt template
       const prompt = await getPrompt(extraData.llm);
-      const chain = prompt.pipe(chatModel);
-      response = await chain.invoke({
-        input: extraData.llm.prompt
-      });
+      if (chatModel instanceof ChatOpenAI || chatModel instanceof ChatAnthropic) {
+        const chain = prompt.pipe(chatModel);
+        response = await chain.invoke({
+          input: extraData.llm.prompt
+        });
+      } else {
+        throw new UserVisibleError("Unexpected model type for non-reasoning model", 500);
+      }
     }
 
     if (!response) {
@@ -382,8 +386,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Extract token usage from the response
-    const inputTokens = response.usage_metadata?.input_tokens || 0;
-    const outputTokens = response.usage_metadata?.output_tokens || 0;
+    const hasUsageMetadata = (
+      obj: unknown
+    ): obj is { usage_metadata?: { input_tokens?: number; output_tokens?: number } } =>
+      typeof obj === "object" && obj !== null && "usage_metadata" in obj;
+
+    const inputTokens = hasUsageMetadata(response) ? response.usage_metadata?.input_tokens || 0 : 0;
+    const outputTokens = hasUsageMetadata(response) ? response.usage_metadata?.output_tokens || 0 : 0;
 
     const toText = (c: unknown) =>
       Array.isArray(c)
@@ -393,7 +402,10 @@ export async function POST(request: NextRequest) {
             .join("\n")
         : (c as string);
 
-    const resultText = toText(response.content);
+    const hasContent = (obj: unknown): obj is { content: unknown } =>
+      typeof obj === "object" && obj !== null && "content" in obj;
+
+    const resultText = toText(hasContent(response) ? response.content : "");
 
     // Check if the result is empty and throw an error if so
     if (!resultText || resultText.trim() === "") {
