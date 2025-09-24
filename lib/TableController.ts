@@ -339,9 +339,10 @@ export function useTableControllerTableValues<
     return controller.list().data.map((row) => row as PossiblyTentativeResult<ResultType>);
   });
   useEffect(() => {
-    const { unsubscribe } = controller.list((data) => {
+    const { unsubscribe, data } = controller.list((data) => {
       setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     });
+    setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     return unsubscribe;
   }, [controller]);
   return values;
@@ -653,6 +654,7 @@ export default class TableController<
         );
 
         // Update existing rows in place and notify item listeners
+        let anyChanges = false;
         for (let i = 0; i < this._rows.length; i++) {
           const current = this._rows[i] as unknown as ResultOne & { id: IDType };
           const updated = nextById.get(current.id);
@@ -664,8 +666,14 @@ export default class TableController<
               if (listeners) {
                 listeners.forEach((listener) => listener(this._rows[i]));
               }
+              anyChanges = true;
             }
           }
+        }
+        if (anyChanges) {
+          // Optimization opportunity: we should fix it so that no subscriber depends on this behavior
+          this._rows = newRows;
+          this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
         }
       } else {
         // Membership changed: replace rows and notify list + item listeners accordingly
