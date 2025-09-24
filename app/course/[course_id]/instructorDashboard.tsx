@@ -90,8 +90,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const private_profile_id = await getPrivateProfileId(course_id);
 
   // Get dashboard metrics via RPC
-  // Types for this RPC are not yet in generated Supabase types
-  // @ts-expect-error typed via migration, not in generated types yet
   const { data: metricsRaw, error: metricsError } = await supabase.rpc("get_instructor_dashboard_metrics", {
     p_class_id: course_id
   });
