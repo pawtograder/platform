@@ -58,6 +58,7 @@ begin
       and ur.private_profile_id is not null
       and (v_class_id is null or c.id = v_class_id)
       and a.template_repo is not null and a.template_repo <> ''
+      and c.github_org is not null and c.github_org <> ''
       and a.group_config <> 'groups'
       and a.release_date is not null and a.release_date <= now()  -- Only released assignments!
       and (
@@ -86,6 +87,10 @@ begin
 end;
 $$;
 
+revoke all on function public.create_repos_for_student(uuid, integer, boolean) from public;
+grant execute on function public.create_repos_for_student(uuid, integer, boolean) to authenticated;
+grant execute on function public.create_repos_for_student(uuid, integer, boolean) to service_role;
+
 
 -- 9) Background invoker and cron schedule for the GitHub async worker
 create or replace function public.invoke_github_async_worker_background_task()
@@ -106,7 +111,7 @@ begin
   select count(*)::integer into message_count from pgmq_public.read('async_calls', 0, 50);
   
   -- Determine number of workers based on queue size
-  if queue_size >= 20 then
+  if message_count >= 20 then
     worker_count := 10;
     raise notice 'High queue load detected (% messages), starting % workers', queue_size, worker_count;
   else

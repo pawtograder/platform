@@ -125,8 +125,9 @@ function detectRateLimitType(error: unknown): {
   const retryAfter = headers ? parseInt(headers["retry-after"] || "", 10) : NaN;
   const remaining = headers ? parseInt(headers["x-ratelimit-remaining"] || "", 10) : NaN;
   const msg = (err?.message || "").toLowerCase();
-  console.log("detectRateLimitType msg", msg);
-  console.log("detectRateLimitType status", status);
+  const resetHeader = headers?.["x-ratelimit-reset"];
+  const untilResetSec = resetHeader ? Math.max(0, parseInt(resetHeader, 10) - Math.floor(Date.now() / 1000)) : undefined;
+
   if (status === 429) return { type: "secondary", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
   if (status === 403) {
     if (
@@ -136,7 +137,13 @@ function detectRateLimitType(error: unknown): {
       return { type: "secondary", retryAfter };
     }
     if (!isNaN(remaining) && remaining === 0) {
-      return { type: "extreme", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
+      const computed =
+        typeof untilResetSec === "number" && !isNaN(untilResetSec)
+          ? untilResetSec
+          : isNaN(retryAfter)
+            ? undefined
+            : retryAfter;
+      return { type: "primary", retryAfter: computed };
     }
   }
   return { type: null };
@@ -165,11 +172,15 @@ async function recordGitHubAsyncError(
       error_type: error instanceof Error ? error.constructor.name : "Unknown"
     };
 
-    await adminSupabase.schema("public").rpc("record_github_async_error", {
+    const { error: recordError } = await adminSupabase.schema("public").rpc("record_github_async_error", {
       p_org: org,
       p_method: method,
       p_error_data: errorData as unknown as Json
     });
+    if (recordError) {
+      scope.setContext("error_recording_failed_rpc", { rpc_error: recordError.message });
+      Sentry.captureException(recordError, scope);
+    }
   } catch (e) {
     scope.setContext("error_recording_failed", {
       original_error: error instanceof Error ? error.message : String(error),
@@ -253,7 +264,6 @@ async function handleGitHubApiCall<T>(
   } catch (error) {
     console.trace(error);
     const rt = detectRateLimitType(error);
-    console.log("rt", rt.type);
     scope.setTag("rate_limit_type", rt.type);
     scope.setTag("github_api_method", method);
     Sentry.captureException(error, scope);
@@ -281,7 +291,7 @@ async function handleGitHubApiCall<T>(
             p_scope: "org",
             p_key: org,
             p_event: type,
-            p_retry_after_seconds: retryAfter,
+            p_retry_after_seconds: retryAfter || delay,
             p_reason:
               type === "secondary"
                 ? "secondary_rate_limit"
