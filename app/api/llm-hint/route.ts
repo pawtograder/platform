@@ -104,7 +104,8 @@ class OpenAISDKAdapter {
 
 // This is a bit clumsy, but not sure of a better option.
 function isReasoningModel(model: string): boolean {
-  return /^o[134](-[a-z]+)*$/.test(model);
+  // Match o1/o3/o4 and typical suffixes (e.g., -mini, -preview, -2024-08-06)
+  return /^(?:o1|o3|o4)(?:[-._a-z0-9]+)?$/i.test(model);
 }
 
 async function getChatModel({
