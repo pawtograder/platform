@@ -117,6 +117,7 @@ begin
            a.title,
            a.release_date,
            public.calculate_final_due_date(a.id, p_student_profile_id, agm.assignment_group_id) as effective_due_date,
+           a.total_points,
            s.id as submission_id,
            s.created_at as submission_timestamp,
            s.ordinal as submission_ordinal,

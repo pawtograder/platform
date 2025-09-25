@@ -53,6 +53,7 @@ type AssignmentSummary = {
   submission_ordinal: number | null;
   autograder_score: number | null;
   total_score: number | null;
+  total_points: number | null;
 };
 
 type PrivateGrade = {
@@ -246,7 +247,7 @@ export default function StudentPage() {
                           <Link
                             href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
                           >
-                            {a.total_score ?? "—"}
+                            {a.total_score ?? "—"} / {a.total_points ?? "—"}
                           </Link>
                         ) : (
                           (a.total_score ?? "—")
@@ -501,7 +502,7 @@ export default function StudentPage() {
                   <Table.Row>
                     <Table.ColumnHeader>Column</Table.ColumnHeader>
                     <Table.ColumnHeader textAlign="right">Score</Table.ColumnHeader>
-                    <Table.ColumnHeader textAlign="right">Override</Table.ColumnHeader>
+                    <Table.ColumnHeader textAlign="right">Max</Table.ColumnHeader>
                     <Table.ColumnHeader>Released</Table.ColumnHeader>
                   </Table.Row>
                 </Table.Header>
@@ -509,8 +510,10 @@ export default function StudentPage() {
                   {sortedPrivateGrades.map((g) => (
                     <Table.Row key={`${g.gradebook_column_id}`}>
                       <Table.Cell>{columnsById.get(g.gradebook_column_id)?.name ?? g.gradebook_column_id}</Table.Cell>
-                      <Table.Cell textAlign="right">{g.score ?? "—"}</Table.Cell>
-                      <Table.Cell textAlign="right">{g.score_override ?? "—"}</Table.Cell>
+                      <Table.Cell textAlign="right">{g.score_override ?? g.score ?? "—"}</Table.Cell>
+                      <Table.Cell textAlign="right">
+                        {columnsById.get(g.gradebook_column_id)?.max_score ?? "—"}
+                      </Table.Cell>
                       <Table.Cell>{g.released ? "Yes" : "No"}</Table.Cell>
                     </Table.Row>
                   ))}
