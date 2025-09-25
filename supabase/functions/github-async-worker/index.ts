@@ -307,7 +307,7 @@ async function checkAndTripErrorCircuitBreaker(
         });
 
         Sentry.captureMessage(
-          `GitHub async worker circuit breaker tripped for org ${org}: ${errorCount} errors in 5 minutes. Circuit open for 8 hours.`,
+          `GitHub async worker circuit breaker tripped for org ${org}: error threshold exceeded. Circuit open for 8 hours.`,
           {
             level: "error"
           }
