@@ -60,6 +60,7 @@ import {
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import Link from "next/link";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
+import StudentSummaryTrigger from "../ui/student-summary";
 
 /**
  * Office hours form and UI helper types
@@ -700,6 +701,9 @@ const HelpRequestStudents = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const { course_id } = useParams();
+
+  const isInstructorOrGrader = useIsGraderOrInstructor();
 
   // Get student associations for activity logging
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -832,10 +836,15 @@ const HelpRequestStudents = ({
           </Text>
           <HStack>
             {students.map((student, index) => (
-              <Text key={student.id} fontSize="sm">
-                {student.name}
-                {index < students.length - 1 && ","}
-              </Text>
+              <>
+                <Text key={student.id} fontSize="sm">
+                  {student.name}
+                  {index < students.length - 1 && ","}
+                </Text>
+                {isInstructorOrGrader && (
+                  <StudentSummaryTrigger student_id={student.id} course_id={Number(course_id)} />
+                )}
+              </>
             ))}
           </HStack>
         </HStack>

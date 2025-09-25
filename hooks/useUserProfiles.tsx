@@ -20,10 +20,16 @@ export function getUserProfile(
   };
 }
 
-export function useUserProfile(
-  id: string | null | undefined
-):
-  | { flair?: string; flair_color?: string; id: string; name: string; avatar_url: string; real_name?: string }
+export function useUserProfile(id: string | null | undefined):
+  | {
+      flair?: string;
+      flair_color?: string;
+      id: string;
+      name: string;
+      avatar_url: string;
+      real_name?: string;
+      private_profile_id?: string;
+    }
   | undefined {
   const controller = useCourseController();
   const findFunction = useCallback(
@@ -45,7 +51,8 @@ export function useUserProfile(
       avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.id}`,
       flair: profile.flair || "",
       flair_color: profile.flair_color || "",
-      real_name: userRole?.profiles.name && profile.id !== userRole.private_profile_id ? userRole.profiles.name : ""
+      real_name: userRole?.profiles.name && profile.id !== userRole.private_profile_id ? userRole.profiles.name : "",
+      private_profile_id: userRole?.private_profile_id
     };
   }, [profile, userRole]);
   return ret;

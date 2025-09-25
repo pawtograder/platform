@@ -3,7 +3,7 @@
 import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
@@ -21,9 +21,12 @@ import Markdown from "@/components/ui/markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { useTableControllerValueById } from "@/lib/TableController";
 import { Radio } from "@/components/ui/radio";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
+  const { course_id } = useParams();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   return (
     <Box>
       <VStack gap="0" align="start">
@@ -46,6 +49,9 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
                 </Heading>
               ) : (
                 <Skeleton width="100px" />
+              )}
+              {isGraderOrInstructor && userProfile?.private_profile_id && (
+                <StudentSummaryTrigger student_id={userProfile.private_profile_id} course_id={Number(course_id)} />
               )}
               <Text fontSize="sm" color="text.muted" px="1">
                 {thread.is_question ? "Asked question" : "Posted note"} #{thread.ordinal} to{" "}

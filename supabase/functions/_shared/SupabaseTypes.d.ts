@@ -9139,6 +9139,10 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: Json;
       };
+      get_student_summary: {
+        Args: { p_class_id: number; p_student_profile_id: string };
+        Returns: Json;
+      };
       get_system_notification_stats: {
         Args: { p_requested_by?: string };
         Returns: {

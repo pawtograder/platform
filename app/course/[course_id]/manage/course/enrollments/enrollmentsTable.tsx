@@ -49,6 +49,7 @@ import EditUserRoleModal from "./editUserRoleModal";
 import RemoveStudentModal from "./removeStudentModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import AddSingleCourseMember from "./addSingleCourseMember";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -719,6 +720,7 @@ export default function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
+              <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
                   <Icon
@@ -826,7 +828,7 @@ export default function EnrollmentsTable() {
       sorting: [{ id: "profiles.name", desc: false }],
       pagination: {
         pageIndex: 0,
-        pageSize: 1000
+        pageSize: 200
       }
     }
   });
