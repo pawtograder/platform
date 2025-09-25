@@ -412,6 +412,7 @@ export async function processEnvelope(
               .select("github_org_confirmed, users(github_username)")
               .eq("class_id", envelope.class_id || 0)
               .eq("role", "student")
+              .eq("disabled", false)
               .limit(1000);
             if (error) throw error;
             return (data || [])
