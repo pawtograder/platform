@@ -63,8 +63,9 @@ class OpenAISDKAdapter {
   async invoke(input: { input: string }) {
     try {
       // Back to chat completions with correct URL structure
-      const requestParams: any = {
+      const requestParams: OpenAISDK.Chat.ChatCompletionCreateParams = {
         // Don't pass model since it's already in the URL path
+        model: this.model, // OpenAI SDK requires model parameter
         messages: [
           { role: "developer", content: "You are a helpful assistant that provides feedback on code." },
           { role: "user", content: input.input }
