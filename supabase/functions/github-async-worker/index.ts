@@ -45,8 +45,8 @@ function getCreateRepoLimiter(org: string): Bottleneck {
     const password = upstashToken;
     limiter = new Bottleneck({
       id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 60,
-      reservoirRefreshAmount: 60,
+      reservoir: 100,
+      reservoirRefreshAmount: 100,
       reservoirRefreshInterval: 60_000,
       datastore: "ioredis",
       clearDatastore: false,
