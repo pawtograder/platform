@@ -64,8 +64,9 @@ class OpenAISDKAdapter {
     try {
       // Back to chat completions with correct URL structure
       const requestParams: OpenAISDK.Chat.ChatCompletionCreateParams = {
-        // Don't pass model since it's already in the URL path
-        model: this.model, // OpenAI SDK requires model parameter
+        // Model is required by both OpenAI and Azure clients in the request body
+        // (even though Azure may also include it in the URL path)
+        model: this.model,
         messages: [
           { role: "developer", content: "You are a helpful assistant that provides feedback on code." },
           { role: "user", content: input.input }
