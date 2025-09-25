@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createServiceClient, SupabaseClient } from "@supabase/supabase-js";
 import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
+import { OpenAI as OpenAISDK } from "openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 
@@ -44,6 +45,69 @@ class UserVisibleError extends Error {
   }
 }
 
+/**
+ * Adapter to make OpenAI SDK work like LangChain chat models
+ * Needed to support reasoning models, since LangChain does not support them for AzureOpenAI
+ */
+class OpenAISDKAdapter {
+  private client: OpenAISDK;
+  private model: string;
+  private maxTokens?: number;
+
+  constructor(client: OpenAISDK, model: string, maxTokens?: number) {
+    this.client = client;
+    this.model = model;
+    this.maxTokens = maxTokens;
+  }
+
+  async invoke(input: { input: string }) {
+    try {
+      // Back to chat completions with correct URL structure
+      const requestParams: OpenAISDK.Chat.ChatCompletionCreateParams = {
+        // Model is required by both OpenAI and Azure clients in the request body
+        // (even though Azure may also include it in the URL path)
+        model: this.model,
+        messages: [
+          { role: "developer", content: "You are a helpful assistant that provides feedback on code." },
+          { role: "user", content: input.input }
+        ]
+      };
+
+      // Only add supported parameters for reasoning models
+      if (this.maxTokens) {
+        requestParams.max_completion_tokens = this.maxTokens;
+      }
+
+      const response = await this.client.chat.completions.create(requestParams);
+
+      // Adapt the response to match chat model format
+      return {
+        content: response.choices[0]?.message?.content || "",
+        usage_metadata: {
+          input_tokens: response.usage?.prompt_tokens || 0,
+          output_tokens: response.usage?.completion_tokens || 0
+        }
+      };
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { operation: "openai_sdk_adapter" },
+        extra: {
+          model: this.model,
+          maxTokens: this.maxTokens,
+          errorDetails: error && typeof error === "object" && "error" in error ? error.error : undefined
+        }
+      });
+      throw error;
+    }
+  }
+}
+
+// This is a bit clumsy, but not sure of a better option.
+function isReasoningModel(model: string): boolean {
+  // Match o1/o3/o4 and typical suffixes (e.g., -mini, -preview, -2024-08-06)
+  return /^(?:o1|o3|o4)(?:[-._a-z0-9]+)?$/i.test(model);
+}
+
 async function getChatModel({
   model,
   provider,
@@ -73,16 +137,29 @@ async function getChatModel({
     if (!process.env.AZURE_OPENAI_ENDPOINT || !process.env[key_env_name]) {
       throw new UserVisibleError(`Azure OpenAI endpoint and key are required, must set env var ${key_env_name}`, 500);
     }
-    return new AzureChatOpenAI({
-      model,
-      temperature: temperature || 0.85,
-      maxTokens: maxTokens,
-      maxRetries: maxRetries || 2,
-      azureOpenAIApiKey: process.env[key_env_name],
-      azureOpenAIApiInstanceName: instanceName,
-      azureOpenAIApiDeploymentName: model,
-      azureOpenAIApiVersion: "2024-05-01-preview"
-    });
+
+    if (isReasoningModel(model)) {
+      const client = new OpenAISDK({
+        apiKey: process.env[key_env_name],
+        baseURL: `${process.env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${model}`,
+        defaultQuery: { "api-version": "2025-03-01-preview" },
+        defaultHeaders: {
+          "api-key": process.env[key_env_name]
+        }
+      });
+      return new OpenAISDKAdapter(client, model, maxTokens);
+    } else {
+      return new AzureChatOpenAI({
+        model,
+        temperature: temperature || 0.85,
+        maxTokens: maxTokens,
+        maxRetries: maxRetries || 2,
+        azureOpenAIApiKey: process.env[key_env_name],
+        azureOpenAIApiInstanceName: instanceName,
+        azureOpenAIApiDeploymentName: model,
+        azureOpenAIApiVersion: "2025-03-01-preview"
+      });
+    }
   } else if (provider === "openai") {
     const key_env_name = account ? `OPENAI_API_KEY_${account}` : "OPENAI_API_KEY";
     if (!process.env[key_env_name]) {
@@ -288,19 +365,37 @@ export async function POST(request: NextRequest) {
       maxTokens: extraData.llm.max_tokens,
       account: extraData.llm.account
     });
-    const prompt = await getPrompt(extraData.llm);
-    const chain = prompt.pipe(chatModel);
-    const response = await chain.invoke({
-      input: extraData.llm.prompt
-    });
+    let response;
+    if (isReasoningModel(modelName)) {
+      // For reasoning models, bypass LangChain prompt template and call directly
+      response = await (chatModel as OpenAISDKAdapter).invoke({
+        input: extraData.llm.prompt
+      });
+    } else {
+      // For regular models, use LangChain prompt template
+      const prompt = await getPrompt(extraData.llm);
+      if (chatModel instanceof ChatOpenAI || chatModel instanceof ChatAnthropic) {
+        const chain = prompt.pipe(chatModel);
+        response = await chain.invoke({
+          input: extraData.llm.prompt
+        });
+      } else {
+        throw new UserVisibleError("Unexpected model type for non-reasoning model", 500);
+      }
+    }
 
     if (!response) {
       throw new UserVisibleError("No response received from AI provider", 500);
     }
 
     // Extract token usage from the response
-    const inputTokens = response.usage_metadata?.input_tokens || 0;
-    const outputTokens = response.usage_metadata?.output_tokens || 0;
+    const hasUsageMetadata = (
+      obj: unknown
+    ): obj is { usage_metadata?: { input_tokens?: number; output_tokens?: number } } =>
+      typeof obj === "object" && obj !== null && "usage_metadata" in obj;
+
+    const inputTokens = hasUsageMetadata(response) ? response.usage_metadata?.input_tokens || 0 : 0;
+    const outputTokens = hasUsageMetadata(response) ? response.usage_metadata?.output_tokens || 0 : 0;
 
     const toText = (c: unknown) =>
       Array.isArray(c)
@@ -310,7 +405,10 @@ export async function POST(request: NextRequest) {
             .join("\n")
         : (c as string);
 
-    const resultText = toText(response.content);
+    const hasContent = (obj: unknown): obj is { content: unknown } =>
+      typeof obj === "object" && obj !== null && "content" in obj;
+
+    const resultText = toText(hasContent(response) ? response.content : "");
 
     // Check if the result is empty and throw an error if so
     if (!resultText || resultText.trim() === "") {
