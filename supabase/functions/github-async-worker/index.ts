@@ -744,7 +744,7 @@ export async function processEnvelope(
           return false;
         }
 
-        // For immediate circuit breaker, requeue with 30-second delay
+        // Requeue with computed backoff delay for rate limit
         await requeueWithDelay(adminSupabase, envelope, delay, scope);
         await archiveMessage(adminSupabase, meta.msg_id, scope);
         return false;
