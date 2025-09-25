@@ -720,7 +720,9 @@ export default function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
-              <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
+              {profile && studentProfileId && (
+                <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
+              )}
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
                   <Icon

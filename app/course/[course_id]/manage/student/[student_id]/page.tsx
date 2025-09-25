@@ -100,13 +100,17 @@ export default function StudentPage() {
         p_student_profile_id: student_id as string
       });
       if (error) {
-        setIsLoading(false);
+        if (mounted) {
+          setIsLoading(false);
+        }
         return;
       }
       if (data && mounted) {
         setStudentSummary(data as StudentSummary);
       }
-      setIsLoading(false);
+      if (mounted) {
+        setIsLoading(false);
+      }
     };
     fetchStudentSummary();
     return () => {
@@ -145,7 +149,6 @@ export default function StudentPage() {
         <Box minW={{ base: "240px", md: "320px" }}>
           <ChakraReactSelect
             aria-label="Select student"
-            useBasicStyles
             isClearable={false}
             size="sm"
             value={studentProfile ? { label: studentProfile.name || "Student", value: studentProfile.id } : undefined}

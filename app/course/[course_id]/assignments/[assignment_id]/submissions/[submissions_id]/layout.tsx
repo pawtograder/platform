@@ -884,8 +884,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
               ) : (
                 <>
                   <Text>{submitter?.name}</Text>{" "}
-                  {isGraderOrInstructor && (
-                    <StudentSummaryTrigger student_id={submission.profile_id || ""} course_id={Number(course_id)} />
+                  {isGraderOrInstructor && submission.profile_id && (
+                    <StudentSummaryTrigger
+                      student_id={submission.profile_id}
+                      course_id={parseInt(course_id as string, 10)}
+                    />
                   )}
                 </>
               )}

@@ -39,7 +39,7 @@ begin
      and up.private_profile_id = p_student_profile_id
    limit 1;
 
-  v_profile_ids := ARRAY[p_student_profile_id, v_public_profile_id];
+  v_profile_ids := array_remove(ARRAY[p_student_profile_id, v_public_profile_id], NULL);
 
   -- Build JSON in parts
   with

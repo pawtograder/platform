@@ -16,7 +16,7 @@ import {
   Text
 } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   BsArrowLeft,
   BsBoxArrowUpRight,
@@ -836,15 +836,13 @@ const HelpRequestStudents = ({
           </Text>
           <HStack>
             {students.map((student, index) => (
-              <>
-                <Text key={student.id} fontSize="sm">
-                  {student.name}
-                  {index < students.length - 1 && ","}
-                </Text>
+              <React.Fragment key={student.id}>
+                <Text fontSize="sm">{student.name}</Text>
                 {isInstructorOrGrader && (
-                  <StudentSummaryTrigger student_id={student.id} course_id={Number(course_id)} />
+                  <StudentSummaryTrigger student_id={student.id} course_id={parseInt(course_id as string, 10)} />
                 )}
-              </>
+                {index < students.length - 1 && ","}
+              </React.Fragment>
             ))}
           </HStack>
         </HStack>
