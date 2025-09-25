@@ -81,7 +81,9 @@ export function useAllStudentProfiles() {
     const staffProfileIds = new Set(staffTags.map((tag) => tag.profile_id));
 
     // Filter profiles to only include those without staff tags
-    return allProfiles.filter((profile) => !staffProfileIds.has(profile.id) && profile.is_private_profile);
+    const ret = allProfiles.filter((profile) => !staffProfileIds.has(profile.id) && profile.is_private_profile);
+    ret.sort((a, b) => a.name?.localeCompare(b.name || "") || 0);
+    return ret;
   }, [allProfiles, allTags]);
 }
 export function useGradersAndInstructors() {
@@ -336,7 +338,7 @@ export class CourseController {
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
-  private _client: SupabaseClient<Database>;
+  readonly client: SupabaseClient<Database>;
   private _userId: string;
 
   // Lazily created TableController instances to avoid realtime subscription bursts
@@ -354,6 +356,7 @@ export class CourseController {
   private _assignments?: TableController<"assignments">;
   private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
   private _repositories?: TableController<"repositories">;
+  private _gradebookColumns?: TableController<"gradebook_columns">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -363,7 +366,7 @@ export class CourseController {
     userId: string
   ) {
     this._classRealTimeController = classRealTimeController;
-    this._client = client as SupabaseClient<Database>;
+    this.client = client as SupabaseClient<Database>;
     this._userId = userId;
   }
 
@@ -397,9 +400,9 @@ export class CourseController {
   get profiles(): TableController<"profiles"> {
     if (!this._profiles) {
       this._profiles = new TableController({
-        client: this._client,
+        client: this.client,
         table: "profiles",
-        query: this._client.from("profiles").select("*").eq("class_id", this.courseId),
+        query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -409,9 +412,9 @@ export class CourseController {
   get discussionThreadTeasers(): TableController<"discussion_threads"> {
     if (!this._discussionThreadTeasers) {
       this._discussionThreadTeasers = new TableController({
-        client: this._client,
+        client: this.client,
         table: "discussion_threads",
-        query: this._client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
+        query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
         realtimeFilter: { root_class_id: this.courseId }
       });
@@ -422,9 +425,9 @@ export class CourseController {
   get discussionThreadReadStatus(): TableController<"discussion_thread_read_status"> {
     if (!this._discussionThreadReadStatus) {
       this._discussionThreadReadStatus = new TableController({
-        client: this._client,
+        client: this.client,
         table: "discussion_thread_read_status",
-        query: this._client.from("discussion_thread_read_status").select("*").eq("user_id", this._userId),
+        query: this.client.from("discussion_thread_read_status").select("*").eq("user_id", this._userId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -434,9 +437,9 @@ export class CourseController {
   get discussionThreadWatchers(): TableController<"discussion_thread_watchers"> {
     if (!this._discussionThreadWatchers) {
       this._discussionThreadWatchers = new TableController({
-        client: this._client,
+        client: this.client,
         table: "discussion_thread_watchers",
-        query: this._client
+        query: this.client
           .from("discussion_thread_watchers")
           .select("*")
           .eq("user_id", this._userId)
@@ -451,9 +454,9 @@ export class CourseController {
   get tags(): TableController<"tags"> {
     if (!this._tags) {
       this._tags = new TableController({
-        client: this._client,
+        client: this.client,
         table: "tags",
-        query: this._client.from("tags").select("*").eq("class_id", this.courseId),
+        query: this.client.from("tags").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -463,9 +466,9 @@ export class CourseController {
   get labSections(): TableController<"lab_sections"> {
     if (!this._labSections) {
       this._labSections = new TableController({
-        client: this._client,
+        client: this.client,
         table: "lab_sections",
-        query: this._client.from("lab_sections").select("*").eq("class_id", this.courseId),
+        query: this.client.from("lab_sections").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -475,9 +478,9 @@ export class CourseController {
   get labSectionMeetings(): TableController<"lab_section_meetings"> {
     if (!this._labSectionMeetings) {
       this._labSectionMeetings = new TableController({
-        client: this._client,
+        client: this.client,
         table: "lab_section_meetings",
-        query: this._client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
+        query: this.client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -487,9 +490,9 @@ export class CourseController {
   get classSections(): TableController<"class_sections"> {
     if (!this._classSections) {
       this._classSections = new TableController({
-        client: this._client,
+        client: this.client,
         table: "class_sections",
-        query: this._client.from("class_sections").select("*").eq("class_id", this.courseId),
+        query: this.client.from("class_sections").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -499,9 +502,9 @@ export class CourseController {
   get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
     if (!this._userRolesWithProfiles) {
       this._userRolesWithProfiles = new TableController({
-        client: this._client,
+        client: this.client,
         table: "user_roles",
-        query: this._client
+        query: this.client
           .from("user_roles")
           .select("*, profiles!private_profile_id(*), users(*)")
           .eq("class_id", this.courseId),
@@ -515,9 +518,9 @@ export class CourseController {
   get studentDeadlineExtensions(): TableController<"student_deadline_extensions"> {
     if (!this._studentDeadlineExtensions) {
       this._studentDeadlineExtensions = new TableController({
-        client: this._client,
+        client: this.client,
         table: "student_deadline_extensions",
-        query: this._client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId),
+        query: this.client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -527,9 +530,9 @@ export class CourseController {
   get assignmentDueDateExceptions(): TableController<"assignment_due_date_exceptions"> {
     if (!this._assignmentDueDateExceptions) {
       this._assignmentDueDateExceptions = new TableController({
-        client: this._client,
+        client: this.client,
         table: "assignment_due_date_exceptions",
-        query: this._client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId),
+        query: this.client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -539,9 +542,9 @@ export class CourseController {
   get assignments(): TableController<"assignments"> {
     if (!this._assignments) {
       this._assignments = new TableController({
-        client: this._client,
+        client: this.client,
         table: "assignments",
-        query: this._client
+        query: this.client
           .from("assignments")
           .select("*")
           .eq("class_id", this.courseId)
@@ -556,9 +559,9 @@ export class CourseController {
   get assignmentGroupsWithMembers(): TableController<"assignment_groups", "*, assignment_groups_members(*)"> {
     if (!this._assignmentGroupsWithMembers) {
       this._assignmentGroupsWithMembers = new TableController({
-        client: this._client,
+        client: this.client,
         table: "assignment_groups",
-        query: this._client
+        query: this.client
           .from("assignment_groups")
           .select("*, assignment_groups_members(*)")
           .eq("class_id", this.courseId),
@@ -572,13 +575,24 @@ export class CourseController {
   get repositories(): TableController<"repositories"> {
     if (!this._repositories) {
       this._repositories = new TableController({
-        client: this._client,
+        client: this.client,
         table: "repositories",
-        query: this._client.from("repositories").select("*").eq("class_id", this.courseId),
+        query: this.client.from("repositories").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
     return this._repositories;
+  }
+  get gradebookColumns(): TableController<"gradebook_columns"> {
+    if (!this._gradebookColumns) {
+      this._gradebookColumns = new TableController({
+        client: this.client,
+        table: "gradebook_columns",
+        query: this.client.from("gradebook_columns").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._gradebookColumns;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};

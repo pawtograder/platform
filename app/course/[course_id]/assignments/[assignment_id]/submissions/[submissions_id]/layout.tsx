@@ -64,6 +64,7 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { linkToSubPage } from "./utils";
 import { Alert } from "@/components/ui/alert";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -832,6 +833,7 @@ function Comments() {
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { course_id } = useParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -880,7 +882,15 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   )
                 </Text>
               ) : (
-                <Text>{submitter?.name}</Text>
+                <>
+                  <Text>{submitter?.name}</Text>{" "}
+                  {isGraderOrInstructor && submission.profile_id && (
+                    <StudentSummaryTrigger
+                      student_id={submission.profile_id}
+                      course_id={parseInt(course_id as string, 10)}
+                    />
+                  )}
+                </>
               )}
               - Submission #{submission.ordinal}
             </HStack>
