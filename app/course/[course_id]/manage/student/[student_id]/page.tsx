@@ -1,6 +1,6 @@
 "use client";
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
-import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController, useIsDroppedStudent } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTableControllerTableValues, useTableControllerValueById } from "@/lib/TableController";
 import type { Assignment } from "@/utils/supabase/DatabaseTypes";
@@ -90,6 +90,7 @@ export default function StudentPage() {
   const studentProfile = useUserProfile(
     typeof student_id === "string" ? student_id : Array.isArray(student_id) ? student_id[0] : ""
   );
+  const isDroppedStudent = useIsDroppedStudent(student_id as string);
   const allStudents = useAllStudentProfiles();
   useEffect(() => {
     if (!client) return;
@@ -150,6 +151,11 @@ export default function StudentPage() {
     <VStack align="stretch" gap={6} px={{ base: 2, md: 4 }} py={4} role="region" aria-label="Student Summary">
       <HStack justify="flex-start" w="full">
         <Heading size="lg">Student Summary</Heading>
+        {isDroppedStudent && (
+          <Text color="fg.inverted" bg="bg.inverted">
+            (Dropped)
+          </Text>
+        )}
         <Box minW={{ base: "240px", md: "320px" }}>
           <ChakraReactSelect
             aria-label="Select student"
