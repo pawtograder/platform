@@ -101,12 +101,15 @@ export default function StudentPage() {
       });
       if (error) {
         if (mounted) {
+          setStudentSummary(null);
           setIsLoading(false);
         }
         return;
       }
       if (data && mounted) {
         setStudentSummary(data as StudentSummary);
+      } else if (mounted) {
+        setStudentSummary(null);
       }
       if (mounted) {
         setIsLoading(false);

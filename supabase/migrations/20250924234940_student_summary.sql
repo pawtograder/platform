@@ -220,12 +220,11 @@ AS $$
              ) as entries_array
         FROM public.gradebook_column_students gcs
         INNER JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
-        INNER JOIN public.user_privileges up on up.class_id = gcs.class_id
         WHERE gcs.class_id = get_gradebook_records_for_all_students_array.class_id
         and EXISTS (
           SELECT 1 FROM public.user_privileges up
           WHERE up.user_id = auth.uid()
-            AND up.class_id = gcs.class_id
+            AND up.class_id = get_gradebook_records_for_all_students_array.class_id
             AND up.role IN ('instructor','grader')
         )
         GROUP BY gcs.student_id
