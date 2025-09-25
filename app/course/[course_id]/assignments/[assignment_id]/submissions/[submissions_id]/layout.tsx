@@ -19,7 +19,7 @@ import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/s
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse, useIsDroppedStudent } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -845,6 +845,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const safeTimeZone = time_zone || "UTC";
   const hasExtension = hoursExtended && hoursExtended > 0;
   const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
+  const isDroppedStudent = useIsDroppedStudent(submission.profile_id);
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -893,6 +894,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </>
               )}
               - Submission #{submission.ordinal}
+              {isDroppedStudent && (
+                <Text color="fg.inverted" bg="bg.inverted">
+                  (Dropped)
+                </Text>
+              )}
             </HStack>
             <HStack gap={1}>
               <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">

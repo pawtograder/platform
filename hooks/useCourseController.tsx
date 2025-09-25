@@ -97,12 +97,21 @@ export function useGradersAndInstructors() {
   return profiles;
 }
 
+export function useIsDroppedStudent(private_profile_id: string | undefined | null) {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const matcher = useCallback(
+    (r: UserRoleWithPrivateProfileAndUser) => r.private_profile_id === private_profile_id,
+    [private_profile_id]
+  );
+  const role = useFindTableControllerValue(controller, matcher);
+  return role?.disabled;
+}
 export function useAllStudentRoles() {
   const { userRolesWithProfiles: controller } = useCourseController();
   const [roles, setRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
   useEffect(() => {
     const { data, unsubscribe } = controller.list((data) => {
-      const students = data.filter((r) => r.role === "student");
+      const students = data.filter((r) => r.role === "student" && !r.disabled);
       setRoles((old) => {
         if (old && old.length == students.length) {
           if (old.every((r) => students.some((s) => s.id === r.id))) {
@@ -112,7 +121,7 @@ export function useAllStudentRoles() {
         return students;
       });
     });
-    setRoles(data.filter((r) => r.role === "student"));
+    setRoles(data.filter((r) => r.role === "student" && !r.disabled));
     return unsubscribe;
   }, [controller]);
   return roles;

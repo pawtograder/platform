@@ -1450,6 +1450,7 @@ export class GradebookController {
     const result = [];
     result.push(["Name", "Email", "Canvas ID", "SID", ...columns.map((col) => col.name)]);
     roster.forEach((student) => {
+      if (student.disabled) return; //Skip dropped students
       const studentGradebookController = this.getStudentGradebookController(student.private_profile_id);
       const userProfile = courseController.profiles.getById(student.private_profile_id);
       const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
