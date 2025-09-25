@@ -11,6 +11,7 @@ import {
   useAssignments,
   useClassSections,
   useCourseController,
+  useGradersAndInstructors,
   useLabSections,
   useUserRolesWithProfiles
 } from "@/hooks/useCourseController";
@@ -245,6 +246,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     });
   }, [supabase, course_id, courseController.classRealTimeController]);
   const gradingConflicts = useTableControllerTableValues(gradingConflictsController);
+  const gradersAndInstructors = useGradersAndInstructors();
 
   // Reference/exclusion rubric and assignments (loaded table-by-table)
   const [referenceRubrics, setReferenceRubrics] = useState<RubricWithParts[] | undefined>(undefined);
@@ -457,6 +459,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       .filter((sub) => sub.assignment_id === Number(assignment_id))
       .filter((sub) => !isAssignedForSelectedParts(sub.id))
       .filter((sub) => {
+        if (gradersAndInstructors.some((gi) => gi.id === sub.profile_id)) {
+          return false;
+        }
         const memberIds = buildMemberIds(sub);
         // Class section filter
         if (selectedClassSectionIds.size > 0) {
