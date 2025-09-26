@@ -800,6 +800,7 @@ function LabSectionsTable() {
 }
 
 export default function LabSectionsPage() {
+  throw new Error("Test error");
   return (
     <Container maxW="6xl">
       <LabSectionsTable />
