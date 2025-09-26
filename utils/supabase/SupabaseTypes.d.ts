@@ -1844,6 +1844,30 @@ export type Database = {
           }
         ];
       };
+      github_async_errors: {
+        Row: {
+          created_at: string;
+          error_data: Json;
+          id: number;
+          method: string;
+          org: string;
+        };
+        Insert: {
+          created_at?: string;
+          error_data: Json;
+          id?: number;
+          method: string;
+          org: string;
+        };
+        Update: {
+          created_at?: string;
+          error_data?: Json;
+          id?: number;
+          method?: string;
+          org?: string;
+        };
+        Relationships: [];
+      };
       github_circuit_breaker_events: {
         Row: {
           id: number;
@@ -8842,6 +8866,10 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      check_github_error_threshold: {
+        Args: { p_org: string; p_threshold: number; p_window_minutes: number };
+        Returns: number;
+      };
       check_gradebook_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
@@ -8849,6 +8877,10 @@ export type Database = {
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
+      };
+      cleanup_github_async_errors: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       clear_all_incomplete_review_assignments: {
         Args: { p_assignment_id: number; p_class_id: number };
@@ -8981,6 +9013,17 @@ export type Database = {
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
+      };
+      delete_queued_messages_for_class: {
+        Args: { p_class_id: number };
+        Returns: {
+          deleted_count: number;
+          deleted_message_ids: number[];
+        }[];
+      };
+      delete_queued_messages_for_class_simple: {
+        Args: { p_class_id: number };
+        Returns: number;
       };
       delete_system_notifications_by_campaign: {
         Args: { p_campaign_id: string; p_deleted_by?: string };
@@ -9334,6 +9377,10 @@ export type Database = {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
       };
+      record_github_async_error: {
+        Args: { p_error_data: Json; p_method: string; p_org: string };
+        Returns: undefined;
+      };
       refresh_workflow_events_summary: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
@@ -9359,11 +9406,11 @@ export type Database = {
         Returns: undefined;
       };
       sync_staff_github_team: {
-        Args: { class_id: number } | { class_id: number; user_id?: string };
+        Args: { class_id: number; user_id?: string };
         Returns: undefined;
       };
       sync_student_github_team: {
-        Args: { class_id: number } | { class_id: number; user_id?: string };
+        Args: { class_id: number; user_id?: string };
         Returns: undefined;
       };
       test_discussion_thread_insert_performance: {
