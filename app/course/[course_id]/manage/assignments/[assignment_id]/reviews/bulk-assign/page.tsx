@@ -21,9 +21,8 @@ import TableController, {
   useListTableControllerValues,
   useTableControllerTableValues
 } from "@/lib/TableController";
-import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import * as Sentry from "@sentry/nextjs";
+import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -39,6 +38,7 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate } from "@refinedev/core";
+import * as Sentry from "@sentry/nextjs";
 import { MultiValue, Select } from "chakra-react-select";
 import { addDays } from "date-fns";
 import { useParams } from "next/navigation";
@@ -296,6 +296,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const [exclusionSubmissionsMap, setExclusionSubmissionsMap] = useState<
     Record<number, { profile_id: string | null; assignment_group_id: number | null }>
   >({});
+  const [isAssigningReviews, setIsAssigningReviews] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -511,6 +512,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     selectedRubric,
     selectedRubricPartsForFilter,
     selectedClassSections,
+    gradersAndInstructors,
     selectedLabSections,
     selectedStudentTags,
     tags,
@@ -1011,6 +1013,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    * Creates the review assignments based on the draft reviews using the bulk_assign_reviews RPC.
    */
   const assignReviews = async () => {
+    setIsAssigningReviews(true);
     try {
       if (!selectedRubric) {
         toaster.error({ title: "Error creating review assignments", description: "Failed to find rubric" });
@@ -1055,11 +1058,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       });
 
       if (rpcError) {
-        Sentry.addBreadcrumb({
-          message: "Bulk assignment RPC failed",
-          category: "bulk_assign",
-          data: { error: rpcError.message, code: rpcError.code },
-          level: "error"
+        Sentry.withScope((scope) => {
+          scope.setContext("bulk_assign", {
+            error: rpcError.message,
+            code: rpcError.code
+          });
+          Sentry.captureException(rpcError);
         });
 
         toaster.error({
@@ -1083,11 +1087,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       await referenceReviewAssignmentsController?.refetchAll();
 
       if (!typedResult?.success) {
-        Sentry.addBreadcrumb({
-          message: "Bulk assignment RPC returned failure",
-          category: "bulk_assign",
-          data: { result: typedResult },
-          level: "error"
+        Sentry.withScope((scope) => {
+          scope.setContext("bulk_assign", {
+            result: typedResult
+          });
+          Sentry.captureException(
+            new Error(`Bulk assignment RPC returned failure: ${typedResult?.error || "Unknown error"}`)
+          );
         });
 
         toaster.error({
@@ -1133,18 +1139,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         `An unexpected error occurred while confirming assignments, our team has been notified with error ID ${errId}`;
 
-      Sentry.addBreadcrumb({
-        message: "Bulk assignment failed with exception",
-        category: "bulk_assign",
-        data: { error: errMsg },
-        level: "error"
-      });
-
       toaster.error({
         title: "Error confirming assignments",
         description: errMsg
       });
       return false;
+    } finally {
+      setIsAssigningReviews(false);
     }
   };
 
@@ -1818,7 +1819,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               groupMembersByGroupId={groupMembersByGroupId}
             />
             <Flex justify="center" w="100%">
-              <Button w={"lg"} variant="solid" colorPalette="green" onClick={() => assignReviews()}>
+              <Button
+                w={"lg"}
+                variant="solid"
+                colorPalette="green"
+                onClick={() => assignReviews()}
+                loading={isAssigningReviews}
+              >
                 Confirm Assignments
               </Button>
             </Flex>
