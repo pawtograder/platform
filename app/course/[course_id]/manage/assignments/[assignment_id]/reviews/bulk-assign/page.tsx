@@ -1091,7 +1091,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           scope.setContext("bulk_assign", {
             result: typedResult
           });
-          Sentry.captureException(new Error(`Bulk assignment RPC returned failure: ${typedResult?.error || "Unknown error"}`));
+          Sentry.captureException(
+            new Error(`Bulk assignment RPC returned failure: ${typedResult?.error || "Unknown error"}`)
+          );
         });
 
         toaster.error({
