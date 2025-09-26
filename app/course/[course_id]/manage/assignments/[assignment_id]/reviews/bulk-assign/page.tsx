@@ -1139,8 +1139,6 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         `An unexpected error occurred while confirming assignments, our team has been notified with error ID ${errId}`;
 
-      Sentry.captureException(e);
-
       toaster.error({
         title: "Error confirming assignments",
         description: errMsg
