@@ -1058,11 +1058,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       });
 
       if (rpcError) {
-        Sentry.setContext("bulk_assign", {
-          error: rpcError.message,
-          code: rpcError.code
+        Sentry.withScope((scope) => {
+          scope.setContext("bulk_assign", {
+            error: rpcError.message,
+            code: rpcError.code
+          });
+          Sentry.captureException(rpcError);
         });
-        Sentry.captureException(new Error("Bulk assignment RPC failed"));
 
         toaster.error({
           title: "Error creating review assignments",
@@ -1085,10 +1087,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       await referenceReviewAssignmentsController?.refetchAll();
 
       if (!typedResult?.success) {
-        Sentry.setContext("bulk_assign", {
-          result: typedResult
+        Sentry.withScope((scope) => {
+          scope.setContext("bulk_assign", {
+            result: typedResult
+          });
+          Sentry.captureException(new Error(`Bulk assignment RPC returned failure: ${typedResult?.error || "Unknown error"}`));
         });
-        Sentry.captureException(new Error("Bulk assignment RPC returned failure"));
 
         toaster.error({
           title: "Error creating review assignments",
