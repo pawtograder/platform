@@ -21,9 +21,8 @@ import TableController, {
   useListTableControllerValues,
   useTableControllerTableValues
 } from "@/lib/TableController";
-import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import * as Sentry from "@sentry/nextjs";
+import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -39,6 +38,7 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate } from "@refinedev/core";
+import * as Sentry from "@sentry/nextjs";
 import { MultiValue, Select } from "chakra-react-select";
 import { addDays } from "date-fns";
 import { useParams } from "next/navigation";

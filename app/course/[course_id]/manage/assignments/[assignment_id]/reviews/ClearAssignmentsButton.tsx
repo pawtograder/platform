@@ -113,11 +113,13 @@ export default function ClearAssignmentsButton({
       });
 
       if (rpcError) {
-        Sentry.setContext("clear_assignments", {
-          error: rpcError.message,
-          code: rpcError.code
+        Sentry.withScope((scope) => {
+          scope.setContext("clear_assignments", {
+            error: rpcError.message,
+            code: rpcError.code
+          });
+          Sentry.captureException(rpcError);
         });
-        Sentry.captureException(new Error("Clear assignments RPC failed"));
 
         toaster.error({
           title: "Error clearing assignments",
@@ -136,10 +138,14 @@ export default function ClearAssignmentsButton({
       };
 
       if (!typedResult?.success) {
-        Sentry.setContext("clear_assignments", {
-          result: typedResult
+        Sentry.withScope((scope) => {
+          scope.setContext("clear_assignments", {
+            result: typedResult
+          });
+          Sentry.captureException(
+            new Error(`Clear assignments RPC returned failure: ${typedResult?.error || "Unknown error"}`)
+          );
         });
-        Sentry.captureException(new Error("Clear assignments RPC returned failure"));
 
         toaster.error({
           title: "Error clearing assignments",

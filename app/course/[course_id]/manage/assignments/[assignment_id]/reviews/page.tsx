@@ -162,11 +162,13 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
       });
 
       if (rpcError) {
-        Sentry.setContext("clear_rubric_assignments", {
-          error: rpcError.message,
-          code: rpcError.code
+        Sentry.withScope((scope) => {
+          scope.setContext("clear_rubric_assignments", {
+            error: rpcError.message,
+            code: rpcError.code
+          });
+          Sentry.captureException(rpcError);
         });
-        Sentry.captureException(new Error("Clear rubric assignments RPC failed"));
 
         toaster.error({
           title: "Error Clearing Assignments",
@@ -185,10 +187,14 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
       };
 
       if (!typedResult?.success) {
-        Sentry.setContext("clear_rubric_assignments", {
-          result: typedResult
+        Sentry.withScope((scope) => {
+          scope.setContext("clear_rubric_assignments", {
+            result: typedResult
+          });
+          Sentry.captureException(
+            new Error(`Clear rubric assignments RPC returned failure: ${typedResult?.error || "Unknown error"}`)
+          );
         });
-        Sentry.captureException(new Error("Clear rubric assignments RPC returned failure"));
 
         toaster.error({
           title: "Error Clearing Assignments",

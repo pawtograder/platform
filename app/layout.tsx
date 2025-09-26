@@ -6,6 +6,7 @@ import "katex/dist/katex.min.css";
 import "@uiw/react-markdown-preview/markdown.css";
 import "@uiw/react-md-editor/markdown-editor.css";
 import { ColorModeWatcher } from "@/components/ui/color-mode";
+import { Toaster } from "@/components/ui/toaster";
 const defaultUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
 
 export const metadata = {
@@ -30,6 +31,7 @@ export default function RootLayout({
         <Provider>
           <Theme colorPalette="gray">
             <ClientOnly>
+              <Toaster />
               <ColorModeWatcher />
             </ClientOnly>
             {children}
