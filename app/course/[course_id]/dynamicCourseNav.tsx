@@ -36,7 +36,7 @@ import {
 } from "react-icons/fi";
 import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
-import UserMenu from "../UserMenu";
+import UserMenu from "./UserMenu";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },

@@ -323,6 +323,14 @@ export async function userFetchAzureProfile(params: { accessToken: string }, sup
     throw new EdgeFunctionError(error);
   }
 }
+export async function syncGitHubAccount(supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("github-user-sync", { body: {} });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as { message: string };
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;

@@ -7174,7 +7174,9 @@ export type Database = {
           avatar_url: string | null;
           created_at: string;
           email: string | null;
+          github_user_id: string | null;
           github_username: string | null;
+          last_github_user_sync: string | null;
           name: string | null;
           sis_user_id: number | null;
           user_id: string;
@@ -7183,7 +7185,9 @@ export type Database = {
           avatar_url?: string | null;
           created_at?: string;
           email?: string | null;
+          github_user_id?: string | null;
           github_username?: string | null;
+          last_github_user_sync?: string | null;
           name?: string | null;
           sis_user_id?: number | null;
           user_id?: string;
@@ -7192,7 +7196,9 @@ export type Database = {
           avatar_url?: string | null;
           created_at?: string;
           email?: string | null;
+          github_user_id?: string | null;
           github_username?: string | null;
+          last_github_user_sync?: string | null;
           name?: string | null;
           sis_user_id?: number | null;
           user_id?: string;
