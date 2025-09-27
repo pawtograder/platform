@@ -29,7 +29,6 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     return { madeChanges: false, errorMessages: [] };
   }
 
-
   let madeChanges = false;
 
   for (const c of classes) {
