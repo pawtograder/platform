@@ -25,6 +25,10 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     Sentry.captureException(classesError, scope);
     throw new UserVisibleError("Error fetching classes");
   }
+  if (!classes || classes.length === 0) {
+    return { madeChanges: false, errorMessages: [] };
+  }
+
 
   let madeChanges = false;
 

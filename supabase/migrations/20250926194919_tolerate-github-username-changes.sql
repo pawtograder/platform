@@ -8,7 +8,6 @@ CREATE OR REPLACE FUNCTION public.update_github_profile()
  SECURITY DEFINER
 AS $function$
 BEGIN
-  BEGIN
     IF NEW.provider <> 'github' THEN
       RETURN NEW;
     END IF;
