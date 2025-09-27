@@ -59,6 +59,10 @@ const config: StorybookConfig = {
       __dirname,
       "mocks/hooks/useCourseController.tsx"
     );
+    config.resolve.alias[path.resolve(__dirname, "../hooks/useCourseController.tsx")] = path.resolve(
+      __dirname,
+      "mocks/hooks/useCourseController.tsx"
+    );
 
     // Mock refine core hooks used across components
     config.resolve.alias["@refinedev/core"] = path.resolve(
