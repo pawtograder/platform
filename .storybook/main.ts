@@ -39,6 +39,10 @@ const config: StorybookConfig = {
       __dirname,
       "mocks/hooks/useSubmission.tsx"
     );
+    config.resolve.alias["@/hooks/useSubmission.tsx"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useSubmission.tsx"
+    );
     config.resolve.alias["@/hooks/useSubmissionReview"] = path.resolve(
       __dirname,
       "mocks/hooks/useSubmissionReview.tsx"
@@ -70,6 +74,10 @@ const config: StorybookConfig = {
 
     // Hard override absolute source files in case path alias resolution bypasses module name
     config.resolve.alias[path.resolve(__dirname, "../hooks/useSubmission.tsx")] = path.resolve(
+      __dirname,
+      "mocks/hooks/useSubmission.tsx"
+    );
+    config.resolve.alias[path.resolve(__dirname, "../hooks/useSubmission")] = path.resolve(
       __dirname,
       "mocks/hooks/useSubmission.tsx"
     );

@@ -75,7 +75,9 @@ export function SubmissionProvider({ children }: { children: React.ReactNode; su
 }
 
 export function useSubmission() {
-  return useContext(Ctx).submissionController.submission as any;
+  const ctx = useContext(Ctx);
+  if (!ctx) throw new Error("SubmissionContext not found");
+  return ctx.submissionController.submission as any;
 }
 
 export function useSubmissionMaybe() {
@@ -83,7 +85,9 @@ export function useSubmissionMaybe() {
 }
 
 export function useSubmissionController() {
-  return useContext(Ctx).submissionController as any;
+  const ctx = useContext(Ctx);
+  if (!ctx) throw new Error("SubmissionContext not found");
+  return ctx.submissionController as any;
 }
 
 export function useSubmissionFileComments() {
