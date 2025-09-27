@@ -63,6 +63,11 @@ export default function GitHubHelpPage() {
         ))}
       </List.Root>
       <Box>
+        If you are able to access these pages in your browser, but are not able to access them on your computer, please
+        work with your course staff to troubleshoot the issue: this process confirms that there is nothing wrong
+        between Pawtograder and GitHub.
+      </Box>
+      <Box>
         <Text>
           If you are certain that you are signed in with the account {githubUsername} and you still cannot access the
           repositories, you can (no more than once a day) manually trigger a sync of your GitHub account. This will also

@@ -1,9 +1,10 @@
 "use client";
 
+import NotificationPreferences from "@/components/notifications/notification-preferences";
 import NotificationsBox from "@/components/notifications/notifications-box";
+import { Button } from "@/components/ui/button";
 import { ColorModeButton } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
-import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
@@ -26,18 +27,16 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { Button } from "@/components/ui/button";
-import { useInvalidate, useList, useOne } from "@refinedev/core";
+import { useInvalidate, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaGithub, FaUnlink } from "react-icons/fa";
-import { RiChatSettingsFill } from "react-icons/ri";
+import { FaGithub } from "react-icons/fa";
 import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
 import { PiSignOut } from "react-icons/pi";
+import { RiChatSettingsFill } from "react-icons/ri";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../../actions";
-import NotificationPreferences from "@/components/notifications/notification-preferences";
 
 function SupportMenu() {
   const buildNumber = useMemo(() => {
@@ -481,60 +480,13 @@ const NotificationPreferencesMenu = () => {
 
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
-  const { user } = useAuthState();
-  const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
+  const { role: enrollment } = useClassProfiles();
+  const gitHubUsername = enrollment.users.github_username;
   const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
     id: private_profile_id
   });
-  const uid = user?.id;
-  const { data: dbUser } = useList<{ user_id: string; github_username: string }>({
-    resource: "users",
-    meta: {
-      select: "user_id, github_username"
-    },
-    filters: [
-      {
-        field: "user_id",
-        operator: "eq",
-        value: uid
-      }
-    ],
-    queryOptions: {
-      enabled: uid !== undefined
-    }
-  });
-
-  useEffect(() => {
-    if (dbUser) {
-      setGitHubUsername(dbUser.data[0].github_username);
-    }
-  }, [dbUser]);
-
-  const unlinkGitHub = useCallback(async () => {
-    const supabase = createClient();
-    const identities = await supabase.auth.getUserIdentities();
-    const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-    if (!githubIdentity) {
-      throw new Error("GitHub identity not found");
-    }
-    const { error } = await supabase.auth.unlinkIdentity(githubIdentity);
-    if (error) {
-      throw new Error(error.message);
-    }
-    setGitHubUsername(null);
-  }, []);
-  const linkGitHub = useCallback(async () => {
-    const supabase = createClient();
-    const { error } = await supabase.auth.linkIdentity({
-      provider: "github",
-      options: { redirectTo: `${window.location.href}` }
-    });
-    if (error) {
-      throw new Error(error.message);
-    }
-  }, []);
 
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
@@ -574,51 +526,6 @@ function UserSettingsMenu() {
                     <CloseButton size="sm" aria-label="Close" />
                   </Drawer.CloseTrigger>
                 </HStack>
-
-                {!gitHubUsername && (
-                  <Button
-                    onClick={linkGitHub}
-                    colorPalette="gray"
-                    width="100%"
-                    textAlign="left"
-                    variant="ghost"
-                    size="sm"
-                    justifyContent="flex-start"
-                    py={0}
-                  >
-                    <FaGithub />
-                    Link GitHub
-                  </Button>
-                )}
-                {gitHubUsername && (
-                  <>
-                    <PopConfirm
-                      triggerLabel="Unlink GitHub"
-                      trigger={
-                        <Button
-                          variant="ghost"
-                          colorPalette="red"
-                          size="sm"
-                          textAlign="left"
-                          width="100%"
-                          disabled={true}
-                          alignItems="center"
-                          gap={2}
-                          justifyContent="flex-start"
-                          py={0}
-                        >
-                          <FaUnlink />
-                          Unlink GitHub
-                        </Button>
-                      }
-                      confirmHeader="Unlink GitHub"
-                      confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
-                      onConfirm={async () => {
-                        await unlinkGitHub();
-                      }}
-                    ></PopConfirm>
-                  </>
-                )}
                 <ProfileChangesMenu />
                 <NotificationPreferencesMenu />
                 <Button
