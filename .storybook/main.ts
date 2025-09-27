@@ -1,0 +1,60 @@
+import type { StorybookConfig } from "@storybook/nextjs";
+import path from "path";
+
+const config: StorybookConfig = {
+  framework: {
+    name: "@storybook/nextjs",
+    options: {}
+  },
+  stories: [
+    "../components/**/*.stories.@(js|jsx|ts|tsx)",
+    "../stories/**/*.stories.@(js|jsx|ts|tsx)"
+  ],
+  addons: [
+    "@storybook/addon-essentials",
+    "@storybook/addon-interactions"
+  ],
+  staticDirs: [
+    { from: "../public", to: "/" }
+  ],
+  webpackFinal: async (config) => {
+    if (!config.resolve) config.resolve = {};
+    if (!config.resolve.alias) config.resolve.alias = {} as any;
+
+    // Alias Next.js app router navigation to Storybook-friendly mocks
+    config.resolve.alias["next/navigation"] = path.resolve(
+      __dirname,
+      "mocks/next-navigation.ts"
+    );
+
+    // Alias hooks to mocked implementations for isolated rendering
+    config.resolve.alias["@/hooks/useAssignment"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useAssignment.tsx"
+    );
+    config.resolve.alias["@/hooks/useSubmission"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useSubmission.tsx"
+    );
+    config.resolve.alias["@/hooks/useSubmissionReview"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useSubmissionReview.tsx"
+    );
+    config.resolve.alias["@/hooks/useClassProfiles"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useClassProfiles.tsx"
+    );
+    config.resolve.alias["@/hooks/useRubricVisibility"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useRubricVisibility.ts"
+    );
+    config.resolve.alias["@/hooks/useCourseController"] = path.resolve(
+      __dirname,
+      "mocks/hooks/useCourseController.tsx"
+    );
+
+    return config;
+  }
+};
+
+export default config;
