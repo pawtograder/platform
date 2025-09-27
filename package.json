@@ -24,7 +24,9 @@
     "seed": "npx tsx scripts/SeedDB.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "lint": "next lint && prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
@@ -183,7 +185,13 @@
     "typescript-json-schema": "^0.65.1",
     "webpack": "^5.96.1",
     "webpack-cli": "^5.1.4",
-    "yargs": "^17.0.0"
+    "yargs": "^17.0.0",
+    "@storybook/addon-essentials": "^8.5.5",
+    "@storybook/addon-interactions": "^8.5.5",
+    "@storybook/blocks": "^8.5.5",
+    "@storybook/nextjs": "^8.5.5",
+    "@storybook/react": "^8.5.5",
+    "storybook": "^8.5.5"
   },
   "optionalDependencies": {
     "@rollup/rollup-linux-x64-gnu": "^4.46.3"
