@@ -36,7 +36,7 @@ import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
 import { PiSignOut } from "react-icons/pi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
-import { signOutAction } from "../actions";
+import { signOutAction } from "../../actions";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 
 function SupportMenu() {
@@ -51,6 +51,7 @@ function SupportMenu() {
     }
     return "Unknown";
   }, []);
+  const { course_id } = useParams();
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
@@ -61,6 +62,11 @@ function SupportMenu() {
       <Portal>
         <Menu.Positioner>
           <Menu.Content>
+            <Menu.Item value="github-help">
+              <Link href={`/course/${course_id}/github-help`}>
+                <FaGithub /> GitHub Help
+              </Link>
+            </Menu.Item>
             <Menu.Item value="view-docs">
               <Link href={"https://docs.pawtograder.com"} target="_blank">
                 View documentation
