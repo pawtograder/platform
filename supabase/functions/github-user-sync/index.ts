@@ -122,44 +122,18 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           }
           try {
             const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
-// …earlier code…
-const { error: insertError, data: dbRepo } = await adminSupabase
-  .from("repositories")
-  .insert({
-    class_id: assignment.class_id!,
-    assignment_group_id: group.id,
-    assignment_id: assignment.id,
-    repository: `${c.classes!.github_org}/${repoName}`,
-    synced_handout_sha: assignment.latest_template_sha
-  })
-  .select("id")
-  .single();
-if (insertError) {
-  Sentry.captureException(insertError, scope);
-  throw new UserVisibleError(`Error creating repo: ${insertError}`);
-}
-
-try {
-  const headSha = await createRepo(
-    c.classes!.github_org!,
-    repoName,
-    assignment.template_repo!
-  );
-  const { error: updateRepoError } = await adminSupabase
-    .from("repositories")
-    .update({
-      synced_repo_sha: headSha || null,
-      is_github_ready: true
-    })
-    .eq("id", dbRepo!.id);
-  if (updateRepoError) {
-    Sentry.captureException(updateRepoError, scope);
-    throw new UserVisibleError(`Error creating repo: ${updateRepoError}`);
-  }
-} catch (e) {
-  Sentry.captureException(e, scope);
-  // …
-}
+            const { error: updateRepoError } = await adminSupabase
+              .from("repositories")
+              .update({
+                synced_repo_sha: headSha || null,
+                is_github_ready: true
+              })
+              .eq("id", dbRepo!.id);
+            if (updateRepoError) {
+              throw updateRepoError;
+            }
+          } catch (e) {
+            Sentry.captureException(e, scope);
             await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
