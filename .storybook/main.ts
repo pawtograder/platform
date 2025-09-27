@@ -21,6 +21,9 @@ const config: StorybookConfig = {
     if (!config.resolve) config.resolve = {};
     if (!config.resolve.alias) config.resolve.alias = {} as any;
 
+    // Base alias for project root
+    (config.resolve.alias as any)["@"] = path.resolve(__dirname, "..");
+
     // Alias Next.js app router navigation to Storybook-friendly mocks
     config.resolve.alias["next/navigation"] = path.resolve(
       __dirname,

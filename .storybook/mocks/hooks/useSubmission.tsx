@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from "react";
-import type { SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
+import type { SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "../../../../utils/supabase/DatabaseTypes";
 
 const sampleSubmission: SubmissionWithFilesGraderResultsOutputTestsAndRubric = {
   id: 1,

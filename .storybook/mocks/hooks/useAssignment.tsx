@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from "react";
-import type { HydratedRubric, HydratedRubricCriteria, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
+import type { HydratedRubric, HydratedRubricCriteria, HydratedRubricPart } from "../../../../utils/supabase/DatabaseTypes";
 
 const sampleRubric: HydratedRubric = {
   id: 1,

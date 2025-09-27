@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import SubmissionsLayoutWrapper from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/layout";
-import FilesView from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files/page";
+import SubmissionsLayoutWrapper from "../app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/layout";
+import FilesView from "../app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files/page";
 import { AssignmentProvider } from "../.storybook/mocks/hooks/useAssignment";
 import { SubmissionProvider } from "../.storybook/mocks/hooks/useSubmission";
 import { SubmissionReviewProvider } from "../.storybook/mocks/hooks/useSubmissionReview";
