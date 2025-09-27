@@ -5,7 +5,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { syncGitHubAccount } from "@/lib/edgeFunctions";
 import { useTableControllerTableValues } from "@/lib/TableController";
-import { Box, Button, Heading, Link, List, Text } from "@chakra-ui/react";
+import { Box, Button, Heading, Link, List, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useCallback, useMemo, useState } from "react";
 
@@ -42,30 +42,32 @@ export default function GitHubHelpPage() {
     setSyncing(false);
   }, [courseController.client]);
   return (
-    <Box p={4}>
+    <VStack p={4} alignItems="flex-start" gap={4}>
       <Heading>GitHub Access Troubleshooting</Heading>
       <Box>
         Your Pawtograder account is currently linked to the GitHub account {githubUsername} (ID: {githubUserId}). You
         can use this page to confirm that you can access repositories for this class, and to re-sync your GitHub account
-        if you are having issues, or have changed your username on GitHub.
+        if you are having issues, or if you have changed your username on GitHub.
       </Box>
       <Box>
-        You should be able to access the following repositories on GitHub.com if you are signed in with the account{" "}
-        {githubUsername}:
+        <Text>
+          You should be able to access the following repositories on GitHub.com if you are signed in with the account{" "}
+          {githubUsername}:
+        </Text>
+        <List.Root as="ul" px={4}>
+          {repositories.map((repository) => (
+            <List.Item key={repository.id}>
+              <Link href={`https://github.com/${repository.repository}`} target="_blank">
+                {repository.repository}
+              </Link>
+            </List.Item>
+          ))}
+        </List.Root>
       </Box>
-      <List.Root as="ul" px={4}>
-        {repositories.map((repository) => (
-          <List.Item key={repository.id}>
-            <Link href={`https://github.com/${repository.repository}`} target="_blank">
-              {repository.repository}
-            </Link>
-          </List.Item>
-        ))}
-      </List.Root>
       <Box>
         If you are able to access these pages in your browser, but are not able to access them on your computer, please
-        work with your course staff to troubleshoot the issue: this process confirms that there is nothing wrong
-        between Pawtograder and GitHub.
+        work with your course staff to troubleshoot the issue: this process confirms that there is nothing wrong between
+        Pawtograder and GitHub.
       </Box>
       <Box>
         <Text>
@@ -77,6 +79,6 @@ export default function GitHubHelpPage() {
           Sync GitHub Account
         </Button>
       </Box>
-    </Box>
+    </VStack>
   );
 }
