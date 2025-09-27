@@ -113,11 +113,12 @@ export default function ClearAssignmentsButton({
       });
 
       if (rpcError) {
-        Sentry.addBreadcrumb({
-          message: "Clear assignments RPC failed",
-          category: "clear_assignments",
-          data: { error: rpcError.message, code: rpcError.code },
-          level: "error"
+        Sentry.withScope((scope) => {
+          scope.setContext("clear_assignments", {
+            error: rpcError.message,
+            code: rpcError.code
+          });
+          Sentry.captureException(rpcError);
         });
 
         toaster.error({
@@ -137,11 +138,13 @@ export default function ClearAssignmentsButton({
       };
 
       if (!typedResult?.success) {
-        Sentry.addBreadcrumb({
-          message: "Clear assignments RPC returned failure",
-          category: "clear_assignments",
-          data: { result: typedResult },
-          level: "error"
+        Sentry.withScope((scope) => {
+          scope.setContext("clear_assignments", {
+            result: typedResult
+          });
+          Sentry.captureException(
+            new Error(`Clear assignments RPC returned failure: ${typedResult?.error || "Unknown error"}`)
+          );
         });
 
         toaster.error({
@@ -186,12 +189,7 @@ export default function ClearAssignmentsButton({
         (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         "An unexpected error occurred while clearing assignments";
 
-      Sentry.addBreadcrumb({
-        message: "Clear assignments failed with exception",
-        category: "clear_assignments",
-        data: { error: errMsg },
-        level: "error"
-      });
+      Sentry.captureException(e);
 
       toaster.error({
         title: "Error clearing assignments",

@@ -47,7 +47,6 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
             <Table.ColumnHeader>Title</Table.ColumnHeader>
             <Table.ColumnHeader>Release Date</Table.ColumnHeader>
             <Table.ColumnHeader>Due Date</Table.ColumnHeader>
-            <Table.ColumnHeader>Active Submissions</Table.ColumnHeader>
             <Table.ColumnHeader>Open Regrade Requests</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -74,11 +73,6 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
                       "Pp"
                     )
                   : "N/A"}
-              </Table.Cell>
-              <Table.Cell>
-                <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
-                  {assignment.active_submissions_count}
-                </Link>
               </Table.Cell>
               <Table.Cell>
                 <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/regrade-requests`}>

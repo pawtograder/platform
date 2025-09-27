@@ -1,6 +1,6 @@
 "use client";
 import { AssignmentProvider, useAssignmentController } from "@/hooks/useAssignment";
-import { useIsInstructor, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
@@ -9,7 +9,6 @@ import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useEffect, useState } from "react";
 import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
-import { CreateGitHubRepos } from "./CreateGitHubRepos";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
@@ -128,13 +127,6 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
                   </NextLink>
                 </Button>
               ))}
-            {isInstructor && (
-              <CreateGitHubRepos
-                courseId={Number.parseInt(course_id as string)}
-                assignmentId={Number.parseInt(assignment_id as string)}
-                releaseDate={assignment?.data?.release_date}
-              />
-            )}
             {isInstructor && (
               <DeleteAssignmentButton
                 assignmentId={Number.parseInt(assignment_id as string)}

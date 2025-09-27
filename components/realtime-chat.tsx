@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
+import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { toaster } from "@/components/ui/toaster";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
@@ -8,22 +9,22 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
+  useHelpRequest,
   useHelpRequestMessages,
   useOfficeHoursController,
   useRealtimeChat,
   type ChatMessage
 } from "@/hooks/useOfficeHoursRealtime";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { X } from "lucide-react";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "@/components/ui/markdown";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
-  helpRequest: HelpRequest;
+  request_id: number;
   helpRequestStudentIds?: string[];
   readOnly?: boolean;
 }
@@ -106,13 +107,15 @@ const ReplyPreview = ({
  */
 export const RealtimeChat = ({
   onMessage,
-  helpRequest,
+  request_id,
   helpRequestStudentIds = [],
   readOnly = false
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
-  const moderationStatus = useModerationStatus(helpRequest.class_id);
-  const messages = useHelpRequestMessages(helpRequest.id);
+  const helpRequest = useHelpRequest(request_id);
+  const { course_id } = useParams();
+  const moderationStatus = useModerationStatus(Number(course_id));
+  const messages = useHelpRequestMessages(request_id);
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
@@ -132,8 +135,8 @@ export const RealtimeChat = ({
   // Use the new realtime chat hook for chat functionality
   const { sendMessage, markMessageAsRead, isConnected, isValidating, isAuthorized, connectionError, readReceipts } =
     useRealtimeChat({
-      helpRequestId: helpRequest.id,
-      classId: helpRequest.class_id,
+      helpRequestId: request_id,
+      classId: Number(course_id),
       enableChat: true
     });
 
@@ -156,6 +159,25 @@ export const RealtimeChat = ({
       return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
   }, [messages]);
+
+  // Human-friendly date label for separators
+  const formatMessageDateLabel = useCallback((timestamp: string): string => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const atMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayDiff = Math.round((atMidnight - todayMidnight) / (1000 * 60 * 60 * 24));
+
+    if (dayDiff === 0) return "Today";
+    if (dayDiff === -1) return "Yesterday";
+
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    }).format(date);
+  }, []);
 
   // Notify parent component when messages change
   useEffect(() => {
@@ -229,8 +251,8 @@ export const RealtimeChat = ({
             await createStudentActivity({
               values: {
                 student_profile_id: private_profile_id,
-                class_id: helpRequest.class_id,
-                help_request_id: helpRequest.id,
+                class_id: Number(course_id),
+                help_request_id: request_id,
                 activity_type: "message_sent",
                 activity_description: `Student sent a message in help request chat${replyToId ? " (reply)" : ""}`
               }
@@ -387,35 +409,50 @@ export const RealtimeChat = ({
               const messageKey = getUniqueKey(message, index);
               const replyToId = getReplyToId(message);
               const replyToMsg = getReplyToMessage(replyToId);
+              const currentDateStr = new Date(getMessageTimestamp(message)).toDateString();
+              const prevDateStr = prevMessage ? new Date(getMessageTimestamp(prevMessage)).toDateString() : null;
+              const showDateSeparator = !prevMessage || currentDateStr !== prevDateStr;
 
               return (
-                <Box
-                  key={messageKey}
-                  ref={(el: HTMLDivElement | null) => {
-                    if (el && "id" in message && typeof message.id === "number") {
-                      messageRefs.current.set(message.id, el);
-                    }
-                  }}
-                  data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
-                  data-message-author-id={getCurrentMessageAuthor(message)}
-                  style={{
-                    animation: "slideInFromBottom 0.3s ease-out"
-                  }}
-                >
-                  <ChatMessageItem
-                    message={message}
-                    isOwnMessage={
-                      getCurrentMessageAuthor(message) === private_profile_id ||
-                      getCurrentMessageAuthor(message) === (user?.id || "")
-                    }
-                    showHeader={showHeader}
-                    replyToMessage={replyToMsg}
-                    readReceipts={readReceipts}
-                    onReply={handleReply}
-                    allMessages={allMessages}
-                    currentUserId={private_profile_id}
-                    helpRequestStudentIds={helpRequestStudentIds}
-                  />
+                <Box key={messageKey}>
+                  {showDateSeparator && (
+                    <HStack my={3} justify="center">
+                      <Box flex="1" height="1px" bg="border.emphasized" />
+                      <Box px={2} py={0.5} bg="bg.muted" borderRadius="md" border="1px" borderColor="border.emphasized">
+                        <Text fontSize="xs" color="fg.muted">
+                          {formatMessageDateLabel(getMessageTimestamp(message))}
+                        </Text>
+                      </Box>
+                      <Box flex="1" height="1px" bg="border.emphasized" />
+                    </HStack>
+                  )}
+                  <Box
+                    ref={(el: HTMLDivElement | null) => {
+                      if (el && "id" in message && typeof message.id === "number") {
+                        messageRefs.current.set(message.id, el);
+                      }
+                    }}
+                    data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
+                    data-message-author-id={getCurrentMessageAuthor(message)}
+                    style={{
+                      animation: "slideInFromBottom 0.3s ease-out"
+                    }}
+                  >
+                    <ChatMessageItem
+                      message={message}
+                      isOwnMessage={
+                        getCurrentMessageAuthor(message) === private_profile_id ||
+                        getCurrentMessageAuthor(message) === (user?.id || "")
+                      }
+                      showHeader={showHeader}
+                      replyToMessage={replyToMsg}
+                      readReceipts={readReceipts}
+                      onReply={handleReply}
+                      allMessages={allMessages}
+                      currentUserId={private_profile_id}
+                      helpRequestStudentIds={helpRequestStudentIds}
+                    />
+                  </Box>
                 </Box>
               );
             })}

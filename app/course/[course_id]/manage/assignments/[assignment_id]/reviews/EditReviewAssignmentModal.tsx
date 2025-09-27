@@ -89,6 +89,9 @@ export default function EditReviewAssignmentModal({
       { field: "role", operator: "in", value: ["grader", "instructor"] }
     ],
     meta: { select: "private_profile_id, profiles!user_roles_private_profile_id_fkey!inner(id, name)" },
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: { enabled: isOpen }
   });
 
@@ -96,6 +99,9 @@ export default function EditReviewAssignmentModal({
   const { data: gradingConflictsData, isLoading: isLoadingGradingConflicts } = useList<GradingConflictRow>({
     resource: "grading_conflicts",
     filters: [{ field: "class_id", operator: "eq", value: courseId }],
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: { enabled: isOpen }
   });
 

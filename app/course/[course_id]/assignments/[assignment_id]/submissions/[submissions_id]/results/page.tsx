@@ -890,7 +890,8 @@ export default function GraderResults() {
             >
               the GitHub Actions run for this submission
             </Link>{" "}
-            to see if it has completed, and share the link with your instructor.
+            if you want to see live output from the grading script. How long the autograder takes to run depends
+            primarily on how the assignment is configured.
           </Alert>
         </Box>
       </Container>

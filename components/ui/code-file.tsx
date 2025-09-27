@@ -759,7 +759,12 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
 
   useEffect(() => {
     setSelectedCheckOption(null);
+    setSelectedSubOption(null);
   }, [lineNumber]);
+  useEffect(() => {
+    // When the selected check changes, clear any previously selected sub-option
+    setSelectedSubOption(null);
+  }, [selectedCheckOption]);
   useEffect(() => {
     if (messageInputRef.current) {
       messageInputRef.current.focus();
@@ -775,7 +780,11 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   }, [mode]);
   useEffect(() => {
     if (!visible) {
+      // Reset transient popup state any time it is closed
       setCurrentMode(mode);
+      setSelectedCheckOption(null);
+      setSelectedSubOption(null);
+      setSelectOpen(true);
     }
   }, [visible, mode]);
   if (!visible) {

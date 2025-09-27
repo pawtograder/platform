@@ -1,26 +1,17 @@
 "use client";
 
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
-import TableController from "@/lib/TableController";
+import TableController, { useTableControllerTableValues, useTableControllerValueById } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
-  HelpQueue,
-  HelpQueueAssignment,
-  HelpRequest,
-  HelpRequestFeedback,
   HelpRequestMessage,
   HelpRequestMessageReadReceipt,
-  HelpRequestMessageWithoutId,
-  HelpRequestModeration,
-  HelpRequestStudent,
-  HelpRequestTemplate,
-  StudentHelpActivity,
-  StudentKarmaNotes
+  HelpRequestMessageWithoutId
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 // Type for broadcast messages from the database trigger
 type DatabaseBroadcastMessage = {
@@ -493,150 +484,56 @@ export function useHelpRequestReadReceipts(help_request_id: number | undefined) 
 
 export function useHelpRequests() {
   const controller = useOfficeHoursController();
-  const [requests, setRequests] = useState<HelpRequest[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequests.list((data) => {
-      setRequests(data);
-    });
-    setRequests(data);
-    return unsubscribe;
-  }, [controller]);
-  return requests;
+  return useTableControllerTableValues(controller.helpRequests);
 }
 
 export function useHelpRequest(id: number | undefined) {
   const controller = useOfficeHoursController();
-  const [request, setRequest] = useState<HelpRequest | undefined>(undefined);
-  useEffect(() => {
-    if (!id) {
-      return;
-    }
-    const { data, unsubscribe } = controller.helpRequests.getById(id, (data) => {
-      setRequest(data);
-    });
-    setRequest(data);
-    return unsubscribe;
-  }, [controller, id]);
-  return request;
+  return useTableControllerValueById(controller.helpRequests, id);
 }
 
 export function useHelpQueue(id: number | undefined) {
   const controller = useOfficeHoursController();
-  const [queue, setQueue] = useState<HelpQueue | undefined>(id ? controller.helpQueues.getById(id)?.data : undefined);
-  useEffect(() => {
-    if (!id) {
-      return;
-    }
-    const { data, unsubscribe } = controller.helpQueues.getById(id, (data) => {
-      setQueue(data);
-    });
-    setQueue(data);
-    return unsubscribe;
-  }, [controller, id]);
-  return queue;
+  return useTableControllerValueById(controller.helpQueues, id);
 }
 export function useHelpQueues() {
   const controller = useOfficeHoursController();
-  const [queues, setQueues] = useState<HelpQueue[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpQueues.list((data) => {
-      setQueues(data);
-    });
-    setQueues(data);
-    return unsubscribe;
-  }, [controller]);
-  return queues;
+  return useTableControllerTableValues(controller.helpQueues);
 }
 
 export function useHelpRequestStudents() {
   const controller = useOfficeHoursController();
-  const [students, setStudents] = useState<HelpRequestStudent[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequestStudents.list((data) => {
-      setStudents(data);
-    });
-    setStudents(data);
-    return unsubscribe;
-  }, [controller]);
-  return students;
+  return useTableControllerTableValues(controller.helpRequestStudents);
 }
 
 export function useHelpQueueAssignments() {
   const controller = useOfficeHoursController();
-  const [assignments, setAssignments] = useState<HelpQueueAssignment[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpQueueAssignments.list((data) => {
-      setAssignments(data);
-    });
-    setAssignments(data);
-    return unsubscribe;
-  }, [controller]);
-  return assignments;
+  return useTableControllerTableValues(controller.helpQueueAssignments);
 }
 
 export function useStudentKarmaNotes() {
   const controller = useOfficeHoursController();
-  const [karmaNotes, setKarmaNotes] = useState<StudentKarmaNotes[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.studentKarmaNotes.list((data) => {
-      setKarmaNotes(data);
-    });
-    setKarmaNotes(data);
-    return unsubscribe;
-  }, [controller]);
-  return karmaNotes;
+  return useTableControllerTableValues(controller.studentKarmaNotes);
 }
 
 export function useHelpRequestTemplates() {
   const controller = useOfficeHoursController();
-  const [templates, setTemplates] = useState<HelpRequestTemplate[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequestTemplates.list((data) => {
-      setTemplates(data);
-    });
-    setTemplates(data);
-    return unsubscribe;
-  }, [controller]);
-  return templates;
+  return useTableControllerTableValues(controller.helpRequestTemplates);
 }
 
 export function useHelpRequestModeration() {
   const controller = useOfficeHoursController();
-  const [moderation, setModeration] = useState<HelpRequestModeration[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequestModeration.list((data) => {
-      setModeration(data);
-    });
-    setModeration(data);
-    return unsubscribe;
-  }, [controller]);
-  return moderation;
+  return useTableControllerTableValues(controller.helpRequestModeration);
 }
 
 export function useStudentHelpActivity() {
   const controller = useOfficeHoursController();
-  const [activity, setActivity] = useState<StudentHelpActivity[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.studentHelpActivity.list((data) => {
-      setActivity(data);
-    });
-    setActivity(data);
-    return unsubscribe;
-  }, [controller]);
-  return activity;
+  return useTableControllerTableValues(controller.studentHelpActivity);
 }
 
 export function useHelpRequestFeedback() {
   const controller = useOfficeHoursController();
-  const [feedback, setFeedback] = useState<HelpRequestFeedback[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequestFeedback.list((data) => {
-      setFeedback(data);
-    });
-    setFeedback(data);
-    return unsubscribe;
-  }, [controller]);
-  return feedback;
+  return useTableControllerTableValues(controller.helpRequestFeedback);
 }
 export { useConnectionStatus } from "./useConnectionStatus";
 export { useHelpRequestFileReferences } from "./useHelpRequestFileReferences";
