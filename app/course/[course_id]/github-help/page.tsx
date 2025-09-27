@@ -17,10 +17,12 @@ export default function GitHubHelpPage() {
   const githubUserId = enrollment.users.github_user_id;
   const [syncing, setSyncing] = useState(false);
   const canSync = useMemo(() => {
-    return (
-      enrollment.users.last_github_user_sync &&
-      new Date(enrollment.users.last_github_user_sync) < new Date(new Date().getTime() - 1000 * 60 * 60 * 24)
-    );
+    // If last_github_user_sync is null/undefined, allow sync
+    if (!enrollment.users.last_github_user_sync) {
+      return true;
+    }
+    // Otherwise, check if it's been more than 24 hours
+    return new Date(enrollment.users.last_github_user_sync) < new Date(new Date().getTime() - 1000 * 60 * 60 * 24);
   }, [enrollment.users.last_github_user_sync]);
   const doSync = useCallback(async () => {
     setSyncing(true);
