@@ -34,30 +34,44 @@ const sampleSubmission: SubmissionWithFilesGraderResultsOutputTestsAndRubric = {
   grader_results: { score: 40, max_score: 50, grader_result_tests: [], grader_result_output: [] } as any
 };
 
-const Ctx = createContext({
+type CtxType = {
+  submissionController: any;
+};
+const defaultValue: CtxType = {
   submissionController: {
     submission: sampleSubmission,
     submission_comments: {
       list: (cb: any) => ({ unsubscribe: () => {}, data: [] }),
-      getById: () => ({ data: undefined })
+      getById: () => ({ data: undefined }),
+      update: async () => ({}),
+      create: async () => ({})
     },
     submission_file_comments: {
       list: (cb: any) => ({ unsubscribe: () => {}, data: [] }),
-      getById: () => ({ data: undefined })
+      getById: () => ({ data: undefined }),
+      update: async () => ({}),
+      create: async () => ({}),
+      delete: async () => ({})
     },
     submission_artifact_comments: {
       list: (cb: any) => ({ unsubscribe: () => {}, data: [] }),
-      getById: () => ({ data: undefined })
+      getById: () => ({ data: undefined }),
+      update: async () => ({}),
+      create: async () => ({}),
+      delete: async () => ({})
     },
     submission_reviews: {
-      list: (cb: any) => ({ unsubscribe: () => {}, data: [] }),
-      getById: (_id: number) => ({ data: { id: 1, rubric_id: 1, released: true } })
+      rows: [{ id: 1, rubric_id: 1, released: true }],
+      list: (cb: any) => ({ unsubscribe: () => {}, data: [{ id: 1, rubric_id: 1, released: true }] }),
+      getById: (_id: number) => ({ data: { id: 1, rubric_id: 1, released: true } }),
+      update: async () => ({})
     }
   }
-});
+};
+const Ctx = createContext<CtxType>(defaultValue);
 
-export function SubmissionProvider({ children }: { children: React.ReactNode }) {
-  return <Ctx.Provider value={useContext(Ctx)}>{children}</Ctx.Provider>;
+export function SubmissionProvider({ children }: { children: React.ReactNode; submission_id?: number }) {
+  return <Ctx.Provider value={defaultValue}>{children}</Ctx.Provider>;
 }
 
 export function useSubmission() {

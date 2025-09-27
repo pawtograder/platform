@@ -53,6 +53,18 @@ const config: StorybookConfig = {
       "mocks/hooks/useCourseController.tsx"
     );
 
+    // Mock refine core hooks used across components
+    config.resolve.alias["@refinedev/core"] = path.resolve(
+      __dirname,
+      "mocks/refine-core.ts"
+    );
+
+    // Mock Supabase client used by components like artifact viewers
+    config.resolve.alias["@/utils/supabase/client"] = path.resolve(
+      __dirname,
+      "mocks/utils-supabase-client.ts"
+    );
+
     return config;
   }
 };
