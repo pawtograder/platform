@@ -8,12 +8,17 @@ CREATE OR REPLACE FUNCTION public.update_github_profile()
  SECURITY DEFINER
 AS $function$
 BEGIN
-  UPDATE public.users
-  SET
-    github_username = json_extract_path_text(to_json(NEW.identity_data), 'user_name'),
-    github_user_id = NEW.provider_id
-  WHERE user_id = NEW.user_id;
-  RETURN NEW;
+  BEGIN
+    IF NEW.provider <> 'github' THEN
+      RETURN NEW;
+    END IF;
+
+    UPDATE public.users
+    SET
+      github_username = json_extract_path_text(to_json(NEW.identity_data), 'user_name'),
+      github_user_id = NEW.provider_id
+    WHERE user_id = NEW.user_id;
+    RETURN NEW;
 END;
 $function$;
 
