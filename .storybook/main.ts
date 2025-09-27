@@ -65,6 +65,20 @@ const config: StorybookConfig = {
       "mocks/utils-supabase-client.ts"
     );
 
+    // Hard override absolute source files in case path alias resolution bypasses module name
+    config.resolve.alias[path.resolve(__dirname, "../hooks/useSubmission.tsx")] = path.resolve(
+      __dirname,
+      "mocks/hooks/useSubmission.tsx"
+    );
+    config.resolve.alias[path.resolve(__dirname, "../hooks/useSubmissionReview.tsx")] = path.resolve(
+      __dirname,
+      "mocks/hooks/useSubmissionReview.tsx"
+    );
+    config.resolve.alias[path.resolve(__dirname, "../hooks/useAssignment.tsx")] = path.resolve(
+      __dirname,
+      "mocks/hooks/useAssignment.tsx"
+    );
+
     return config;
   }
 };
