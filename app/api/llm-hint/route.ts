@@ -38,7 +38,8 @@ type GradrResultTestWithGraderResults = GetResult<
 class UserVisibleError extends Error {
   constructor(
     message: string,
-    public statusCode: number = 500
+    public statusCode: number = 500,
+    public isBug: boolean = true
   ) {
     super(message);
     this.name = "UserVisibleError";
@@ -350,7 +351,7 @@ export async function POST(request: NextRequest) {
     if (extraData.llm.rate_limit) {
       const rateLimitError = await checkRateLimits(testResult, extraData.llm.rate_limit, serviceSupabase);
       if (rateLimitError) {
-        throw new UserVisibleError(rateLimitError, 429);
+        throw new UserVisibleError(rateLimitError, 429, false);
       }
     }
 
@@ -493,20 +494,25 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line no-console
     console.error("Error in llm-hint API:", error);
 
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    Sentry.captureException(error, {
-      tags: {
-        operation: "llm_hint_api"
-      },
-      extra: {
-        error: errorMessage
-      }
-    });
-
     // If it's a UserVisibleError, return the message directly
     if (error instanceof UserVisibleError) {
+      if (!error.isBug) {
+        Sentry.captureException(error, {
+          tags: {
+            operation: "llm_hint_api"
+          },
+          extra: {
+            error: error.message
+          }
+        });
+      }
       return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    } else {
+      Sentry.captureException(error, {
+        tags: {
+          operation: "llm_hint_api"
+        }
+      });
     }
 
     // For other errors, use a generic message to avoid exposing internal details
