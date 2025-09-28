@@ -867,11 +867,17 @@ async function getTeamAndCreateIfNeeded(org: string, team_slug: string, octokit:
     throw e;
   }
 }
+
 export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "reinvite_to_team");
   scope?.setTag("org", org);
   scope?.setTag("team_slug", team_slug);
   scope?.setTag("github_username", githubUsername);
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `Reinviting user ${githubUsername} to team ${team_slug} in org ${org}`,
+    level: "info"
+  });
 
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
@@ -883,24 +889,44 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   });
   const userID = user.data.id;
   const teamID = team.data.id;
-  console.log(`Team ${team_slug} has id ${teamID}`);
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `Team ${team_slug} has id ${teamID}`,
+    level: "info"
+  });
 
   // Check if user is already in the team
   try {
-    console.log(`Checking if user ${githubUsername} is already in team ${team_slug}...`);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Checking if user ${githubUsername} is already in team ${team_slug}...`,
+      level: "info"
+    });
     const teamMembers = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
       team_slug,
       per_page: 100 // Optimize for large teams
     });
-    console.log(`Found ${teamMembers.length} members in team ${team_slug}`);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Found ${teamMembers.length} members in team ${team_slug}`,
+      level: "info"
+    });
 
     const isUserInTeam = teamMembers.some((member) => member.login === githubUsername);
     if (isUserInTeam) {
-      console.log(`User ${githubUsername} is already in team ${team_slug}`);
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} is already in team ${team_slug}`,
+        level: "info"
+      });
       return false;
     }
-    console.log(`User ${githubUsername} is not in team ${team_slug}, proceeding with invitation`);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `User ${githubUsername} is not in team ${team_slug}, proceeding with invitation`,
+      level: "info"
+    });
   } catch (error) {
     console.log(`Error checking team membership: ${error}`);
     // Continue with invitation if we can't check membership
@@ -913,10 +939,18 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
       invitee_id: userID,
       team_ids: [teamID]
     });
-    console.log(`Invitation response: ${JSON.stringify(resp.data)}`);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Invitation response: ${JSON.stringify(resp.data)}`,
+      level: "info"
+    });
     return true;
   } catch (err) {
-    console.log("Org invitation failed, inspecting error message...");
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Org invitation failed, inspecting error message...`,
+      level: "info"
+    });
     const errWithShape = err as {
       message?: unknown;
       response?: { data?: { errors?: Array<{ message?: unknown }> } };
@@ -934,9 +968,17 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
       }
     }
     const combinedMessage = collectedMessages.join("; ") || JSON.stringify(err);
-    console.log(`Invitation error message: ${combinedMessage}`);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Invitation error message: ${combinedMessage}`,
+      level: "info"
+    });
     if (/already.*(part|member).*organization/i.test(combinedMessage)) {
-      console.log(`User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`);
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`,
+        level: "info"
+      });
       await updateUserRolesForGithubOrg({ github_username: githubUsername, org });
       //Update our user_role to mark that they are in the org!
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
@@ -974,7 +1016,8 @@ export async function syncRepoPermissions(
   courseSlug: string,
   githubUsernamesMixedCase: string[],
   _scope?: Sentry.Scope
-) {
+): Promise<{ madeChanges: boolean }> {
+  let madeChanges = false;
   const scope = _scope?.clone();
   const githubUsernames = githubUsernamesMixedCase.map((u) => u.toLowerCase());
   scope?.setTag("github_operation", "sync_repo_permissions");
@@ -1022,6 +1065,11 @@ export async function syncRepoPermissions(
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
     .map((c) => c.login.toLowerCase());
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`,
+    level: "info"
+  });
   // console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
   //Check if staff team has access to the repo, if not, add it
   const teamsWithAccess = await octokit.paginate("GET /repos/{owner}/{repo}/teams", {
@@ -1029,6 +1077,7 @@ export async function syncRepoPermissions(
     repo
   });
   if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
+    madeChanges = true;
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
       org,
       team_slug,
@@ -1047,11 +1096,17 @@ export async function syncRepoPermissions(
       !adminsThatShouldNotBeListedAsAdmins.includes(u)
   );
   for (const username of newAccess) {
+    madeChanges = true;
     const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
       username,
       permission: "write"
+    });
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `${org}/${repo} adding collaborator ${username}`,
+      level: "info"
     });
     if (resp.status !== 201 && resp.status !== 204) {
       console.log(`Failed to add collaborator ${username} to ${org}/${repo}`);
@@ -1063,6 +1118,13 @@ export async function syncRepoPermissions(
     }
   }
   for (const username of removeAccess) {
+    madeChanges = true;
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `${org}/${repo} removing collaborator ${username}`,
+      level: "info"
+    });
+
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
     const newScope = scope?.clone();
     newScope?.setTag("username", username);
@@ -1073,6 +1135,7 @@ export async function syncRepoPermissions(
       username
     });
   }
+  return { madeChanges };
 }
 async function updateUserRolesForGithubOrg({ github_username, org }: { github_username: string; org: string }) {
   const adminSupabase = createClient<Database>(
