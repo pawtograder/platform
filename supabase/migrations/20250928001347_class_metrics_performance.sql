@@ -14,6 +14,7 @@ DROP FUNCTION IF EXISTS public.class_metrics_hint_feedback_counter();
 DROP FUNCTION IF EXISTS public.class_metrics_user_roles_counter();
 DROP FUNCTION IF EXISTS public.class_metrics_assignment_due_date_exceptions_counter();
 DROP FUNCTION IF EXISTS public.class_metrics_classes_insert();
+DROP FUNCTION IF EXISTS public.refresh_class_user_role_counts(bigint);
 
 DROP TABLE IF EXISTS public.class_metrics_totals;
 
@@ -184,14 +185,44 @@ CREATE OR REPLACE FUNCTION public.class_metrics_help_requests_counter()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  target_class bigint := COALESCE(NEW.class_id, OLD.class_id);
+  old_was_open boolean := false;
+  new_is_open boolean := false;
 BEGIN
-  UPDATE public.class_metrics_totals
-  SET help_requests_total = help_requests_total + 1,
-      help_requests_open = help_requests_open + CASE WHEN NEW.status = 'open' THEN 1 ELSE 0 END,
-      updated_at = now()
-  WHERE class_id = NEW.class_id;
+  -- Check if OLD row was open
+  IF OLD IS NOT NULL THEN
+    old_was_open := (OLD.status = 'open');
+  END IF;
+  
+  -- Check if NEW row is open
+  IF NEW IS NOT NULL THEN
+    new_is_open := (NEW.status = 'open');
+  END IF;
 
-  RETURN NEW;
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.class_metrics_totals
+    SET help_requests_total = help_requests_total + 1,
+        help_requests_open = help_requests_open + CASE WHEN new_is_open THEN 1 ELSE 0 END,
+        updated_at = now()
+    WHERE class_id = target_class;
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- Only update help_requests_open if status changed
+    IF old_was_open <> new_is_open THEN
+      UPDATE public.class_metrics_totals
+      SET help_requests_open = help_requests_open + CASE WHEN new_is_open THEN 1 ELSE -1 END,
+          updated_at = now()
+      WHERE class_id = target_class;
+    END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.class_metrics_totals
+    SET help_requests_total = help_requests_total - 1,
+        help_requests_open = help_requests_open - CASE WHEN old_was_open THEN 1 ELSE 0 END,
+        updated_at = now()
+    WHERE class_id = target_class;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -199,13 +230,42 @@ CREATE OR REPLACE FUNCTION public.class_metrics_notifications_counter()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  target_class bigint := COALESCE(NEW.class_id, OLD.class_id);
+  old_was_unread boolean := false;
+  new_is_unread boolean := false;
 BEGIN
-  UPDATE public.class_metrics_totals
-  SET notifications_unread = notifications_unread + CASE WHEN NEW.viewed_at IS NULL THEN 1 ELSE 0 END,
-      updated_at = now()
-  WHERE class_id = NEW.class_id;
+  -- Check if OLD row was unread
+  IF OLD IS NOT NULL THEN
+    old_was_unread := (OLD.viewed_at IS NULL);
+  END IF;
+  
+  -- Check if NEW row is unread
+  IF NEW IS NOT NULL THEN
+    new_is_unread := (NEW.viewed_at IS NULL);
+  END IF;
 
-  RETURN NEW;
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.class_metrics_totals
+    SET notifications_unread = notifications_unread + CASE WHEN new_is_unread THEN 1 ELSE 0 END,
+        updated_at = now()
+    WHERE class_id = target_class;
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- Only update notifications_unread if viewed_at status changed
+    IF old_was_unread <> new_is_unread THEN
+      UPDATE public.class_metrics_totals
+      SET notifications_unread = notifications_unread + CASE WHEN new_is_unread THEN 1 ELSE -1 END,
+          updated_at = now()
+      WHERE class_id = target_class;
+    END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.class_metrics_totals
+    SET notifications_unread = notifications_unread - CASE WHEN old_was_unread THEN 1 ELSE 0 END,
+        updated_at = now()
+    WHERE class_id = target_class;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -245,27 +305,140 @@ CREATE OR REPLACE FUNCTION public.class_metrics_user_roles_counter()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  old_class_id bigint;
+  new_class_id bigint;
+  old_role text;
+  new_role text;
+  old_disabled boolean;
+  new_disabled boolean;
 BEGIN
-  IF NEW.disabled = false THEN
-    IF NEW.role = 'student' THEN
-      UPDATE public.class_metrics_totals
-      SET active_students_total = active_students_total + 1,
-          updated_at = now()
-      WHERE class_id = NEW.class_id;
-    ELSIF NEW.role = 'instructor' THEN
-      UPDATE public.class_metrics_totals
-      SET active_instructors_total = active_instructors_total + 1,
-          updated_at = now()
-      WHERE class_id = NEW.class_id;
-    ELSIF NEW.role = 'grader' THEN
-      UPDATE public.class_metrics_totals
-      SET active_graders_total = active_graders_total + 1,
-          updated_at = now()
-      WHERE class_id = NEW.class_id;
+  -- Extract values for comparison
+  IF OLD IS NOT NULL THEN
+    old_class_id := OLD.class_id;
+    old_role := OLD.role;
+    old_disabled := OLD.disabled;
+  END IF;
+  
+  IF NEW IS NOT NULL THEN
+    new_class_id := NEW.class_id;
+    new_role := NEW.role;
+    new_disabled := NEW.disabled;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    -- Add to appropriate counter if not disabled
+    IF NOT new_disabled THEN
+      IF new_role = 'student' THEN
+        UPDATE public.class_metrics_totals
+        SET active_students_total = active_students_total + 1, updated_at = now()
+        WHERE class_id = new_class_id;
+      ELSIF new_role = 'instructor' THEN
+        UPDATE public.class_metrics_totals
+        SET active_instructors_total = active_instructors_total + 1, updated_at = now()
+        WHERE class_id = new_class_id;
+      ELSIF new_role = 'grader' THEN
+        UPDATE public.class_metrics_totals
+        SET active_graders_total = active_graders_total + 1, updated_at = now()
+        WHERE class_id = new_class_id;
+      END IF;
+    END IF;
+    
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- Handle class_id changes
+    IF old_class_id <> new_class_id THEN
+      -- Remove from old class
+      IF NOT old_disabled THEN
+        IF old_role = 'student' THEN
+          UPDATE public.class_metrics_totals
+          SET active_students_total = active_students_total - 1, updated_at = now()
+          WHERE class_id = old_class_id;
+        ELSIF old_role = 'instructor' THEN
+          UPDATE public.class_metrics_totals
+          SET active_instructors_total = active_instructors_total - 1, updated_at = now()
+          WHERE class_id = old_class_id;
+        ELSIF old_role = 'grader' THEN
+          UPDATE public.class_metrics_totals
+          SET active_graders_total = active_graders_total - 1, updated_at = now()
+          WHERE class_id = old_class_id;
+        END IF;
+      END IF;
+      
+      -- Add to new class
+      IF NOT new_disabled THEN
+        IF new_role = 'student' THEN
+          UPDATE public.class_metrics_totals
+          SET active_students_total = active_students_total + 1, updated_at = now()
+          WHERE class_id = new_class_id;
+        ELSIF new_role = 'instructor' THEN
+          UPDATE public.class_metrics_totals
+          SET active_instructors_total = active_instructors_total + 1, updated_at = now()
+          WHERE class_id = new_class_id;
+        ELSIF new_role = 'grader' THEN
+          UPDATE public.class_metrics_totals
+          SET active_graders_total = active_graders_total + 1, updated_at = now()
+          WHERE class_id = new_class_id;
+        END IF;
+      END IF;
+    ELSE
+      -- Same class, check for role or disabled status changes
+      IF old_role <> new_role OR old_disabled <> new_disabled THEN
+        -- Remove old contribution
+        IF NOT old_disabled THEN
+          IF old_role = 'student' THEN
+            UPDATE public.class_metrics_totals
+            SET active_students_total = active_students_total - 1, updated_at = now()
+            WHERE class_id = old_class_id;
+          ELSIF old_role = 'instructor' THEN
+            UPDATE public.class_metrics_totals
+            SET active_instructors_total = active_instructors_total - 1, updated_at = now()
+            WHERE class_id = old_class_id;
+          ELSIF old_role = 'grader' THEN
+            UPDATE public.class_metrics_totals
+            SET active_graders_total = active_graders_total - 1, updated_at = now()
+            WHERE class_id = old_class_id;
+          END IF;
+        END IF;
+        
+        -- Add new contribution
+        IF NOT new_disabled THEN
+          IF new_role = 'student' THEN
+            UPDATE public.class_metrics_totals
+            SET active_students_total = active_students_total + 1, updated_at = now()
+            WHERE class_id = new_class_id;
+          ELSIF new_role = 'instructor' THEN
+            UPDATE public.class_metrics_totals
+            SET active_instructors_total = active_instructors_total + 1, updated_at = now()
+            WHERE class_id = new_class_id;
+          ELSIF new_role = 'grader' THEN
+            UPDATE public.class_metrics_totals
+            SET active_graders_total = active_graders_total + 1, updated_at = now()
+            WHERE class_id = new_class_id;
+          END IF;
+        END IF;
+      END IF;
+    END IF;
+    
+  ELSIF TG_OP = 'DELETE' THEN
+    -- Remove from appropriate counter if not disabled
+    IF NOT old_disabled THEN
+      IF old_role = 'student' THEN
+        UPDATE public.class_metrics_totals
+        SET active_students_total = active_students_total - 1, updated_at = now()
+        WHERE class_id = old_class_id;
+      ELSIF old_role = 'instructor' THEN
+        UPDATE public.class_metrics_totals
+        SET active_instructors_total = active_instructors_total - 1, updated_at = now()
+        WHERE class_id = old_class_id;
+      ELSIF old_role = 'grader' THEN
+        UPDATE public.class_metrics_totals
+        SET active_graders_total = active_graders_total - 1, updated_at = now()
+        WHERE class_id = old_class_id;
+      END IF;
     END IF;
   END IF;
 
-  RETURN NEW;
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -357,16 +530,111 @@ CREATE OR REPLACE FUNCTION public.class_metrics_workflow_events_counter()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  target_class bigint := COALESCE(NEW.class_id, OLD.class_id);
+  affected_workflow_run_id bigint;
+  affected_run_attempt integer;
+  old_state text;
+  new_state text;
 BEGIN
-  UPDATE public.class_metrics_totals
-  SET workflow_runs_total = workflow_runs_total + 1,
-      workflow_runs_completed = workflow_runs_completed + CASE WHEN NEW.completed_at IS NOT NULL THEN 1 ELSE 0 END,
-      workflow_runs_in_progress = workflow_runs_in_progress + CASE WHEN NEW.completed_at IS NULL AND NEW.in_progress_at IS NOT NULL THEN 1 ELSE 0 END,
-      workflow_runs_failed = workflow_runs_failed + CASE WHEN NEW.completed_at IS NULL AND NEW.in_progress_at IS NULL AND NEW.requested_at IS NOT NULL THEN 1 ELSE 0 END,
-      updated_at = now()
-  WHERE class_id = NEW.class_id;
+  -- Get the workflow_run_id and run_attempt that was affected
+  affected_workflow_run_id := COALESCE(NEW.workflow_run_id, OLD.workflow_run_id);
+  affected_run_attempt := COALESCE(NEW.run_attempt, OLD.run_attempt);
+  
+  -- Determine the old state of this workflow run
+  IF TG_OP = 'DELETE' OR TG_OP = 'UPDATE' THEN
+    SELECT CASE 
+      WHEN MAX(CASE WHEN event_type = 'completed' AND conclusion IN ('success', 'neutral') THEN 1 ELSE 0 END) = 1 THEN 'completed'
+      WHEN MAX(CASE WHEN event_type = 'completed' AND (conclusion IS NULL OR conclusion NOT IN ('success', 'neutral')) THEN 1 ELSE 0 END) = 1 THEN 'failed'
+      WHEN MAX(CASE WHEN event_type = 'in_progress' THEN 1 ELSE 0 END) = 1 THEN 'in_progress'
+      ELSE 'unknown'
+    END INTO old_state
+    FROM public.workflow_events
+    WHERE class_id = target_class 
+      AND workflow_run_id = affected_workflow_run_id 
+      AND run_attempt = affected_run_attempt
+      AND (TG_OP = 'DELETE' OR (event_type <> NEW.event_type OR conclusion IS DISTINCT FROM NEW.conclusion));
+  END IF;
+  
+  -- Determine the new state of this workflow run
+  IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+    SELECT CASE 
+      WHEN MAX(CASE WHEN event_type = 'completed' AND conclusion IN ('success', 'neutral') THEN 1 ELSE 0 END) = 1 THEN 'completed'
+      WHEN MAX(CASE WHEN event_type = 'completed' AND (conclusion IS NULL OR conclusion NOT IN ('success', 'neutral')) THEN 1 ELSE 0 END) = 1 THEN 'failed'
+      WHEN MAX(CASE WHEN event_type = 'in_progress' THEN 1 ELSE 0 END) = 1 THEN 'in_progress'
+      ELSE 'unknown'
+    END INTO new_state
+    FROM public.workflow_events
+    WHERE class_id = target_class 
+      AND workflow_run_id = affected_workflow_run_id 
+      AND run_attempt = affected_run_attempt;
+  END IF;
+  
+  -- Handle workflow_runs_total changes
+  IF TG_OP = 'INSERT' THEN
+    -- Check if this is the first event for this workflow_run_id + run_attempt combination
+    IF NOT EXISTS (
+      SELECT 1 FROM public.workflow_events 
+      WHERE class_id = target_class 
+        AND workflow_run_id = affected_workflow_run_id 
+        AND run_attempt = affected_run_attempt
+        AND (workflow_run_id, run_attempt) <> (NEW.workflow_run_id, NEW.run_attempt)
+    ) THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_total = workflow_runs_total + 1, updated_at = now()
+      WHERE class_id = target_class;
+    END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    -- Check if this was the last event for this workflow_run_id + run_attempt combination
+    IF NOT EXISTS (
+      SELECT 1 FROM public.workflow_events 
+      WHERE class_id = target_class 
+        AND workflow_run_id = affected_workflow_run_id 
+        AND run_attempt = affected_run_attempt
+        AND (workflow_run_id, run_attempt) <> (OLD.workflow_run_id, OLD.run_attempt)
+    ) THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_total = workflow_runs_total - 1, updated_at = now()
+      WHERE class_id = target_class;
+    END IF;
+  END IF;
+  
+  -- Handle state-specific counter changes
+  IF old_state IS NOT NULL AND old_state <> COALESCE(new_state, 'unknown') THEN
+    -- Remove from old state counter
+    IF old_state = 'completed' THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_completed = workflow_runs_completed - 1, updated_at = now()
+      WHERE class_id = target_class;
+    ELSIF old_state = 'failed' THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_failed = workflow_runs_failed - 1, updated_at = now()
+      WHERE class_id = target_class;
+    ELSIF old_state = 'in_progress' THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_in_progress = workflow_runs_in_progress - 1, updated_at = now()
+      WHERE class_id = target_class;
+    END IF;
+  END IF;
+  
+  IF new_state IS NOT NULL AND new_state <> COALESCE(old_state, 'unknown') THEN
+    -- Add to new state counter
+    IF new_state = 'completed' THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_completed = workflow_runs_completed + 1, updated_at = now()
+      WHERE class_id = target_class;
+    ELSIF new_state = 'failed' THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_failed = workflow_runs_failed + 1, updated_at = now()
+      WHERE class_id = target_class;
+    ELSIF new_state = 'in_progress' THEN
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_in_progress = workflow_runs_in_progress + 1, updated_at = now()
+      WHERE class_id = target_class;
+    END IF;
+  END IF;
 
-  RETURN NEW;
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -374,13 +642,22 @@ CREATE OR REPLACE FUNCTION public.class_metrics_workflow_errors_counter()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  target_class bigint := COALESCE(NEW.class_id, OLD.class_id);
 BEGIN
-  UPDATE public.class_metrics_totals
-  SET workflow_errors_total = workflow_errors_total + 1,
-      updated_at = now()
-  WHERE class_id = NEW.class_id;
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.class_metrics_totals
+    SET workflow_errors_total = workflow_errors_total + 1,
+        updated_at = now()
+    WHERE class_id = target_class;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.class_metrics_totals
+    SET workflow_errors_total = workflow_errors_total - 1,
+        updated_at = now()
+    WHERE class_id = target_class;
+  END IF;
 
-  RETURN NEW;
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -463,7 +740,7 @@ FOR EACH ROW EXECUTE FUNCTION public.class_metrics_discussion_threads_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_help_requests_trg ON public.help_requests;
 CREATE TRIGGER class_metrics_help_requests_trg
-AFTER INSERT ON public.help_requests
+AFTER INSERT OR UPDATE OR DELETE ON public.help_requests
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_help_requests_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_help_request_messages_trg ON public.help_request_messages;
@@ -473,7 +750,7 @@ FOR EACH ROW EXECUTE FUNCTION public.class_metrics_help_request_messages_counter
 
 DROP TRIGGER IF EXISTS class_metrics_notifications_trg ON public.notifications;
 CREATE TRIGGER class_metrics_notifications_trg
-AFTER INSERT ON public.notifications
+AFTER INSERT OR UPDATE OR DELETE ON public.notifications
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_notifications_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_gradebook_columns_trg ON public.gradebook_columns;
@@ -508,17 +785,17 @@ FOR EACH ROW EXECUTE FUNCTION public.class_metrics_hint_feedback_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_user_roles_trg ON public.user_roles;
 CREATE TRIGGER class_metrics_user_roles_trg
-AFTER INSERT ON public.user_roles
+AFTER INSERT OR UPDATE OR DELETE ON public.user_roles
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_user_roles_counter();
 
-DROP TRIGGER IF EXISTS class_metrics_workflow_events_trg ON public.workflow_events_summary;
+DROP TRIGGER IF EXISTS class_metrics_workflow_events_trg ON public.workflow_events;
 CREATE TRIGGER class_metrics_workflow_events_trg
-AFTER INSERT ON public.workflow_events
+AFTER INSERT OR UPDATE OR DELETE ON public.workflow_events
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_workflow_events_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_workflow_errors_trg ON public.workflow_run_error;
 CREATE TRIGGER class_metrics_workflow_errors_trg
-AFTER INSERT ON public.workflow_run_error
+AFTER INSERT OR UPDATE OR DELETE ON public.workflow_run_error
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_workflow_errors_counter();
 
 CREATE OR REPLACE FUNCTION public.get_all_class_metrics()
