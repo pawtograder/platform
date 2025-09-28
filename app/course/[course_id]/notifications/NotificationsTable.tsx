@@ -70,7 +70,10 @@ export default function NotificationsTable() {
     [notifications]
   );
   const other = useMemo(
-    () => (notifications || []).filter((n) => !["help_request", "help_request_message", "discussion_thread"].includes(getType(n))),
+    () =>
+      (notifications || []).filter(
+        (n) => !["help_request", "help_request_message", "discussion_thread"].includes(getType(n))
+      ),
     [notifications]
   );
 
@@ -112,12 +115,16 @@ export default function NotificationsTable() {
 
   return (
     <VStack w="100%" align="stretch" gap={6} p={4}>
-      <Text fontSize="lg" fontWeight="semibold">Notifications</Text>
+      <Text fontSize="lg" fontWeight="semibold">
+        Notifications
+      </Text>
 
       {/* Office Hours */}
       <VStack align="stretch" gap={3}>
         <HStack justify="space-between">
-          <Text fontSize="md" fontWeight="semibold">Office Hours</Text>
+          <Text fontSize="md" fontWeight="semibold">
+            Office Hours
+          </Text>
           <Text color="fg.muted">{officeHoursMessages.length} items</Text>
         </HStack>
         <Box overflowX="auto">
@@ -128,7 +135,9 @@ export default function NotificationsTable() {
                 <Table.ColumnHeader bg="bg.muted">Queue</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Who replied</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Message</Table.ColumnHeader>
-                <Table.ColumnHeader bg="bg.muted" textAlign="right">Actions</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted" textAlign="right">
+                  Actions
+                </Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -149,39 +158,49 @@ export default function NotificationsTable() {
                 </Table.Row>
               ) : (
                 officeHoursMessages.map((n) => {
-                    const b = (n.body || {}) as Partial<HelpRequestMessageBody>;
-                    return (
-                      <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
-                        <Table.Cell>
-                          <Text color="fg.muted">{n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}</Text>
-                        </Table.Cell>
-                        <Table.Cell>
-                          <Text>{b.help_queue_name || ""}</Text>
-                        </Table.Cell>
-                        <Table.Cell>
-                          <Text fontWeight="medium">{b.author_name || ""}</Text>
-                        </Table.Cell>
-                        <Table.Cell>
-                          <Text lineClamp={2} color="fg.muted">{b.message_preview || ""}</Text>
-                        </Table.Cell>
-                        <Table.Cell>
-                          <HStack justifyContent="flex-end" gap={2}>
-                            <Button size="xs" variant="ghost" colorPalette="blue" onClick={() => openHelpRequest(n)}>
-                              Open <FaExternalLinkAlt style={{ marginLeft: 6 }} />
+                  const b = (n.body || {}) as Partial<HelpRequestMessageBody>;
+                  return (
+                    <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
+                      <Table.Cell>
+                        <Text color="fg.muted">
+                          {n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}
+                        </Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text>{b.help_queue_name || ""}</Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text fontWeight="medium">{b.author_name || ""}</Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text lineClamp={2} color="fg.muted">
+                          {b.message_preview || ""}
+                        </Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <HStack justifyContent="flex-end" gap={2}>
+                          <Button size="xs" variant="ghost" colorPalette="blue" onClick={() => openHelpRequest(n)}>
+                            Open <FaExternalLinkAlt style={{ marginLeft: 6 }} />
+                          </Button>
+                          {!n.viewed_at && (
+                            <Button size="xs" variant="subtle" colorPalette="green" onClick={() => set_read(n, true)}>
+                              Mark read
                             </Button>
-                            {!n.viewed_at && (
-                              <Button size="xs" variant="subtle" colorPalette="green" onClick={() => set_read(n, true)}>
-                                Mark read
-                              </Button>
-                            )}
-                            <IconButton size="xs" variant="ghost" colorPalette="red" aria-label="Dismiss" onClick={() => dismiss(n)}>
-                              <FaTrash />
-                            </IconButton>
-                          </HStack>
-                        </Table.Cell>
-                      </Table.Row>
-                    );
-                  })
+                          )}
+                          <IconButton
+                            size="xs"
+                            variant="ghost"
+                            colorPalette="red"
+                            aria-label="Dismiss"
+                            onClick={() => dismiss(n)}
+                          >
+                            <FaTrash />
+                          </IconButton>
+                        </HStack>
+                      </Table.Cell>
+                    </Table.Row>
+                  );
+                })
               )}
             </Table.Body>
           </Table.Root>
@@ -191,7 +210,9 @@ export default function NotificationsTable() {
       {/* Discussion Threads */}
       <VStack align="stretch" gap={3}>
         <HStack justify="space-between">
-          <Text fontSize="md" fontWeight="semibold">Discussion Threads</Text>
+          <Text fontSize="md" fontWeight="semibold">
+            Discussion Threads
+          </Text>
           <Text color="fg.muted">{discussion.length} items</Text>
         </HStack>
         <Box overflowX="auto">
@@ -202,7 +223,9 @@ export default function NotificationsTable() {
                 <Table.ColumnHeader bg="bg.muted">Type</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Who</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Teaser</Table.ColumnHeader>
-                <Table.ColumnHeader bg="bg.muted" textAlign="right">Actions</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted" textAlign="right">
+                  Actions
+                </Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -228,16 +251,22 @@ export default function NotificationsTable() {
                   return (
                     <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
                       <Table.Cell>
-                        <Text color="fg.muted">{n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}</Text>
+                        <Text color="fg.muted">
+                          {n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}
+                        </Text>
                       </Table.Cell>
                       <Table.Cell>
-                        <Badge variant="subtle" colorPalette={kind === "replied" ? "blue" : "green"}>{kind}</Badge>
+                        <Badge variant="subtle" colorPalette={kind === "replied" ? "blue" : "green"}>
+                          {kind}
+                        </Badge>
                       </Table.Cell>
                       <Table.Cell>
                         <Text fontWeight="medium">{b.reply_author_name || ""}</Text>
                       </Table.Cell>
                       <Table.Cell>
-                        <Text lineClamp={2} color="fg.muted">{b.teaser || ""}</Text>
+                        <Text lineClamp={2} color="fg.muted">
+                          {b.teaser || ""}
+                        </Text>
                       </Table.Cell>
                       <Table.Cell>
                         <HStack justifyContent="flex-end" gap={2}>
@@ -249,7 +278,13 @@ export default function NotificationsTable() {
                               Mark read
                             </Button>
                           )}
-                          <IconButton size="xs" variant="ghost" colorPalette="red" aria-label="Dismiss" onClick={() => dismiss(n)}>
+                          <IconButton
+                            size="xs"
+                            variant="ghost"
+                            colorPalette="red"
+                            aria-label="Dismiss"
+                            onClick={() => dismiss(n)}
+                          >
                             <FaTrash />
                           </IconButton>
                         </HStack>
@@ -266,7 +301,9 @@ export default function NotificationsTable() {
       {/* Other */}
       <VStack align="stretch" gap={3}>
         <HStack justify="space-between">
-          <Text fontSize="md" fontWeight="semibold">Other</Text>
+          <Text fontSize="md" fontWeight="semibold">
+            Other
+          </Text>
           <Text color="fg.muted">{other.length} items</Text>
         </HStack>
         <Box overflowX="auto">
@@ -276,7 +313,9 @@ export default function NotificationsTable() {
                 <Table.ColumnHeader bg="bg.muted">When</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Type</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Teaser</Table.ColumnHeader>
-                <Table.ColumnHeader bg="bg.muted" textAlign="right">Actions</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted" textAlign="right">
+                  Actions
+                </Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -299,10 +338,14 @@ export default function NotificationsTable() {
                 other.map((n) => (
                   <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
                     <Table.Cell>
-                      <Text color="fg.muted">{n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}</Text>
+                      <Text color="fg.muted">
+                        {n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}
+                      </Text>
                     </Table.Cell>
                     <Table.Cell>
-                      <Badge variant="subtle" colorPalette="gray">{getType(n)}</Badge>
+                      <Badge variant="subtle" colorPalette="gray">
+                        {getType(n)}
+                      </Badge>
                     </Table.Cell>
                     <Table.Cell>
                       <NotificationTeaser
@@ -318,7 +361,13 @@ export default function NotificationsTable() {
                             Mark read
                           </Button>
                         )}
-                        <IconButton size="xs" variant="ghost" colorPalette="red" aria-label="Dismiss" onClick={() => dismiss(n)}>
+                        <IconButton
+                          size="xs"
+                          variant="ghost"
+                          colorPalette="red"
+                          aria-label="Dismiss"
+                          onClick={() => dismiss(n)}
+                        >
                           <FaTrash />
                         </IconButton>
                       </HStack>
