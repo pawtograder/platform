@@ -7,97 +7,36 @@ interface ClassMetrics {
   class_id: number;
   class_name: string;
   class_slug: string;
-
-  // Workflow metrics
+  late_tokens_per_student_limit: number;
+  metrics_updated_at: string | null;
+  assignments_total: number;
+  active_students_total: number;
+  active_instructors_total: number;
+  active_graders_total: number;
+  submissions_total: number;
+  submission_reviews_total: number;
+  submission_comments_total: number;
+  regrade_requests_total: number;
+  discussion_threads_total: number;
+  help_requests_total: number;
+  help_requests_open: number;
+  help_request_messages_total: number;
+  notifications_unread: number;
+  gradebook_columns_total: number;
+  late_token_usage_total: number;
+  video_meeting_sessions_total: number;
+  video_meeting_participants_total: number;
+  llm_inference_total: number;
+  llm_input_tokens_total: number;
+  llm_output_tokens_total: number;
+  hint_feedback_total: number;
+  hint_feedback_useful_total: number;
+  hint_feedback_with_comments: number;
   workflow_runs_total: number;
   workflow_runs_completed: number;
   workflow_runs_failed: number;
   workflow_runs_in_progress: number;
   workflow_errors_total: number;
-  workflow_runs_timeout: number;
-
-  // Workflow performance metrics
-  workflow_avg_queue_time_seconds: number;
-  workflow_avg_run_time_seconds: number;
-
-  // User engagement metrics
-  active_students_total: number;
-  active_instructors_total: number;
-  active_graders_total: number;
-  students_active_7d: number;
-  students_active_24h: number;
-
-  // Assignment metrics
-  assignments_total: number;
-  assignments_active: number;
-
-  // Submission metrics
-  submissions_total: number;
-  submissions_recent_24h: number;
-  submissions_graded: number;
-  submissions_pending_grading: number;
-
-  // Grading metrics
-  submission_reviews_total: number;
-  submission_reviews_recent_7d: number;
-  avg_grading_turnaround_hours: number;
-
-  // Comment metrics
-  submission_comments_total: number;
-
-  // Regrade request metrics
-  regrade_requests_total: number;
-  regrade_requests_recent_7d: number;
-
-  // Discussion metrics
-  discussion_threads_total: number;
-  discussion_posts_recent_7d: number;
-
-  // Help request metrics
-  help_requests_total: number;
-  help_requests_open: number;
-  help_requests_resolved_24h: number;
-  help_requests_avg_resolution_minutes: number;
-  help_request_messages_total: number;
-
-  // Notification metrics
-  notifications_unread: number;
-
-  // System complexity metrics
-  gradebook_columns_total: number;
-
-  // Late token usage metrics
-  late_token_usage_total: number;
-  late_tokens_per_student_limit: number;
-
-  // Video meeting metrics
-  video_meeting_sessions_total: number;
-  video_meeting_sessions_recent_7d: number;
-  video_meeting_participants_total: number;
-  video_meeting_participants_recent_7d: number;
-  video_meeting_avg_duration_minutes: number;
-  video_meeting_unique_users_7d: number;
-
-  // SIS sync error metrics
-  sis_sync_errors_recent: number;
-
-  // LLM inference usage metrics
-  llm_inference_total: number;
-  llm_inference_recent_7d: number;
-  llm_input_tokens_total: number;
-  llm_output_tokens_total: number;
-  llm_input_tokens_recent_7d: number;
-  llm_output_tokens_recent_7d: number;
-  llm_unique_accounts: number;
-  llm_unique_models: number;
-  llm_unique_providers: number;
-
-  // Hint feedback metrics
-  hint_feedback_total: number;
-  hint_feedback_useful_total: number;
-  hint_feedback_useful_percentage: number;
-  hint_feedback_recent_7d: number;
-  hint_feedback_with_comments: number;
 }
 
 async function generatePrometheusMetrics(): Promise<Response> {
@@ -170,97 +109,36 @@ async function generatePrometheusMetrics(): Promise<Response> {
       class_id: classData.class_id,
       class_name: classData.class_name,
       class_slug: classData.class_slug,
-
-      // Workflow metrics
+      late_tokens_per_student_limit: classData.late_tokens_per_student_limit || 0,
+      metrics_updated_at: classData.metrics_updated_at || null,
+      assignments_total: classData.assignments_total || 0,
+      active_students_total: classData.active_students_total || 0,
+      active_instructors_total: classData.active_instructors_total || 0,
+      active_graders_total: classData.active_graders_total || 0,
+      submissions_total: classData.submissions_total || 0,
+      submission_reviews_total: classData.submission_reviews_total || 0,
+      submission_comments_total: classData.submission_comments_total || 0,
+      regrade_requests_total: classData.regrade_requests_total || 0,
+      discussion_threads_total: classData.discussion_threads_total || 0,
+      help_requests_total: classData.help_requests_total || 0,
+      help_requests_open: classData.help_requests_open || 0,
+      help_request_messages_total: classData.help_request_messages_total || 0,
+      notifications_unread: classData.notifications_unread || 0,
+      gradebook_columns_total: classData.gradebook_columns_total || 0,
+      late_token_usage_total: classData.late_token_usage_total || 0,
+      video_meeting_sessions_total: classData.video_meeting_sessions_total || 0,
+      video_meeting_participants_total: classData.video_meeting_participants_total || 0,
+      llm_inference_total: classData.llm_inference_total || 0,
+      llm_input_tokens_total: classData.llm_input_tokens_total || 0,
+      llm_output_tokens_total: classData.llm_output_tokens_total || 0,
+      hint_feedback_total: classData.hint_feedback_total || 0,
+      hint_feedback_useful_total: classData.hint_feedback_useful_total || 0,
+      hint_feedback_with_comments: classData.hint_feedback_with_comments || 0,
       workflow_runs_total: classData.workflow_runs_total || 0,
       workflow_runs_completed: classData.workflow_runs_completed || 0,
       workflow_runs_failed: classData.workflow_runs_failed || 0,
       workflow_runs_in_progress: classData.workflow_runs_in_progress || 0,
-      workflow_errors_total: classData.workflow_errors_total || 0,
-      workflow_runs_timeout: classData.workflow_runs_timeout || 0,
-
-      // Workflow performance metrics
-      workflow_avg_queue_time_seconds: classData.workflow_avg_queue_time_seconds || 0,
-      workflow_avg_run_time_seconds: classData.workflow_avg_run_time_seconds || 0,
-
-      // User engagement metrics
-      active_students_total: classData.active_students_total || 0,
-      active_instructors_total: classData.active_instructors_total || 0,
-      active_graders_total: classData.active_graders_total || 0,
-      students_active_7d: classData.students_active_7d || 0,
-      students_active_24h: classData.students_active_24h || 0,
-
-      // Assignment metrics
-      assignments_total: classData.assignments_total || 0,
-      assignments_active: classData.assignments_active || 0,
-
-      // Submission metrics
-      submissions_total: classData.submissions_total || 0,
-      submissions_recent_24h: classData.submissions_recent_24h || 0,
-      submissions_graded: classData.submissions_graded || 0,
-      submissions_pending_grading: classData.submissions_pending_grading || 0,
-
-      // Grading metrics
-      submission_reviews_total: classData.submission_reviews_total || 0,
-      submission_reviews_recent_7d: classData.submission_reviews_recent_7d || 0,
-      avg_grading_turnaround_hours: classData.avg_grading_turnaround_hours || 0,
-
-      // Comment metrics
-      submission_comments_total: classData.submission_comments_total || 0,
-
-      // Regrade request metrics
-      regrade_requests_total: classData.regrade_requests_total || 0,
-      regrade_requests_recent_7d: classData.regrade_requests_recent_7d || 0,
-
-      // Discussion metrics
-      discussion_threads_total: classData.discussion_threads_total || 0,
-      discussion_posts_recent_7d: classData.discussion_posts_recent_7d || 0,
-
-      // Help request metrics
-      help_requests_total: classData.help_requests_total || 0,
-      help_requests_open: classData.help_requests_open || 0,
-      help_requests_resolved_24h: classData.help_requests_resolved_24h || 0,
-      help_requests_avg_resolution_minutes: classData.help_requests_avg_resolution_minutes || 0,
-      help_request_messages_total: classData.help_request_messages_total || 0,
-
-      // Notification metrics
-      notifications_unread: classData.notifications_unread || 0,
-
-      // System complexity metrics
-      gradebook_columns_total: classData.gradebook_columns_total || 0,
-
-      // Late token usage metrics
-      late_token_usage_total: classData.late_token_usage_total || 0,
-      late_tokens_per_student_limit: classData.late_tokens_per_student_limit || 0,
-
-      // Video meeting metrics
-      video_meeting_sessions_total: classData.video_meeting_sessions_total || 0,
-      video_meeting_sessions_recent_7d: classData.video_meeting_sessions_recent_7d || 0,
-      video_meeting_participants_total: classData.video_meeting_participants_total || 0,
-      video_meeting_participants_recent_7d: classData.video_meeting_participants_recent_7d || 0,
-      video_meeting_avg_duration_minutes: classData.video_meeting_avg_duration_minutes || 0,
-      video_meeting_unique_users_7d: classData.video_meeting_unique_users_7d || 0,
-
-      // SIS sync error metrics
-      sis_sync_errors_recent: classData.sis_sync_errors_recent || 0,
-
-      // LLM inference usage metrics
-      llm_inference_total: classData.llm_inference_total || 0,
-      llm_inference_recent_7d: classData.llm_inference_recent_7d || 0,
-      llm_input_tokens_total: classData.llm_input_tokens_total || 0,
-      llm_output_tokens_total: classData.llm_output_tokens_total || 0,
-      llm_input_tokens_recent_7d: classData.llm_input_tokens_recent_7d || 0,
-      llm_output_tokens_recent_7d: classData.llm_output_tokens_recent_7d || 0,
-      llm_unique_accounts: classData.llm_unique_accounts || 0,
-      llm_unique_models: classData.llm_unique_models || 0,
-      llm_unique_providers: classData.llm_unique_providers || 0,
-
-      // Hint feedback metrics
-      hint_feedback_total: classData.hint_feedback_total || 0,
-      hint_feedback_useful_total: classData.hint_feedback_useful_total || 0,
-      hint_feedback_useful_percentage: classData.hint_feedback_useful_percentage || 0,
-      hint_feedback_recent_7d: classData.hint_feedback_recent_7d || 0,
-      hint_feedback_with_comments: classData.hint_feedback_with_comments || 0
+      workflow_errors_total: classData.workflow_errors_total || 0
     }));
 
     // Generate comprehensive Prometheus metrics format
@@ -315,7 +193,169 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
     output += "\n";
   };
 
-  // === WORKFLOW METRICS ===
+  // === USER COUNTS ===
+  generateMetric(
+    "pawtograder_active_students_total",
+    "Total number of enrolled students per class",
+    "gauge",
+    "active_students_total"
+  );
+  generateMetric(
+    "pawtograder_active_instructors_total",
+    "Total number of instructors per class",
+    "gauge",
+    "active_instructors_total"
+  );
+  generateMetric(
+    "pawtograder_active_graders_total",
+    "Total number of graders per class",
+    "gauge",
+    "active_graders_total"
+  );
+
+  // === ASSIGNMENT METRICS ===
+  generateMetric(
+    "pawtograder_assignments_total",
+    "Total number of assignments per class",
+    "gauge",
+    "assignments_total"
+  );
+
+  // === SUBMISSION + REVIEW METRICS ===
+  generateMetric(
+    "pawtograder_submissions_total",
+    "Total number of active submissions per class",
+    "counter",
+    "submissions_total"
+  );
+  generateMetric(
+    "pawtograder_submission_reviews_total",
+    "Total number of completed submission reviews per class",
+    "counter",
+    "submission_reviews_total"
+  );
+  generateMetric(
+    "pawtograder_submission_comments_total",
+    "Total number of submission comments (all types) per class",
+    "counter",
+    "submission_comments_total"
+  );
+
+  // === REGRADE REQUEST METRICS ===
+  generateMetric(
+    "pawtograder_regrade_requests_total",
+    "Total number of regrade requests per class",
+    "counter",
+    "regrade_requests_total"
+  );
+
+  // === DISCUSSION METRICS ===
+  generateMetric(
+    "pawtograder_discussion_threads_total",
+    "Total number of discussion threads per class",
+    "counter",
+    "discussion_threads_total"
+  );
+
+  // === HELP REQUEST METRICS ===
+  generateMetric(
+    "pawtograder_help_requests_total",
+    "Total number of help requests per class",
+    "counter",
+    "help_requests_total"
+  );
+  generateMetric(
+    "pawtograder_help_requests_open",
+    "Number of currently open help requests per class",
+    "gauge",
+    "help_requests_open"
+  );
+  generateMetric(
+    "pawtograder_help_request_messages_total",
+    "Total number of help request messages per class",
+    "counter",
+    "help_request_messages_total"
+  );
+
+  // === NOTIFICATION METRICS ===
+  generateMetric(
+    "pawtograder_notifications_unread",
+    "Number of unread notifications per class",
+    "gauge",
+    "notifications_unread"
+  );
+
+  // === SYSTEM COMPLEXITY METRICS ===
+  generateMetric(
+    "pawtograder_gradebook_columns_total",
+    "Total number of gradebook columns per class (complexity indicator)",
+    "gauge",
+    "gradebook_columns_total"
+  );
+
+  // === LATE TOKEN USAGE ===
+  generateMetric(
+    "pawtograder_late_token_usage_total",
+    "Total number of late tokens used per class",
+    "counter",
+    "late_token_usage_total"
+  );
+
+  // === VIDEO MEETINGS ===
+  generateMetric(
+    "pawtograder_video_meeting_sessions_total",
+    "Total number of video meeting sessions per class",
+    "counter",
+    "video_meeting_sessions_total"
+  );
+  generateMetric(
+    "pawtograder_video_meeting_participants_total",
+    "Total number of video meeting participants per class",
+    "counter",
+    "video_meeting_participants_total"
+  );
+
+  // === LLM USAGE ===
+  generateMetric(
+    "pawtograder_llm_inference_total",
+    "Total number of LLM inference requests per class",
+    "counter",
+    "llm_inference_total"
+  );
+  generateMetric(
+    "pawtograder_llm_input_tokens_total",
+    "Total number of input tokens consumed per class",
+    "counter",
+    "llm_input_tokens_total"
+  );
+  generateMetric(
+    "pawtograder_llm_output_tokens_total",
+    "Total number of output tokens generated per class",
+    "counter",
+    "llm_output_tokens_total"
+  );
+
+  // === HINT FEEDBACK ===
+  generateMetric(
+    "pawtograder_hint_feedback_total",
+    "Total number of hint feedback responses per class",
+    "counter",
+    "hint_feedback_total"
+  );
+  generateMetric(
+    "pawtograder_hint_feedback_useful_total",
+    "Number of hint feedback responses marked as useful per class",
+    "counter",
+    "hint_feedback_useful_total"
+  );
+  generateMetric(
+    "pawtograder_hint_feedback_with_comments",
+    "Number of hint feedback responses with written comments per class",
+    "counter",
+    "hint_feedback_with_comments"
+  );
+
+  // === WORKFLOW COUNTERS ===
   generateMetric(
     "pawtograder_workflow_runs_total",
     "Total number of workflow runs per class",
@@ -345,350 +385,6 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
     "Total number of workflow errors per class",
     "counter",
     "workflow_errors_total"
-  );
-  generateMetric(
-    "pawtograder_workflow_runs_timeout",
-    "Total number of workflow runs that timed out per class",
-    "counter",
-    "workflow_runs_timeout"
-  );
-
-  // === WORKFLOW PERFORMANCE METRICS ===
-  generateMetric(
-    "pawtograder_workflow_avg_queue_time_seconds",
-    "Average time workflows wait in queue before starting (seconds)",
-    "gauge",
-    "workflow_avg_queue_time_seconds"
-  );
-  generateMetric(
-    "pawtograder_workflow_avg_run_time_seconds",
-    "Average workflow execution time (seconds)",
-    "gauge",
-    "workflow_avg_run_time_seconds"
-  );
-
-  // === USER ENGAGEMENT METRICS ===
-  generateMetric(
-    "pawtograder_active_students_total",
-    "Total number of enrolled students per class",
-    "gauge",
-    "active_students_total"
-  );
-  generateMetric(
-    "pawtograder_active_instructors_total",
-    "Total number of instructors per class",
-    "gauge",
-    "active_instructors_total"
-  );
-  generateMetric(
-    "pawtograder_active_graders_total",
-    "Total number of graders per class",
-    "gauge",
-    "active_graders_total"
-  );
-  generateMetric(
-    "pawtograder_students_active_7d",
-    "Number of students active in the last 7 days per class",
-    "gauge",
-    "students_active_7d"
-  );
-  generateMetric(
-    "pawtograder_students_active_24h",
-    "Number of students active in the last 24 hours per class",
-    "gauge",
-    "students_active_24h"
-  );
-
-  // === ASSIGNMENT METRICS ===
-  generateMetric(
-    "pawtograder_assignments_total",
-    "Total number of assignments per class",
-    "gauge",
-    "assignments_total"
-  );
-  generateMetric(
-    "pawtograder_assignments_active",
-    "Number of currently active assignments per class",
-    "gauge",
-    "assignments_active"
-  );
-
-  // === SUBMISSION METRICS ===
-  generateMetric(
-    "pawtograder_submissions_total",
-    "Total number of active submissions per class",
-    "counter",
-    "submissions_total"
-  );
-  generateMetric(
-    "pawtograder_submissions_recent_24h",
-    "Number of submissions created in the last 24 hours per class",
-    "gauge",
-    "submissions_recent_24h"
-  );
-  generateMetric(
-    "pawtograder_submissions_graded",
-    "Number of submissions that have been graded per class",
-    "gauge",
-    "submissions_graded"
-  );
-  generateMetric(
-    "pawtograder_submissions_pending_grading",
-    "Number of submissions pending grading per class",
-    "gauge",
-    "submissions_pending_grading"
-  );
-
-  // === GRADING METRICS ===
-  generateMetric(
-    "pawtograder_submission_reviews_total",
-    "Total number of completed submission reviews per class",
-    "counter",
-    "submission_reviews_total"
-  );
-  generateMetric(
-    "pawtograder_submission_reviews_recent_7d",
-    "Number of submission reviews completed in the last 7 days per class",
-    "gauge",
-    "submission_reviews_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_avg_grading_turnaround_hours",
-    "Average time from submission to grading completion (hours)",
-    "gauge",
-    "avg_grading_turnaround_hours"
-  );
-
-  // === COMMENT METRICS ===
-  generateMetric(
-    "pawtograder_submission_comments_total",
-    "Total number of submission comments (all types) per class",
-    "counter",
-    "submission_comments_total"
-  );
-
-  // === REGRADE REQUEST METRICS ===
-  generateMetric(
-    "pawtograder_regrade_requests_total",
-    "Total number of regrade requests per class",
-    "counter",
-    "regrade_requests_total"
-  );
-  generateMetric(
-    "pawtograder_regrade_requests_recent_7d",
-    "Number of regrade requests in the last 7 days per class",
-    "gauge",
-    "regrade_requests_recent_7d"
-  );
-
-  // === DISCUSSION METRICS ===
-  generateMetric(
-    "pawtograder_discussion_threads_total",
-    "Total number of discussion threads per class",
-    "counter",
-    "discussion_threads_total"
-  );
-  generateMetric(
-    "pawtograder_discussion_posts_recent_7d",
-    "Number of discussion posts in the last 7 days per class",
-    "gauge",
-    "discussion_posts_recent_7d"
-  );
-
-  // === HELP REQUEST METRICS ===
-  generateMetric(
-    "pawtograder_help_requests_total",
-    "Total number of help requests per class",
-    "counter",
-    "help_requests_total"
-  );
-  generateMetric(
-    "pawtograder_help_requests_open",
-    "Number of currently open help requests per class",
-    "gauge",
-    "help_requests_open"
-  );
-  generateMetric(
-    "pawtograder_help_requests_resolved_24h",
-    "Number of help requests resolved in the last 24 hours per class",
-    "gauge",
-    "help_requests_resolved_24h"
-  );
-  generateMetric(
-    "pawtograder_help_requests_avg_resolution_minutes",
-    "Average help request resolution time (minutes)",
-    "gauge",
-    "help_requests_avg_resolution_minutes"
-  );
-  generateMetric(
-    "pawtograder_help_request_messages_total",
-    "Total number of help request messages per class",
-    "counter",
-    "help_request_messages_total"
-  );
-
-  // === NOTIFICATION METRICS ===
-  generateMetric(
-    "pawtograder_notifications_unread",
-    "Number of unread notifications per class",
-    "gauge",
-    "notifications_unread"
-  );
-
-  // === SYSTEM COMPLEXITY METRICS ===
-  generateMetric(
-    "pawtograder_gradebook_columns_total",
-    "Total number of gradebook columns per class (complexity indicator)",
-    "gauge",
-    "gradebook_columns_total"
-  );
-
-  // === LATE TOKEN USAGE METRICS ===
-  generateMetric(
-    "pawtograder_late_token_usage_total",
-    "Total number of late tokens used per class",
-    "counter",
-    "late_token_usage_total"
-  );
-  generateMetric(
-    "pawtograder_late_tokens_per_student_limit",
-    "Late token limit per student per class",
-    "gauge",
-    "late_tokens_per_student_limit"
-  );
-
-  // === VIDEO MEETING METRICS ===
-  generateMetric(
-    "pawtograder_video_meeting_sessions_total",
-    "Total number of video meeting sessions per class",
-    "counter",
-    "video_meeting_sessions_total"
-  );
-  generateMetric(
-    "pawtograder_video_meeting_sessions_recent_7d",
-    "Number of video meeting sessions in the last 7 days per class",
-    "gauge",
-    "video_meeting_sessions_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_video_meeting_participants_total",
-    "Total number of video meeting participants per class",
-    "counter",
-    "video_meeting_participants_total"
-  );
-  generateMetric(
-    "pawtograder_video_meeting_participants_recent_7d",
-    "Number of video meeting participants in the last 7 days per class",
-    "gauge",
-    "video_meeting_participants_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_video_meeting_avg_duration_minutes",
-    "Average video meeting duration in minutes per class",
-    "gauge",
-    "video_meeting_avg_duration_minutes"
-  );
-  generateMetric(
-    "pawtograder_video_meeting_unique_users_7d",
-    "Number of unique users in video meetings in the last 7 days per class",
-    "gauge",
-    "video_meeting_unique_users_7d"
-  );
-
-  // === SIS SYNC ERROR METRICS ===
-  generateMetric(
-    "pawtograder_sis_sync_errors_recent",
-    "Number of recent SIS sync errors per class (enabled syncs with error status)",
-    "gauge",
-    "sis_sync_errors_recent"
-  );
-
-  // === LLM INFERENCE USAGE METRICS ===
-  generateMetric(
-    "pawtograder_llm_inference_total",
-    "Total number of LLM inference requests per class",
-    "counter",
-    "llm_inference_total"
-  );
-  generateMetric(
-    "pawtograder_llm_inference_recent_7d",
-    "Number of LLM inference requests in the last 7 days per class",
-    "gauge",
-    "llm_inference_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_llm_input_tokens_total",
-    "Total number of input tokens consumed per class",
-    "counter",
-    "llm_input_tokens_total"
-  );
-  generateMetric(
-    "pawtograder_llm_output_tokens_total",
-    "Total number of output tokens generated per class",
-    "counter",
-    "llm_output_tokens_total"
-  );
-  generateMetric(
-    "pawtograder_llm_input_tokens_recent_7d",
-    "Number of input tokens consumed in the last 7 days per class",
-    "gauge",
-    "llm_input_tokens_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_llm_output_tokens_recent_7d",
-    "Number of output tokens generated in the last 7 days per class",
-    "gauge",
-    "llm_output_tokens_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_llm_unique_accounts",
-    "Number of unique LLM accounts used per class",
-    "gauge",
-    "llm_unique_accounts"
-  );
-  generateMetric(
-    "pawtograder_llm_unique_models",
-    "Number of unique LLM models used per class",
-    "gauge",
-    "llm_unique_models"
-  );
-  generateMetric(
-    "pawtograder_llm_unique_providers",
-    "Number of unique LLM providers used per class",
-    "gauge",
-    "llm_unique_providers"
-  );
-
-  // === HINT FEEDBACK METRICS ===
-  generateMetric(
-    "pawtograder_hint_feedback_total",
-    "Total number of hint feedback responses per class",
-    "counter",
-    "hint_feedback_total"
-  );
-  generateMetric(
-    "pawtograder_hint_feedback_useful_total",
-    "Number of hint feedback responses marked as useful per class",
-    "counter",
-    "hint_feedback_useful_total"
-  );
-  generateMetric(
-    "pawtograder_hint_feedback_useful_percentage",
-    "Percentage of hint feedback marked as useful per class",
-    "gauge",
-    "hint_feedback_useful_percentage"
-  );
-  generateMetric(
-    "pawtograder_hint_feedback_recent_7d",
-    "Number of hint feedback responses in the last 7 days per class",
-    "gauge",
-    "hint_feedback_recent_7d"
-  );
-  generateMetric(
-    "pawtograder_hint_feedback_with_comments",
-    "Number of hint feedback responses with written comments per class",
-    "counter",
-    "hint_feedback_with_comments"
   );
 
   // === ASSIGNMENT-LEVEL METRICS ===
@@ -883,6 +579,7 @@ Deno.serve(async (req) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
+  return new Response("Not available right now", { status: 503 });
   // Single endpoint with all metrics
-  return await generatePrometheusMetrics();
+  // return await generatePrometheusMetrics();
 });
