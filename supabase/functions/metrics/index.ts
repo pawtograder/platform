@@ -579,7 +579,6 @@ Deno.serve(async (req) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  return new Response("Not available right now", { status: 503 });
   // Single endpoint with all metrics
-  // return await generatePrometheusMetrics();
+  return await generatePrometheusMetrics();
 });

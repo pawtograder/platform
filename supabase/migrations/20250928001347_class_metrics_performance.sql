@@ -417,113 +417,98 @@ CREATE TRIGGER class_metrics_classes_insert_trg
 AFTER INSERT ON public.classes
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_classes_insert();
 
-DROP TRIGGER IF EXISTS class_metrics_assignments_trg ON public.assignments;
 CREATE TRIGGER class_metrics_assignments_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.assignments
+AFTER INSERT ON public.assignments
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_assignments_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_submissions_trg ON public.submissions;
 CREATE TRIGGER class_metrics_submissions_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submissions
+AFTER INSERT ON public.submissions
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_submissions_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_submission_reviews_trg ON public.submission_reviews;
 CREATE TRIGGER class_metrics_submission_reviews_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submission_reviews
+AFTER INSERT ON public.submission_reviews
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_submission_reviews_counter();
-
-CREATE OR REPLACE FUNCTION public.class_metrics_submission_comments_counter()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  UPDATE public.class_metrics_totals
-  SET submission_comments_total = submission_comments_total + 1,
-      updated_at = now()
-  WHERE class_id = NEW.class_id;
-
-  RETURN NEW;
-END;
-$$;
 
 DROP TRIGGER IF EXISTS class_metrics_submission_comments_trg ON public.submission_comments;
 CREATE TRIGGER class_metrics_submission_comments_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submission_comments
+AFTER INSERT ON public.submission_comments
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_submission_comments_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_submission_artifact_comments_trg ON public.submission_artifact_comments;
 CREATE TRIGGER class_metrics_submission_artifact_comments_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submission_artifact_comments
+AFTER INSERT ON public.submission_artifact_comments
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_submission_comments_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_submission_file_comments_trg ON public.submission_file_comments;
 CREATE TRIGGER class_metrics_submission_file_comments_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submission_file_comments
+AFTER INSERT ON public.submission_file_comments
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_submission_comments_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_submission_regrade_request_comments_trg ON public.submission_regrade_request_comments;
 CREATE TRIGGER class_metrics_submission_regrade_request_comments_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submission_regrade_request_comments
+AFTER INSERT ON public.submission_regrade_request_comments
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_submission_comments_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_regrade_requests_trg ON public.submission_regrade_requests;
 CREATE TRIGGER class_metrics_regrade_requests_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.submission_regrade_requests
+AFTER INSERT ON public.submission_regrade_requests
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_regrade_requests_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_discussion_threads_trg ON public.discussion_threads;
 CREATE TRIGGER class_metrics_discussion_threads_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.discussion_threads
+AFTER INSERT ON public.discussion_threads
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_discussion_threads_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_help_requests_trg ON public.help_requests;
 CREATE TRIGGER class_metrics_help_requests_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.help_requests
+AFTER INSERT ON public.help_requests
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_help_requests_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_help_request_messages_trg ON public.help_request_messages;
 CREATE TRIGGER class_metrics_help_request_messages_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.help_request_messages
+AFTER INSERT ON public.help_request_messages
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_help_request_messages_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_notifications_trg ON public.notifications;
 CREATE TRIGGER class_metrics_notifications_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.notifications
+AFTER INSERT ON public.notifications
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_notifications_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_gradebook_columns_trg ON public.gradebook_columns;
 CREATE TRIGGER class_metrics_gradebook_columns_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.gradebook_columns
+AFTER INSERT ON public.gradebook_columns
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_gradebook_columns_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_assignment_due_date_exceptions_trg ON public.assignment_due_date_exceptions;
 CREATE TRIGGER class_metrics_assignment_due_date_exceptions_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.assignment_due_date_exceptions
+AFTER INSERT ON public.assignment_due_date_exceptions
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_assignment_due_date_exceptions_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_video_meeting_sessions_trg ON public.video_meeting_sessions;
 CREATE TRIGGER class_metrics_video_meeting_sessions_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.video_meeting_sessions
+AFTER INSERT ON public.video_meeting_sessions
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_video_meeting_sessions_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_video_meeting_session_users_trg ON public.video_meeting_session_users;
 CREATE TRIGGER class_metrics_video_meeting_session_users_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.video_meeting_session_users
+AFTER INSERT ON public.video_meeting_session_users
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_video_meeting_participants_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_llm_inference_trg ON public.llm_inference_usage;
 CREATE TRIGGER class_metrics_llm_inference_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.llm_inference_usage
+AFTER INSERT ON public.llm_inference_usage
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_llm_inference_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_hint_feedback_trg ON public.grader_result_tests_hint_feedback;
 CREATE TRIGGER class_metrics_hint_feedback_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.grader_result_tests_hint_feedback
+AFTER INSERT ON public.grader_result_tests_hint_feedback
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_hint_feedback_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_user_roles_trg ON public.user_roles;
 CREATE TRIGGER class_metrics_user_roles_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.user_roles
+AFTER INSERT ON public.user_roles
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_user_roles_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_workflow_events_trg ON public.workflow_events_summary;
