@@ -55,14 +55,19 @@ export function OverrideScoreForm({
   }, [isAutoCalculated, setFocus]);
 
   const onSubmit = async (values: Partial<GradebookColumnStudent>) => {
+    // Normalize NaN values to null
+    const normalizedScore = values.score !== undefined && Number.isNaN(values.score) ? null : values.score;
+    const normalizedOverride = values.score_override !== undefined && Number.isNaN(values.score_override) ? null : values.score_override;
+    
     const forceMissingOff =
-      (values.score !== undefined || values.score_override !== undefined) &&
+      (normalizedScore !== undefined || normalizedOverride !== undefined) &&
       !studentGradebookColumn.score &&
       !studentGradebookColumn.score_override &&
       studentGradebookColumn.is_missing;
     await gradebookController.updateGradebookColumnStudent(studentGradebookColumn.id, {
       ...values,
-      score: values.is_missing && !forceMissingOff ? null : values.score,
+      score: values.is_missing && !forceMissingOff ? null : normalizedScore,
+      score_override: normalizedOverride,
       is_missing: forceMissingOff ? false : values.is_missing
     });
     if (onSuccess) onSuccess();

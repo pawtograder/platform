@@ -128,10 +128,11 @@ PARALLEL SAFE
 SECURITY DEFINER
 SET search_path TO ''
 AS $$
-  WITH auth AS (
-    SELECT public.authorizeforclassgrader(get_gradebook_records_for_all_students_stream.class_id) AS ok
-  ),
-  ids AS (
+  IF NOT public.authorizeforclassgrader(get_gradebook_records_for_all_students_stream.class_id) THEN
+    RETURN;
+ END IF;
+
+  WITH ids AS (
     SELECT DISTINCT gcs.student_id
     FROM public.gradebook_column_students gcs
     WHERE gcs.class_id = get_gradebook_records_for_all_students_stream.class_id
@@ -162,8 +163,6 @@ AS $$
     ON gcs.class_id = get_gradebook_records_for_all_students_stream.class_id
    AND gcs.student_id = ids.student_id
   JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
-  CROSS JOIN auth
-  WHERE auth.ok
   GROUP BY ids.student_id
   ORDER BY ids.student_id;
 $$;
@@ -180,10 +179,11 @@ PARALLEL SAFE
 SECURITY DEFINER  
 SET search_path TO ''
 AS $$
-  WITH auth AS (
-    SELECT public.authorizeforclassgrader(get_gradebook_records_for_all_students_array_stream.class_id) AS ok
-  ),
-  ids AS (
+  IF NOT public.authorizeforclassgrader(get_gradebook_records_for_all_students_array_stream.class_id) THEN
+    RETURN;
+ END IF;
+
+  WITH ids AS (
     SELECT DISTINCT gcs.student_id
     FROM public.gradebook_column_students gcs
     WHERE gcs.class_id = get_gradebook_records_for_all_students_array_stream.class_id
@@ -214,8 +214,6 @@ AS $$
     ON gcs.class_id = get_gradebook_records_for_all_students_array_stream.class_id
    AND gcs.student_id = ids.student_id
   JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
-  CROSS JOIN auth
-  WHERE auth.ok
   GROUP BY ids.student_id
   ORDER BY ids.student_id;
 $$;
