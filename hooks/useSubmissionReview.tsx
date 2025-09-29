@@ -314,18 +314,32 @@ export function useMissingRubricChecksForActiveReview() {
   }, [rubric, activeSubmissionReview]);
 
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
-    if (!activeSubmissionReview || !rubricChecks.length) {
+    if (!activeSubmissionReview || !rubricChecks.length || !rubric) {
       return { missing_required_checks: [], missing_optional_checks: [] };
     }
+    const allCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
+    const criteriaEvaluation = allCriteria.map((criteria) => ({
+      criteria,
+      check_count_applied: criteria.rubric_checks.filter((check) =>
+        comments.some((comment) => comment.rubric_check_id === check.id)
+      ).length
+    }));
+
+    const saturatedCriteria = criteriaEvaluation.filter(
+      (item) => item.criteria.max_checks_per_submission === item.check_count_applied
+    );
     return {
       missing_required_checks: rubricChecks.filter(
         (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
       ),
       missing_optional_checks: rubricChecks.filter(
-        (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
+        (check) =>
+          !check.is_required &&
+          !comments.some((comment) => comment.rubric_check_id === check.id) &&
+          !saturatedCriteria.some((item) => item.criteria.id === check.rubric_criteria_id)
       )
     };
-  }, [rubricChecks, comments, activeSubmissionReview]);
+  }, [rubricChecks, comments, activeSubmissionReview, rubric]);
 
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
     if (!activeSubmissionReview || !rubric) {
