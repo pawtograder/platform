@@ -189,26 +189,25 @@ AS $$
 $$;
 
 -- Safe wrapper for broadcasting that avoids sending to empty channels
-CREATE OR REPLACE FUNCTION public.safe_broadcast(p_payload jsonb, p_channel text)
+CREATE OR REPLACE FUNCTION public.safe_broadcast(p_payload jsonb, p_event text, p_channel text, p_private boolean)
 RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
   IF public.channel_has_subscribers(p_channel) THEN
-    PERFORM realtime.send(p_payload, 'broadcast', p_channel, true);
+    PERFORM realtime.send(p_payload, p_event, p_channel, p_private);
   END IF;
 END;
 $$;
 
 -- Update selected broadcast functions to use safe_broadcast
 -- 1) Course-level unified broadcaster
-CREATE OR REPLACE FUNCTION public.broadcast_course_table_change_unified()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = ''
-AS $$
+CREATE OR REPLACE FUNCTION "public"."broadcast_course_table_change_unified"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
 DECLARE
     class_id_value bigint;
     row_id text;
@@ -220,6 +219,7 @@ DECLARE
     creator_profile_id uuid;
     is_visible boolean;
 BEGIN
+    -- Get the class_id and row_id from the record
     IF TG_OP = 'INSERT' THEN
         class_id_value := NEW.class_id;
         row_id := NEW.id;
@@ -231,21 +231,36 @@ BEGIN
         row_id := OLD.id;
     END IF;
 
+    -- Only broadcast if we have valid class_id
     IF class_id_value IS NOT NULL THEN
+        -- Create payload with table-specific information (staff scoped)
         staff_payload := jsonb_build_object(
             'type', 'staff_data_change',
             'operation', TG_OP,
             'table', TG_TABLE_NAME,
             'row_id', row_id,
             'class_id', class_id_value,
-            'data', CASE WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
             'timestamp', NOW()
         );
+
+        -- For student-facing notifications, start with the same payload (can be minimized later)
         student_payload := staff_payload;
 
-        PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id_value || ':staff');
+        -- Broadcast to staff channel
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'class:' || class_id_value || ':staff',
+            true
+        );
 
+        -- Student-facing broadcasts by table, mirroring office-hours pattern where safe
         IF TG_TABLE_NAME IN ('lab_sections', 'lab_section_meetings', 'profiles') THEN
+            -- Broadcast to all students in the class
             SELECT ARRAY(
                 SELECT ur.private_profile_id
                 FROM public.user_roles ur
@@ -253,9 +268,15 @@ BEGIN
             ) INTO affected_profile_ids;
 
             FOREACH profile_id IN ARRAY affected_profile_ids LOOP
-                PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id_value || ':user:' || profile_id);
+                PERFORM public.safe_broadcast(
+                    staff_payload,
+                    'broadcast',
+                    'class:' || class_id_value || ':user:' || profile_id,
+                    true
+                );
             END LOOP;
         ELSIF TG_TABLE_NAME = 'tags' THEN
+            -- Tags visible to class → broadcast to all students; non-visible → only to creator
             IF TG_OP = 'DELETE' THEN
                 is_visible := COALESCE(OLD.visible, false);
                 creator_user_id := OLD.creator_id;
@@ -264,15 +285,22 @@ BEGIN
                 creator_user_id := NEW.creator_id;
             END IF;
 
+            -- Notify creator for any change (even when not visible)
             SELECT ur.private_profile_id INTO creator_profile_id
             FROM public.user_roles ur
             WHERE ur.user_id = creator_user_id AND ur.class_id = class_id_value
             LIMIT 1;
 
             IF creator_profile_id IS NOT NULL THEN
-                PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id_value || ':user:' || creator_profile_id);
+                PERFORM public.safe_broadcast(
+                    staff_payload,
+                    'broadcast',
+                    'class:' || class_id_value || ':user:' || creator_profile_id,
+                    true
+                );
             END IF;
 
+            -- If visible, also broadcast to all students in the class
             IF is_visible THEN
                 SELECT ARRAY(
                     SELECT ur.private_profile_id
@@ -281,310 +309,1307 @@ BEGIN
                 ) INTO affected_profile_ids;
 
                 FOREACH profile_id IN ARRAY affected_profile_ids LOOP
-                    PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id_value || ':user:' || profile_id);
+                    PERFORM public.safe_broadcast(
+                        staff_payload,
+                        'broadcast',
+                        'class:' || class_id_value || ':user:' || profile_id,
+                        true
+                    );
                 END LOOP;
             END IF;
         ELSIF TG_TABLE_NAME = 'user_roles' THEN
-            NULL;
+            -- OPTIMIZATION: user_roles changes now ONLY go to staff
+            -- Removed individual user notification - staff visibility is sufficient
+            -- This eliminates unnecessary broadcasts when users join/leave classes
+            NULL; -- No additional broadcasts beyond staff channel
         ELSIF TG_TABLE_NAME IN ('assignment_due_date_exceptions', 'student_deadline_extensions') THEN
+            -- These tables affect specific students or groups
+            -- Staff always see all changes (already handled above)
+
+            -- For assignment_due_date_exceptions: notify affected students/groups
             IF TG_TABLE_NAME = 'assignment_due_date_exceptions' THEN
                 IF TG_OP = 'DELETE' THEN
+                    -- Notify the affected student if individual exception
                     IF OLD.student_id IS NOT NULL THEN
-                        PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id_value || ':user:' || OLD.student_id);
+                        PERFORM public.safe_broadcast(
+                            staff_payload,
+                            'broadcast',
+                            'class:' || class_id_value || ':user:' || OLD.student_id,
+                            true
+                        );
+                    END IF;
+                    -- For group exceptions, notify all group members
+                    IF OLD.assignment_group_id IS NOT NULL THEN
+                        SELECT ARRAY(
+                            SELECT agm.profile_id
+                            FROM public.assignment_groups_members agm
+                            WHERE agm.assignment_group_id = OLD.assignment_group_id
+                        ) INTO affected_profile_ids;
+
+                        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+                            PERFORM public.safe_broadcast(
+                                staff_payload,
+                                'broadcast',
+                                'class:' || class_id_value || ':user:' || profile_id,
+                                true
+                            );
+                        END LOOP;
                     END IF;
                 ELSE
+                    -- For INSERT/UPDATE operations
                     IF NEW.student_id IS NOT NULL THEN
-                        PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id_value || ':user:' || NEW.student_id);
+                        PERFORM public.safe_broadcast(
+                            staff_payload,
+                            'broadcast',
+                            'class:' || class_id_value || ':user:' || NEW.student_id,
+                            true
+                        );
                     END IF;
+                    IF NEW.assignment_group_id IS NOT NULL THEN
+                        SELECT ARRAY(
+                            SELECT agm.profile_id
+                            FROM public.assignment_groups_members agm
+                            WHERE agm.assignment_group_id = NEW.assignment_group_id
+                        ) INTO affected_profile_ids;
+
+                        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+                            PERFORM public.safe_broadcast(
+                                staff_payload,
+                                'broadcast',
+                                'class:' || class_id_value || ':user:' || profile_id,
+                                true
+                            );
+                        END LOOP;
+                    END IF;
+                END IF;
+            ELSIF TG_TABLE_NAME = 'student_deadline_extensions' THEN
+                -- Notify the specific student about their extension
+                IF TG_OP = 'DELETE' THEN
+                    PERFORM public.safe_broadcast(
+                        staff_payload,
+                        'broadcast',
+                        'class:' || class_id_value || ':user:' || OLD.student_id,
+                        true
+                    );
+                ELSE
+                    PERFORM public.safe_broadcast(
+                        staff_payload,
+                        'broadcast',
+                        'class:' || class_id_value || ':user:' || NEW.student_id,
+                        true
+                    );
                 END IF;
             END IF;
         END IF;
     END IF;
-    RETURN NULL;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
 END;
 $$;
 
 -- 2) Help request broadcast (wrap sends)
 CREATE OR REPLACE FUNCTION public.broadcast_help_request_data_change()
 RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = ''
+LANGUAGE plpgsql
+SECURITY DEFINER
 AS $$
 DECLARE
-  class_id bigint;
-  queue_channel text;
-  main_channel text;
-  queue_payload jsonb;
-  main_payload jsonb;
+    help_request_id BIGINT;
+    class_id BIGINT;
+    row_id BIGINT;
+    is_private BOOLEAN;
+    main_payload JSONB;
 BEGIN
-  -- existing logic is preserved; only sends are wrapped
-  -- Reconstruct minimal channels/payloads as in original function
-  IF TG_OP = 'DELETE' THEN
-    class_id := OLD.class_id;
-  ELSE
-    class_id := NEW.class_id;
+    -- Get the help_request_id and class_id based on the table
+    IF TG_TABLE_NAME = 'help_requests' THEN
+        IF TG_OP = 'INSERT' THEN
+            help_request_id := NEW.id;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+            is_private := NEW.is_private;
+        ELSIF TG_OP = 'UPDATE' THEN
+            help_request_id := NEW.id;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+            is_private := NEW.is_private;
+        ELSIF TG_OP = 'DELETE' THEN
+            help_request_id := OLD.id;
+            class_id := OLD.class_id;
+            row_id := OLD.id;
+            is_private := OLD.is_private;
+        END IF;
+    ELSE
+        -- For related tables, derive help_request_id and class_id
+        IF TG_TABLE_NAME = 'help_request_message_read_receipts' THEN
+            IF TG_OP = 'INSERT' THEN
+                help_request_id := COALESCE(NEW.help_request_id, (
+                    SELECT hrm.help_request_id FROM public.help_request_messages hrm WHERE hrm.id = NEW.message_id
+                ));
+                row_id := NEW.id;
+            ELSIF TG_OP = 'UPDATE' THEN
+                help_request_id := COALESCE(NEW.help_request_id, (
+                    SELECT hrm.help_request_id FROM public.help_request_messages hrm WHERE hrm.id = NEW.message_id
+                ));
+                row_id := NEW.id;
+            ELSIF TG_OP = 'DELETE' THEN
+                help_request_id := COALESCE(OLD.help_request_id, (
+                    SELECT hrm.help_request_id FROM public.help_request_messages hrm WHERE hrm.id = OLD.message_id
+                ));
+                row_id := OLD.id;
+            END IF;
+        ELSE
+            IF TG_OP = 'INSERT' THEN
+                help_request_id := NEW.help_request_id;
+                class_id := NEW.class_id;
+                row_id := NEW.id;
+            ELSIF TG_OP = 'UPDATE' THEN
+                help_request_id := COALESCE(NEW.help_request_id, OLD.help_request_id);
+                class_id := COALESCE(NEW.class_id, OLD.class_id);
+                row_id := NEW.id;
+            ELSIF TG_OP = 'DELETE' THEN
+                help_request_id := OLD.help_request_id;
+                class_id := OLD.class_id;
+                row_id := OLD.id;
+            END IF;
+        END IF;
+    END IF;
+
+    -- Lookup class_id and is_private when missing (for related tables)
+    IF (class_id IS NULL OR is_private IS NULL) AND help_request_id IS NOT NULL THEN
+        SELECT hr.class_id, hr.is_private INTO class_id, is_private
+        FROM public.help_requests hr
+        WHERE hr.id = help_request_id;
+    END IF;
+
+    -- Only broadcast if we have valid help_request_id and class_id
+    IF help_request_id IS NOT NULL AND class_id IS NOT NULL THEN
+        -- Create payload with help request specific information
+        main_payload := jsonb_build_object(
+            'type', 'request_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', row_id,
+            'help_request_id', help_request_id,
+            'class_id', class_id,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'timestamp', NOW()
+        );
+
+        -- Each help request channel has its own RLS
+        PERFORM public.safe_broadcast(
+            main_payload,
+            'broadcast',
+            'help_request:' || help_request_id,
+            true
+        );
+    END IF;
+
+    -- Return appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$;
+-- 3) Gradebook cell change (wrap sends)
+
+-- Create unified broadcast function for gradebook_column_students changes
+CREATE OR REPLACE FUNCTION broadcast_gradebook_column_students_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    target_class_id BIGINT;
+    target_student_id UUID;
+    target_is_private BOOLEAN;
+    staff_payload JSONB;
+    user_payload JSONB;
+BEGIN
+    -- Get the class_id, student_id, and is_private from the record
+    IF TG_OP = 'INSERT' THEN
+        target_class_id := NEW.class_id;
+        target_student_id := NEW.student_id;
+        target_is_private := NEW.is_private;
+    ELSIF TG_OP = 'UPDATE' THEN
+        target_class_id := COALESCE(NEW.class_id, OLD.class_id);
+        target_student_id := COALESCE(NEW.student_id, OLD.student_id);
+        target_is_private := COALESCE(NEW.is_private, OLD.is_private);
+    ELSIF TG_OP = 'DELETE' THEN
+        target_class_id := OLD.class_id;
+        target_student_id := OLD.student_id;
+        target_is_private := OLD.is_private;
+    END IF;
+
+    IF target_class_id IS NOT NULL AND target_student_id IS NOT NULL THEN
+        -- Create base payload for gradebook_column_students changes
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', CASE
+                WHEN TG_OP = 'DELETE' THEN OLD.id
+                ELSE NEW.id
+            END,
+            'data', CASE
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', target_class_id,
+            'student_id', target_student_id,
+            'is_private', target_is_private,
+            'timestamp', NOW()
+        );
+
+        -- Always broadcast to staff channel (instructors and graders see all changes)
+        PERFORM public.safe_broadcast(
+            staff_payload || jsonb_build_object('target_audience', 'staff'),
+            'broadcast',
+            'class:' || target_class_id || ':staff',
+            true
+        );
+
+        -- If this is a public record (is_private = false), also broadcast to the student's channel
+        IF target_is_private = false THEN
+            user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+            
+            PERFORM public.safe_broadcast(
+                user_payload,
+                'broadcast',
+                'class:' || target_class_id || ':user:' || target_student_id,
+                true
+            );
+        END IF;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Remaining wrappers: watchers/read-status/discussion threads/gradebook columns/row state/staff data/regrade/review/submission
+CREATE OR REPLACE FUNCTION "public"."broadcast_discussion_thread_read_status_unified"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+    class_id_value bigint;
+    row_id text;
+    user_payload jsonb;
+    viewer_user_id uuid;
+    viewer_profile_id uuid;
+BEGIN
+    -- Get class_id from the discussion thread and row_id
+    IF TG_OP = 'INSERT' THEN
+        SELECT dt.class_id INTO class_id_value
+        FROM public.discussion_threads dt
+        WHERE dt.id = NEW.discussion_thread_id;
+        row_id := NEW.id;
+        viewer_user_id := NEW.user_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        SELECT dt.class_id INTO class_id_value
+        FROM public.discussion_threads dt
+        WHERE dt.id = COALESCE(NEW.discussion_thread_id, OLD.discussion_thread_id);
+        row_id := COALESCE(NEW.id, OLD.id);
+        viewer_user_id := COALESCE(NEW.user_id, OLD.user_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        SELECT dt.class_id INTO class_id_value
+        FROM public.discussion_threads dt
+        WHERE dt.id = OLD.discussion_thread_id;
+        row_id := OLD.id;
+        viewer_user_id := OLD.user_id;
+    END IF;
+
+    -- Get the private_profile_id from user_id for the channel name
+    IF class_id_value IS NOT NULL AND viewer_user_id IS NOT NULL THEN
+        SELECT ur.private_profile_id INTO viewer_profile_id
+        FROM public.user_roles ur
+        WHERE ur.user_id = viewer_user_id AND ur.class_id = class_id_value
+        LIMIT 1;
+    END IF;
+
+    -- Only broadcast if we have valid class_id and profile_id
+    IF class_id_value IS NOT NULL AND viewer_profile_id IS NOT NULL THEN
+        -- Create payload for the individual user only
+        user_payload := jsonb_build_object(
+            'type', 'staff_data_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', row_id,
+            'class_id', class_id_value,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast ONLY to the individual user who made the read status change
+        -- This eliminates unnecessary broadcasts to staff and other users
+        PERFORM public.safe_broadcast(
+            user_payload,
+            'broadcast',
+            'class:' || class_id_value || ':user:' || viewer_profile_id,
+            true
+        );
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$;
+CREATE OR REPLACE FUNCTION "public"."broadcast_discussion_thread_watchers_user_only"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+    class_id_value bigint;
+    row_id text;
+    user_payload jsonb;
+    watcher_user_id uuid;
+    watcher_profile_id uuid;
+BEGIN
+    -- Get class_id and user info from the record
+    IF TG_OP = 'INSERT' THEN
+        class_id_value := NEW.class_id;
+        row_id := NEW.id;
+        watcher_user_id := NEW.user_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        class_id_value := COALESCE(NEW.class_id, OLD.class_id);
+        row_id := COALESCE(NEW.id, OLD.id);
+        watcher_user_id := COALESCE(NEW.user_id, OLD.user_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        class_id_value := OLD.class_id;
+        row_id := OLD.id;
+        watcher_user_id := OLD.user_id;
+    END IF;
+
+    -- Get the private_profile_id from user_id for the channel name
+    IF class_id_value IS NOT NULL AND watcher_user_id IS NOT NULL THEN
+        SELECT ur.private_profile_id INTO watcher_profile_id
+        FROM public.user_roles ur
+        WHERE ur.user_id = watcher_user_id AND ur.class_id = class_id_value
+        LIMIT 1;
+    END IF;
+
+    -- Only broadcast if we have valid class_id and profile_id
+    IF class_id_value IS NOT NULL AND watcher_profile_id IS NOT NULL THEN
+        -- Create payload for the individual user only
+        user_payload := jsonb_build_object(
+            'type', 'staff_data_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', row_id,
+            'class_id', class_id_value,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast ONLY to the individual user who changed their watch status
+        -- Staff don't need to see personal watch preferences
+        PERFORM public.safe_broadcast(
+            user_payload,
+            'broadcast',
+            'class:' || class_id_value || ':user:' || watcher_profile_id,
+            true
+        );
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.broadcast_discussion_threads_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+    target_class_id bigint;
+    staff_payload jsonb;
+    affected_profile_ids uuid[];
+    profile_id uuid;
+begin
+    -- Get the class_id from the record
+    if TG_OP = 'INSERT' then
+        target_class_id := NEW.class_id;
+    elsif TG_OP = 'UPDATE' then
+        target_class_id := coalesce(NEW.class_id, OLD.class_id);
+    elsif TG_OP = 'DELETE' then
+        target_class_id := OLD.class_id;
+    end if;
+
+    if target_class_id is not null then
+        -- Create payload for discussion_threads changes (staff scoped)
+        staff_payload := jsonb_build_object(
+            'type', 'staff_data_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', case
+                when TG_OP = 'DELETE' then OLD.id
+                else NEW.id
+            end,
+            'data', case
+                when TG_OP = 'DELETE' then to_jsonb(OLD)
+                else to_jsonb(NEW)
+            end,
+            'class_id', target_class_id,
+            'timestamp', now()
+        );
+
+        -- Broadcast to staff channel (instructors and graders see all discussion threads)
+        perform public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'class:' || target_class_id || ':staff',
+            true
+        );
+
+        -- Student-facing broadcasts for discussion threads (respect RLS constraints):
+        -- The SELECT policies already gate what students can fetch. We broadcast minimal payload to per-user channels.
+        SELECT ARRAY(
+            SELECT ur.private_profile_id
+            FROM public.user_roles ur
+            WHERE ur.class_id = target_class_id AND ur.role = 'student'
+        ) INTO affected_profile_ids;
+
+        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+            PERFORM public.safe_broadcast(
+                staff_payload,
+                'broadcast',
+                'class:' || target_class_id || ':user:' || profile_id,
+                true
+            );
+        END LOOP;
+    end if;
+
+    -- Return the appropriate record
+    if TG_OP = 'DELETE' then
+        return OLD;
+    else
+        return NEW;
+    end if;
+end;
+$function$
+;
+CREATE OR REPLACE FUNCTION broadcast_gradebook_columns_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    target_class_id BIGINT;
+    staff_payload JSONB;
+    user_payload JSONB;
+    affected_profile_ids UUID[];
+    profile_id UUID;
+BEGIN
+    -- Get the class_id from the record
+    IF TG_OP = 'INSERT' THEN
+        target_class_id := NEW.class_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        target_class_id := COALESCE(NEW.class_id, OLD.class_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        target_class_id := OLD.class_id;
+    END IF;
+
+    IF target_class_id IS NOT NULL THEN
+        -- Create payload for gradebook_columns changes
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', CASE
+                WHEN TG_OP = 'DELETE' THEN OLD.id
+                ELSE NEW.id
+            END,
+            'data', CASE
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', target_class_id,
+            'target_audience', 'staff',
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to staff channel (instructors and graders see all column changes)
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'class:' || target_class_id || ':staff',
+            true
+        );
+
+        -- Get all students in the class for user channels
+        SELECT ARRAY(
+            SELECT ur.private_profile_id
+            FROM user_roles ur
+            WHERE ur.class_id = target_class_id AND ur.role = 'student'
+        ) INTO affected_profile_ids;
+
+        -- Create user payload (same as staff but marked for users)
+        user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+
+        -- Broadcast to all student user channels (students see column structure changes)
+        FOREACH profile_id IN ARRAY affected_profile_ids
+        LOOP
+            PERFORM public.safe_broadcast(
+                user_payload,
+                'broadcast',
+                'class:' || target_class_id || ':user:' || profile_id,
+                true
+            );
+        END LOOP;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.broadcast_gradebook_row_state_change()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_class_id BIGINT;
+  target_student_id UUID;
+  staff_payload JSONB;
+  user_payload JSONB;
+  target_is_private BOOLEAN;
+BEGIN
+  -- Determine IDs and privacy based on operation
+  IF TG_OP = 'INSERT' THEN
+    target_class_id := NEW.class_id;
+    target_student_id := NEW.student_id;
+    target_is_private := NEW.is_private;
+  ELSIF TG_OP = 'UPDATE' THEN
+    target_class_id := COALESCE(NEW.class_id, OLD.class_id);
+    target_student_id := COALESCE(NEW.student_id, OLD.student_id);
+    target_is_private := COALESCE(NEW.is_private, OLD.is_private);
+  ELSIF TG_OP = 'DELETE' THEN
+    target_class_id := OLD.class_id;
+    target_student_id := OLD.student_id;
+    target_is_private := OLD.is_private;
   END IF;
 
-  main_payload := jsonb_build_object(
-    'type','table_change',
+  IF target_class_id IS NULL THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  -- Build base payload matching existing table_change format
+  staff_payload := jsonb_build_object(
+    'type', 'table_change',
     'operation', TG_OP,
-    'table', TG_TABLE_NAME,
-    'row_id', COALESCE(NEW.id, OLD.id),
-    'class_id', class_id,
-    'data', CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,
+    'table', 'gradebook_row_recalc_state',
+    'data', CASE WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,
+    'class_id', target_class_id,
     'timestamp', NOW()
   );
 
-  main_channel := 'class:' || class_id || ':help_request:' || COALESCE(NEW.id, OLD.id);
-  PERFORM public.safe_broadcast(main_payload, main_channel);
-
-  queue_channel := 'class:' || class_id || ':help_queue';
-  queue_payload := main_payload;
-  PERFORM public.safe_broadcast(queue_payload, queue_channel);
-
-  RETURN NULL;
-END;
-$$;
-
--- 3) Gradebook cell change (wrap sends)
-CREATE OR REPLACE FUNCTION public.broadcast_gradebook_column_students_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE
-  target_class_id bigint;
-  staff_payload jsonb;
-  user_payload jsonb;
-BEGIN
-  target_class_id := CASE WHEN TG_OP='DELETE' THEN OLD.class_id ELSE NEW.class_id END;
-  staff_payload := jsonb_build_object(
-    'type','table_change',
-    'operation', TG_OP,
-    'table', TG_TABLE_NAME,
-    'row_id', COALESCE(NEW.id, OLD.id),
-    'class_id', target_class_id,
-    'data', CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,
-    'timestamp', NOW(),
-    'target_audience','staff'
+  -- Always broadcast to staff channel
+  PERFORM public.safe_broadcast(
+    staff_payload || jsonb_build_object('target_audience', 'staff'),
+    'broadcast',
+    'class:' || target_class_id || ':staff',
+    true
   );
-  PERFORM public.safe_broadcast(staff_payload, 'class:' || target_class_id || ':staff');
 
-  user_payload := staff_payload || jsonb_build_object('target_audience','user');
-  IF TG_OP <> 'DELETE' AND COALESCE(NEW.is_private, false) = false THEN
-    PERFORM public.safe_broadcast(user_payload, 'class:' || target_class_id || ':user:' || NEW.student_id);
-  ELSIF TG_OP = 'DELETE' AND COALESCE(OLD.is_private, false) = false THEN
-    PERFORM public.safe_broadcast(user_payload, 'class:' || target_class_id || ':user:' || OLD.student_id);
-  END IF;
-  RETURN NULL;
-END;
-$$;
-
--- Remaining wrappers: watchers/read-status/discussion threads/gradebook columns/row state/staff data/regrade/review/submission
-CREATE OR REPLACE FUNCTION public.broadcast_discussion_thread_read_status_unified()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-  class_id_value bigint;
-  row_id text;
-  user_payload jsonb;
-  viewer_user_id uuid;
-  viewer_profile_id uuid;
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    SELECT dt.class_id INTO class_id_value FROM public.discussion_threads dt WHERE dt.id = NEW.discussion_thread_id;
-    row_id := NEW.id; viewer_user_id := NEW.user_id;
-  ELSIF TG_OP = 'UPDATE' THEN
-    SELECT dt.class_id INTO class_id_value FROM public.discussion_threads dt WHERE dt.id = COALESCE(NEW.discussion_thread_id, OLD.discussion_thread_id);
-    row_id := COALESCE(NEW.id, OLD.id); viewer_user_id := COALESCE(NEW.user_id, OLD.user_id);
-  ELSE
-    SELECT dt.class_id INTO class_id_value FROM public.discussion_threads dt WHERE dt.id = OLD.discussion_thread_id;
-    row_id := OLD.id; viewer_user_id := OLD.user_id;
-  END IF;
-
-  IF class_id_value IS NOT NULL AND viewer_user_id IS NOT NULL THEN
-    SELECT ur.private_profile_id INTO viewer_profile_id FROM public.user_roles ur WHERE ur.user_id = viewer_user_id AND ur.class_id = class_id_value LIMIT 1;
-  END IF;
-
-  IF class_id_value IS NOT NULL AND viewer_profile_id IS NOT NULL THEN
-    user_payload := jsonb_build_object('type','staff_data_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id_value,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(user_payload, 'class:' || class_id_value || ':user:' || viewer_profile_id);
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.broadcast_discussion_thread_watchers_user_only()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-  class_id_value bigint;
-  row_id text;
-  user_payload jsonb;
-  watcher_user_id uuid;
-  watcher_profile_id uuid;
-BEGIN
-  IF TG_OP='INSERT' THEN class_id_value:=NEW.class_id; row_id:=NEW.id; watcher_user_id:=NEW.user_id; 
-  ELSIF TG_OP='UPDATE' THEN class_id_value:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); watcher_user_id:=COALESCE(NEW.user_id, OLD.user_id);
-  ELSE class_id_value:=OLD.class_id; row_id:=OLD.id; watcher_user_id:=OLD.user_id; END IF;
-  IF class_id_value IS NOT NULL AND watcher_user_id IS NOT NULL THEN
-    SELECT ur.private_profile_id INTO watcher_profile_id FROM public.user_roles ur WHERE ur.user_id = watcher_user_id AND ur.class_id = class_id_value LIMIT 1;
-  END IF;
-  IF class_id_value IS NOT NULL AND watcher_profile_id IS NOT NULL THEN
-    user_payload := jsonb_build_object('type','staff_data_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id_value,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(user_payload, 'class:' || class_id_value || ':user:' || watcher_profile_id);
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.broadcast_discussion_threads_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE target_class_id bigint; staff_payload jsonb; affected_profile_ids uuid[]; profile_id uuid; BEGIN
-  IF TG_OP='INSERT' THEN target_class_id:=NEW.class_id; ELSIF TG_OP='UPDATE' THEN target_class_id:=COALESCE(NEW.class_id, OLD.class_id); ELSE target_class_id:=OLD.class_id; END IF;
-  IF target_class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','staff_data_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',CASE WHEN TG_OP='DELETE' THEN OLD.id ELSE NEW.id END,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'class_id',target_class_id,'timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || target_class_id || ':staff');
-    SELECT ARRAY(SELECT ur.private_profile_id FROM public.user_roles ur WHERE ur.class_id = target_class_id AND ur.role = 'student') INTO affected_profile_ids;
-    FOREACH profile_id IN ARRAY affected_profile_ids LOOP
-      PERFORM public.safe_broadcast(staff_payload, 'class:' || target_class_id || ':user:' || profile_id);
-    END LOOP;
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.broadcast_gradebook_columns_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE target_class_id bigint; staff_payload jsonb; user_payload jsonb; affected_profile_ids uuid[]; profile_id uuid; BEGIN
-  IF TG_OP='INSERT' THEN target_class_id:=NEW.class_id; ELSIF TG_OP='UPDATE' THEN target_class_id:=COALESCE(NEW.class_id, OLD.class_id); ELSE target_class_id:=OLD.class_id; END IF;
-  IF target_class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','table_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',CASE WHEN TG_OP='DELETE' THEN OLD.id ELSE NEW.id END,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'class_id',target_class_id,'target_audience','staff','timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || target_class_id || ':staff');
-    SELECT ARRAY(SELECT ur.private_profile_id FROM public.user_roles ur WHERE ur.class_id = target_class_id AND ur.role = 'student') INTO affected_profile_ids;
-    user_payload := staff_payload || jsonb_build_object('target_audience','user');
-    FOREACH profile_id IN ARRAY affected_profile_ids LOOP
-      PERFORM public.safe_broadcast(user_payload, 'class:' || target_class_id || ':user:' || profile_id);
-    END LOOP;
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
-
-CREATE OR REPLACE FUNCTION public.broadcast_gradebook_row_state_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE target_class_id bigint; target_student_id uuid; staff_payload jsonb; user_payload jsonb; target_is_private boolean; BEGIN
-  IF TG_OP='INSERT' THEN target_class_id:=NEW.class_id; target_student_id:=NEW.student_id; target_is_private:=NEW.is_private;
-  ELSIF TG_OP='UPDATE' THEN target_class_id:=COALESCE(NEW.class_id, OLD.class_id); target_student_id:=COALESCE(NEW.student_id, OLD.student_id); target_is_private:=COALESCE(NEW.is_private, OLD.is_private);
-  ELSE target_class_id:=OLD.class_id; target_student_id:=OLD.student_id; target_is_private:=OLD.is_private; END IF;
-  IF target_class_id IS NULL THEN RETURN COALESCE(NEW, OLD); END IF;
-  staff_payload := jsonb_build_object('type','table_change','operation',TG_OP,'table','gradebook_row_recalc_state','data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'class_id',target_class_id,'timestamp',NOW());
-  PERFORM public.safe_broadcast(staff_payload || jsonb_build_object('target_audience','staff'), 'class:' || target_class_id || ':staff');
+  -- If non-private, also broadcast to the student's user channel
   IF target_is_private = false THEN
-    user_payload := staff_payload || jsonb_build_object('target_audience','user');
-    PERFORM public.safe_broadcast(user_payload, 'class:' || target_class_id || ':user:' || target_student_id);
+    user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+    PERFORM public.safe_broadcast(
+      user_payload,
+      'broadcast',
+      'class:' || target_class_id || ':user:' || target_student_id,
+      true
+    );
   END IF;
+
   RETURN COALESCE(NEW, OLD);
-END;$$;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION public.broadcast_help_queue_data_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE help_queue_id bigint; class_id bigint; row_id bigint; is_private_request boolean; queue_payload jsonb; BEGIN
-  IF TG_TABLE_NAME='help_queues' THEN
-    IF TG_OP='INSERT' THEN help_queue_id:=NEW.id; class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN help_queue_id:=NEW.id; class_id:=NEW.class_id; row_id:=NEW.id; ELSE help_queue_id:=OLD.id; class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  ELSIF TG_TABLE_NAME='help_queue_assignments' THEN
-    IF TG_OP='INSERT' THEN help_queue_id:=NEW.help_queue_id; class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN help_queue_id:=COALESCE(NEW.help_queue_id, OLD.help_queue_id); class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); ELSE help_queue_id:=OLD.help_queue_id; class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  ELSIF TG_TABLE_NAME='help_requests' THEN
-    IF TG_OP='INSERT' THEN help_queue_id:=NEW.help_queue; class_id:=NEW.class_id; row_id:=NEW.id; is_private_request:=NEW.is_private;
-    ELSIF TG_OP='UPDATE' THEN help_queue_id:=COALESCE(NEW.help_queue, OLD.help_queue); class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=NEW.id; is_private_request:=COALESCE(NEW.is_private, OLD.is_private);
-    ELSE help_queue_id:=OLD.help_queue; class_id:=OLD.class_id; row_id:=OLD.id; is_private_request:=OLD.is_private; END IF;
-  END IF;
-  IF help_queue_id IS NOT NULL AND class_id IS NOT NULL THEN
-    queue_payload := jsonb_build_object('type','queue_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'help_queue_id',help_queue_id,'class_id',class_id,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    IF TG_TABLE_NAME = 'help_requests' AND is_private_request IS TRUE THEN
-      PERFORM public.safe_broadcast(queue_payload, 'class:' || class_id || ':help_queues:staff');
-    ELSE
-      PERFORM public.safe_broadcast(queue_payload, 'class:' || class_id || ':help_queue:' || help_queue_id);
-      PERFORM public.safe_broadcast(queue_payload, 'class:' || class_id || ':help_queues');
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    help_queue_id BIGINT;
+    class_id BIGINT;
+    row_id BIGINT;
+    queue_payload JSONB;
+BEGIN
+    -- Get help_queue_id and class_id based on the table
+    IF TG_TABLE_NAME = 'help_queues' THEN
+        IF TG_OP = 'INSERT' THEN
+            help_queue_id := NEW.id;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            help_queue_id := NEW.id;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'DELETE' THEN
+            help_queue_id := OLD.id;
+            class_id := OLD.class_id;
+            row_id := OLD.id;
+        END IF;
+    ELSIF TG_TABLE_NAME = 'help_queue_assignments' THEN
+        IF TG_OP = 'INSERT' THEN
+            help_queue_id := NEW.help_queue_id;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            help_queue_id := NEW.help_queue_id;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'DELETE' THEN
+            help_queue_id := OLD.help_queue_id;
+            class_id := OLD.class_id;
+            row_id := OLD.id;
+        END IF;
+    ELSIF TG_TABLE_NAME = 'help_requests' THEN
+        -- For help requests, we also need to update the help queue status
+        IF TG_OP = 'INSERT' THEN
+            help_queue_id := NEW.help_queue;
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            help_queue_id := COALESCE(NEW.help_queue, OLD.help_queue);
+            class_id := COALESCE(NEW.class_id, OLD.class_id);
+            row_id := NEW.id;
+        ELSIF TG_OP = 'DELETE' THEN
+            help_queue_id := OLD.help_queue;
+            class_id := OLD.class_id;
+            row_id := OLD.id;
+        END IF;
     END IF;
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
 
+    -- Only broadcast if we have valid help_queue_id and class_id
+    IF help_queue_id IS NOT NULL AND class_id IS NOT NULL THEN
+        -- Create payload with help queue specific information
+        queue_payload := jsonb_build_object(
+            'type', 'queue_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', row_id,
+            'help_queue_id', help_queue_id,
+            'class_id', class_id,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to individual help queue channel
+        PERFORM public.safe_broadcast(
+            queue_payload,
+            'broadcast',
+            'help_queue:' || help_queue_id,
+            true
+        );
+
+        -- Also broadcast to global help queues channel
+        PERFORM public.safe_broadcast(
+            queue_payload,
+            'broadcast',
+            'help_queues',
+            true
+        );
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$function$
+;
 CREATE OR REPLACE FUNCTION public.broadcast_help_request_staff_data_change()
 RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
+LANGUAGE plpgsql
+SECURITY DEFINER
 AS $$
-DECLARE class_id bigint; staff_payload jsonb; row_id bigint; BEGIN
-  IF TG_OP='INSERT' THEN class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); ELSE class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  IF class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','staff_data_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id || ':help_queues:staff');
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
+DECLARE
+    help_request_id BIGINT;
+    class_id BIGINT;
+    student_profile_id UUID;
+    row_id BIGINT;
+    staff_payload JSONB;
+BEGIN
+    -- Get relevant IDs based on table
+    IF TG_TABLE_NAME = 'help_request_moderation' THEN
+        IF TG_OP = 'INSERT' THEN
+            help_request_id := NEW.help_request_id;
+            class_id := NEW.class_id;
+            student_profile_id := NEW.student_profile_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            help_request_id := COALESCE(NEW.help_request_id, OLD.help_request_id);
+            class_id := COALESCE(NEW.class_id, OLD.class_id);
+            student_profile_id := COALESCE(NEW.student_profile_id, OLD.student_profile_id);
+            row_id := COALESCE(NEW.id, OLD.id);
+        ELSIF TG_OP = 'DELETE' THEN
+            help_request_id := OLD.help_request_id;
+            class_id := OLD.class_id;
+            student_profile_id := OLD.student_profile_id;
+            row_id := OLD.id;
+        END IF;
+    ELSIF TG_TABLE_NAME = 'student_karma_notes' THEN
+        IF TG_OP = 'INSERT' THEN
+            help_request_id := NEW.help_request_id;
+            class_id := NEW.class_id;
+            student_profile_id := NEW.student_profile_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            help_request_id := COALESCE(NEW.help_request_id, OLD.help_request_id);
+            class_id := COALESCE(NEW.class_id, OLD.class_id);
+            student_profile_id := COALESCE(NEW.student_profile_id, OLD.student_profile_id);
+            row_id := COALESCE(NEW.id, OLD.id);
+        ELSIF TG_OP = 'DELETE' THEN
+            help_request_id := OLD.help_request_id;
+            class_id := OLD.class_id;
+            student_profile_id := OLD.student_profile_id;
+            row_id := OLD.id;
+        END IF;
+    ELSIF TG_TABLE_NAME = 'help_request_templates' THEN
+        IF TG_OP = 'INSERT' THEN
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            class_id := COALESCE(NEW.class_id, OLD.class_id);
+            row_id := COALESCE(NEW.id, OLD.id);
+        ELSIF TG_OP = 'DELETE' THEN
+            class_id := OLD.class_id;
+            row_id := OLD.id;
+        END IF;
+    END IF;
 
-CREATE OR REPLACE FUNCTION public.broadcast_regrade_request_data_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE class_id bigint; staff_payload jsonb; row_id bigint; BEGIN
-  IF TG_OP='INSERT' THEN class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); ELSE class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  IF class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','table_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id || ':staff');
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
+    -- Build payload
+    staff_payload := jsonb_build_object(
+        'type', 'staff_data_change',
+        'operation', TG_OP,
+        'table', TG_TABLE_NAME,
+        'row_id', row_id,
+        'class_id', class_id,
+        'student_profile_id', student_profile_id,
+        'help_request_id', help_request_id,
+        'data', CASE 
+            WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+            ELSE to_jsonb(NEW)
+        END,
+        'timestamp', NOW()
+    );
 
-CREATE OR REPLACE FUNCTION public.broadcast_review_assignment_data_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE class_id bigint; staff_payload jsonb; row_id bigint; BEGIN
-  IF TG_OP='INSERT' THEN class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); ELSE class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  IF class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','table_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id || ':staff');
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
+    -- Always broadcast to office-hours staff channel
+    IF class_id IS NOT NULL THEN
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'help_queues:' || class_id || ':staff',
+            true
+        );
+    END IF;
 
-CREATE OR REPLACE FUNCTION public.broadcast_review_assignment_rubric_part_data_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE class_id bigint; staff_payload jsonb; row_id bigint; BEGIN
-  IF TG_OP='INSERT' THEN class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); ELSE class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  IF class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','table_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id || ':staff');
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
 
-CREATE OR REPLACE FUNCTION public.broadcast_submission_data_change()
-RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER
-AS $$
-DECLARE class_id bigint; staff_payload jsonb; row_id bigint; BEGIN
-  IF TG_OP='INSERT' THEN class_id:=NEW.class_id; row_id:=NEW.id; ELSIF TG_OP='UPDATE' THEN class_id:=COALESCE(NEW.class_id, OLD.class_id); row_id:=COALESCE(NEW.id, OLD.id); ELSE class_id:=OLD.class_id; row_id:=OLD.id; END IF;
-  IF class_id IS NOT NULL THEN
-    staff_payload := jsonb_build_object('type','table_change','operation',TG_OP,'table',TG_TABLE_NAME,'row_id',row_id,'class_id',class_id,'data',CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END,'timestamp',NOW());
-    PERFORM public.safe_broadcast(staff_payload, 'class:' || class_id || ':staff');
-  END IF;
-  RETURN COALESCE(NEW, OLD);
-END;$$;
+CREATE OR REPLACE FUNCTION broadcast_regrade_request_data_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    class_id BIGINT;
+    assignee_profile_id UUID;
+    profile_id UUID;
+    affected_profile_ids UUID[];
+    staff_payload JSONB;
+    user_payload JSONB;
+BEGIN
+    -- Get the class_id and assignee_profile_id
+    IF TG_OP = 'INSERT' THEN
+        class_id := NEW.class_id;
+        assignee_profile_id := NEW.assignee;
+    ELSIF TG_OP = 'UPDATE' THEN
+        class_id := COALESCE(NEW.class_id, OLD.class_id);
+        assignee_profile_id := COALESCE(NEW.assignee, OLD.assignee);
+    ELSIF TG_OP = 'DELETE' THEN
+        class_id := OLD.class_id;
+        assignee_profile_id := OLD.assignee;
+    END IF;
 
+    IF class_id IS NOT NULL THEN
+        -- Create payload with multiplexing information
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', class_id,
+            'timestamp', NOW()
+        );
 
+        -- Broadcast to staff channel
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'class:' || class_id || ':staff',
+            true
+        );
+
+        -- Also broadcast to the submission owner's channel and all group members
+        IF TG_OP = 'INSERT' THEN
+            -- Get all affected profile IDs (submission owner + group members)
+            SELECT ARRAY(
+                SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                FROM submissions s
+                LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                WHERE s.id = NEW.submission_id
+            ) INTO affected_profile_ids;
+            
+            -- Broadcast to all affected users
+            IF array_length(affected_profile_ids, 1) > 0 THEN
+                user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                -- Send to each affected user
+                FOREACH profile_id IN ARRAY affected_profile_ids
+                LOOP
+                    IF profile_id IS NOT NULL THEN
+                        PERFORM public.safe_broadcast(
+                            user_payload,
+                            'broadcast',
+                            'class:' || class_id || ':user:' || profile_id,
+                            true
+                        );
+                    END IF;
+                END LOOP;
+            END IF;
+        ELSIF TG_OP = 'UPDATE' THEN
+            -- For updates, check both old and new submission owners and group members
+            DECLARE
+                old_affected_profile_ids UUID[];
+                new_affected_profile_ids UUID[];
+            BEGIN
+                -- Get old affected profile IDs (submission owner + group members)
+                SELECT ARRAY(
+                    SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                    FROM submissions s
+                    LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                    LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                    WHERE s.id = OLD.submission_id
+                ) INTO old_affected_profile_ids;
+                
+                -- Get new affected profile IDs (submission owner + group members)
+                SELECT ARRAY(
+                    SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                    FROM submissions s
+                    LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                    LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                    WHERE s.id = NEW.submission_id
+                ) INTO new_affected_profile_ids;
+                
+                -- Broadcast to old affected users if submission_id changed
+                IF OLD.submission_id != NEW.submission_id AND array_length(old_affected_profile_ids, 1) > 0 THEN
+                    user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                    FOREACH profile_id IN ARRAY old_affected_profile_ids
+                    LOOP
+                        IF profile_id IS NOT NULL THEN
+                            PERFORM public.safe_broadcast(
+                                user_payload,
+                                'broadcast',
+                                'class:' || class_id || ':user:' || profile_id,
+                                true
+                            );
+                        END IF;
+                    END LOOP;
+                END IF;
+                
+                -- Broadcast to new affected users
+                IF array_length(new_affected_profile_ids, 1) > 0 THEN
+                    user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                    FOREACH profile_id IN ARRAY new_affected_profile_ids
+                    LOOP
+                        IF profile_id IS NOT NULL THEN
+                            PERFORM public.safe_broadcast(
+                                user_payload,
+                                'broadcast',
+                                'class:' || class_id || ':user:' || profile_id,
+                                true
+                            );
+                        END IF;
+                    END LOOP;
+                END IF;
+            END;
+        ELSIF TG_OP = 'DELETE' THEN
+            -- For deletes, broadcast to the submission owner and all group members
+            SELECT ARRAY(
+                SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                FROM submissions s
+                LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                WHERE s.id = OLD.submission_id
+            ) INTO affected_profile_ids;
+            
+            -- Broadcast to all affected users
+            IF array_length(affected_profile_ids, 1) > 0 THEN
+                user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                FOREACH profile_id IN ARRAY affected_profile_ids
+                LOOP
+                    IF profile_id IS NOT NULL THEN
+                        PERFORM public.safe_broadcast(
+                            user_payload,
+                            'broadcast',
+                            'class:' || class_id || ':user:' || profile_id,
+                            true
+                        );
+                    END IF;
+                END LOOP;
+            END IF;
+        END IF;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION broadcast_review_assignment_data_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    class_id BIGINT;
+    assignee_profile_id UUID;
+    staff_payload JSONB;
+    user_payload JSONB;
+BEGIN
+    -- Get the assignee_profile_id and class_id
+    IF TG_OP = 'INSERT' THEN
+        assignee_profile_id := NEW.assignee_profile_id;
+        class_id := NEW.class_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        assignee_profile_id := COALESCE(NEW.assignee_profile_id, OLD.assignee_profile_id);
+        class_id := COALESCE(NEW.class_id, OLD.class_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        assignee_profile_id := OLD.assignee_profile_id;
+        class_id := OLD.class_id;
+    END IF;
+
+    IF class_id IS NOT NULL THEN
+        -- Create payload with multiplexing information
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', class_id,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to staff channel
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'class:' || class_id || ':staff',
+            true
+        );
+
+        -- Broadcast to assignee user channel if there's an assignee
+        IF assignee_profile_id IS NOT NULL THEN
+            user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+            PERFORM public.safe_broadcast(
+                user_payload,
+                'broadcast',
+                'class:' || class_id || ':user:' || assignee_profile_id,
+                true
+            );
+        END IF;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION broadcast_review_assignment_rubric_part_data_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    class_id BIGINT;
+    assignee_profile_id UUID;
+    staff_payload JSONB;
+    user_payload JSONB;
+BEGIN
+    -- Get the assignee_profile_id and class_id from the review_assignment
+    IF TG_OP = 'INSERT' THEN
+        SELECT ra.assignee_profile_id, ra.class_id 
+        INTO assignee_profile_id, class_id
+        FROM "public"."review_assignments" ra
+        WHERE ra.id = NEW.review_assignment_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        SELECT ra.assignee_profile_id, ra.class_id 
+        INTO assignee_profile_id, class_id
+        FROM "public"."review_assignments" ra
+        WHERE ra.id = COALESCE(NEW.review_assignment_id, OLD.review_assignment_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        SELECT ra.assignee_profile_id, ra.class_id 
+        INTO assignee_profile_id, class_id
+        FROM "public"."review_assignments" ra
+        WHERE ra.id = OLD.review_assignment_id;
+    END IF;
+
+    IF class_id IS NOT NULL THEN
+        -- Create payload with multiplexing information
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', class_id,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to staff channel
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'class:' || class_id || ':staff',
+            true
+        );
+
+        -- Broadcast to assignee user channel if there's an assignee
+        IF assignee_profile_id IS NOT NULL THEN
+            user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+            PERFORM public.safe_broadcast(
+                user_payload,
+                'broadcast',
+                'class:' || class_id || ':user:' || assignee_profile_id,
+                true
+            );
+        END IF;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION broadcast_submission_data_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    class_id BIGINT;
+    submission_id BIGINT;
+    comment_id BIGINT;
+    grader_payload JSONB;
+    user_payload JSONB;
+    affected_profile_ids UUID[];
+    profile_id UUID;
+BEGIN
+    -- Get the comment ID, submission_id, and class_id
+    IF TG_OP = 'INSERT' THEN
+        comment_id := NEW.id;
+        submission_id := NEW.submission_id;
+        class_id := NEW.class_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        comment_id := NEW.id;
+        submission_id := COALESCE(NEW.submission_id, OLD.submission_id);
+        class_id := COALESCE(NEW.class_id, OLD.class_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        comment_id := OLD.id;
+        submission_id := OLD.submission_id;
+        class_id := OLD.class_id;
+    END IF;
+
+    -- Only broadcast if there's a submission_id and class_id
+    IF submission_id IS NOT NULL AND class_id IS NOT NULL THEN
+        -- Create payload with submission-specific information
+        grader_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', comment_id,
+            'submission_id', submission_id,
+            'class_id', class_id,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to graders channel for this submission
+        PERFORM public.safe_broadcast(
+            grader_payload,
+            'broadcast',
+            'submission:' || submission_id || ':graders',
+            true
+        );
+
+        -- Get affected profile IDs (submission author and group members)
+        SELECT ARRAY(
+            SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+            FROM submissions s
+            LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+            LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+            WHERE s.id = submission_id
+        ) INTO affected_profile_ids;
+
+        -- Create user payload (same as grader payload but marked for users)
+        user_payload := grader_payload || jsonb_build_object('target_audience', 'user');
+
+        -- Broadcast to affected user channels for this specific submission
+        FOREACH profile_id IN ARRAY affected_profile_ids
+        LOOP
+            PERFORM public.safe_broadcast(
+                user_payload,
+                'broadcast',
+                'submission:' || submission_id || ':profile_id:' || profile_id,
+                true
+            );
+        END LOOP;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION broadcast_gradebook_data_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    class_id_val BIGINT;
+    student_id_val UUID;
+    staff_payload JSONB;
+    user_payload JSONB;
+BEGIN
+    -- Get the relevant IDs and context based on table and operation
+    IF TG_TABLE_NAME = 'gradebook_column_students' THEN
+        IF TG_OP = 'INSERT' THEN
+            class_id_val := NEW.class_id;
+            student_id_val := NEW.student_id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            class_id_val := COALESCE(NEW.class_id, OLD.class_id);
+            student_id_val := COALESCE(NEW.student_id, OLD.student_id);
+        ELSIF TG_OP = 'DELETE' THEN
+            class_id_val := OLD.class_id;
+            student_id_val := OLD.student_id;
+        END IF;
+    ELSIF TG_TABLE_NAME = 'gradebook_columns' THEN
+        IF TG_OP = 'INSERT' THEN
+            class_id_val := NEW.class_id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            class_id_val := COALESCE(NEW.class_id, OLD.class_id);
+        ELSIF TG_OP = 'DELETE' THEN
+            class_id_val := OLD.class_id;
+        END IF;
+    END IF;
+
+    -- Only broadcast if there's a class_id
+    IF class_id_val IS NOT NULL THEN
+        -- Create payload for staff (instructors/graders see everything with full data)
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'data', CASE
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', class_id_val,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to staff channel (instructors/graders see all changes)
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'gradebook:' || class_id_val || ':staff',
+            true
+        );
+
+        -- For gradebook_column_students, also broadcast to the affected student
+        -- Only broadcast to student if grades are not private (is_private = false)
+        IF TG_TABLE_NAME = 'gradebook_column_students' AND student_id_val IS NOT NULL THEN
+            -- Check if this should be visible to the student
+            -- For INSERT/UPDATE: only if is_private = false
+            -- For DELETE: always notify (student should know their grade was removed)
+            IF TG_OP = 'DELETE' OR
+               (TG_OP IN ('INSERT', 'UPDATE') AND NEW.is_private = false) THEN
+                
+                user_payload := staff_payload || jsonb_build_object('target_audience', 'student');
+                
+                PERFORM public.safe_broadcast(
+                    user_payload,
+                    'broadcast',
+                    'gradebook:' || class_id_val || ':student:' || student_id_val,
+                    true
+                );
+            END IF;
+        ELSIF TG_TABLE_NAME = 'gradebook_columns' THEN
+            -- For gradebook_columns changes, broadcast to all students in the class
+            -- since column changes (like new assignments) affect everyone
+            user_payload := staff_payload || jsonb_build_object('target_audience', 'student');
+            
+            -- Broadcast to a general student channel for the class
+            PERFORM public.safe_broadcast(
+                user_payload,
+                'broadcast',
+                'gradebook:' || class_id_val || ':students',
+                true
+            );
+        END IF;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
