@@ -1,6 +1,6 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
-import { Badge, Box, IconButton, VStack, Text, Button, HStack } from "@chakra-ui/react";
+import { Badge, Box, IconButton, VStack, Text, Button, HStack, Link } from "@chakra-ui/react";
 import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/components/ui/popover";
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { HiOutlineInbox } from "react-icons/hi2";
@@ -16,6 +16,7 @@ export default function NotificationsBox() {
   const [modalNotifications, setModalNotifications] = useState<Notification[]>([]);
   const [bannerNotifications, setBannerNotifications] = useState<Notification[]>([]);
   const { role: classRole } = useClassProfiles();
+  const course_id = classRole?.class_id;
 
   // Filter out notifications where the author is the current user and separate by display mode
   const allFilteredNotifications = useMemo(
@@ -161,6 +162,11 @@ export default function NotificationsBox() {
                   <Text fontWeight="semibold" fontSize="lg" color="fg.default">
                     Notifications
                   </Text>
+                  {course_id && (
+                    <Link href={`/course/${course_id}/notifications`} color="fg.muted" mt="1">
+                      View all
+                    </Link>
+                  )}
                   {unreadCount > 0 && (
                     <Text fontSize="sm" color="fg.muted" mt="1">
                       {unreadCount} unread
