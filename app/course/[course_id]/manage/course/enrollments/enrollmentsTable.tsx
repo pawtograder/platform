@@ -161,7 +161,7 @@ export default function EnrollmentsTable() {
     setCheckedBoxes(new Set(checkedBoxesRef.current));
   };
 
-  const addTag = async (values: Omit<Tag, "id" | "created_at">) => {
+  const addTag = async (values: Omit<Tag, "id" | "created_at" | "updated_at">) => {
     const { error } = await supabase.from("tags").insert(values);
     if (error) throw error;
   };

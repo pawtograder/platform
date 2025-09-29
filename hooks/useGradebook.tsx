@@ -322,6 +322,7 @@ class StudentGradebookController {
       .map((entry) => ({
         id: entry.gcs_id,
         created_at: "", // Not available in new format
+        updated_at: "", // Not available in new format
         class_id: 0, // Will be set by the parent controller
         gradebook_column_id: entry.gc_id,
         gradebook_id: 0, // Will be set by the parent controller
@@ -1035,6 +1036,7 @@ export class GradebookController {
         const gradebookColumnStudent: GradebookColumnStudent = {
           id: entry.gcs_id,
           created_at: "", // Not available in new format, but likely not used
+          updated_at: "", // Not available in new format
           class_id: this.class_id,
           gradebook_column_id: entry.gc_id,
           gradebook_id: this.gradebook_id,
@@ -1074,6 +1076,7 @@ export class GradebookController {
         const gradebookColumnStudent: GradebookColumnStudent = {
           id: entry.gcs_id,
           created_at: "", // Not available in new format
+          updated_at: "", // Not available in new format
           class_id: this.class_id,
           gradebook_column_id: entry.gc_id,
           gradebook_id: this.gradebook_id,
@@ -1127,6 +1130,7 @@ export class GradebookController {
         const gradebookColumnStudent: GradebookColumnStudent = {
           id: entry.gcs_id,
           created_at: "", // Not available in new format
+          updated_at: "", // Not available in new format
           class_id: this.class_id,
           gradebook_column_id: entry.gc_id,
           gradebook_id: this.gradebook_id,
@@ -1195,6 +1199,7 @@ export class GradebookController {
     return {
       id: entry.gcs_id,
       created_at: "", // Not available in new format
+      updated_at: "", // Not available in new format
       class_id: this.class_id,
       gradebook_column_id: entry.gc_id,
       gradebook_id: this.gradebook_id,
