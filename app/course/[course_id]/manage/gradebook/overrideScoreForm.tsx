@@ -86,7 +86,8 @@ export function OverrideScoreForm({
               <Field label="New Score" flexGrow={0} flexShrink={1}>
                 {renderer({
                   ...studentGradebookColumn,
-                  score: watchedValues.score ?? 0,
+                  score:
+                    watchedValues.score === undefined || Number.isNaN(watchedValues.score) ? 0 : watchedValues.score,
                   max_score: column?.max_score ?? 0
                 })}
               </Field>
