@@ -60,17 +60,35 @@ export function OverrideScoreForm({
     const normalizedOverride =
       values.score_override !== undefined && Number.isNaN(values.score_override) ? null : values.score_override;
 
+    // Only treat actual numeric values as present (not null from cleared inputs)
+    const hasActualScore = typeof normalizedScore === "number" && normalizedScore !== null;
+    const hasActualOverride = typeof normalizedOverride === "number" && normalizedOverride !== null;
+
     const forceMissingOff =
-      (normalizedScore !== undefined || normalizedOverride !== undefined) &&
+      (hasActualScore || hasActualOverride) &&
       !studentGradebookColumn.score &&
       !studentGradebookColumn.score_override &&
       studentGradebookColumn.is_missing;
-    await gradebookController.updateGradebookColumnStudent(studentGradebookColumn.id, {
-      ...values,
-      score: values.is_missing && !forceMissingOff ? null : normalizedScore,
-      score_override: normalizedOverride,
-      is_missing: forceMissingOff ? false : values.is_missing
-    });
+
+    // Build clean update payload that omits undefined keys
+    const updatePayload: Partial<GradebookColumnStudent> = {};
+
+    if (values.is_droppable !== undefined) updatePayload.is_droppable = values.is_droppable;
+    if (values.is_excused !== undefined) updatePayload.is_excused = values.is_excused;
+    if (values.score_override_note !== undefined) updatePayload.score_override_note = values.score_override_note;
+
+    // Only include score/score_override/is_missing when explicitly set
+    if (values.score !== undefined) {
+      updatePayload.score = values.is_missing && !forceMissingOff ? null : normalizedScore;
+    }
+    if (values.score_override !== undefined) {
+      updatePayload.score_override = normalizedOverride;
+    }
+    if (values.is_missing !== undefined) {
+      updatePayload.is_missing = forceMissingOff ? false : values.is_missing;
+    }
+
+    await gradebookController.updateGradebookColumnStudent(studentGradebookColumn.id, updatePayload);
     if (onSuccess) onSuccess();
   };
 
