@@ -2,7 +2,6 @@
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { type BroadcastMessage } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   Assignment,
   GradebookColumn,
@@ -11,11 +10,12 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { CourseController, useCourseController } from "./useCourseController";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import { useClassProfiles } from "./useClassProfiles";
@@ -43,11 +43,24 @@ export type GradebookRecordsForStudent = {
     incomplete_values: Json; // JSONB type
   }[];
 };
-
+export function useIsGradebookDataReady() {
+  const gradebookController = useGradebookController();
+  const [isReady, setIsReady] = useState(gradebookController.table.ready);
+  useEffect(() => {
+    let cleanedUp = false;
+    gradebookController.table.readyPromise.then(() => {
+      if (cleanedUp) return;
+      setIsReady(true);
+    });
+    return () => {
+      cleanedUp = true;
+    };
+  }, [gradebookController]);
+  return isReady;
+}
 export function useGradebookColumns() {
   const gradebookController = useGradebookController();
   const [columns, setColumns] = useState<GradebookColumn[]>(gradebookController.gradebook_columns.rows);
-  const isRefetching = useGradebookRefetchStatus();
 
   useEffect(() => {
     return gradebookController.gradebook_columns.list((data) => {
@@ -55,8 +68,7 @@ export function useGradebookColumns() {
     }).unsubscribe;
   }, [gradebookController]);
 
-  // Return empty array during refetch to prevent showing partial data
-  return isRefetching ? [] : columns;
+  return columns;
 }
 
 export function useGradebookColumn(column_id: number) {
@@ -92,11 +104,6 @@ export function useGradebookColumnStudent(column_id: number, student_id: string)
   const [columnStudent, setColumnStudent] = useState<GradebookColumnStudent | undefined>(
     gradebookController.getGradebookColumnStudent(column_id, student_id)
   );
-  const isRefetching = useGradebookRefetchStatus();
-  if (isRefetching) {
-    throw new Error("Should not try to get gradebook column student when any table is refetching");
-    // return undefined;
-  }
 
   useEffect(() => {
     // Use the specialized index for direct access to student/column pair
@@ -104,8 +111,7 @@ export function useGradebookColumnStudent(column_id: number, student_id: string)
     return () => unsubscribe();
   }, [column_id, student_id, gradebookController]);
 
-  // Return undefined during refetch to prevent showing partial data
-  return isRefetching ? undefined : columnStudent;
+  return columnStudent;
 }
 
 export function getScore(gradebookColumnStudent: GradebookColumnStudent | undefined) {
@@ -426,8 +432,8 @@ class StudentGradebookController {
 }
 
 /**
- * Efficient controller for managing gradebook cell data using the new bulk fetch function.
- * Uses a single query to load all gradebook data and subscribes to real-time updates.
+ * Efficient controller for managing gradebook cell data using streaming fetch function.
+ * Uses incremental loading with keyset pagination and subscribes to real-time updates.
  */
 export class GradebookCellController {
   private _data: GradebookRecordsForStudent[] = [];
@@ -438,6 +444,12 @@ export class GradebookCellController {
   private _class_id: number;
   private _unsubscribes: (() => void)[] = [];
   private _closed: boolean = false;
+
+  // Streaming state management
+  private _isLoading: boolean = false;
+  private _hasMoreData: boolean = true;
+  private _lastStudentId: string | null = null;
+  private _loadingListeners: ((isLoading: boolean) => void)[] = [];
 
   // Subscriber management
   private _dataListeners: ((data: GradebookRecordsForStudent[]) => void)[] = [];
@@ -452,17 +464,13 @@ export class GradebookCellController {
   }
 
   private async _initializeEntireGradebookForAllStudents(): Promise<void> {
-    const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
-      class_id: this._class_id
-    });
+    // Use streaming function to load data incrementally
+    await this._loadNextBatch();
 
-    if (this._closed) return;
-
-    if (error) {
-      throw new Error(`Failed to load gradebook data: ${error.message}`);
+    // Continue loading until all data is fetched
+    while (this._hasMoreData && !this._closed) {
+      await this._loadNextBatch();
     }
-
-    this._data = (data as GradebookRecordsForStudent[]) || [];
   }
   private async _initializeGradebookForThisStudent(): Promise<void> {
     const { data, error } = await this._client
@@ -692,20 +700,81 @@ export class GradebookCellController {
     this._refreshData();
   }
 
-  private async _refreshData(): Promise<void> {
+  /**
+   * Load the next batch of students using the streaming function
+   */
+  private async _loadNextBatch(): Promise<void> {
+    if (!this._hasMoreData || this._isLoading || this._closed) return;
+
+    this._isLoading = true;
+    this._loadingListeners.forEach((listener) => listener(true));
+
     try {
-      const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
-        class_id: this._class_id
+      const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students_stream", {
+        class_id: this._class_id,
+        after_student_id: this._lastStudentId ?? undefined,
+        limit_rows: 300 // Default batch size
       });
 
       if (error) {
-        // Silent failure for refresh operations to avoid disrupting the UI
-        return;
+        throw new Error(`Failed to load gradebook data batch: ${error.message}`);
       }
 
       if (this._closed) return;
 
-      this._data = (data as GradebookRecordsForStudent[]) || [];
+      const batchData = (data as { private_profile_id: string; entries: Json }[]) || [];
+
+      if (batchData.length === 0) {
+        this._hasMoreData = false;
+      } else {
+        // Convert the batch data to the expected format
+        const convertedBatch: GradebookRecordsForStudent[] = batchData.map((row) => ({
+          private_profile_id: row.private_profile_id,
+          entries: row.entries as GradebookRecordsForStudent["entries"]
+        }));
+
+        // Append new data to existing data
+        this._data.push(...convertedBatch);
+
+        // Update the last student ID for pagination
+        const lastStudent = convertedBatch[convertedBatch.length - 1];
+        this._lastStudentId = lastStudent.private_profile_id;
+
+        // Check if we got fewer results than requested (indicates end of data)
+        if (batchData.length < 300) {
+          this._hasMoreData = false;
+        }
+
+        // Notify listeners of new data
+        this._dataListeners.forEach((listener) => listener(this._data));
+
+        // Notify student-specific listeners for new students
+        convertedBatch.forEach((student) => {
+          const listeners = this._studentListeners.get(student.private_profile_id);
+          if (listeners) {
+            listeners.forEach((listener) => listener(student));
+          }
+        });
+      }
+    } catch (error) {
+      if (!this._closed) {
+        throw error;
+      }
+    } finally {
+      this._isLoading = false;
+      this._loadingListeners.forEach((listener) => listener(false));
+    }
+  }
+
+  private async _refreshData(): Promise<void> {
+    try {
+      // Reset streaming state for full refresh
+      this._data = [];
+      this._lastStudentId = null;
+      this._hasMoreData = true;
+
+      // Load all data using streaming
+      await this._initializeEntireGradebookForAllStudents();
 
       // Notify all listeners
       this._dataListeners.forEach((listener) => listener(this._data));
@@ -733,6 +802,14 @@ export class GradebookCellController {
 
   get data(): GradebookRecordsForStudent[] {
     return this._data;
+  }
+
+  get isLoading(): boolean {
+    return this._isLoading;
+  }
+
+  get hasMoreData(): boolean {
+    return this._hasMoreData;
   }
 
   /**
@@ -794,6 +871,29 @@ export class GradebookCellController {
   }
 
   /**
+   * Subscribe to loading state changes
+   */
+  subscribeToLoadingState(listener: (isLoading: boolean) => void): () => void {
+    this._loadingListeners.push(listener);
+
+    // Immediately call with current state
+    listener(this._isLoading);
+
+    return () => {
+      this._loadingListeners = this._loadingListeners.filter((l) => l !== listener);
+    };
+  }
+
+  /**
+   * Load more data if available (for on-demand loading)
+   */
+  async loadMore(): Promise<void> {
+    if (this._hasMoreData && !this._isLoading) {
+      await this._loadNextBatch();
+    }
+  }
+
+  /**
    * Force a refresh of all data from the database
    */
   async refresh(): Promise<void> {
@@ -834,6 +934,7 @@ export class GradebookCellController {
     this._unsubscribes = [];
     this._dataListeners = [];
     this._studentListeners.clear();
+    this._loadingListeners = [];
   }
 }
 
@@ -1059,11 +1160,6 @@ export class GradebookController {
 
   // Get all students for a specific column using the new controller
   getStudentsForColumn(column_id: number): GradebookColumnStudent[] {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      return [];
-    }
-
     const students: GradebookColumnStudent[] = [];
 
     // Iterate through all students in the new controller
@@ -1110,11 +1206,6 @@ export class GradebookController {
 
   // Get all columns for a specific student using the new controller
   getColumnsForStudent(student_id: string): GradebookColumnStudent[] {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      return [];
-    }
-
     const studentData = this.table.getStudentData(student_id);
     if (!studentData) {
       return [];
@@ -1166,12 +1257,6 @@ export class GradebookController {
   }
 
   getGradebookColumnStudent(column_id: number, student_id: string): GradebookColumnStudent | undefined {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      throw new Error("Should not try to get gradebook column student when any table is refetching");
-      // return undefined;
-    }
-
     const studentData = this.table.getStudentData(student_id);
     if (!studentData) {
       return undefined;
@@ -1467,10 +1552,6 @@ export class GradebookController {
     return result;
   }
   get columns() {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      return [];
-    }
     return this.gradebook_columns.rows;
   }
 
@@ -1546,6 +1627,7 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    console.log("Gradebook provider effect created");
     return () => {
       if (controller.current) {
         controller.current.close();
@@ -1658,4 +1740,29 @@ export function useGradebookRefetchStatus() {
   }, [gradebookController]);
 
   return isRefetching;
+}
+
+export function useGradebookLoadingStatus() {
+  const gradebookController = useGradebookController();
+  const [isLoading, setIsLoading] = useState(gradebookController.table.isLoading);
+  const [hasMoreData, setHasMoreData] = useState(gradebookController.table.hasMoreData);
+
+  useEffect(() => {
+    const unsubscribe = gradebookController.table.subscribeToLoadingState(setIsLoading);
+    return unsubscribe;
+  }, [gradebookController]);
+
+  useEffect(() => {
+    // Subscribe to data changes to track hasMoreData
+    const unsubscribe = gradebookController.table.subscribeToData(() => {
+      setHasMoreData(gradebookController.table.hasMoreData);
+    });
+    return unsubscribe;
+  }, [gradebookController]);
+
+  return {
+    isLoading,
+    hasMoreData,
+    loadMore: () => gradebookController.table.loadMore()
+  };
 }
