@@ -16,7 +16,7 @@ export default function NotificationsBox() {
   const [modalNotifications, setModalNotifications] = useState<Notification[]>([]);
   const [bannerNotifications, setBannerNotifications] = useState<Notification[]>([]);
   const { role: classRole } = useClassProfiles();
-  const course_id = classRole.class_id;
+  const course_id = classRole?.class_id;
 
   // Filter out notifications where the author is the current user and separate by display mode
   const allFilteredNotifications = useMemo(
@@ -162,9 +162,11 @@ export default function NotificationsBox() {
                   <Text fontWeight="semibold" fontSize="lg" color="fg.default">
                     Notifications
                   </Text>
-                  <Link href={`/course/${course_id}/notifications`} color="fg.muted" mt="1">
-                    View all
-                  </Link>
+                  {course_id && (
+                    <Link href={`/course/${course_id}/notifications`} color="fg.muted" mt="1">
+                      View all
+                    </Link>
+                  )}
                   {unreadCount > 0 && (
                     <Text fontSize="sm" color="fg.muted" mt="1">
                       {unreadCount} unread

@@ -412,9 +412,9 @@ export class CourseController {
   get notifications(): TableController<"notifications"> {
     if (!this._notifications) {
       this._notifications = new TableController({
-        client: this._client,
+        client: this.client,
         table: "notifications",
-        query: this._client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
+        query: this.client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
         classRealTimeController: this.classRealTimeController
       });
     }

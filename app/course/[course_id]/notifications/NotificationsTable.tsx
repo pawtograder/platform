@@ -13,7 +13,6 @@ import { FaExternalLinkAlt, FaTrash } from "react-icons/fa";
 
 function getType(n: Notification): string {
   const body = n.body && typeof n.body === "object" ? (n.body as { type?: string }) : undefined;
-  console.log(body);
   return body?.type ?? "unknown";
 }
 
