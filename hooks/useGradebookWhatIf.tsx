@@ -6,7 +6,6 @@ import { GradebookController, useGradebookController } from "./useGradebook";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { CourseController, useCourseController } from "./useCourseController";
-import { useLogIfChanged } from "@/app/course/[course_id]/discussion/discussion_thread";
 import { Spinner } from "@chakra-ui/react";
 
 const TRACE_WHAT_IF_CALCULATIONS = true;
@@ -881,8 +880,6 @@ function GradebookWhatIfProviderInternal({
   const gradebookController = useGradebookController();
   const courseController = useCourseController();
   const controllerRef = useRef<GradebookWhatIfController | null>(null);
-  useLogIfChanged("private_profile_id", private_profile_id);
-  useLogIfChanged("gradebookController", gradebookController);
 
   // Cleanup and reinitialize when private_profile_id changes
   useEffect(() => {

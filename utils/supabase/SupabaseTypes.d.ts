@@ -9116,11 +9116,11 @@ export type Database = {
         }[];
       };
       get_gradebook_records_for_all_students: {
-        Args: { class_id: number };
+        Args: { p_class_id: number };
         Returns: Json;
       };
       get_gradebook_records_for_all_students_array: {
-        Args: { class_id: number };
+        Args: { p_class_id: number };
         Returns: Json;
       };
       get_instructor_dashboard_metrics: {
