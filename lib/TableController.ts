@@ -646,8 +646,9 @@ export default class TableController<
         const { data, error } = await this._client
           .from(this._table)
           .select(selectClause)
-          .gt("updated_at", sinceIso)
+          .gte("updated_at", sinceIso)
           .order("updated_at", { ascending: true, nullsFirst: false })
+          .order("id", { ascending: true })
           .range(rangeStart, rangeEnd);
 
         if (this._closed) return;
@@ -712,6 +713,7 @@ export default class TableController<
     } catch (error) {
       // If incremental fails (e.g., due to missing column), fall back to full refetch on next attempt
       Sentry.captureException(error);
+      this._maxUpdatedAtMs = null;
     } finally {
       this._isRefetching = false;
       this._refetchListeners.forEach((listener) => listener(false));

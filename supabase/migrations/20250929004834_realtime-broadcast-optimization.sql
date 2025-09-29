@@ -20,6 +20,8 @@ DECLARE
   t text;
   tables text[] := ARRAY[
     'assignment_due_date_exceptions',
+    'student_deadline_extensions',
+    'profiles',
     'discussion_thread_read_status',
     'discussion_thread_watchers',
     'discussion_threads',
@@ -114,7 +116,7 @@ BEGIN
   ) THEN
     CREATE POLICY "own rows only" ON public.realtime_channel_subscriptions
       USING (user_id = auth.uid())
-      WITH CHECK (user_id = auth.uid());
+      WITH CHECK (user_id = auth.uid() AND lease_expires_at <= now() + interval '15 minutes');
   END IF;
 END $$;
 
@@ -132,12 +134,21 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  guarded_user_id uuid;
+  capped_lease_seconds integer;
 BEGIN
+  -- Guard against NULL auth.uid() with fallback
+  guarded_user_id := COALESCE(auth.uid(), '00000000-0000-0000-0000-000000000000'::uuid);
+  
+  -- Cap lease duration to prevent permanent leases (min 60s, max 3600s = 1 hour)
+  capped_lease_seconds := LEAST(GREATEST(p_lease_seconds, 60), 3600);
+  
   INSERT INTO public.realtime_channel_subscriptions (channel, client_id, user_id, profile_id, class_id, lease_expires_at)
-  VALUES (p_channel, p_client_id, auth.uid(), p_profile_id, p_class_id, now() + make_interval(secs => GREATEST(p_lease_seconds, 60)))
+  VALUES (p_channel, p_client_id, guarded_user_id, p_profile_id, p_class_id, now() + make_interval(secs => capped_lease_seconds))
   ON CONFLICT (channel, client_id) DO UPDATE
     SET lease_expires_at = EXCLUDED.lease_expires_at,
-        user_id = auth.uid(),
+        user_id = guarded_user_id,
         profile_id = EXCLUDED.profile_id,
         class_id = EXCLUDED.class_id,
         updated_at = now();
@@ -150,16 +161,27 @@ CREATE OR REPLACE FUNCTION public.refresh_realtime_subscription(
   p_client_id uuid,
   p_lease_seconds integer DEFAULT 150
 ) RETURNS void
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  guarded_user_id uuid;
+  capped_lease_seconds integer;
+BEGIN
+  -- Guard against NULL auth.uid() with fallback
+  guarded_user_id := COALESCE(auth.uid(), '00000000-0000-0000-0000-000000000000'::uuid);
+  
+  -- Cap lease duration to prevent permanent leases (min 60s, max 3600s = 1 hour)
+  capped_lease_seconds := LEAST(GREATEST(p_lease_seconds, 60), 3600);
+  
   INSERT INTO public.realtime_channel_subscriptions (channel, client_id, user_id, lease_expires_at)
-  VALUES ($1, $2, auth.uid(), now() + make_interval(secs => GREATEST($3, 60)))
+  VALUES (p_channel, p_client_id, guarded_user_id, now() + make_interval(secs => capped_lease_seconds))
   ON CONFLICT (channel, client_id) DO UPDATE
     SET lease_expires_at = EXCLUDED.lease_expires_at,
-        user_id = auth.uid(),
+        user_id = guarded_user_id,
         updated_at = now();
+END;
 $$;
 
 -- Unregister a lease
@@ -167,12 +189,19 @@ CREATE OR REPLACE FUNCTION public.unregister_realtime_subscription(
   p_channel text,
   p_client_id uuid
 ) RETURNS void
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  guarded_user_id uuid;
+BEGIN
+  -- Guard against NULL auth.uid() with fallback
+  guarded_user_id := COALESCE(auth.uid(), '00000000-0000-0000-0000-000000000000'::uuid);
+  
   DELETE FROM public.realtime_channel_subscriptions
-  WHERE channel = $1 AND client_id = $2 AND user_id = auth.uid();
+  WHERE channel = p_channel AND client_id = p_client_id AND user_id = guarded_user_id;
+END;
 $$;
 
 -- Check whether any active subscriptions exist for a channel
@@ -525,6 +554,7 @@ $$;
 -- Create unified broadcast function for gradebook_column_students changes
 CREATE OR REPLACE FUNCTION broadcast_gradebook_column_students_change()
 RETURNS TRIGGER AS $$
+SET search_path = public, pg_temp
 DECLARE
     target_class_id BIGINT;
     target_student_id UUID;
@@ -751,6 +781,7 @@ AS $function$
 declare
     target_class_id bigint;
     staff_payload jsonb;
+    student_payload jsonb;
     affected_profile_ids uuid[];
     profile_id uuid;
 begin
@@ -789,22 +820,22 @@ begin
             true
         );
 
-        -- Student-facing broadcasts for discussion threads (respect RLS constraints):
-        -- The SELECT policies already gate what students can fetch. We broadcast minimal payload to per-user channels.
-        SELECT ARRAY(
-            SELECT ur.private_profile_id
-            FROM public.user_roles ur
-            WHERE ur.class_id = target_class_id AND ur.role = 'student'
-        ) INTO affected_profile_ids;
+        -- Minimal student payload; clients refetch
+        student_payload := jsonb_build_object(
+            'type','table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'row_id', case when TG_OP='DELETE' then OLD.id else NEW.id end,
+            'class_id', target_class_id,
+            'timestamp', now()
+        );
 
-        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
-            PERFORM public.safe_broadcast(
-                staff_payload,
-                'broadcast',
-                'class:' || target_class_id || ':user:' || profile_id,
-                true
-            );
-        END LOOP;
+        PERFORM public.safe_broadcast(
+            student_payload,
+            'broadcast',
+            'class:' || target_class_id,
+            true
+        );
     end if;
 
     -- Return the appropriate record
@@ -818,6 +849,7 @@ $function$
 ;
 CREATE OR REPLACE FUNCTION broadcast_gradebook_columns_change()
 RETURNS TRIGGER AS $$
+SET search_path = public, pg_temp
 DECLARE
     target_class_id BIGINT;
     staff_payload JSONB;
@@ -864,7 +896,7 @@ BEGIN
         -- Get all students in the class for user channels
         SELECT ARRAY(
             SELECT ur.private_profile_id
-            FROM user_roles ur
+            FROM public.user_roles ur
             WHERE ur.class_id = target_class_id AND ur.role = 'student'
         ) INTO affected_profile_ids;
 
@@ -1145,6 +1177,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION broadcast_regrade_request_data_change()
 RETURNS TRIGGER AS $$
+SET search_path = public, pg_temp
 DECLARE
     class_id BIGINT;
     assignee_profile_id UUID;
@@ -1192,9 +1225,9 @@ BEGIN
             -- Get all affected profile IDs (submission owner + group members)
             SELECT ARRAY(
                 SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
-                FROM submissions s
-                LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
-                LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                FROM public.submissions s
+                LEFT JOIN public.assignment_groups ag ON s.assignment_group_id = ag.id
+                LEFT JOIN public.assignment_groups_members agm ON ag.id = agm.assignment_group_id
                 WHERE s.id = NEW.submission_id
             ) INTO affected_profile_ids;
             
@@ -1232,9 +1265,9 @@ BEGIN
                 -- Get new affected profile IDs (submission owner + group members)
                 SELECT ARRAY(
                     SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
-                    FROM submissions s
-                    LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
-                    LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                    FROM public.submissions s
+                    LEFT JOIN public.assignment_groups ag ON s.assignment_group_id = ag.id
+                    LEFT JOIN public.assignment_groups_members agm ON ag.id = agm.assignment_group_id
                     WHERE s.id = NEW.submission_id
                 ) INTO new_affected_profile_ids;
                 
@@ -1274,9 +1307,9 @@ BEGIN
             -- For deletes, broadcast to the submission owner and all group members
             SELECT ARRAY(
                 SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
-                FROM submissions s
-                LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
-                LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                FROM public.submissions s
+                LEFT JOIN public.assignment_groups ag ON s.assignment_group_id = ag.id
+                LEFT JOIN public.assignment_groups_members agm ON ag.id = agm.assignment_group_id
                 WHERE s.id = OLD.submission_id
             ) INTO affected_profile_ids;
             
@@ -1835,3 +1868,37 @@ LEFT JOIN review_info ri
 LEFT JOIN due_date_ex de
   ON de.assignment_id = a.id AND de.student_profile_id = ur.student_profile_id
 WHERE a.archived_at IS NULL;
+
+-- Cleanup function for expired realtime subscriptions
+CREATE OR REPLACE FUNCTION public.cleanup_expired_realtime_subscriptions()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  deleted_count integer;
+BEGIN
+  -- Delete subscriptions that expired more than 1 hour ago
+  DELETE FROM public.realtime_channel_subscriptions
+  WHERE lease_expires_at < now() - interval '1 hour';
+  
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  
+  -- Log cleanup activity (optional - can be removed if logging is not needed)
+  IF deleted_count > 0 THEN
+    RAISE NOTICE 'Cleaned up % expired realtime subscriptions', deleted_count;
+  END IF;
+END;
+$$;
+
+-- Schedule cleanup job to run every 24 hours
+-- Note: This requires pg_cron extension to be enabled
+SELECT cron.schedule(
+  'cleanup-expired-realtime-subscriptions',
+  '0 0 * * *', -- Run daily at midnight
+  'SELECT public.cleanup_expired_realtime_subscriptions();'
+);
+
+COMMENT ON FUNCTION public.cleanup_expired_realtime_subscriptions() IS 
+'Cleans up expired realtime channel subscriptions that have been expired for more than 1 hour. Scheduled to run daily via pg_cron.';
