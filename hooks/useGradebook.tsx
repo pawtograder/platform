@@ -460,7 +460,7 @@ export class GradebookCellController {
 
   private async _initializeEntireGradebookForAllStudents(): Promise<void> {
     const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
-      class_id: this._class_id
+      p_class_id: this._class_id
     });
 
     if (this._closed) return;
