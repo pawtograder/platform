@@ -9116,34 +9116,12 @@ export type Database = {
         }[];
       };
       get_gradebook_records_for_all_students: {
-        Args: { class_id: number };
+        Args: { p_class_id: number };
         Returns: Json;
       };
       get_gradebook_records_for_all_students_array: {
-        Args: { class_id: number };
+        Args: { p_class_id: number };
         Returns: Json;
-      };
-      get_gradebook_records_for_all_students_array_stream: {
-        Args: {
-          after_student_id?: string;
-          class_id: number;
-          limit_rows?: number;
-        };
-        Returns: {
-          entries: Json;
-          private_profile_id: string;
-        }[];
-      };
-      get_gradebook_records_for_all_students_stream: {
-        Args: {
-          after_student_id?: string;
-          class_id: number;
-          limit_rows?: number;
-        };
-        Returns: {
-          entries: Json;
-          private_profile_id: string;
-        }[];
       };
       get_instructor_dashboard_metrics: {
         Args: { p_class_id: number; p_now?: string };

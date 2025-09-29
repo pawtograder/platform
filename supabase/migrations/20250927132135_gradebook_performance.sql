@@ -2,6 +2,7 @@
 -- Goal: Perform a single early authorization check, then run pure SQL without repeated checks
 
 -- get_gradebook_records_for_all_students: early RLS check, then fast aggregation
+DROP FUNCTION IF EXISTS "public"."get_gradebook_records_for_all_students"(bigint);
 CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students"("p_class_id" bigint)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -50,6 +51,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS "public"."get_gradebook_records_for_all_students_array"(bigint);
 -- Array variant: early RLS check, then array aggregation
 CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students_array"("p_class_id" bigint)
 RETURNS jsonb
