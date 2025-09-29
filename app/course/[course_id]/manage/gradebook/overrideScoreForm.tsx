@@ -57,8 +57,9 @@ export function OverrideScoreForm({
   const onSubmit = async (values: Partial<GradebookColumnStudent>) => {
     // Normalize NaN values to null
     const normalizedScore = values.score !== undefined && Number.isNaN(values.score) ? null : values.score;
-    const normalizedOverride = values.score_override !== undefined && Number.isNaN(values.score_override) ? null : values.score_override;
-    
+    const normalizedOverride =
+      values.score_override !== undefined && Number.isNaN(values.score_override) ? null : values.score_override;
+
     const forceMissingOff =
       (normalizedScore !== undefined || normalizedOverride !== undefined) &&
       !studentGradebookColumn.score &&
