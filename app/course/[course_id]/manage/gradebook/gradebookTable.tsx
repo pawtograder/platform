@@ -58,7 +58,7 @@ import {
   Tooltip,
   VStack
 } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { useList, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
   Column,
@@ -135,11 +135,8 @@ function ScoreExprDocs() {
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
-  const { mutateAsync: createColumn } = useCreate<GradebookColumn>({
-    resource: "gradebook_columns"
-  });
+
   const [isLoading, setIsLoading] = useState(false);
-  const invalidate = useInvalidate();
   const onClose = useCallback(() => {
     setIsOpen(false);
   }, []);
@@ -180,24 +177,17 @@ function AddColumnDialog() {
     setIsLoading(true);
     try {
       const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", -1);
-      await createColumn({
-        resource: "gradebook_columns",
-        values: {
-          name: data.name,
-          description: data.description,
-          max_score: data.maxScore,
-          slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
-          render_expression: data.renderExpression?.length ? data.renderExpression : null,
-          dependencies,
-          class_id: gradebookController.class_id,
-          gradebook_id: gradebookController.gradebook_id,
-          sort_order: gradebookController.gradebook_columns.rows.length
-        }
-      });
-      invalidate({
-        resource: "gradebook_columns",
-        invalidates: ["all"]
+      await gradebookController.gradebook_columns.create({
+        name: data.name,
+        description: data.description,
+        max_score: data.maxScore,
+        slug: data.slug,
+        score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+        render_expression: data.renderExpression?.length ? data.renderExpression : null,
+        dependencies,
+        class_id: gradebookController.class_id,
+        gradebook_id: gradebookController.gradebook_id,
+        sort_order: gradebookController.gradebook_columns.rows.length
       });
       setIsLoading(false);
       toaster.create({
@@ -649,9 +639,9 @@ function ConvertMissingToZeroDialog({ columnId, onClose }: { columnId: number; o
 
 function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: () => void }) {
   const supabase = createClient();
-  const invalidate = useInvalidate();
   const [isDeleting, setIsDeleting] = useState(false);
   const columns = useGradebookColumns();
+  const gradebookController = useGradebookController();
   const dependentColumns = useMemo(() => {
     return columns.filter(
       (c) =>
@@ -704,11 +694,7 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
                       onClick={async () => {
                         setIsDeleting(true);
                         await supabase.from("gradebook_column_students").delete().eq("gradebook_column_id", columnId);
-                        await supabase.from("gradebook_columns").delete().eq("id", columnId);
-                        await invalidate({
-                          resource: "gradebook_columns",
-                          invalidates: ["all"]
-                        });
+                        await gradebookController.gradebook_columns.delete(columnId);
                         onClose();
                       }}
                     >
@@ -1174,8 +1160,7 @@ function GradebookColumnHeader({
   const [isMovingRight, setIsMovingRight] = useState(false);
   const [isReleasing, setIsReleasing] = useState(false);
   const [isUnreleasing, setIsUnreleasing] = useState(false);
-  const supabase = createClient();
-  const invalidate = useInvalidate();
+  const supabase = useMemo(() => createClient(), []);
   const headerRef = useRef<HTMLDivElement>(null);
 
   const moveLeft = useCallback(async () => {
@@ -1188,12 +1173,7 @@ function GradebookColumnHeader({
       });
 
       if (error) throw error;
-
-      await invalidate({
-        resource: "gradebook_columns",
-        id: column_id,
-        invalidates: ["all"]
-      });
+      await gradebookController.gradebook_columns.refetchAll();
 
       toaster.create({
         title: "Column moved left",
@@ -1209,7 +1189,7 @@ function GradebookColumnHeader({
     } finally {
       setIsMovingLeft(false);
     }
-  }, [column_id, column, invalidate, supabase]);
+  }, [column_id, column, supabase, gradebookController]);
 
   const moveRight = useCallback(async () => {
     if (column.sort_order == null) return;
@@ -1222,11 +1202,7 @@ function GradebookColumnHeader({
 
       if (error) throw error;
 
-      await invalidate({
-        resource: "gradebook_columns",
-        id: column_id,
-        invalidates: ["all"]
-      });
+      await gradebookController.gradebook_columns.refetchAll();
 
       toaster.create({
         title: "Column moved right",
@@ -1242,7 +1218,7 @@ function GradebookColumnHeader({
     } finally {
       setIsMovingRight(false);
     }
-  }, [column_id, column, invalidate, supabase]);
+  }, [column_id, column, supabase, gradebookController]);
 
   const releaseColumn = useCallback(async () => {
     setIsReleasing(true);
@@ -1251,11 +1227,7 @@ function GradebookColumnHeader({
 
       if (error) throw error;
 
-      await invalidate({
-        resource: "gradebook_columns",
-        id: column_id,
-        invalidates: ["all"]
-      });
+      await gradebookController.gradebook_columns.refetchAll();
 
       toaster.create({
         title: "Column released",
@@ -1271,7 +1243,7 @@ function GradebookColumnHeader({
     } finally {
       setIsReleasing(false);
     }
-  }, [column_id, column, invalidate, supabase]);
+  }, [column_id, column, supabase, gradebookController]);
 
   const unreleaseColumn = useCallback(async () => {
     setIsUnreleasing(true);
@@ -1280,11 +1252,7 @@ function GradebookColumnHeader({
 
       if (error) throw error;
 
-      await invalidate({
-        resource: "gradebook_columns",
-        id: column_id,
-        invalidates: ["all"]
-      });
+      await gradebookController.gradebook_columns.refetchAll();
 
       toaster.create({
         title: "Column unreleased",
@@ -1300,7 +1268,7 @@ function GradebookColumnHeader({
     } finally {
       setIsUnreleasing(false);
     }
-  }, [column_id, column, invalidate, supabase]);
+  }, [column_id, column, supabase, gradebookController]);
 
   const toolTipText = useMemo(() => {
     const ret: string[] = [];

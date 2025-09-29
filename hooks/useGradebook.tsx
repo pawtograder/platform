@@ -10,6 +10,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
+import * as Sentry from "@sentry/nextjs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { CourseController, useCourseController } from "./useCourseController";
@@ -445,10 +446,7 @@ export class GradebookCellController {
   private _unsubscribes: (() => void)[] = [];
   private _closed: boolean = false;
 
-  // Streaming state management
   private _isLoading: boolean = false;
-  private _hasMoreData: boolean = true;
-  private _lastStudentId: string | null = null;
   private _loadingListeners: ((isLoading: boolean) => void)[] = [];
 
   // Subscriber management
@@ -464,13 +462,15 @@ export class GradebookCellController {
   }
 
   private async _initializeEntireGradebookForAllStudents(): Promise<void> {
-    // Use streaming function to load data incrementally
-    await this._loadNextBatch();
+    const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
+      class_id: this._class_id
+    });
 
-    // Continue loading until all data is fetched
-    while (this._hasMoreData && !this._closed) {
-      await this._loadNextBatch();
+    if (this._closed) return;
+    if (error) {
+      throw new Error(`Failed to load gradebook data: ${error.message}`);
     }
+    this._data = (data as GradebookRecordsForStudent[]) || [];
   }
   private async _initializeGradebookForThisStudent(): Promise<void> {
     const { data, error } = await this._client
@@ -700,72 +700,6 @@ export class GradebookCellController {
     this._refreshData();
   }
 
-  /**
-   * Load the next batch of students using the streaming function
-   */
-  private async _loadNextBatch(): Promise<void> {
-    if (!this._hasMoreData || this._isLoading || this._closed) return;
-
-    this._isLoading = true;
-    this._loadingListeners.forEach((listener) => listener(true));
-
-    try {
-      const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students_stream", {
-        class_id: this._class_id,
-        after_student_id: this._lastStudentId ?? undefined,
-        limit_rows: 300 // Default batch size
-      });
-
-      if (error) {
-        throw new Error(`Failed to load gradebook data batch: ${error.message}`);
-      }
-
-      if (this._closed) return;
-
-      const batchData = (data as { private_profile_id: string; entries: Json }[]) || [];
-
-      if (batchData.length === 0) {
-        this._hasMoreData = false;
-      } else {
-        // Convert the batch data to the expected format
-        const convertedBatch: GradebookRecordsForStudent[] = batchData.map((row) => ({
-          private_profile_id: row.private_profile_id,
-          entries: row.entries as GradebookRecordsForStudent["entries"]
-        }));
-
-        // Append new data to existing data
-        this._data.push(...convertedBatch);
-
-        // Update the last student ID for pagination
-        const lastStudent = convertedBatch[convertedBatch.length - 1];
-        this._lastStudentId = lastStudent.private_profile_id;
-
-        // Check if we got fewer results than requested (indicates end of data)
-        if (batchData.length < 300) {
-          this._hasMoreData = false;
-        }
-
-        // Notify listeners of new data
-        this._dataListeners.forEach((listener) => listener(this._data));
-
-        // Notify student-specific listeners for new students
-        convertedBatch.forEach((student) => {
-          const listeners = this._studentListeners.get(student.private_profile_id);
-          if (listeners) {
-            listeners.forEach((listener) => listener(student));
-          }
-        });
-      }
-    } catch (error) {
-      if (!this._closed) {
-        throw error;
-      }
-    } finally {
-      this._isLoading = false;
-      this._loadingListeners.forEach((listener) => listener(false));
-    }
-  }
-
   private async _refreshData(): Promise<void> {
     try {
       // Reset streaming state for full refresh
@@ -806,10 +740,6 @@ export class GradebookCellController {
 
   get isLoading(): boolean {
     return this._isLoading;
-  }
-
-  get hasMoreData(): boolean {
-    return this._hasMoreData;
   }
 
   /**
@@ -882,15 +812,6 @@ export class GradebookCellController {
     return () => {
       this._loadingListeners = this._loadingListeners.filter((l) => l !== listener);
     };
-  }
-
-  /**
-   * Load more data if available (for on-demand loading)
-   */
-  async loadMore(): Promise<void> {
-    if (this._hasMoreData && !this._isLoading) {
-      await this._loadNextBatch();
-    }
   }
 
   /**
@@ -1026,35 +947,8 @@ export class GradebookController {
       this.assignments_table.readyPromise
     ]);
 
-    // Set up gradebook-specific broadcast subscriptions
-    this._setupGradebookSubscriptions();
-
     // Set up refetch status tracking
     this._setupRefetchTracking();
-  }
-
-  private _setupGradebookSubscriptions() {
-    // Subscribe to gradebook_columns changes for column structure updates
-    const unsubscribeColumns = this._classRealTimeController.subscribeToTable("gradebook_columns", () => {
-      // The TableController will handle the actual data updates
-      // This subscription is for any additional gradebook-specific logic
-    });
-    this._unsubscribes.push(unsubscribeColumns);
-
-    // The GradebookCellController handles its own real-time subscriptions
-    // No additional subscription needed here
-  }
-
-  private _handleGradeChange(gradeData: GradebookColumnStudent) {
-    // Handle any gradebook-specific logic when grades change
-    // This could include updating calculated columns, notifications, etc.
-
-    // Example: If this is a student's public grade (is_private = false),
-    // we might want to trigger additional UI updates
-    if (gradeData.is_private === false) {
-      // Update any cached calculations or trigger UI refresh
-      // The actual data updates are handled by TableController
-    }
   }
 
   private _setupRefetchTracking() {
@@ -1627,7 +1521,6 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    console.log("Gradebook provider effect created");
     return () => {
       if (controller.current) {
         controller.current.close();
@@ -1745,24 +1638,13 @@ export function useGradebookRefetchStatus() {
 export function useGradebookLoadingStatus() {
   const gradebookController = useGradebookController();
   const [isLoading, setIsLoading] = useState(gradebookController.table.isLoading);
-  const [hasMoreData, setHasMoreData] = useState(gradebookController.table.hasMoreData);
 
   useEffect(() => {
     const unsubscribe = gradebookController.table.subscribeToLoadingState(setIsLoading);
     return unsubscribe;
   }, [gradebookController]);
 
-  useEffect(() => {
-    // Subscribe to data changes to track hasMoreData
-    const unsubscribe = gradebookController.table.subscribeToData(() => {
-      setHasMoreData(gradebookController.table.hasMoreData);
-    });
-    return unsubscribe;
-  }, [gradebookController]);
-
   return {
-    isLoading,
-    hasMoreData,
-    loadMore: () => gradebookController.table.loadMore()
+    isLoading
   };
 }
