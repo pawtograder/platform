@@ -102,6 +102,9 @@ END;
 $$;
 
 -- Maintain ownership and permissions consistent with prior migrations
+REVOKE EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students"(bigint) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students_array"(bigint) FROM PUBLIC;
+
 ALTER FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint) OWNER TO "postgres";
 ALTER FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id" bigint) OWNER TO "postgres";
 
