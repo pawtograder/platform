@@ -2,6 +2,7 @@
 
 import NotificationTeaser from "@/components/notifications/notification-teaser";
 import { toaster } from "@/components/ui/toaster";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useNotifications } from "@/hooks/useNotifications";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, HStack, IconButton, Spinner, Table, Text, VStack } from "@chakra-ui/react";
@@ -54,7 +55,7 @@ type DiscussionBody = {
 // }
 
 export default function NotificationsTable() {
-  const { notifications, set_read, dismiss } = useNotifications();
+  const { notifications, set_read, dismiss, mark_all_read, delete_all } = useNotifications();
   const { course_id } = useParams();
   const router = useRouter();
 
@@ -114,9 +115,33 @@ export default function NotificationsTable() {
 
   return (
     <VStack w="100%" align="stretch" gap={6} p={4}>
-      <Text fontSize="lg" fontWeight="semibold">
-        Notifications
-      </Text>
+      <HStack justify="space-between" w="100%">
+        <Text fontSize="lg" fontWeight="semibold">
+          Notifications
+        </Text>
+        <HStack gap={2}>
+          <Button
+            size="sm"
+            variant="subtle"
+            colorPalette="green"
+            onClick={() => mark_all_read(notifications || [])}
+            disabled={isLoading || !notifications?.some((n) => !n.viewed_at)}
+          >
+            Mark all as read
+          </Button>
+          <PopConfirm
+            triggerLabel="Delete all notifications"
+            trigger={
+              <Button size="sm" variant="ghost" colorPalette="red" disabled={isLoading || !notifications?.length}>
+                Delete all
+              </Button>
+            }
+            confirmHeader="Delete all notifications"
+            confirmText="Are you sure you want to delete all notifications? This action cannot be undone."
+            onConfirm={() => delete_all(notifications || [])}
+          />
+        </HStack>
+      </HStack>
 
       {/* Office Hours */}
       <VStack align="stretch" gap={3}>
@@ -124,7 +149,34 @@ export default function NotificationsTable() {
           <Text fontSize="md" fontWeight="semibold">
             Office Hours
           </Text>
-          <Text color="fg.muted">{officeHoursMessages.length} items</Text>
+          <HStack gap={2}>
+            <Text color="fg.muted">{officeHoursMessages.length} items</Text>
+            <Button
+              size="xs"
+              variant="subtle"
+              colorPalette="green"
+              onClick={() => mark_all_read(officeHoursMessages)}
+              disabled={isLoading || !officeHoursMessages.some((n) => !n.viewed_at)}
+            >
+              Mark all as read
+            </Button>
+            <PopConfirm
+              triggerLabel="Delete all office hours notifications"
+              trigger={
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  colorPalette="red"
+                  disabled={isLoading || !officeHoursMessages.length}
+                >
+                  Delete all
+                </Button>
+              }
+              confirmHeader="Delete all office hours notifications"
+              confirmText="Are you sure you want to delete all office hours notifications? This action cannot be undone."
+              onConfirm={() => delete_all(officeHoursMessages)}
+            />
+          </HStack>
         </HStack>
         <Box overflowX="auto">
           <Table.Root minW="0" w="100%">
@@ -132,7 +184,7 @@ export default function NotificationsTable() {
               <Table.Row>
                 <Table.ColumnHeader bg="bg.muted">When</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Queue</Table.ColumnHeader>
-                <Table.ColumnHeader bg="bg.muted">Who replied</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted">User</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted">Message</Table.ColumnHeader>
                 <Table.ColumnHeader bg="bg.muted" textAlign="right">
                   Actions
@@ -222,7 +274,29 @@ export default function NotificationsTable() {
           <Text fontSize="md" fontWeight="semibold">
             Discussion Threads
           </Text>
-          <Text color="fg.muted">{discussion.length} items</Text>
+          <HStack gap={2}>
+            <Text color="fg.muted">{discussion.length} items</Text>
+            <Button
+              size="xs"
+              variant="subtle"
+              colorPalette="green"
+              onClick={() => mark_all_read(discussion)}
+              disabled={isLoading || !discussion.some((n) => !n.viewed_at)}
+            >
+              Mark all as read
+            </Button>
+            <PopConfirm
+              triggerLabel="Delete all discussion notifications"
+              trigger={
+                <Button size="xs" variant="ghost" colorPalette="red" disabled={isLoading || !discussion.length}>
+                  Delete all
+                </Button>
+              }
+              confirmHeader="Delete all discussion notifications"
+              confirmText="Are you sure you want to delete all discussion notifications? This action cannot be undone."
+              onConfirm={() => delete_all(discussion)}
+            />
+          </HStack>
         </HStack>
         <Box overflowX="auto">
           <Table.Root minW="0" w="100%">
@@ -313,7 +387,29 @@ export default function NotificationsTable() {
           <Text fontSize="md" fontWeight="semibold">
             Other
           </Text>
-          <Text color="fg.muted">{other.length} items</Text>
+          <HStack gap={2}>
+            <Text color="fg.muted">{other.length} items</Text>
+            <Button
+              size="xs"
+              variant="subtle"
+              colorPalette="green"
+              onClick={() => mark_all_read(other)}
+              disabled={isLoading || !other.some((n) => !n.viewed_at)}
+            >
+              Mark all as read
+            </Button>
+            <PopConfirm
+              triggerLabel="Delete all other notifications"
+              trigger={
+                <Button size="xs" variant="ghost" colorPalette="red" disabled={isLoading || !other.length}>
+                  Delete all
+                </Button>
+              }
+              confirmHeader="Delete all other notifications"
+              confirmText="Are you sure you want to delete all other notifications? This action cannot be undone."
+              onConfirm={() => delete_all(other)}
+            />
+          </HStack>
         </HStack>
         <Box overflowX="auto">
           <Table.Root minW="0" w="100%">

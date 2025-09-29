@@ -70,6 +70,23 @@ export function useNotifications(resource?: string, id?: number) {
     [delete_notification, controller]
   );
 
+  const mark_all_read = useCallback(
+    async (notificationList: Notification[]) => {
+      const unreadNotifications = notificationList.filter((n) => !n.viewed_at);
+      const promises = unreadNotifications.map((notification) => set_read(notification, true));
+      await Promise.all(promises);
+    },
+    [set_read]
+  );
+
+  const delete_all = useCallback(
+    async (notificationList: Notification[]) => {
+      const promises = notificationList.map((notification) => dismiss(notification));
+      await Promise.all(promises);
+    },
+    [dismiss]
+  );
+
   // Handle resource-specific notifications
   useEffect(() => {
     if (resource && id) {
@@ -137,5 +154,5 @@ export function useNotifications(resource?: string, id?: number) {
   // Return the appropriate notifications based on whether resource/id are provided
   const notifications = resource && id ? resourceNotifications : allNotifications;
 
-  return { notifications, set_read, dismiss };
+  return { notifications, set_read, dismiss, mark_all_read, delete_all };
 }
