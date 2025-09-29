@@ -43,10 +43,8 @@ CREATE TABLE public.class_metrics_totals (
     hint_feedback_total bigint DEFAULT 0,
     hint_feedback_useful_total bigint DEFAULT 0,
     hint_feedback_with_comments bigint DEFAULT 0,
-    workflow_runs_total bigint DEFAULT 0,
     workflow_runs_completed bigint DEFAULT 0,
     workflow_runs_failed bigint DEFAULT 0,
-    workflow_runs_in_progress bigint DEFAULT 0,
     workflow_errors_total bigint DEFAULT 0,
     created_at timestamptz DEFAULT now() NOT NULL,
     updated_at timestamptz DEFAULT now() NOT NULL
@@ -85,9 +83,7 @@ WITH totals AS (
     COALESCE((SELECT COUNT(*) FROM public.grader_result_tests_hint_feedback gf WHERE gf.class_id = c.id), 0) AS hint_feedback_total,
     COALESCE((SELECT COUNT(*) FROM public.grader_result_tests_hint_feedback gf WHERE gf.class_id = c.id AND gf.useful = true), 0) AS hint_feedback_useful_total,
     COALESCE((SELECT COUNT(*) FROM public.grader_result_tests_hint_feedback gf WHERE gf.class_id = c.id AND gf.comment IS NOT NULL AND btrim(gf.comment) <> ''), 0) AS hint_feedback_with_comments,
-    COALESCE((SELECT COUNT(*) FROM public.workflow_events_summary wes WHERE wes.class_id = c.id), 0) AS workflow_runs_total,
     COALESCE((SELECT COUNT(*) FROM public.workflow_events_summary wes WHERE wes.class_id = c.id AND wes.completed_at IS NOT NULL), 0) AS workflow_runs_completed,
-    COALESCE((SELECT COUNT(*) FROM public.workflow_events_summary wes WHERE wes.class_id = c.id AND wes.completed_at IS NULL AND wes.in_progress_at IS NOT NULL), 0) AS workflow_runs_in_progress,
     COALESCE((SELECT COUNT(*) FROM public.workflow_events_summary wes WHERE wes.class_id = c.id AND wes.completed_at IS NULL AND wes.in_progress_at IS NULL AND wes.requested_at IS NOT NULL), 0) AS workflow_runs_failed,
     COALESCE((SELECT COUNT(*) FROM public.workflow_run_error wre WHERE wre.class_id = c.id), 0) AS workflow_errors_total
   FROM public.classes c
@@ -117,10 +113,8 @@ SET assignments_total = totals.assignments_total,
     hint_feedback_total = totals.hint_feedback_total,
     hint_feedback_useful_total = totals.hint_feedback_useful_total,
     hint_feedback_with_comments = totals.hint_feedback_with_comments,
-    workflow_runs_total = totals.workflow_runs_total,
     workflow_runs_completed = totals.workflow_runs_completed,
     workflow_runs_failed = totals.workflow_runs_failed,
-    workflow_runs_in_progress = totals.workflow_runs_in_progress,
     workflow_errors_total = totals.workflow_errors_total,
     updated_at = now()
 FROM totals
@@ -532,104 +526,26 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   target_class bigint := COALESCE(NEW.class_id, OLD.class_id);
-  affected_workflow_run_id bigint;
-  affected_run_attempt integer;
-  old_state text;
-  new_state text;
 BEGIN
-  -- Get the workflow_run_id and run_attempt that was affected
-  affected_workflow_run_id := COALESCE(NEW.workflow_run_id, OLD.workflow_run_id);
-  affected_run_attempt := COALESCE(NEW.run_attempt, OLD.run_attempt);
-  
-  -- Determine the old state of this workflow run (only for DELETE)
-  IF TG_OP = 'DELETE' THEN
-    SELECT CASE 
-      WHEN MAX(CASE WHEN event_type = 'completed' AND conclusion IN ('success', 'neutral') THEN 1 ELSE 0 END) = 1 THEN 'completed'
-      WHEN MAX(CASE WHEN event_type = 'completed' AND (conclusion IS NULL OR conclusion NOT IN ('success', 'neutral')) THEN 1 ELSE 0 END) = 1 THEN 'failed'
-      WHEN MAX(CASE WHEN event_type = 'in_progress' THEN 1 ELSE 0 END) = 1 THEN 'in_progress'
-      ELSE 'unknown'
-    END INTO old_state
-    FROM public.workflow_events
-    WHERE class_id = target_class 
-      AND workflow_run_id = affected_workflow_run_id 
-      AND run_attempt = affected_run_attempt
-      AND (workflow_run_id, run_attempt) <> (OLD.workflow_run_id, OLD.run_attempt);
-  END IF;
-  
-  -- Determine the new state of this workflow run (only for INSERT)
-  IF TG_OP = 'INSERT' THEN
-    SELECT CASE 
-      WHEN MAX(CASE WHEN event_type = 'completed' AND conclusion IN ('success', 'neutral') THEN 1 ELSE 0 END) = 1 THEN 'completed'
-      WHEN MAX(CASE WHEN event_type = 'completed' AND (conclusion IS NULL OR conclusion NOT IN ('success', 'neutral')) THEN 1 ELSE 0 END) = 1 THEN 'failed'
-      WHEN MAX(CASE WHEN event_type = 'in_progress' THEN 1 ELSE 0 END) = 1 THEN 'in_progress'
-      ELSE 'unknown'
-    END INTO new_state
-    FROM public.workflow_events
-    WHERE class_id = target_class 
-      AND workflow_run_id = affected_workflow_run_id 
-      AND run_attempt = affected_run_attempt;
-  END IF;
-  
-  -- Handle workflow_runs_total changes
-  IF TG_OP = 'INSERT' THEN
-    -- Check if this is the first event for this workflow_run_id + run_attempt combination
-    IF NOT EXISTS (
-      SELECT 1 FROM public.workflow_events 
-      WHERE class_id = target_class 
-        AND workflow_run_id = affected_workflow_run_id 
-        AND run_attempt = affected_run_attempt
-        AND (workflow_run_id, run_attempt) <> (NEW.workflow_run_id, NEW.run_attempt)
-    ) THEN
-      UPDATE public.class_metrics_totals
-      SET workflow_runs_total = workflow_runs_total + 1, updated_at = now()
-      WHERE class_id = target_class;
-    END IF;
-  ELSIF TG_OP = 'DELETE' THEN
-    -- Check if this was the last event for this workflow_run_id + run_attempt combination
-    IF NOT EXISTS (
-      SELECT 1 FROM public.workflow_events 
-      WHERE class_id = target_class 
-        AND workflow_run_id = affected_workflow_run_id 
-        AND run_attempt = affected_run_attempt
-        AND (workflow_run_id, run_attempt) <> (OLD.workflow_run_id, OLD.run_attempt)
-    ) THEN
-      UPDATE public.class_metrics_totals
-      SET workflow_runs_total = workflow_runs_total - 1, updated_at = now()
-      WHERE class_id = target_class;
-    END IF;
-  END IF;
-  
-  -- Handle state-specific counter changes
-  IF TG_OP = 'DELETE' AND old_state IS NOT NULL THEN
-    -- Remove from old state counter
-    IF old_state = 'completed' THEN
-      UPDATE public.class_metrics_totals
-      SET workflow_runs_completed = workflow_runs_completed - 1, updated_at = now()
-      WHERE class_id = target_class;
-    ELSIF old_state = 'failed' THEN
-      UPDATE public.class_metrics_totals
-      SET workflow_runs_failed = workflow_runs_failed - 1, updated_at = now()
-      WHERE class_id = target_class;
-    ELSIF old_state = 'in_progress' THEN
-      UPDATE public.class_metrics_totals
-      SET workflow_runs_in_progress = workflow_runs_in_progress - 1, updated_at = now()
-      WHERE class_id = target_class;
-    END IF;
-  END IF;
-  
-  IF TG_OP = 'INSERT' AND new_state IS NOT NULL THEN
-    -- Add to new state counter
-    IF new_state = 'completed' THEN
+  -- Only track completed events (success or failure)
+  IF TG_OP = 'INSERT' AND NEW.event_type = 'completed' THEN
+    IF NEW.conclusion IN ('success', 'neutral') THEN
       UPDATE public.class_metrics_totals
       SET workflow_runs_completed = workflow_runs_completed + 1, updated_at = now()
       WHERE class_id = target_class;
-    ELSIF new_state = 'failed' THEN
+    ELSE
       UPDATE public.class_metrics_totals
       SET workflow_runs_failed = workflow_runs_failed + 1, updated_at = now()
       WHERE class_id = target_class;
-    ELSIF new_state = 'in_progress' THEN
+    END IF;
+  ELSIF TG_OP = 'DELETE' AND OLD.event_type = 'completed' THEN
+    IF OLD.conclusion IN ('success', 'neutral') THEN
       UPDATE public.class_metrics_totals
-      SET workflow_runs_in_progress = workflow_runs_in_progress + 1, updated_at = now()
+      SET workflow_runs_completed = workflow_runs_completed - 1, updated_at = now()
+      WHERE class_id = target_class;
+    ELSE
+      UPDATE public.class_metrics_totals
+      SET workflow_runs_failed = workflow_runs_failed - 1, updated_at = now()
       WHERE class_id = target_class;
     END IF;
   END IF;
@@ -843,10 +759,8 @@ BEGIN
              'hint_feedback_total', COALESCE(mt.hint_feedback_total, 0),
              'hint_feedback_useful_total', COALESCE(mt.hint_feedback_useful_total, 0),
              'hint_feedback_with_comments', COALESCE(mt.hint_feedback_with_comments, 0),
-             'workflow_runs_total', COALESCE(mt.workflow_runs_total, 0),
              'workflow_runs_completed', COALESCE(mt.workflow_runs_completed, 0),
              'workflow_runs_failed', COALESCE(mt.workflow_runs_failed, 0),
-             'workflow_runs_in_progress', COALESCE(mt.workflow_runs_in_progress, 0),
              'workflow_errors_total', COALESCE(mt.workflow_errors_total, 0)
            )
          )
