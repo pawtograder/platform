@@ -496,7 +496,7 @@ export async function POST(request: NextRequest) {
 
     // If it's a UserVisibleError, return the message directly
     if (error instanceof UserVisibleError) {
-      if (!error.isBug) {
+      if (error.isBug) {
         Sentry.captureException(error, {
           tags: {
             operation: "llm_hint_api"
