@@ -83,8 +83,10 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");
+  const redirectParam = data.get("redirect") as string | null;
+  const redirectPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : undefined;
   if (action === "signin") {
-    return signInWithEmailAction(email as string, password as string);
+    return signInWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "signup") {
     return signUpWithEmailAction(email as string, password as string);
   } else if (action === "reset-password") {
@@ -102,14 +104,16 @@ export const resetPasswordAction = async (email: string) => {
   }
   return encodedRedirect("success", "/sign-in", "Password reset email sent", { email });
 };
-export const signInWithEmailAction = async (email: string, password: string) => {
+export const signInWithEmailAction = async (email: string, password: string, redirectPath?: string) => {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message, { email });
+    const params: Record<string, string> = { email };
+    if (redirectPath) params.redirect = redirectPath;
+    return encodedRedirect("error", "/sign-in", error.message, params);
   }
   if (data.user) {
-    return redirect("/course");
+    return redirect(redirectPath ?? "/course");
   }
 };
 export const signUpWithEmailAction = async (email: string, password: string) => {
@@ -139,24 +143,26 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     return redirect("/course");
   }
 };
-export const signInWithMicrosoftAction = async () => {
+export const signInWithMicrosoftAction = async (formData: FormData) => {
   const supabase = await createClient();
 
-  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
+  const redirectParam = formData.get("redirect") as string | null;
+  const nextPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
+  const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback?next=${encodeURIComponent(nextPath)}`;
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email User.Read", redirectTo }
   });
 
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/sign-in", error.message, { redirect: nextPath });
   }
 
   if (authData.url) {
     return redirect(authData.url);
   }
 
-  return redirect("/course");
+  return redirect(nextPath || "/course");
 };
 
 export const signOutAction = async () => {
