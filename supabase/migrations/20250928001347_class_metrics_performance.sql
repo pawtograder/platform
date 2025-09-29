@@ -63,7 +63,7 @@ WITH totals AS (
     COALESCE((SELECT COUNT(*) FROM public.user_roles ur WHERE ur.class_id = c.id::integer AND ur.role = 'student' AND ur.disabled = false), 0) AS active_students_total,
     COALESCE((SELECT COUNT(*) FROM public.user_roles ur WHERE ur.class_id = c.id::integer AND ur.role = 'instructor' AND ur.disabled = false), 0) AS active_instructors_total,
     COALESCE((SELECT COUNT(*) FROM public.user_roles ur WHERE ur.class_id = c.id::integer AND ur.role = 'grader' AND ur.disabled = false), 0) AS active_graders_total,
-    COALESCE((SELECT COUNT(*) FROM public.submissions s WHERE s.class_id = c.id AND s.is_active = true), 0) AS submissions_total,
+    COALESCE((SELECT COUNT(*) FROM public.submissions s WHERE s.class_id = c.id), 0) AS submissions_total,
     COALESCE((SELECT COUNT(*) FROM public.submission_reviews sr WHERE sr.class_id = c.id AND sr.completed_at IS NOT NULL), 0) AS submission_reviews_total,
     COALESCE((SELECT COUNT(*) FROM public.submission_comments sc WHERE sc.class_id = c.id), 0)
       + COALESCE((SELECT COUNT(*) FROM public.submission_artifact_comments sac WHERE sac.class_id = c.id), 0)
@@ -541,8 +541,8 @@ BEGIN
   affected_workflow_run_id := COALESCE(NEW.workflow_run_id, OLD.workflow_run_id);
   affected_run_attempt := COALESCE(NEW.run_attempt, OLD.run_attempt);
   
-  -- Determine the old state of this workflow run
-  IF TG_OP = 'DELETE' OR TG_OP = 'UPDATE' THEN
+  -- Determine the old state of this workflow run (only for DELETE)
+  IF TG_OP = 'DELETE' THEN
     SELECT CASE 
       WHEN MAX(CASE WHEN event_type = 'completed' AND conclusion IN ('success', 'neutral') THEN 1 ELSE 0 END) = 1 THEN 'completed'
       WHEN MAX(CASE WHEN event_type = 'completed' AND (conclusion IS NULL OR conclusion NOT IN ('success', 'neutral')) THEN 1 ELSE 0 END) = 1 THEN 'failed'
@@ -553,11 +553,11 @@ BEGIN
     WHERE class_id = target_class 
       AND workflow_run_id = affected_workflow_run_id 
       AND run_attempt = affected_run_attempt
-      AND (TG_OP = 'DELETE' OR (event_type <> NEW.event_type OR conclusion IS DISTINCT FROM NEW.conclusion));
+      AND (workflow_run_id, run_attempt) <> (OLD.workflow_run_id, OLD.run_attempt);
   END IF;
   
-  -- Determine the new state of this workflow run
-  IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+  -- Determine the new state of this workflow run (only for INSERT)
+  IF TG_OP = 'INSERT' THEN
     SELECT CASE 
       WHEN MAX(CASE WHEN event_type = 'completed' AND conclusion IN ('success', 'neutral') THEN 1 ELSE 0 END) = 1 THEN 'completed'
       WHEN MAX(CASE WHEN event_type = 'completed' AND (conclusion IS NULL OR conclusion NOT IN ('success', 'neutral')) THEN 1 ELSE 0 END) = 1 THEN 'failed'
@@ -600,7 +600,7 @@ BEGIN
   END IF;
   
   -- Handle state-specific counter changes
-  IF old_state IS NOT NULL AND old_state <> COALESCE(new_state, 'unknown') THEN
+  IF TG_OP = 'DELETE' AND old_state IS NOT NULL THEN
     -- Remove from old state counter
     IF old_state = 'completed' THEN
       UPDATE public.class_metrics_totals
@@ -617,7 +617,7 @@ BEGIN
     END IF;
   END IF;
   
-  IF new_state IS NOT NULL AND new_state <> COALESCE(old_state, 'unknown') THEN
+  IF TG_OP = 'INSERT' AND new_state IS NOT NULL THEN
     -- Add to new state counter
     IF new_state = 'completed' THEN
       UPDATE public.class_metrics_totals
@@ -790,7 +790,7 @@ FOR EACH ROW EXECUTE FUNCTION public.class_metrics_user_roles_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_workflow_events_trg ON public.workflow_events;
 CREATE TRIGGER class_metrics_workflow_events_trg
-AFTER INSERT OR UPDATE OR DELETE ON public.workflow_events
+AFTER INSERT OR DELETE ON public.workflow_events
 FOR EACH ROW EXECUTE FUNCTION public.class_metrics_workflow_events_counter();
 
 DROP TRIGGER IF EXISTS class_metrics_workflow_errors_trg ON public.workflow_run_error;
