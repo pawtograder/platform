@@ -157,7 +157,15 @@ export default function NotificationsTable() {
                 </Table.Row>
               ) : (
                 officeHoursMessages.map((n) => {
-                  const b = (n.body || {}) as Partial<HelpRequestMessageBody>;
+                  const b = (n.body || {}) as Partial<HelpRequestMessageBody | HelpRequestBody>;
+                  const isHelpRequest = b.type === "help_request";
+                  const whoReplied = isHelpRequest 
+                    ? (b as Partial<HelpRequestBody>).creator_name || (b as Partial<HelpRequestBody>).assignee_name || ""
+                    : (b as Partial<HelpRequestMessageBody>).author_name || "";
+                  const messageText = isHelpRequest
+                    ? (b as Partial<HelpRequestBody>).request_preview || ""
+                    : (b as Partial<HelpRequestMessageBody>).message_preview || "";
+                  
                   return (
                     <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
                       <Table.Cell>
@@ -169,11 +177,11 @@ export default function NotificationsTable() {
                         <Text>{b.help_queue_name || ""}</Text>
                       </Table.Cell>
                       <Table.Cell>
-                        <Text fontWeight="medium">{b.author_name || ""}</Text>
+                        <Text fontWeight="medium">{whoReplied}</Text>
                       </Table.Cell>
                       <Table.Cell>
                         <Text lineClamp={2} color="fg.muted">
-                          {b.message_preview || ""}
+                          {messageText}
                         </Text>
                       </Table.Cell>
                       <Table.Cell>
