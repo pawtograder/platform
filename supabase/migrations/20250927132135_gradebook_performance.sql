@@ -2,17 +2,17 @@
 -- Goal: Perform a single early authorization check, then run pure SQL without repeated checks
 
 -- get_gradebook_records_for_all_students: early RLS check, then fast aggregation
-CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint)
+CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students"("p_class_id" bigint)
 RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
 PARALLEL SAFE
 SECURITY DEFINER
-SET search_path TO 'pg_catalog,public'
+SET search_path TO pg_catalog,public
 AS $$
 BEGIN
     -- Early authorization guard - return immediately if unauthorized
-    IF NOT public.authorizeforclassgrader(class_id) THEN
+    IF NOT public.authorizeforclassgrader(p_class_id) THEN
         RETURN '[]'::jsonb;
     END IF;
     
@@ -43,7 +43,7 @@ BEGIN
                 ) as student_data
             FROM public.gradebook_column_students gcs
             INNER JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
-            WHERE gcs.class_id = get_gradebook_records_for_all_students.class_id
+            WHERE gcs.class_id = p_class_id
             GROUP BY gcs.student_id
         ) grouped_data
     );
@@ -51,17 +51,17 @@ END;
 $$;
 
 -- Array variant: early RLS check, then array aggregation
-CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id" bigint)
+CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students_array"("p_class_id" bigint)
 RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
 PARALLEL SAFE  
 SECURITY DEFINER  
-SET search_path TO 'pg_catalog,public'
+SET search_path TO pg_catalog,public
 AS $$
 BEGIN
     -- Early authorization guard - return immediately if unauthorized
-    IF NOT public.authorizeforclassgrader(class_id) THEN
+    IF NOT public.authorizeforclassgrader(p_class_id) THEN
         RETURN '[]'::jsonb;
     END IF;
     
@@ -94,7 +94,7 @@ BEGIN
                 ) as entries_array
             FROM public.gradebook_column_students gcs
             INNER JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
-            WHERE gcs.class_id = get_gradebook_records_for_all_students_array.class_id
+            WHERE gcs.class_id = p_class_id
             GROUP BY gcs.student_id
         ) array_data
     );
@@ -107,10 +107,8 @@ ALTER FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id
 
 GRANT EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint) TO "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint) TO "service_role";
-GRANT EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint) TO "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id" bigint) TO "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id" bigint) TO "service_role";
-GRANT EXECUTE ON FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id" bigint) TO "anon";
 
 COMMENT ON FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint) IS 
 'Ultra-high-performance function with early authorization guard; removes inline checks for faster execution on large datasets.';
