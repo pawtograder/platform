@@ -4,16 +4,20 @@
 -- get_gradebook_records_for_all_students: early RLS check, then fast aggregation
 CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students"("class_id" bigint)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 PARALLEL SAFE
 SECURITY DEFINER
-SET search_path TO ''
+SET search_path TO 'pg_catalog,public'
 AS $$
-    -- Early authorization guard
-    SELECT (
-      CASE WHEN public.authorizeforclassgrader(get_gradebook_records_for_all_students.class_id)
-      THEN (
+BEGIN
+    -- Early authorization guard - return immediately if unauthorized
+    IF NOT public.authorizeforclassgrader(class_id) THEN
+        RETURN '[]'::jsonb;
+    END IF;
+    
+    -- Only execute heavy query if authorized
+    RETURN (
         SELECT COALESCE(jsonb_agg(student_data ORDER BY student_id), '[]'::jsonb)
         FROM (
             SELECT 
@@ -42,25 +46,27 @@ AS $$
             WHERE gcs.class_id = get_gradebook_records_for_all_students.class_id
             GROUP BY gcs.student_id
         ) grouped_data
-      )
-      ELSE (SELECT '[]'::jsonb)
-      END
     );
+END;
 $$;
 
 -- Array variant: early RLS check, then array aggregation
 CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students_array"("class_id" bigint)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 PARALLEL SAFE  
 SECURITY DEFINER  
-SET search_path TO ''
+SET search_path TO 'pg_catalog,public'
 AS $$
-    -- Early authorization guard
-    SELECT (
-      CASE WHEN public.authorizeforclassgrader(get_gradebook_records_for_all_students_array.class_id)
-      THEN (
+BEGIN
+    -- Early authorization guard - return immediately if unauthorized
+    IF NOT public.authorizeforclassgrader(class_id) THEN
+        RETURN '[]'::jsonb;
+    END IF;
+    
+    -- Only execute heavy query if authorized
+    RETURN (
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
                 'private_profile_id', student_id::text,
@@ -91,10 +97,8 @@ AS $$
             WHERE gcs.class_id = get_gradebook_records_for_all_students_array.class_id
             GROUP BY gcs.student_id
         ) array_data
-      )
-      ELSE (SELECT '[]'::jsonb)
-      END
     );
+END;
 $$;
 
 -- Maintain ownership and permissions consistent with prior migrations

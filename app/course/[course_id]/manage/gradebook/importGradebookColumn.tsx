@@ -91,7 +91,7 @@ export default function ImportGradebookColumns() {
             external_data: {
               source: "csv",
               fileName: importJob?.filename,
-              date: new Date().toLocaleDateString(),
+              date: new Date().toISOString(),
               creator: private_profile_id
             },
             max_score: maxScore,

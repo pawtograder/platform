@@ -63,6 +63,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   const column = useGradebookColumn(columnId);
   const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
   const triggerId = useId();
+  const contentId = useId();
   const { openAt } = useGradebookPopover();
   const triggerRef = useRef<HTMLDivElement | null>(null);
 
@@ -127,7 +128,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
           content={scoreAdvice}
           positioning={{ placement: "bottom" }}
           showArrow={true}
-          ids={{ trigger: triggerId }}
+          ids={{ trigger: triggerId, content: contentId }}
           disabled={!scoreAdvice}
           contentProps={{ style: { zIndex: 10000 } }}
         >
@@ -153,7 +154,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
                   })
                 : "Not available"
             }`}
-            aria-describedby={scoreAdvice ? `grade-advice-${columnId}-${studentId}` : undefined}
+            aria-describedby={scoreAdvice ? contentId : undefined}
             tabIndex={0}
             onMouseDown={(e) => {
               // Open on mousedown to avoid initial outside-click closing

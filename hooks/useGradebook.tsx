@@ -434,7 +434,7 @@ class StudentGradebookController {
 
 /**
  * Efficient controller for managing gradebook cell data using streaming fetch function.
- * Uses incremental loading with keyset pagination and subscribes to real-time updates.
+ * Uses a single fetch function to load all data, and subscribes to real-time updates.
  */
 export class GradebookCellController {
   private _data: GradebookRecordsForStudent[] = [];
@@ -445,9 +445,6 @@ export class GradebookCellController {
   private _class_id: number;
   private _unsubscribes: (() => void)[] = [];
   private _closed: boolean = false;
-
-  private _isLoading: boolean = false;
-  private _loadingListeners: ((isLoading: boolean) => void)[] = [];
 
   // Subscriber management
   private _dataListeners: ((data: GradebookRecordsForStudent[]) => void)[] = [];
@@ -704,11 +701,14 @@ export class GradebookCellController {
     try {
       // Reset streaming state for full refresh
       this._data = [];
-      this._lastStudentId = null;
-      this._hasMoreData = true;
 
-      // Load all data using streaming
-      await this._initializeEntireGradebookForAllStudents();
+      if (this._classRealTimeController.isStaff) {
+        // Load all data using streaming
+        await this._initializeEntireGradebookForAllStudents();
+      } else {
+        // Load all data using streaming
+        await this._initializeGradebookForThisStudent();
+      }
 
       // Notify all listeners
       this._dataListeners.forEach((listener) => listener(this._data));
@@ -736,10 +736,6 @@ export class GradebookCellController {
 
   get data(): GradebookRecordsForStudent[] {
     return this._data;
-  }
-
-  get isLoading(): boolean {
-    return this._isLoading;
   }
 
   /**
@@ -801,20 +797,6 @@ export class GradebookCellController {
   }
 
   /**
-   * Subscribe to loading state changes
-   */
-  subscribeToLoadingState(listener: (isLoading: boolean) => void): () => void {
-    this._loadingListeners.push(listener);
-
-    // Immediately call with current state
-    listener(this._isLoading);
-
-    return () => {
-      this._loadingListeners = this._loadingListeners.filter((l) => l !== listener);
-    };
-  }
-
-  /**
    * Force a refresh of all data from the database
    */
   async refresh(): Promise<void> {
@@ -855,7 +837,6 @@ export class GradebookCellController {
     this._unsubscribes = [];
     this._dataListeners = [];
     this._studentListeners.clear();
-    this._loadingListeners = [];
   }
 }
 
@@ -1633,18 +1614,4 @@ export function useGradebookRefetchStatus() {
   }, [gradebookController]);
 
   return isRefetching;
-}
-
-export function useGradebookLoadingStatus() {
-  const gradebookController = useGradebookController();
-  const [isLoading, setIsLoading] = useState(gradebookController.table.isLoading);
-
-  useEffect(() => {
-    const unsubscribe = gradebookController.table.subscribeToLoadingState(setIsLoading);
-    return unsubscribe;
-  }, [gradebookController]);
-
-  return {
-    isLoading
-  };
 }
