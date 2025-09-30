@@ -97,6 +97,7 @@ export type Database = {
           note: string | null;
           student_id: string | null;
           tokens_consumed: number;
+          updated_at: string;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -110,6 +111,7 @@ export type Database = {
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
+          updated_at?: string;
         };
         Update: {
           assignment_group_id?: number | null;
@@ -123,6 +125,7 @@ export type Database = {
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -390,13 +393,6 @@ export type Database = {
             foreignKeyName: "assignment_group_join_request_profile_id_fkey1";
             columns: ["profile_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
-          },
-          {
-            foreignKeyName: "assignment_group_join_request_profile_id_fkey1";
-            columns: ["profile_id"];
-            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["student_profile_id"];
           },
@@ -588,13 +584,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["student_private_profile_id"];
-          },
-          {
-            foreignKeyName: "assignment_groups_members_profile_id_fkey1";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
           },
           {
             foreignKeyName: "assignment_groups_members_profile_id_fkey1";
@@ -1105,6 +1094,110 @@ export type Database = {
           }
         ];
       };
+      class_metrics_totals: {
+        Row: {
+          active_graders_total: number | null;
+          active_instructors_total: number | null;
+          active_students_total: number | null;
+          assignments_total: number | null;
+          class_id: number;
+          created_at: string;
+          discussion_threads_total: number | null;
+          gradebook_columns_total: number | null;
+          help_request_messages_total: number | null;
+          help_requests_open: number | null;
+          help_requests_total: number | null;
+          hint_feedback_total: number | null;
+          hint_feedback_useful_total: number | null;
+          hint_feedback_with_comments: number | null;
+          late_token_usage_total: number | null;
+          llm_inference_total: number | null;
+          llm_input_tokens_total: number | null;
+          llm_output_tokens_total: number | null;
+          notifications_unread: number | null;
+          regrade_requests_total: number | null;
+          submission_comments_total: number | null;
+          submission_reviews_total: number | null;
+          submissions_total: number | null;
+          updated_at: string;
+          video_meeting_participants_total: number | null;
+          video_meeting_sessions_total: number | null;
+          workflow_errors_total: number | null;
+          workflow_runs_completed: number | null;
+          workflow_runs_failed: number | null;
+        };
+        Insert: {
+          active_graders_total?: number | null;
+          active_instructors_total?: number | null;
+          active_students_total?: number | null;
+          assignments_total?: number | null;
+          class_id: number;
+          created_at?: string;
+          discussion_threads_total?: number | null;
+          gradebook_columns_total?: number | null;
+          help_request_messages_total?: number | null;
+          help_requests_open?: number | null;
+          help_requests_total?: number | null;
+          hint_feedback_total?: number | null;
+          hint_feedback_useful_total?: number | null;
+          hint_feedback_with_comments?: number | null;
+          late_token_usage_total?: number | null;
+          llm_inference_total?: number | null;
+          llm_input_tokens_total?: number | null;
+          llm_output_tokens_total?: number | null;
+          notifications_unread?: number | null;
+          regrade_requests_total?: number | null;
+          submission_comments_total?: number | null;
+          submission_reviews_total?: number | null;
+          submissions_total?: number | null;
+          updated_at?: string;
+          video_meeting_participants_total?: number | null;
+          video_meeting_sessions_total?: number | null;
+          workflow_errors_total?: number | null;
+          workflow_runs_completed?: number | null;
+          workflow_runs_failed?: number | null;
+        };
+        Update: {
+          active_graders_total?: number | null;
+          active_instructors_total?: number | null;
+          active_students_total?: number | null;
+          assignments_total?: number | null;
+          class_id?: number;
+          created_at?: string;
+          discussion_threads_total?: number | null;
+          gradebook_columns_total?: number | null;
+          help_request_messages_total?: number | null;
+          help_requests_open?: number | null;
+          help_requests_total?: number | null;
+          hint_feedback_total?: number | null;
+          hint_feedback_useful_total?: number | null;
+          hint_feedback_with_comments?: number | null;
+          late_token_usage_total?: number | null;
+          llm_inference_total?: number | null;
+          llm_input_tokens_total?: number | null;
+          llm_output_tokens_total?: number | null;
+          notifications_unread?: number | null;
+          regrade_requests_total?: number | null;
+          submission_comments_total?: number | null;
+          submission_reviews_total?: number | null;
+          submissions_total?: number | null;
+          updated_at?: string;
+          video_meeting_participants_total?: number | null;
+          video_meeting_sessions_total?: number | null;
+          workflow_errors_total?: number | null;
+          workflow_runs_completed?: number | null;
+          workflow_runs_failed?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_metrics_totals_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: true;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       class_sections: {
         Row: {
           campus: string | null;
@@ -1296,6 +1389,7 @@ export type Database = {
           discussion_thread_root_id: number;
           id: number;
           read_at: string | null;
+          updated_at: string;
           user_id: string;
         };
         Insert: {
@@ -1304,6 +1398,7 @@ export type Database = {
           discussion_thread_root_id: number;
           id?: number;
           read_at?: string | null;
+          updated_at?: string;
           user_id?: string;
         };
         Update: {
@@ -1312,6 +1407,7 @@ export type Database = {
           discussion_thread_root_id?: number;
           id?: number;
           read_at?: string | null;
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -1374,6 +1470,7 @@ export type Database = {
           discussion_thread_root_id: number;
           enabled: boolean;
           id: number;
+          updated_at: string;
           user_id: string;
         };
         Insert: {
@@ -1382,6 +1479,7 @@ export type Database = {
           discussion_thread_root_id: number;
           enabled?: boolean;
           id?: number;
+          updated_at?: string;
           user_id: string;
         };
         Update: {
@@ -1390,6 +1488,7 @@ export type Database = {
           discussion_thread_root_id?: number;
           enabled?: boolean;
           id?: number;
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -1437,6 +1536,7 @@ export type Database = {
           root_class_id: number | null;
           subject: string;
           topic_id: number;
+          updated_at: string;
         };
         Insert: {
           answer?: number | null;
@@ -1458,6 +1558,7 @@ export type Database = {
           root_class_id?: number | null;
           subject: string;
           topic_id: number;
+          updated_at?: string;
         };
         Update: {
           answer?: number | null;
@@ -1479,6 +1580,7 @@ export type Database = {
           root_class_id?: number | null;
           subject?: string;
           topic_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -1940,6 +2042,7 @@ export type Database = {
           score_override: number | null;
           score_override_note: string | null;
           student_id: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -1958,6 +2061,7 @@ export type Database = {
           score_override?: number | null;
           score_override_note?: string | null;
           student_id?: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -1976,6 +2080,7 @@ export type Database = {
           score_override?: number | null;
           score_override_note?: string | null;
           student_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2005,13 +2110,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["student_private_profile_id"];
-          },
-          {
-            foreignKeyName: "gradebook_column_students_student_id_fkey1";
-            columns: ["student_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
           },
           {
             foreignKeyName: "gradebook_column_students_student_id_fkey1";
@@ -2054,6 +2152,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -2072,6 +2171,7 @@ export type Database = {
           show_max_score?: boolean;
           slug: string;
           sort_order?: number | null;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -2090,6 +2190,7 @@ export type Database = {
           show_max_score?: boolean;
           slug?: string;
           sort_order?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2784,6 +2885,7 @@ export type Database = {
           max_concurrent_students: number;
           started_at: string;
           ta_profile_id: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -2794,6 +2896,7 @@ export type Database = {
           max_concurrent_students?: number;
           started_at?: string;
           ta_profile_id: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -2804,6 +2907,7 @@ export type Database = {
           max_concurrent_students?: number;
           started_at?: string;
           ta_profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2850,6 +2954,7 @@ export type Database = {
           max_concurrent_requests: number | null;
           name: string;
           queue_type: Database["public"]["Enums"]["help_queue_type"];
+          updated_at: string;
         };
         Insert: {
           available?: boolean;
@@ -2864,6 +2969,7 @@ export type Database = {
           max_concurrent_requests?: number | null;
           name: string;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
+          updated_at?: string;
         };
         Update: {
           available?: boolean;
@@ -2878,6 +2984,7 @@ export type Database = {
           max_concurrent_requests?: number | null;
           name?: string;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2898,6 +3005,7 @@ export type Database = {
           id: number;
           student_profile_id: string;
           thumbs_up: boolean;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -2907,6 +3015,7 @@ export type Database = {
           id?: number;
           student_profile_id: string;
           thumbs_up: boolean;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -2916,6 +3025,7 @@ export type Database = {
           id?: number;
           student_profile_id?: string;
           thumbs_up?: boolean;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2958,6 +3068,7 @@ export type Database = {
           line_number: number | null;
           submission_file_id: number | null;
           submission_id: number | null;
+          updated_at: string;
         };
         Insert: {
           assignment_id: number;
@@ -2968,6 +3079,7 @@ export type Database = {
           line_number?: number | null;
           submission_file_id?: number | null;
           submission_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           assignment_id?: number;
@@ -2978,6 +3090,7 @@ export type Database = {
           line_number?: number | null;
           submission_file_id?: number | null;
           submission_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3073,6 +3186,7 @@ export type Database = {
           help_request_id: number | null;
           id: number;
           message_id: number;
+          updated_at: string;
           viewer_id: string;
         };
         Insert: {
@@ -3081,6 +3195,7 @@ export type Database = {
           help_request_id?: number | null;
           id?: number;
           message_id: number;
+          updated_at?: string;
           viewer_id: string;
         };
         Update: {
@@ -3089,6 +3204,7 @@ export type Database = {
           help_request_id?: number | null;
           id?: number;
           message_id?: number;
+          updated_at?: string;
           viewer_id?: string;
         };
         Relationships: [
@@ -3139,6 +3255,7 @@ export type Database = {
           instructors_only: boolean;
           message: string;
           reply_to_message_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -3149,6 +3266,7 @@ export type Database = {
           instructors_only?: boolean;
           message: string;
           reply_to_message_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -3159,6 +3277,7 @@ export type Database = {
           instructors_only?: boolean;
           message?: string;
           reply_to_message_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3212,6 +3331,7 @@ export type Database = {
           moderator_profile_id: string;
           reason: string | null;
           student_profile_id: string;
+          updated_at: string;
         };
         Insert: {
           action_type: Database["public"]["Enums"]["moderation_action_type"];
@@ -3226,6 +3346,7 @@ export type Database = {
           moderator_profile_id: string;
           reason?: string | null;
           student_profile_id: string;
+          updated_at?: string;
         };
         Update: {
           action_type?: Database["public"]["Enums"]["moderation_action_type"];
@@ -3240,6 +3361,7 @@ export type Database = {
           moderator_profile_id?: string;
           reason?: string | null;
           student_profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3300,6 +3422,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           profile_id: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -3307,6 +3430,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           profile_id: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -3314,6 +3438,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3357,6 +3482,7 @@ export type Database = {
           is_active: boolean;
           name: string;
           template_content: string;
+          updated_at: string;
           usage_count: number;
         };
         Insert: {
@@ -3369,6 +3495,7 @@ export type Database = {
           is_active?: boolean;
           name: string;
           template_content: string;
+          updated_at?: string;
           usage_count?: number;
         };
         Update: {
@@ -3381,6 +3508,7 @@ export type Database = {
           is_active?: boolean;
           name?: string;
           template_content?: string;
+          updated_at?: string;
           usage_count?: number;
         };
         Relationships: [
@@ -3467,6 +3595,7 @@ export type Database = {
           resolved_by: string | null;
           status: Database["public"]["Enums"]["help_request_status"];
           template_id: number | null;
+          updated_at: string;
         };
         Insert: {
           assignee?: string | null;
@@ -3485,6 +3614,7 @@ export type Database = {
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
           template_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           assignee?: string | null;
@@ -3503,6 +3633,7 @@ export type Database = {
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
           template_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3727,6 +3858,7 @@ export type Database = {
           lab_section_id: number;
           meeting_date: string;
           notes: string | null;
+          updated_at: string;
         };
         Insert: {
           cancelled?: boolean;
@@ -3736,6 +3868,7 @@ export type Database = {
           lab_section_id: number;
           meeting_date: string;
           notes?: string | null;
+          updated_at?: string;
         };
         Update: {
           cancelled?: boolean;
@@ -3745,6 +3878,7 @@ export type Database = {
           lab_section_id?: number;
           meeting_date?: string;
           notes?: string | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3778,6 +3912,7 @@ export type Database = {
           name: string;
           sis_crn: number | null;
           start_time: string | null;
+          updated_at: string;
         };
         Insert: {
           campus?: string | null;
@@ -3793,6 +3928,7 @@ export type Database = {
           name: string;
           sis_crn?: number | null;
           start_time?: string | null;
+          updated_at?: string;
         };
         Update: {
           campus?: string | null;
@@ -3808,6 +3944,7 @@ export type Database = {
           name?: string;
           sis_crn?: number | null;
           start_time?: string | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -4385,6 +4522,7 @@ export type Database = {
           short_name: string | null;
           sortable_name: string | null;
           time_zone: string | null;
+          updated_at: string;
         };
         Insert: {
           avatar_url?: string | null;
@@ -4398,6 +4536,7 @@ export type Database = {
           short_name?: string | null;
           sortable_name?: string | null;
           time_zone?: string | null;
+          updated_at?: string;
         };
         Update: {
           avatar_url?: string | null;
@@ -4411,6 +4550,40 @@ export type Database = {
           short_name?: string | null;
           sortable_name?: string | null;
           time_zone?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      realtime_channel_subscriptions: {
+        Row: {
+          channel: string;
+          class_id: number | null;
+          client_id: string;
+          created_at: string;
+          lease_expires_at: string;
+          profile_id: string | null;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          channel: string;
+          class_id?: number | null;
+          client_id: string;
+          created_at?: string;
+          lease_expires_at: string;
+          profile_id?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          channel?: string;
+          class_id?: number | null;
+          client_id?: string;
+          created_at?: string;
+          lease_expires_at?: string;
+          profile_id?: string | null;
+          updated_at?: string;
+          user_id?: string;
         };
         Relationships: [];
       };
@@ -4500,13 +4673,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "repositories_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
           },
           {
             foreignKeyName: "repositories_profile_id_fkey";
@@ -4639,13 +4805,6 @@ export type Database = {
             foreignKeyName: "repository_check_runs_triggered_by_fkey1";
             columns: ["triggered_by"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
-          },
-          {
-            foreignKeyName: "repository_check_runs_triggered_by_fkey1";
-            columns: ["triggered_by"];
-            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["student_profile_id"];
           },
@@ -4672,6 +4831,7 @@ export type Database = {
           id: number;
           review_assignment_id: number;
           rubric_part_id: number;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -4679,6 +4839,7 @@ export type Database = {
           id?: number;
           review_assignment_id: number;
           rubric_part_id: number;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -4686,6 +4847,7 @@ export type Database = {
           id?: number;
           review_assignment_id?: number;
           rubric_part_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -4733,6 +4895,7 @@ export type Database = {
           rubric_id: number;
           submission_id: number;
           submission_review_id: number;
+          updated_at: string;
         };
         Insert: {
           assignee_profile_id: string;
@@ -4748,6 +4911,7 @@ export type Database = {
           rubric_id: number;
           submission_id: number;
           submission_review_id: number;
+          updated_at?: string;
         };
         Update: {
           assignee_profile_id?: string;
@@ -4763,6 +4927,7 @@ export type Database = {
           rubric_id?: number;
           submission_id?: number;
           submission_review_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5378,6 +5543,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           student_profile_id: string;
+          updated_at: string;
         };
         Insert: {
           activity_description?: string | null;
@@ -5387,6 +5553,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           student_profile_id: string;
+          updated_at?: string;
         };
         Update: {
           activity_description?: string | null;
@@ -5396,6 +5563,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           student_profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5511,6 +5679,7 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -5529,6 +5698,7 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -5547,6 +5717,7 @@ export type Database = {
           submission_artifact_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5839,6 +6010,7 @@ export type Database = {
           rubric_check_id: number | null;
           submission_id: number;
           submission_review_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -5856,6 +6028,7 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -5873,6 +6046,7 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id?: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5973,6 +6147,7 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -5992,6 +6167,7 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -6011,6 +6187,7 @@ export type Database = {
           submission_file_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6149,13 +6326,6 @@ export type Database = {
             foreignKeyName: "submission_files_profile_id_fkey";
             columns: ["profile_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
-          },
-          {
-            foreignKeyName: "submission_files_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["student_profile_id"];
           },
@@ -6287,6 +6457,7 @@ export type Database = {
           id: number;
           submission_id: number;
           submission_regrade_request_id: number;
+          updated_at: string;
         };
         Insert: {
           assignment_id: number;
@@ -6297,6 +6468,7 @@ export type Database = {
           id?: number;
           submission_id: number;
           submission_regrade_request_id: number;
+          updated_at?: string;
         };
         Update: {
           assignment_id?: number;
@@ -6307,6 +6479,7 @@ export type Database = {
           id?: number;
           submission_id?: number;
           submission_regrade_request_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6428,6 +6601,7 @@ export type Database = {
           submission_comment_id: number | null;
           submission_file_comment_id: number | null;
           submission_id: number;
+          updated_at: string;
         };
         Insert: {
           assignee: string;
@@ -6454,6 +6628,7 @@ export type Database = {
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id: number;
+          updated_at?: string;
         };
         Update: {
           assignee?: string;
@@ -6480,6 +6655,7 @@ export type Database = {
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6649,6 +6825,7 @@ export type Database = {
           total_autograde_score: number;
           total_score: number;
           tweak: number;
+          updated_at: string;
         };
         Insert: {
           checked_at?: string | null;
@@ -6667,6 +6844,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score: number;
           tweak: number;
+          updated_at?: string;
         };
         Update: {
           checked_at?: string | null;
@@ -6685,6 +6863,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score?: number;
           tweak?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6913,13 +7092,6 @@ export type Database = {
             foreignKeyName: "submissions_profile_id_fkey";
             columns: ["profile_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
-          },
-          {
-            foreignKeyName: "submissions_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["student_profile_id"];
           },
@@ -7004,6 +7176,7 @@ export type Database = {
           id: string;
           name: string;
           profile_id: string;
+          updated_at: string;
           visible: boolean;
         };
         Insert: {
@@ -7014,6 +7187,7 @@ export type Database = {
           id?: string;
           name: string;
           profile_id: string;
+          updated_at?: string;
           visible: boolean;
         };
         Update: {
@@ -7024,6 +7198,7 @@ export type Database = {
           id?: string;
           name?: string;
           profile_id?: string;
+          updated_at?: string;
           visible?: boolean;
         };
         Relationships: [
@@ -7095,6 +7270,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          updated_at: string;
           user_id: string;
         };
         Insert: {
@@ -7110,6 +7286,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          updated_at?: string;
           user_id: string;
         };
         Update: {
@@ -7125,6 +7302,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -7756,27 +7934,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["activesubmissionid"];
-          },
-          {
-            foreignKeyName: "user_roles_private_profile_id_fkey";
-            columns: ["student_profile_id"];
-            isOneToOne: true;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "user_roles_private_profile_id_fkey";
-            columns: ["student_profile_id"];
-            isOneToOne: true;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
-          },
-          {
-            foreignKeyName: "user_roles_user_id_fkey1";
-            columns: ["student_user_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
           }
         ];
       };
@@ -8169,13 +8326,6 @@ export type Database = {
             foreignKeyName: "submissions_profile_id_fkey";
             columns: ["user_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
-          },
-          {
-            foreignKeyName: "submissions_profile_id_fkey";
-            columns: ["user_id"];
-            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["student_profile_id"];
           },
@@ -8415,13 +8565,6 @@ export type Database = {
             foreignKeyName: "repositories_profile_id_fkey";
             columns: ["profile_id"];
             isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
-          },
-          {
-            foreignKeyName: "repositories_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["student_profile_id"];
           },
@@ -8510,13 +8653,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "repositories_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["student_profile_id"];
           },
           {
             foreignKeyName: "repositories_profile_id_fkey";
@@ -8864,6 +9000,10 @@ export type Database = {
         Args: { help_request_id: number };
         Returns: boolean;
       };
+      channel_has_subscribers: {
+        Args: { p_channel: string };
+        Returns: boolean;
+      };
       check_assignment_deadlines_passed: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
@@ -8883,6 +9023,10 @@ export type Database = {
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
+      };
+      cleanup_expired_realtime_subscriptions: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       cleanup_github_async_errors: {
         Args: Record<PropertyKey, never>;
@@ -9263,6 +9407,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          updated_at: string;
         };
       };
       gradebook_column_move_right: {
@@ -9284,6 +9429,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          updated_at: string;
         };
       };
       help_request_is_private: {
@@ -9387,8 +9533,26 @@ export type Database = {
         Args: { p_error_data: Json; p_method: string; p_org: string };
         Returns: undefined;
       };
+      refresh_realtime_subscription: {
+        Args: {
+          p_channel: string;
+          p_client_id: string;
+          p_lease_seconds?: number;
+        };
+        Returns: undefined;
+      };
       refresh_workflow_events_summary: {
         Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
+      register_realtime_subscription: {
+        Args: {
+          p_channel: string;
+          p_class_id?: number;
+          p_client_id: string;
+          p_lease_seconds?: number;
+          p_profile_id?: string;
+        };
         Returns: undefined;
       };
       release_all_grading_reviews_for_assignment: {
@@ -9397,6 +9561,15 @@ export type Database = {
       };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
+        Returns: undefined;
+      };
+      safe_broadcast: {
+        Args: {
+          p_channel: string;
+          p_event: string;
+          p_payload: Json;
+          p_private: boolean;
+        };
         Returns: undefined;
       };
       send_signup_welcome_message: {
@@ -9435,6 +9608,10 @@ export type Database = {
       trigger_sis_sync: {
         Args: { p_class_id?: number };
         Returns: Json;
+      };
+      unregister_realtime_subscription: {
+        Args: { p_channel: string; p_client_id: string };
+        Returns: undefined;
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };

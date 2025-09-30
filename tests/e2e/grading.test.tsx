@@ -148,6 +148,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
     ).toBeVisible({ timeout: 10000 });
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.waitForURL("**/assignments");
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
 
     await page.getByRole("link", { name: assignment!.title }).click();

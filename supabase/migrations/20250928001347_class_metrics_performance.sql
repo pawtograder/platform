@@ -2,7 +2,6 @@
 -- Drops the previous on-demand implementation and replaces it with table-driven totals
 -- covering only simple "all-time" metrics (no time-window calculations).
 
-DROP FUNCTION IF EXISTS public.get_all_class_metrics();
 DROP FUNCTION IF EXISTS public.bump_class_metric(bigint, text, bigint);
 DROP FUNCTION IF EXISTS public.class_metrics_assignments_counter();
 DROP FUNCTION IF EXISTS public.class_metrics_submissions_counter();
@@ -15,6 +14,7 @@ DROP FUNCTION IF EXISTS public.class_metrics_user_roles_counter();
 DROP FUNCTION IF EXISTS public.class_metrics_assignment_due_date_exceptions_counter();
 DROP FUNCTION IF EXISTS public.class_metrics_classes_insert();
 DROP FUNCTION IF EXISTS public.refresh_class_user_role_counts(bigint);
+DROP FUNCTION IF EXISTS public.get_all_class_metrics();
 
 DROP TABLE IF EXISTS public.class_metrics_totals;
 

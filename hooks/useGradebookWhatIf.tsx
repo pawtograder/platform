@@ -376,7 +376,8 @@ class GradebookWhatIfController {
               incomplete_values: incompleteValues,
               is_private: false,
               is_recalculating: false,
-              column_slug: thisColumn!.slug!
+              column_slug: thisColumn!.slug!,
+              updated_at: column.updated_at
             };
             //Find any not released or missing values that this column depends on
             const existingIncompleteValues = this.getIncompleteValues(columnId);
