@@ -6,9 +6,10 @@ import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack 
 import { BsMicrosoft } from "react-icons/bs";
 import { isSignupsEnabled } from "@/lib/features";
 
-type SearchParams = Message & { email?: string; code?: string };
+type SearchParams = Message & { email?: string; code?: string; redirect?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
-  const { email, ...message } = await props.searchParams;
+  const { email, redirect: redirectParam, ...message } = await props.searchParams;
+  const redirectSafe = redirectParam && redirectParam.startsWith("/") ? redirectParam : undefined;
   const enableSignup = isSignupsEnabled();
 
   return (
@@ -22,6 +23,7 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
 
         <Stack gap="3" colorPalette="gray">
           <form action={signInWithMicrosoftAction}>
+            {redirectSafe && <input type="hidden" name="redirect" value={redirectSafe} />}
             <SubmitButton
               variant="outline"
               aria-label="Sign in with Microsoft (Northeastern Login)"
@@ -53,6 +55,7 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
               <Input name="email" placeholder="name@company.com" aria-label="Sign in email" defaultValue={email} />
               <Input name="password" placeholder="password" type="password" aria-label="Sign in password" />
             </Box>
+            {redirectSafe && <input type="hidden" name="redirect" value={redirectSafe} />}
             <Box mt="4">
               <SubmitButton name="action" value="signin" width="100%" pendingText="Signing in…">
                 Sign in with email

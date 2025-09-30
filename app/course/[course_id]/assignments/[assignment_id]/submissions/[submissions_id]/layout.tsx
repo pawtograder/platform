@@ -19,7 +19,7 @@ import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/s
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse, useIsDroppedStudent } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -64,6 +64,7 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { linkToSubPage } from "./utils";
 import { Alert } from "@/components/ui/alert";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -832,6 +833,7 @@ function Comments() {
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { course_id } = useParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -843,6 +845,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const safeTimeZone = time_zone || "UTC";
   const hasExtension = hoursExtended && hoursExtended > 0;
   const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
+  const isDroppedStudent = useIsDroppedStudent(submission.profile_id);
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -880,9 +883,22 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   )
                 </Text>
               ) : (
-                <Text>{submitter?.name}</Text>
+                <>
+                  <Text>{submitter?.name}</Text>{" "}
+                  {isGraderOrInstructor && submission.profile_id && (
+                    <StudentSummaryTrigger
+                      student_id={submission.profile_id}
+                      course_id={parseInt(course_id as string, 10)}
+                    />
+                  )}
+                </>
               )}
               - Submission #{submission.ordinal}
+              {isDroppedStudent && (
+                <Text color="fg.inverted" bg="bg.inverted">
+                  (Dropped)
+                </Text>
+              )}
             </HStack>
             <HStack gap={1}>
               <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">

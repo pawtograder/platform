@@ -7198,7 +7198,9 @@ export type Database = {
           avatar_url: string | null;
           created_at: string;
           email: string | null;
+          github_user_id: string | null;
           github_username: string | null;
+          last_github_user_sync: string | null;
           name: string | null;
           sis_user_id: number | null;
           user_id: string;
@@ -7207,7 +7209,9 @@ export type Database = {
           avatar_url?: string | null;
           created_at?: string;
           email?: string | null;
+          github_user_id?: string | null;
           github_username?: string | null;
+          last_github_user_sync?: string | null;
           name?: string | null;
           sis_user_id?: number | null;
           user_id?: string;
@@ -7216,7 +7220,9 @@ export type Database = {
           avatar_url?: string | null;
           created_at?: string;
           email?: string | null;
+          github_user_id?: string | null;
           github_username?: string | null;
+          last_github_user_sync?: string | null;
           name?: string | null;
           sis_user_id?: number | null;
           user_id?: string;
@@ -9153,11 +9159,11 @@ export type Database = {
         }[];
       };
       get_gradebook_records_for_all_students: {
-        Args: { class_id: number };
+        Args: { p_class_id: number };
         Returns: Json;
       };
       get_gradebook_records_for_all_students_array: {
-        Args: { class_id: number };
+        Args: { p_class_id: number };
         Returns: Json;
       };
       get_instructor_dashboard_metrics: {
@@ -9180,6 +9186,10 @@ export type Database = {
       };
       get_llm_tags_breakdown: {
         Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
+      get_student_summary: {
+        Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
       };
       get_system_notification_stats: {

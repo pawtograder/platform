@@ -159,7 +159,8 @@ function AdjustDueDateDialogContent({
       assignmentDueDateExceptions,
       private_profile_id,
       reset,
-      setError
+      setError,
+      setOpen
     ]
   );
 
@@ -182,7 +183,8 @@ function AdjustDueDateDialogContent({
     <Dialog.Content p={4}>
       <Dialog.Header>
         <Dialog.Title>
-          Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />}
+          Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />} on{" "}
+          {assignment.title}
         </Dialog.Title>
         <Dialog.CloseTrigger />
       </Dialog.Header>

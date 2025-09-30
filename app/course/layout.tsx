@@ -7,7 +7,7 @@ export default async function AuthedLayout({ children }: { children: React.React
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
   if (!user?.user) {
-    redirect("/sign-in");
+    redirect(`/sign-in?redirect=/course`);
   }
   return (
     <AuthStateProvider user={user?.user}>

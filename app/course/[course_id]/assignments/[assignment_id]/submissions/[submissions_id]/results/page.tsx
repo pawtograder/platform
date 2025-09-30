@@ -112,6 +112,11 @@ function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGene
       console.error("LLM Hint Error:", err);
       setError(errorMessage);
 
+      // Do NOT log 429 errors to Sentry
+      if (err instanceof Error && err.message.startsWith("Rate limit:")) {
+        return;
+      }
+
       // Log to Sentry for debugging
       Sentry.captureException(err, {
         tags: {
