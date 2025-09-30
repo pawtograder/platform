@@ -553,8 +553,11 @@ $$;
 
 -- Create unified broadcast function for gradebook_column_students changes
 CREATE OR REPLACE FUNCTION broadcast_gradebook_column_students_change()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = public, pg_temp
+AS $$
 DECLARE
     target_class_id BIGINT;
     target_student_id UUID;
@@ -625,7 +628,7 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 -- Remaining wrappers: watchers/read-status/discussion threads/gradebook columns/row state/staff data/regrade/review/submission
 CREATE OR REPLACE FUNCTION "public"."broadcast_discussion_thread_read_status_unified"() RETURNS "trigger"
@@ -833,7 +836,7 @@ begin
         PERFORM public.safe_broadcast(
             student_payload,
             'broadcast',
-            'class:' || target_class_id,
+            'class:' || target_class_id || ':students',
             true
         );
     end if;
@@ -848,8 +851,11 @@ end;
 $function$
 ;
 CREATE OR REPLACE FUNCTION broadcast_gradebook_columns_change()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = public, pg_temp
+AS $$
 DECLARE
     target_class_id BIGINT;
     staff_payload JSONB;
@@ -922,10 +928,14 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 CREATE OR REPLACE FUNCTION public.broadcast_gradebook_row_state_change()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
   target_class_id BIGINT;
   target_student_id UUID;
@@ -983,7 +993,7 @@ BEGIN
 
   RETURN COALESCE(NEW, OLD);
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 CREATE OR REPLACE FUNCTION public.broadcast_help_queue_data_change()
  RETURNS trigger
@@ -1176,8 +1186,11 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION broadcast_regrade_request_data_change()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = public, pg_temp
+AS $$
 DECLARE
     class_id BIGINT;
     assignee_profile_id UUID;
@@ -1338,7 +1351,7 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 CREATE OR REPLACE FUNCTION broadcast_review_assignment_data_change()
 RETURNS TRIGGER AS $$
@@ -1892,13 +1905,280 @@ BEGIN
 END;
 $$;
 
--- Schedule cleanup job to run every 24 hours
+-- Schedule cleanup job to run every 24 hours (idempotent)
 -- Note: This requires pg_cron extension to be enabled
-SELECT cron.schedule(
-  'cleanup-expired-realtime-subscriptions',
-  '0 0 * * *', -- Run daily at midnight
-  'SELECT public.cleanup_expired_realtime_subscriptions();'
-);
+DO $$
+BEGIN
+  -- Only create the job if it doesn't already exist
+  IF NOT EXISTS (
+    SELECT 1 FROM cron.job 
+    WHERE jobname = 'cleanup-expired-realtime-subscriptions'
+  ) THEN
+    PERFORM cron.schedule(
+      'cleanup-expired-realtime-subscriptions',
+      '0 0 * * *', -- Run daily at midnight
+      'SELECT public.cleanup_expired_realtime_subscriptions();'
+    );
+  END IF;
+END $$;
 
 COMMENT ON FUNCTION public.cleanup_expired_realtime_subscriptions() IS 
 'Cleans up expired realtime channel subscriptions that have been expired for more than 1 hour. Scheduled to run daily via pg_cron.';
+
+
+CREATE OR REPLACE FUNCTION public.check_unified_realtime_authorization(topic_text text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+declare
+    topic_parts text[];
+    topic_type text;
+    class_id_text text;
+    submission_id_text text;
+    profile_id_text text;
+    help_request_id_text text;
+    help_queue_id_text text;
+    class_id_bigint bigint;
+    submission_id_bigint bigint;
+    profile_id_uuid uuid;
+    help_request_id_bigint bigint;
+    help_queue_id_bigint bigint;
+    is_class_grader boolean;
+    is_submission_authorized boolean;
+    is_profile_owner boolean;
+    is_private_request boolean;
+    channel_type text;
+begin
+    -- Parse topic
+    topic_parts := string_to_array(topic_text, ':');
+    if array_length(topic_parts, 1) < 1 then
+        return false;
+    end if;
+    topic_type := topic_parts[1];
+
+    -- Gradebook channels delegate to existing function
+    if topic_type = 'gradebook' then
+        return public.check_gradebook_realtime_authorization(topic_text);
+    end if;
+
+    -- Class-scoped help_queues channels: help_queues:<class_id> and help_queues:<class_id>:staff
+    if topic_type = 'help_queues' then
+        if array_length(topic_parts, 1) < 2 then
+            return false;
+        end if;
+        class_id_text := topic_parts[2];
+        begin
+            class_id_bigint := class_id_text::bigint;
+        exception when others then
+            return false;
+        end;
+        -- Staff variant (graders/instructors only)
+        if array_length(topic_parts, 1) = 3 and topic_parts[3] = 'staff' then
+            return public.authorizeforclassgrader(class_id_bigint);
+        end if;
+        -- Aggregator variant (all class members)
+        if array_length(topic_parts, 1) = 2 then
+            return public.authorizeforclass(class_id_bigint);
+        end if;
+        return false;
+    end if;
+
+    -- help_request channels (help_request:<id>)
+    if topic_type = 'help_request' then
+        if array_length(topic_parts, 1) < 2 then
+            return false;
+        end if;
+        help_request_id_text := topic_parts[2];
+        begin
+            help_request_id_bigint := help_request_id_text::bigint;
+        exception when others then
+            return false;
+        end;
+        return public.can_access_help_request(help_request_id_bigint);
+    end if;
+
+    -- help_queue channels (help_queue:<id>)
+    if topic_type = 'help_queue' then
+        if array_length(topic_parts, 1) < 2 then
+            return false;
+        end if;
+        help_queue_id_text := topic_parts[2];
+        begin
+            help_queue_id_bigint := help_queue_id_text::bigint;
+        exception when others then
+            return false;
+        end;
+        select hq.class_id into class_id_bigint from public.help_queues hq where hq.id = help_queue_id_bigint;
+        if class_id_bigint is not null then
+            return public.authorizeforclass(class_id_bigint);
+        else
+            return false;
+        end if;
+    end if;
+
+      -- Handle class-level channels (for review_assignments, etc.)
+    if topic_type = 'class' then
+        class_id_text := topic_parts[2];
+        channel_type := topic_parts[3];
+        
+        -- Convert class_id to bigint
+        begin
+            class_id_bigint := class_id_text::bigint;
+        exception when others then
+            return false;
+        end;
+        
+        -- Handle staff channel
+        if channel_type = 'staff' then
+            return public.authorizeforclassgrader(class_id_bigint);
+        
+        -- Handle user channel
+        elsif channel_type = 'user' then
+            -- Must have 4 parts for user channel
+            if array_length(topic_parts, 1) != 4 then
+                return false;
+            end if;
+            
+            profile_id_text := topic_parts[4];
+            
+            -- Convert profile_id to uuid
+            begin
+                profile_id_uuid := profile_id_text::uuid;
+            exception when others then
+                return false;
+            end;
+            
+            -- Check if user is grader/instructor OR is the profile owner
+            is_class_grader := public.authorizeforclassgrader(class_id_bigint);
+            is_profile_owner := public.authorizeforprofile(profile_id_uuid);
+            
+            return is_class_grader or is_profile_owner;
+        elsif channel_type = 'students' then
+            return public.authorizeforclass(class_id_bigint);
+        else
+            return false;
+        end if;
+    
+    -- Handle submission-level channels (for submission comments, etc.)
+    elsif topic_type = 'submission' then
+        submission_id_text := topic_parts[2];
+        channel_type := topic_parts[3];
+        
+        -- Convert submission_id to bigint
+        begin
+            submission_id_bigint := submission_id_text::bigint;
+        exception when others then
+            return false;
+        end;
+        
+        -- Handle graders channel
+        if channel_type = 'graders' then
+            -- Get class_id from submission to check grader authorization
+            select s.class_id into class_id_bigint
+            from public.submissions s
+            where s.id = submission_id_bigint;
+            
+            if class_id_bigint is null then
+                return false;
+            end if;
+            
+            return public.authorizeforclassgrader(class_id_bigint);
+        
+        -- Handle profile_id channel
+        elsif channel_type = 'profile_id' then
+            -- Must have 4 parts for profile_id channel
+            if array_length(topic_parts, 1) != 4 then
+                return false;
+            end if;
+            
+            profile_id_text := topic_parts[4];
+            
+            -- Convert profile_id to uuid
+            begin
+                profile_id_uuid := profile_id_text::uuid;
+            exception when others then
+                return false;
+            end;
+            
+            -- Check if user has access to the submission OR is the profile owner
+            is_submission_authorized := public.authorize_for_submission(submission_id_bigint);
+            is_profile_owner := public.authorizeforprofile(profile_id_uuid);
+            
+            -- Also check if user is a grader for the class (for extra access)
+            select s.class_id into class_id_bigint
+            from public.submissions s
+            where s.id = submission_id_bigint;
+            
+            if class_id_bigint is not null then
+                is_class_grader := public.authorizeforclassgrader(class_id_bigint);
+            else
+                is_class_grader := false;
+            end if;
+            
+            return is_class_grader or is_submission_authorized or is_profile_owner;
+        
+        else
+            return false;
+        end if;
+    
+    else
+        return false;
+    end if;
+END;
+$$;
+
+-- Backfill: For all classes, create students channels by sending a 'channel_created' message to each 'gradebook:<class_id>:students' channel.
+
+DO
+$$
+DECLARE
+    rec RECORD;
+BEGIN
+    FOR rec IN
+        SELECT id FROM public.classes
+    LOOP
+        PERFORM realtime.send(
+            jsonb_build_object(
+                'type', 'channel_created',
+                'class_id', rec.id,
+                'created_at', NOW()
+            ),
+            'system',
+            'class:' || rec.id || ':students',
+            true
+        );
+    END LOOP;
+END
+$$;
+
+
+CREATE OR REPLACE FUNCTION "public"."create_staff_channel"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+BEGIN
+    -- Pre-create the staff channel by sending an initial message
+    PERFORM realtime.send(
+        jsonb_build_object(
+            'type', 'channel_created',
+            'class_id', NEW.id,
+            'created_at', NOW()
+        ),
+        'system',
+        'class:' || NEW.id || ':staff',
+        true
+    );
+    PERFORM realtime.send(
+        jsonb_build_object(
+            'type', 'channel_created',
+            'class_id', NEW.id,
+            'created_at', NOW()
+        ),
+        'system',
+        'class:' || NEW.id || ':students',
+        true
+    );
+    RETURN NEW;
+END;
+$$;

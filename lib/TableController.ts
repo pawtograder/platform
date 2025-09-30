@@ -496,9 +496,12 @@ export default class TableController<
       clearTimeout(this._debounceTimeout);
     }
 
-    this._debounceTimeout = setTimeout(async () => {
-      await this._processBatchedOperations();
-    }, this._debounceInterval);
+    this._debounceTimeout = setTimeout(
+      async () => {
+        await this._processBatchedOperations();
+      },
+      this._debounceInterval + Math.random() * 1000 * 15
+    ); // Add some jitter to prevent thundering herd
   }
 
   /**
