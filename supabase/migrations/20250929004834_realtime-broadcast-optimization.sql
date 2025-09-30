@@ -1486,7 +1486,11 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION broadcast_submission_data_change()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     class_id BIGINT;
     submission_id BIGINT;
@@ -1535,9 +1539,9 @@ BEGIN
         -- Get affected profile IDs (submission author and group members)
         SELECT ARRAY(
             SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
-            FROM submissions s
-            LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
-            LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+            FROM public.submissions s
+            LEFT JOIN public.assignment_groups ag ON s.assignment_group_id = ag.id
+            LEFT JOIN public.assignment_groups_members agm ON ag.id = agm.assignment_group_id
             WHERE s.id = submission_id
         ) INTO affected_profile_ids;
 
