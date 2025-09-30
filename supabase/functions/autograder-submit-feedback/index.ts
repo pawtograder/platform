@@ -15,18 +15,24 @@ import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
+type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
+
+const RESET_WINDOW_MS = 60_000;
+
 async function insertComments({
   adminSupabase,
   class_id,
   submission_id,
   grading_review_id,
-  comments
+  comments,
+  scope
 }: {
   adminSupabase: SupabaseClient;
   class_id: number;
   submission_id: number;
   grading_review_id: number;
   comments: (FeedbackComment | FeedbackLineComment | FeedbackArtifactComment)[];
+  scope: Sentry.Scope;
 }) {
   const profileMap = new Map<string, string>();
   for (const comment of comments) {
@@ -41,6 +47,7 @@ async function insertComments({
           .maybeSingle();
         if (profileError) {
           console.error(profileError);
+          Sentry.captureException(profileError, scope);
           throw new UserVisibleError(
             `Failed to find profile for comment: ${comment.author.name}, ${profileError.message}`,
             400
@@ -66,6 +73,7 @@ async function insertComments({
             profileMap.set(comment.author.name, newProfile.id);
           } else {
             console.error(newProfileError);
+            Sentry.captureException(newProfileError, scope);
             throw new UserVisibleError(
               `Failed to create profile for comment: ${comment.author.name}, ${newProfileError.message}`
             );
@@ -90,6 +98,7 @@ async function insertComments({
             fileMap.set(comment.file_name, file.id);
           } else {
             console.error(fileError);
+            Sentry.captureException(fileError, scope);
             throw new UserVisibleError(`Submission file not found: ${comment.file_name}, ${fileError?.message}`);
           }
         }
@@ -112,6 +121,7 @@ async function insertComments({
     );
     if (submissionFileCommentsError) {
       console.error(submissionFileCommentsError);
+      Sentry.captureException(submissionFileCommentsError, scope);
       throw new UserVisibleError(`Failed to insert submission file comments: ${submissionFileCommentsError.message}`);
     }
   }
@@ -131,6 +141,7 @@ async function insertComments({
             artifactMap.set(comment.artifact_name, artifact.id);
           } else {
             console.error(artifactError);
+            Sentry.captureException(artifactError, scope);
             throw new UserVisibleError(
               `Submission artifact not found: ${comment.artifact_name}, ${artifactError?.message}`
             );
@@ -154,6 +165,7 @@ async function insertComments({
     );
     if (submissionArtifactCommentsError) {
       console.error(submissionArtifactCommentsError);
+      Sentry.captureException(submissionArtifactCommentsError, scope);
       throw new UserVisibleError(
         `Failed to insert submission artifact comments: ${submissionArtifactCommentsError.message}`
       );
@@ -178,9 +190,131 @@ async function insertComments({
     );
     if (submissionCommentsError) {
       console.error(submissionCommentsError);
+      Sentry.captureException(submissionCommentsError, scope);
       throw new UserVisibleError(`Failed to insert submission comments: ${submissionCommentsError.message}`);
     }
   }
+}
+
+async function resetExistingGraderResult({
+  adminSupabase,
+  grader_result_id,
+  submission_id,
+  autograder_regression_test_id,
+  artifactNames,
+  scope
+}: {
+  adminSupabase: SupabaseClient<Database>;
+  grader_result_id: number;
+  submission_id: number;
+  autograder_regression_test_id?: number | null;
+  artifactNames: string[];
+  scope: Sentry.Scope;
+}) {
+  const { data: existingTests, error: existingTestsError } = await adminSupabase
+    .from("grader_result_tests")
+    .select("id")
+    .eq("grader_result_id", grader_result_id);
+  if (existingTestsError) {
+    console.error(existingTestsError);
+    Sentry.captureException(existingTestsError, scope);
+    throw new UserVisibleError(
+      `Internal error: Failed to load existing grader result tests: ${existingTestsError.message}`
+    );
+  }
+
+  const existingTestIds = existingTests?.map((test) => test.id) ?? [];
+  if (existingTestIds.length > 0) {
+    const { error: deleteTestOutputsError } = await adminSupabase
+      .from("grader_result_test_output")
+      .delete()
+      .in("grader_result_test_id", existingTestIds);
+    if (deleteTestOutputsError) {
+      console.error(deleteTestOutputsError);
+      Sentry.captureException(deleteTestOutputsError, scope);
+      throw new UserVisibleError(
+        `Internal error: Failed to remove previous hidden test outputs: ${deleteTestOutputsError.message}`
+      );
+    }
+  }
+
+  const { error: deleteTestsError } = await adminSupabase
+    .from("grader_result_tests")
+    .delete()
+    .eq("grader_result_id", grader_result_id);
+  if (deleteTestsError) {
+    console.error(deleteTestsError);
+    Sentry.captureException(deleteTestsError, scope);
+    throw new UserVisibleError(`Internal error: Failed to remove previous test results: ${deleteTestsError.message}`);
+  }
+
+  const { error: deleteOutputsError } = await adminSupabase
+    .from("grader_result_output")
+    .delete()
+    .eq("grader_result_id", grader_result_id);
+  if (deleteOutputsError) {
+    console.error(deleteOutputsError);
+    Sentry.captureException(deleteOutputsError, scope);
+    throw new UserVisibleError(
+      `Internal error: Failed to remove previous grader outputs: ${deleteOutputsError.message}`
+    );
+  }
+
+  const { error: deleteWorkflowRunErrorsError } = await adminSupabase
+    .from("workflow_run_error")
+    .delete()
+    .eq("submission_id", submission_id);
+  if (deleteWorkflowRunErrorsError) {
+    console.error(deleteWorkflowRunErrorsError);
+    Sentry.captureException(deleteWorkflowRunErrorsError, scope);
+    throw new UserVisibleError(
+      `Internal error: Failed to remove previous workflow run errors: ${deleteWorkflowRunErrorsError.message}`
+    );
+  }
+
+  if (submission_id && artifactNames.length > 0) {
+    const artifactSelect = adminSupabase
+      .from("submission_artifacts")
+      .select("id")
+      .eq("submission_id", submission_id)
+      .in("name", artifactNames);
+    const constrainedArtifactSelect =
+      autograder_regression_test_id != null
+        ? artifactSelect.eq("autograder_regression_test_id", autograder_regression_test_id)
+        : artifactSelect.is("autograder_regression_test_id", null);
+
+    const { data: existingArtifacts, error: existingArtifactsError } = await constrainedArtifactSelect;
+    if (existingArtifactsError) {
+      console.error(existingArtifactsError);
+      Sentry.captureException(existingArtifactsError, scope);
+      throw new UserVisibleError(
+        `Internal error: Failed to load previous grader artifacts: ${existingArtifactsError.message}`
+      );
+    }
+
+    const artifactIds = existingArtifacts?.map((artifact) => artifact.id) ?? [];
+    if (artifactIds.length > 0) {
+      const { error: deleteArtifactsError } = await adminSupabase
+        .from("submission_artifacts")
+        .delete()
+        .in("id", artifactIds);
+      if (deleteArtifactsError) {
+        console.error(deleteArtifactsError);
+        Sentry.captureException(deleteArtifactsError, scope);
+        throw new UserVisibleError(
+          `Internal error: Failed to remove previous grader artifacts: ${deleteArtifactsError.message}`
+        );
+      }
+    }
+  }
+}
+
+function isConflictError(response: { error: { code?: string; message?: string } | null }): boolean {
+  return (
+    !!response.error &&
+    response.error.code === "23505" &&
+    Boolean(response.error.message?.includes("grader_results_submission_id_key_uniq"))
+  );
 }
 async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeResponse> {
   scope?.setTag("function", "autograder-submit-feedback");
@@ -262,14 +396,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     class_id = regressionTestRun.autograder.assignments.class_id;
     assignment_id = regressionTestRun.autograder.assignments.id;
   } else {
-    const { data: submission } = await adminSupabase
+    const { data: submission, error: submissionError } = await adminSupabase
       .from("submissions")
       .select("*, repository_check_runs(*)")
       .eq("repository", repository)
       .eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
       .eq("run_number", Number.parseInt(decoded.run_id))
-      .single();
+      .maybeSingle();
+    if (submissionError) {
+      console.error(submissionError);
+      Sentry.captureException(submissionError, scope);
+      throw new UserVisibleError(`Internal error: Failed to load submission: ${submissionError.message}`);
+    }
     if (!submission) {
       throw new SecurityError(`Submission not found: ${repository} ${sha} ${decoded.run_id}`);
     }
@@ -305,33 +444,101 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     const max_score =
       requestBody.feedback.max_score ||
       requestBody.feedback.tests.reduce((acc, test) => acc + (test.max_score || 0), 0);
-    const { error, data: resultID } = await adminSupabase
-      .from("grader_results")
-      .insert({
-        submission_id,
-        profile_id,
-        class_id,
-        assignment_group_id,
-        ret_code: requestBody.ret_code,
-        grader_sha: requestBody.grader_sha,
-        score,
-        max_score,
-        lint_output: requestBody.feedback.lint.output,
-        lint_output_format: requestBody.feedback.lint.output_format || "text",
-        lint_passed: requestBody.feedback.lint.status === "pass",
-        execution_time: requestBody.execution_time,
-        autograder_regression_test: autograder_regression_test_id,
-        grader_action_sha: action_sha
-      })
-      .select("id")
-      .single();
-    if (error) {
-      console.error(error);
-      throw new UserVisibleError(`Internal error: Failed to insert feedback: ${error.message}`);
+    const baseGraderResultPayload = {
+      submission_id: submission_id ?? null,
+      profile_id: profile_id ?? null,
+      class_id: class_id!,
+      assignment_group_id: assignment_group_id ?? null,
+      ret_code: requestBody.ret_code ?? null,
+      grader_sha: requestBody.grader_sha ?? null,
+      score,
+      max_score,
+      lint_output: requestBody.feedback.lint.output ?? "",
+      lint_output_format: requestBody.feedback.lint.output_format || "text",
+      lint_passed: requestBody.feedback.lint.status === "pass",
+      execution_time: requestBody.execution_time ?? null,
+      autograder_regression_test: autograder_regression_test_id ?? null,
+      grader_action_sha: action_sha ?? null
+    } satisfies Omit<Database["public"]["Tables"]["grader_results"]["Insert"], "errors">;
+
+    const graderResultPayload: Database["public"]["Tables"]["grader_results"]["Insert"] = {
+      ...baseGraderResultPayload,
+      errors: null
+    };
+
+    const insertResponse = await adminSupabase.from("grader_results").insert(graderResultPayload).select("id").single();
+
+    let resultID = insertResponse.data;
+    let reusedExistingResult = false;
+
+    if (insertResponse.error) {
+      if (isConflictError(insertResponse) && submission_id != null) {
+        const { data: existingResult, error: existingResultError } = await adminSupabase
+          .from("grader_results")
+          .select("id, created_at")
+          .eq("submission_id", submission_id)
+          .single();
+        if (existingResultError || !existingResult) {
+          console.error(existingResultError);
+          Sentry.captureException(existingResultError, scope);
+          throw new UserVisibleError(
+            `Internal error: Failed to reuse existing feedback record: ${existingResultError?.message}`
+          );
+        }
+
+        const existingCreatedAt = new Date(existingResult.created_at ?? "").getTime();
+        if (!Number.isFinite(existingCreatedAt)) {
+          Sentry.captureException(new Error("Internal error: Existing grader result timestamp missing"), scope);
+          throw new UserVisibleError("Internal error: Existing grader result timestamp missing");
+        }
+
+        if (Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
+          throw new SecurityError("Request to rewrite submission feedback is too old");
+        }
+
+        const { error: updateExistingError } = await adminSupabase
+          .from("grader_results")
+          .update({
+            ...baseGraderResultPayload,
+            errors: null
+          })
+          .eq("id", existingResult.id);
+        if (updateExistingError) {
+          console.error(updateExistingError);
+          Sentry.captureException(updateExistingError, scope);
+          throw new UserVisibleError(
+            `Internal error: Failed to update existing feedback: ${updateExistingError.message}`
+          );
+        }
+        resultID = { id: existingResult.id };
+        reusedExistingResult = true;
+      } else {
+        console.error(insertResponse.error);
+        Sentry.captureException(insertResponse.error, scope);
+        throw new UserVisibleError(`Internal error: Failed to insert feedback: ${insertResponse.error.message}`);
+      }
     }
+
+    if (!resultID) {
+      Sentry.captureException(new Error("Internal error: Missing grader result identifier after insert"), scope);
+      throw new UserVisibleError("Internal error: Missing grader result identifier after insert");
+    }
+
     let artifactUploadLinks: { name: string; token: string; path: string }[] = [];
 
     try {
+      const artifactNames =
+        requestBody.feedback.artifacts?.map((artifact) => artifact.name).filter((name): name is string => !!name) ?? [];
+      if (reusedExistingResult && submission_id) {
+        await resetExistingGraderResult({
+          adminSupabase,
+          grader_result_id: resultID.id,
+          submission_id,
+          autograder_regression_test_id,
+          artifactNames,
+          scope
+        });
+      }
       // Insert feedback for each visibility level
       for (const visibility of ["hidden", "visible", "after_due_date", "after_published"]) {
         //Insert output if it exists
@@ -348,6 +555,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               output: output.output
             });
             if (outputError) {
+              Sentry.captureException(outputError, scope);
               console.error(outputError);
               throw new UserVisibleError(`Internal error: Failed to insert output: ${outputError.message}`);
             }
@@ -377,6 +585,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
         )
         .select("id");
       if (testResultsError) {
+        Sentry.captureException(testResultsError, scope);
         throw new UserVisibleError(`Internal error: Failed to insert test results: ${testResultsError.message}`);
       }
       //Insert any hidden output
@@ -397,6 +606,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           .insert(hiddenTestOutputs);
         if (hiddenTestOutputsError) {
           console.error(hiddenTestOutputsError);
+          Sentry.captureException(hiddenTestOutputsError, scope);
           throw new UserVisibleError(
             `Internal error: Failed to insert hidden test outputs: ${hiddenTestOutputsError.message}`
           );
@@ -414,12 +624,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               submission_id: submission_id!,
               autograder_regression_test_id,
               name: artifact.name,
-              data: artifact.data as any
+              data: artifact.data as Json
             }))
           )
           .select("id");
         if (artifactError) {
           console.error(artifactError);
+          Sentry.captureException(artifactError, scope);
           throw new UserVisibleError(`Internal error: Failed to insert artifact: ${artifactError.message}`);
         }
 
@@ -433,6 +644,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               .createSignedUploadUrl(aritfactPath);
             if (!signedLink.data?.signedUrl) {
               console.error(signedLink.error);
+              Sentry.captureException(signedLink.error, scope);
               throw new UserVisibleError(`Internal error: Failed to create signed URL for artifact: ${artifact.name}`);
             }
             return {
@@ -451,7 +663,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           class_id,
           submission_id,
           grading_review_id,
-          comments: requestBody.feedback.annotations
+          comments: requestBody.feedback.annotations,
+          scope
         });
       }
 
@@ -474,16 +687,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     } catch (e) {
       console.error(e);
       if (submission_id) {
-        await adminSupabase
-          .from("grader_results")
-          .update({
-            errors:
-              e instanceof UserVisibleError
-                ? { user_visible_message: e.details }
-                : { error: JSON.parse(JSON.stringify(e)) }
-          })
-          .eq("id", resultID.id);
+        const normalizedError: GraderResultErrors =
+          e instanceof UserVisibleError
+            ? { user_visible_message: e.details }
+            : { error: JSON.parse(JSON.stringify(e)) };
+
+        await adminSupabase.from("grader_results").update({ errors: normalizedError }).eq("id", resultID.id);
       }
+      Sentry.captureException(e, scope);
       throw new UserVisibleError(`Internal error: Failed to insert feedback: ${(e as Error).message}`);
     }
 
