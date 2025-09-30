@@ -2,7 +2,6 @@
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { type BroadcastMessage } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   Assignment,
   GradebookColumn,
@@ -11,11 +10,13 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
+import * as Sentry from "@sentry/nextjs";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { CourseController, useCourseController } from "./useCourseController";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import { useClassProfiles } from "./useClassProfiles";
@@ -43,11 +44,24 @@ export type GradebookRecordsForStudent = {
     incomplete_values: Json; // JSONB type
   }[];
 };
-
+export function useIsGradebookDataReady() {
+  const gradebookController = useGradebookController();
+  const [isReady, setIsReady] = useState(gradebookController.table.ready);
+  useEffect(() => {
+    let cleanedUp = false;
+    gradebookController.table.readyPromise.then(() => {
+      if (cleanedUp) return;
+      setIsReady(true);
+    });
+    return () => {
+      cleanedUp = true;
+    };
+  }, [gradebookController]);
+  return isReady;
+}
 export function useGradebookColumns() {
   const gradebookController = useGradebookController();
   const [columns, setColumns] = useState<GradebookColumn[]>(gradebookController.gradebook_columns.rows);
-  const isRefetching = useGradebookRefetchStatus();
 
   useEffect(() => {
     return gradebookController.gradebook_columns.list((data) => {
@@ -55,8 +69,7 @@ export function useGradebookColumns() {
     }).unsubscribe;
   }, [gradebookController]);
 
-  // Return empty array during refetch to prevent showing partial data
-  return isRefetching ? [] : columns;
+  return columns;
 }
 
 export function useGradebookColumn(column_id: number) {
@@ -92,11 +105,6 @@ export function useGradebookColumnStudent(column_id: number, student_id: string)
   const [columnStudent, setColumnStudent] = useState<GradebookColumnStudent | undefined>(
     gradebookController.getGradebookColumnStudent(column_id, student_id)
   );
-  const isRefetching = useGradebookRefetchStatus();
-  if (isRefetching) {
-    throw new Error("Should not try to get gradebook column student when any table is refetching");
-    // return undefined;
-  }
 
   useEffect(() => {
     // Use the specialized index for direct access to student/column pair
@@ -104,8 +112,7 @@ export function useGradebookColumnStudent(column_id: number, student_id: string)
     return () => unsubscribe();
   }, [column_id, student_id, gradebookController]);
 
-  // Return undefined during refetch to prevent showing partial data
-  return isRefetching ? undefined : columnStudent;
+  return columnStudent;
 }
 
 export function getScore(gradebookColumnStudent: GradebookColumnStudent | undefined) {
@@ -427,8 +434,8 @@ class StudentGradebookController {
 }
 
 /**
- * Efficient controller for managing gradebook cell data using the new bulk fetch function.
- * Uses a single query to load all gradebook data and subscribes to real-time updates.
+ * Efficient controller for managing gradebook cell data using streaming fetch function.
+ * Uses a single fetch function to load all data, and subscribes to real-time updates.
  */
 export class GradebookCellController {
   private _data: GradebookRecordsForStudent[] = [];
@@ -454,15 +461,13 @@ export class GradebookCellController {
 
   private async _initializeEntireGradebookForAllStudents(): Promise<void> {
     const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
-      class_id: this._class_id
+      p_class_id: this._class_id
     });
 
     if (this._closed) return;
-
     if (error) {
       throw new Error(`Failed to load gradebook data: ${error.message}`);
     }
-
     this._data = (data as GradebookRecordsForStudent[]) || [];
   }
   private async _initializeGradebookForThisStudent(): Promise<void> {
@@ -695,18 +700,16 @@ export class GradebookCellController {
 
   private async _refreshData(): Promise<void> {
     try {
-      const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
-        class_id: this._class_id
-      });
+      // Reset streaming state for full refresh
+      this._data = [];
 
-      if (error) {
-        // Silent failure for refresh operations to avoid disrupting the UI
-        return;
+      if (this._classRealTimeController.isStaff) {
+        // Load all data using streaming
+        await this._initializeEntireGradebookForAllStudents();
+      } else {
+        // Load all data using streaming
+        await this._initializeGradebookForThisStudent();
       }
-
-      if (this._closed) return;
-
-      this._data = (data as GradebookRecordsForStudent[]) || [];
 
       // Notify all listeners
       this._dataListeners.forEach((listener) => listener(this._data));
@@ -926,35 +929,8 @@ export class GradebookController {
       this.assignments_table.readyPromise
     ]);
 
-    // Set up gradebook-specific broadcast subscriptions
-    this._setupGradebookSubscriptions();
-
     // Set up refetch status tracking
     this._setupRefetchTracking();
-  }
-
-  private _setupGradebookSubscriptions() {
-    // Subscribe to gradebook_columns changes for column structure updates
-    const unsubscribeColumns = this._classRealTimeController.subscribeToTable("gradebook_columns", () => {
-      // The TableController will handle the actual data updates
-      // This subscription is for any additional gradebook-specific logic
-    });
-    this._unsubscribes.push(unsubscribeColumns);
-
-    // The GradebookCellController handles its own real-time subscriptions
-    // No additional subscription needed here
-  }
-
-  private _handleGradeChange(gradeData: GradebookColumnStudent) {
-    // Handle any gradebook-specific logic when grades change
-    // This could include updating calculated columns, notifications, etc.
-
-    // Example: If this is a student's public grade (is_private = false),
-    // we might want to trigger additional UI updates
-    if (gradeData.is_private === false) {
-      // Update any cached calculations or trigger UI refresh
-      // The actual data updates are handled by TableController
-    }
   }
 
   private _setupRefetchTracking() {
@@ -1061,11 +1037,6 @@ export class GradebookController {
 
   // Get all students for a specific column using the new controller
   getStudentsForColumn(column_id: number): GradebookColumnStudent[] {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      return [];
-    }
-
     const students: GradebookColumnStudent[] = [];
 
     // Iterate through all students in the new controller
@@ -1113,11 +1084,6 @@ export class GradebookController {
 
   // Get all columns for a specific student using the new controller
   getColumnsForStudent(student_id: string): GradebookColumnStudent[] {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      return [];
-    }
-
     const studentData = this.table.getStudentData(student_id);
     if (!studentData) {
       return [];
@@ -1170,12 +1136,6 @@ export class GradebookController {
   }
 
   getGradebookColumnStudent(column_id: number, student_id: string): GradebookColumnStudent | undefined {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      throw new Error("Should not try to get gradebook column student when any table is refetching");
-      // return undefined;
-    }
-
     const studentData = this.table.getStudentData(student_id);
     if (!studentData) {
       return undefined;
@@ -1472,10 +1432,6 @@ export class GradebookController {
     return result;
   }
   get columns() {
-    // Don't return data if any table is refetching to avoid partial data
-    if (this._isAnyTableRefetching) {
-      return [];
-    }
     return this.gradebook_columns.rows;
   }
 

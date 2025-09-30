@@ -489,6 +489,26 @@ export default class TableController<
   }
 
   /**
+   * Allow subclasses to enqueue a broadcast message for debounced processing.
+   * Performs basic validation and table-name matching before queueing.
+   */
+  protected enqueueBroadcast(message: BroadcastMessage): void {
+    if (this._closed) return;
+    // Filter by table name if provided
+    if (message.table && message.table !== this._table) {
+      return;
+    }
+    if (
+      !message.operation ||
+      (message.operation !== "INSERT" && message.operation !== "UPDATE" && message.operation !== "DELETE")
+    ) {
+      return;
+    }
+    this._pendingOperations.push(message);
+    this._scheduleBatchedOperations();
+  }
+
+  /**
    * Schedule batched operations to be processed after debounce interval
    */
   private _scheduleBatchedOperations(): void {
@@ -981,19 +1001,9 @@ export default class TableController<
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
-          if (this._closed) return;
-          // Filter by table name
-          if (message.table !== table) {
-            return;
-          }
-          // Add to single ordered queue for batched processing
-          if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "DELETE") {
-            this._pendingOperations.push(message);
-            this._scheduleBatchedOperations();
-            // Bump watermark opportunistically from payloads
-            if (message.data) {
-              this._bumpMaxUpdatedAtFrom(message.data);
-            }
+          this.enqueueBroadcast(message);
+          if (message.data) {
+            this._bumpMaxUpdatedAtFrom(message.data);
           }
         };
 

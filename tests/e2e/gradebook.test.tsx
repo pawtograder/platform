@@ -572,6 +572,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // New column header should be visible
     await expect(page.getByText("Extra Credit")).toBeVisible();
 
+    await waitForVirtualizerIdle(page);
+    await page.waitForTimeout(3000);
+
     // Enter a score for the first student
     const ecCell = await getGridcellInRow(page, students[0].private_profile_name, "Extra Credit");
     await ecCell.click();
