@@ -13,8 +13,7 @@ import {
   useClassSections,
   useCourseController,
   useGradersAndInstructors,
-  useLabSections,
-  useUserRolesWithProfiles
+  useLabSections
 } from "@/hooks/useCourseController";
 import useTags from "@/hooks/useTags";
 import TableController, {
