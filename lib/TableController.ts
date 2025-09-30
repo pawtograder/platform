@@ -335,7 +335,9 @@ export function useTableControllerTableValues<
     Query
   >
 >(controller: TableController<T, Query, IDType, ResultType>): PossiblyTentativeResult<ResultType>[] {
-  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>([]);
+  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>(() => {
+    return controller.list().data.map((row) => row as PossiblyTentativeResult<ResultType>);
+  });
   useEffect(() => {
     const { unsubscribe, data } = controller.list((data) => {
       setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
@@ -398,6 +400,8 @@ export default class TableController<
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
+  private _lastFetchTimestamp: number = 0;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
@@ -418,6 +422,8 @@ export default class TableController<
   private _pendingOperations: BroadcastMessage[] = [];
   private _debounceTimeout: NodeJS.Timeout | null = null;
   private _isProcessingBatch: boolean = false;
+  /** Tracks the maximum updated_at timestamp (ms) of rows currently loaded. Used for incremental refetches. */
+  private _maxUpdatedAtMs: number | null = null;
 
   get table() {
     return this._table;
@@ -431,6 +437,34 @@ export default class TableController<
   }
   get isRefetching() {
     return this._isRefetching;
+  }
+
+  /** Extract updated_at from a row-like object as epoch ms; returns null if not present/parsable */
+  private _extractUpdatedAtMs(rowLike: unknown): number | null {
+    try {
+      if (!rowLike || typeof rowLike !== "object") return null;
+      const value = (rowLike as Record<string, unknown>)["updated_at"];
+      if (!value) return null;
+      if (typeof value === "string") {
+        const t = new Date(value).getTime();
+        return isNaN(t) ? null : t;
+      }
+      if (value instanceof Date) {
+        const t = (value as Date).getTime();
+        return isNaN(t) ? null : t;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Update max updated_at marker from a row-like object */
+  private _bumpMaxUpdatedAtFrom(rowLike: unknown): void {
+    const ts = this._extractUpdatedAtMs(rowLike);
+    if (ts != null) {
+      this._maxUpdatedAtMs = this._maxUpdatedAtMs == null ? ts : Math.max(this._maxUpdatedAtMs, ts);
+    }
   }
 
   /**
@@ -457,6 +491,26 @@ export default class TableController<
   }
 
   /**
+   * Allow subclasses to enqueue a broadcast message for debounced processing.
+   * Performs basic validation and table-name matching before queueing.
+   */
+  protected enqueueBroadcast(message: BroadcastMessage): void {
+    if (this._closed) return;
+    // Filter by table name if provided
+    if (message.table && message.table !== this._table) {
+      return;
+    }
+    if (
+      !message.operation ||
+      (message.operation !== "INSERT" && message.operation !== "UPDATE" && message.operation !== "DELETE")
+    ) {
+      return;
+    }
+    this._pendingOperations.push(message);
+    this._scheduleBatchedOperations();
+  }
+
+  /**
    * Schedule batched operations to be processed after debounce interval
    */
   private _scheduleBatchedOperations(): void {
@@ -464,9 +518,12 @@ export default class TableController<
       clearTimeout(this._debounceTimeout);
     }
 
-    this._debounceTimeout = setTimeout(async () => {
-      await this._processBatchedOperations();
-    }, this._debounceInterval);
+    this._debounceTimeout = setTimeout(
+      async () => {
+        await this._processBatchedOperations();
+      },
+      this._debounceInterval + Math.random() * 1000 * 15
+    ); // Add some jitter to prevent thundering herd
   }
 
   /**
@@ -584,6 +641,108 @@ export default class TableController<
   }
 
   /**
+   * Incremental refetch using updated_at watermark if available.
+   * Falls back to no-op if watermark is not set or table lacks updated_at.
+   */
+  private async _refetchSinceMaxUpdatedAt(): Promise<void> {
+    if (this._closed) return;
+    if (this._maxUpdatedAtMs == null) {
+      return; // No watermark yet
+    }
+
+    this._isRefetching = true;
+    this._refetchListeners.forEach((listener) => listener(true));
+
+    const sinceIso = new Date(this._maxUpdatedAtMs).toISOString();
+
+    const ourQuery = new PostgrestFilterBuilder(this._query)
+      .gt("updated_at", sinceIso)
+      .order("updated_at", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
+
+    try {
+      let page = 0;
+      const pageSize = 1000;
+      const changedRows: ResultOne[] = [];
+
+      // Fetch in pages ordered by updated_at to advance watermark monotonically
+      // This still drastically reduces transferred data compared to a full refetch.
+      for (;;) {
+        const rangeStart = page * pageSize;
+        const rangeEnd = (page + 1) * pageSize - 1;
+
+        const { data, error } = await ourQuery.range(rangeStart, rangeEnd);
+
+        if (this._closed) return;
+        if (error) {
+          // If the table has no updated_at or filter failed, abort incremental silently
+          throw error;
+        }
+        if (!data || data.length === 0) {
+          break;
+        }
+        changedRows.push(...(data as unknown as ResultOne[]));
+        if (data.length < pageSize) {
+          break;
+        }
+        page++;
+      }
+
+      if (changedRows.length === 0) {
+        return;
+      }
+
+      const entered: ResultOne[] = [];
+      const left: ResultOne[] = [];
+
+      // Build quick lookup for current rows by id
+      const currentById = new Map<IDType, PossiblyTentativeResult<ResultOne>>(
+        this._rows.map((r) => [(r as unknown as ResultOne & { id: IDType }).id as IDType, r])
+      );
+
+      for (const row of changedRows) {
+        const id = (row as unknown as ResultOne & { id: IDType }).id;
+        const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
+        const existing = currentById.get(id);
+
+        // Advance watermark as we see rows; ensures subsequent calls continue where we left off
+        this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
+
+        if (existing && !matchesFilter) {
+          // No longer matches → remove
+          this._removeRow(id);
+          left.push(existing as unknown as ResultOne);
+          currentById.delete(id);
+        } else if (existing && matchesFilter) {
+          // Update in place
+          this._updateRow(id, row as ResultOne & { id: IDType }, false);
+          currentById.set(id, row as unknown as PossiblyTentativeResult<ResultOne>);
+        } else if (!existing && matchesFilter) {
+          // Newly matching / newly created
+          this._addRow({ ...(row as ResultOne), __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+          entered.push(row);
+          currentById.set(id, row as unknown as PossiblyTentativeResult<ResultOne>);
+        }
+        // else (!existing && !matchesFilter) → ignore
+      }
+
+      // Notify list listeners only once for entered/left bundles when there were membership changes
+      if (entered.length > 0 || left.length > 0) {
+        this._listDataListeners.forEach((listener) =>
+          listener(this._rows as unknown as ResultOne[], { entered, left })
+        );
+      }
+    } catch (error) {
+      // If incremental fails (e.g., due to missing column), fall back to full refetch on next attempt
+      Sentry.captureException(error);
+      this._maxUpdatedAtMs = null;
+    } finally {
+      this._isRefetching = false;
+      this._refetchListeners.forEach((listener) => listener(false));
+    }
+  }
+
+  /**
    * Fetch initial data with pagination
    */
   private async _fetchInitialData(): Promise<ResultOne[]> {
@@ -618,13 +777,14 @@ export default class TableController<
       page++;
     }
 
+    this._lastFetchTimestamp = Date.now();
     return rows;
   }
 
   /**
-   * Refetch all data and notify subscribers of changes
+   * Refetch all data and notify subscribers of changes (full refresh)
    */
-  private async _refetchAllData(): Promise<void> {
+  private async _refetchAllDataFull(): Promise<void> {
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -639,34 +799,74 @@ export default class TableController<
         __db_pending: false
       })) as PossiblyTentativeResult<ResultOne>[];
 
-      // Update internal state
-      this._rows = newRows;
-
       // Calculate changes for list listeners
       const oldIds = new Set(oldRows.map((r) => (r as ResultOne & { id: IDType }).id));
       const newIds = new Set(newRows.map((r) => (r as ResultOne & { id: IDType }).id));
 
       const entered = newRows.filter((r) => !oldIds.has((r as ResultOne & { id: IDType }).id)) as ResultOne[];
       const left = oldRows.filter((r) => !newIds.has((r as ResultOne & { id: IDType }).id)) as ResultOne[];
+      // If membership (by id) has not changed, avoid replacing the array and avoid list notifications.
+      if (entered.length === 0 && left.length === 0) {
+        const nextById = new Map<IDType, PossiblyTentativeResult<ResultOne>>(
+          newRows.map((r) => [(r as ResultOne & { id: IDType }).id, r])
+        );
 
-      // Notify list listeners
-      this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
-
-      // Notify item listeners for all items
-      for (const row of newRows) {
-        const id = (row as ResultOne & { id: IDType }).id;
-        const listeners = this._itemDataListeners.get(id);
-        if (listeners) {
-          listeners.forEach((listener) => listener(row));
+        // Update existing rows in place and notify item listeners
+        let anyChanges = false;
+        for (let i = 0; i < this._rows.length; i++) {
+          const current = this._rows[i] as unknown as ResultOne & { id: IDType };
+          const updated = nextById.get(current.id);
+          if (updated) {
+            // Only notify if deeply different
+            if (!this._deepEqualObjects(current, updated)) {
+              this._rows[i] = updated as PossiblyTentativeResult<ResultOne>;
+              const listeners = this._itemDataListeners.get(current.id);
+              if (listeners) {
+                listeners.forEach((listener) => listener(this._rows[i]));
+              }
+              anyChanges = true;
+            }
+          }
         }
-      }
+        if (anyChanges) {
+          // Optimization opportunity: we should fix it so that no subscriber depends on this behavior
+          this._rows = newRows;
+          this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
+        }
+      } else {
+        // Membership changed: replace rows and notify list + item listeners accordingly
+        this._rows = newRows;
 
-      // Notify item listeners for removed items
-      for (const row of left) {
-        const id = (row as ResultOne & { id: IDType }).id;
-        const listeners = this._itemDataListeners.get(id);
-        if (listeners) {
-          listeners.forEach((listener) => listener(undefined));
+        // Notify list listeners
+        this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
+
+        // Notify item listeners only for newly entered or changed items
+        const oldById = new Map<IDType, PossiblyTentativeResult<ResultOne>>(
+          oldRows.map((r) => [(r as ResultOne & { id: IDType }).id, r as PossiblyTentativeResult<ResultOne>])
+        );
+        const enteredIdSet = new Set<IDType>(entered.map((r) => (r as ResultOne & { id: IDType }).id));
+
+        for (const row of newRows) {
+          const id = (row as ResultOne & { id: IDType }).id;
+          const listeners = this._itemDataListeners.get(id);
+          if (!listeners) continue;
+          if (enteredIdSet.has(id)) {
+            listeners.forEach((listener) => listener(row));
+            continue;
+          }
+          const previous = oldById.get(id);
+          if (!this._deepEqualObjects(previous as unknown, row as unknown)) {
+            listeners.forEach((listener) => listener(row));
+          }
+        }
+
+        // Notify item listeners for removed items
+        for (const row of left) {
+          const id = (row as ResultOne & { id: IDType }).id;
+          const listeners = this._itemDataListeners.get(id);
+          if (listeners) {
+            listeners.forEach((listener) => listener(undefined));
+          }
         }
       }
     } catch (error) {
@@ -678,6 +878,22 @@ export default class TableController<
     }
   }
 
+  /**
+   * Unified refetch that prefers incremental-by-updated_at when available; otherwise full refresh
+   */
+  private async _refetchAllData(): Promise<void> {
+    if (this._isRefetching) {
+      return;
+    }
+    this._lastFetchTimestamp = Date.now();
+    if (this._maxUpdatedAtMs != null) {
+      await this._refetchSinceMaxUpdatedAt();
+      return;
+    }
+    await this._refetchAllDataFull();
+  }
+
+  private _lastRefetchAllTime = 0;
   /**
    * Public method to refetch all data for this controller's query and notify subscribers.
    * Useful when entries may have been created after the initial fetch but before
@@ -692,6 +908,11 @@ export default class TableController<
     if (this._isRefetching) {
       return;
     }
+    if (Date.now() - this._lastRefetchAllTime < 3000) {
+      throw new Error("Refetch all called too frequently");
+    }
+    this._lastRefetchAllTime = Date.now();
+
     await this._refetchAllData();
   }
 
@@ -731,7 +952,7 @@ export default class TableController<
   }
 
   /**
-   * Handle connection status changes
+   * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
    */
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     const wasDisconnected =
@@ -740,14 +961,32 @@ export default class TableController<
       this._lastConnectionStatus === "connecting";
     const isNowConnected = status.overall === "connected";
 
-    if (wasDisconnected && isNowConnected && this._ready) {
-      // We've reconnected after being disconnected, refetch all data
-      this._refetchAllData();
-    }
-
     this._lastConnectionStatus = status.overall;
+
+    // Debounce the refetch to avoid thrashing when channels oscillate
+    if (wasDisconnected && isNowConnected && this._ready) {
+      // Clear any pending refetch
+      if (this._connectionStatusDebounceTimer) {
+        clearTimeout(this._connectionStatusDebounceTimer);
+      }
+
+      // Schedule refetch after a short delay to let connection stabilize
+      this._connectionStatusDebounceTimer = setTimeout(() => {
+        this._connectionStatusDebounceTimer = null;
+        if (!this._closed && this._lastConnectionStatus === "connected") {
+          // Skip refetch if we just fetched within the last 3 seconds (e.g., initial load)
+          const timeSinceLastFetch = Date.now() - this._lastFetchTimestamp;
+          if (timeSinceLastFetch < 3000) {
+            return;
+          }
+          // Only refetch if we're still connected after the debounce period
+          this._refetchAllData();
+        }
+      }, 1000); // 1 second debounce for connection status
+    }
   }
 
+  private _debugID: string = Math.random().toString(36).substring(2, 15);
   constructor({
     query,
     client,
@@ -790,15 +1029,9 @@ export default class TableController<
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
-          if (this._closed) return;
-          // Filter by table name
-          if (message.table !== table) {
-            return;
-          }
-          // Add to single ordered queue for batched processing
-          if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "DELETE") {
-            this._pendingOperations.push(message);
-            this._scheduleBatchedOperations();
+          this.enqueueBroadcast(message);
+          if (message.data) {
+            this._bumpMaxUpdatedAtFrom(message.data);
           }
         };
 
@@ -816,6 +1049,11 @@ export default class TableController<
           ...row,
           __db_pending: false
         }));
+
+        // Initialize watermark
+        for (const r of this._rows) {
+          this._bumpMaxUpdatedAtFrom(r);
+        }
 
         // Set up realtime subscription if controller is provided
         if (!this._closed && this._classRealTimeController) {
@@ -880,6 +1118,10 @@ export default class TableController<
       clearTimeout(this._debounceTimeout);
       this._debounceTimeout = null;
     }
+    if (this._connectionStatusDebounceTimer) {
+      clearTimeout(this._connectionStatusDebounceTimer);
+      this._connectionStatusDebounceTimer = null;
+    }
     // Clear all listeners and pending operations
     this._refetchListeners = [];
     this._listDataListeners = [];
@@ -916,6 +1158,7 @@ export default class TableController<
           if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id)) {
             // Check if the fetched row matches our realtime filter
             if (this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
+              this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
               // Check for pending tentative rows that might represent the same data
               const pendingRow = this._rows.find((r) => {
                 const rowData = r as PossiblyTentativeResult<ResultOne>;
@@ -976,8 +1219,10 @@ export default class TableController<
             // Row was updated but no longer matches our filter - remove it
             this._removeRow(id);
           } else if (existingRow && matchesFilter) {
+            this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
             this._updateRow(id, row as ResultOne & { id: IDType }, false);
           } else if (!existingRow && matchesFilter) {
+            this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
             this._addRow({
               ...row,
               __db_pending: false
@@ -1024,6 +1269,7 @@ export default class TableController<
 
       // Check for exact ID match first
       const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+      this._bumpMaxUpdatedAtFrom(data);
       if (existingRowById) {
         // If we have a custom select for single row (joins), refresh the full row to keep joins in sync
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
@@ -1051,6 +1297,7 @@ export default class TableController<
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
           this._fetchRow(data.id as IDType).then((fullRow) => {
             if (fullRow) {
+              this._bumpMaxUpdatedAtFrom(fullRow as unknown as Record<string, unknown>);
               this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
             } else {
               this._updateRow(
@@ -1084,11 +1331,13 @@ export default class TableController<
               return;
             }
             if (fullRow) {
+              this._bumpMaxUpdatedAtFrom(fullRow as unknown as Record<string, unknown>);
               this._addRow({
                 ...(fullRow as ResultOne),
                 __db_pending: false
               } as PossiblyTentativeResult<ResultOne>);
             } else {
+              this._bumpMaxUpdatedAtFrom(data);
               this._addRow({
                 ...(data as ResultOne),
                 __db_pending: false
@@ -1100,6 +1349,7 @@ export default class TableController<
           if (isDuplicate) {
             return;
           }
+          this._bumpMaxUpdatedAtFrom(data);
           this._addRow({
             ...data,
             __db_pending: false
@@ -1113,6 +1363,7 @@ export default class TableController<
           if (!row) {
             return;
           }
+          this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
 
           // Check if the fetched row matches our realtime filter
           if (!this._matchesRealtimeFilter(row as Record<string, unknown>)) {
@@ -1232,6 +1483,66 @@ export default class TableController<
   }
 
   /**
+   * Shallow equality check for two plain objects. Returns true if they have
+   * the same set of keys and all corresponding values are strictly equal.
+   */
+  private _shallowEqualObjects(objA: unknown, objB: unknown): boolean {
+    if (objA === objB) return true;
+    if (!objA || !objB) return false;
+    if (typeof objA !== "object" || typeof objB !== "object") return false;
+
+    const a = objA as Record<string, unknown>;
+    const b = objB as Record<string, unknown>;
+
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      if (a[key] !== b[key]) return false;
+    }
+    return true;
+  }
+
+  /** Deep equality for JSON-like values (objects/arrays/primitives). */
+  private _deepEqualObjects(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    if (typeof a !== typeof b) return false;
+
+    // Dates: compare time value
+    if (a instanceof Date && b instanceof Date) {
+      return a.getTime() === b.getTime();
+    }
+
+    // Arrays
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (!this._deepEqualObjects(a[i], b[i])) return false;
+      }
+      return true;
+    }
+
+    // Objects
+    if (typeof a === "object" && typeof b === "object") {
+      const aObj = a as Record<string, unknown>;
+      const bObj = b as Record<string, unknown>;
+      const aKeys = Object.keys(aObj);
+      const bKeys = Object.keys(bObj);
+      if (aKeys.length !== bKeys.length) return false;
+      for (const key of aKeys) {
+        if (!Object.prototype.hasOwnProperty.call(bObj, key)) return false;
+        if (!this._deepEqualObjects(aObj[key], bObj[key])) return false;
+      }
+      return true;
+    }
+
+    // Fallback strict equality for primitives and mismatched types
+    return false;
+  }
+
+  /**
    * Check if a row matches the realtime filter
    */
   private _matchesRealtimeFilter(rowData: Record<string, unknown>): boolean {
@@ -1277,6 +1588,7 @@ export default class TableController<
         return;
       }
       const applyUpdate = (rowLike: Record<string, unknown>) => {
+        this._bumpMaxUpdatedAtFrom(rowLike);
         if (existingRow) {
           this._updateRow(
             data.id as IDType,
@@ -1308,6 +1620,7 @@ export default class TableController<
         if (!row) {
           return;
         }
+        this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
 
         const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id);
         const matchesFilter = this._matchesRealtimeFilter(row as Record<string, unknown>);

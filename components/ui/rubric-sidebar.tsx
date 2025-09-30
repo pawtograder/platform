@@ -410,12 +410,15 @@ export function SubmissionArtifactCommentLink({ comment }: { comment: Submission
       href={`${baseUrl}?${queryParams.toString()}`}
       prefetch={true}
       onClick={(e) => {
-        e.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("pawto:files-select", {
-            detail: { artifactId: comment.submission_artifact_id }
-          })
-        );
+        // If already on files tab, switch client-side without navigation; otherwise allow normal navigation
+        if (pathname.includes("/files")) {
+          e.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("pawto:files-select", {
+              detail: { artifactId: comment.submission_artifact_id }
+            })
+          );
+        }
       }}
     >
       @ {shortFileName}
@@ -442,12 +445,14 @@ export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFile
       href={`${baseUrl}#L${comment.line}`}
       prefetch={true}
       onClick={(e) => {
-        e.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("pawto:files-select", {
-            detail: { fileId: comment.submission_file_id, hash: `L${comment.line}` }
-          })
-        );
+        if (pathname.includes("/files")) {
+          e.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("pawto:files-select", {
+              detail: { fileId: comment.submission_file_id, hash: `L${comment.line}` }
+            })
+          );
+        }
       }}
     >
       @ {shortFileName}:{comment.line}

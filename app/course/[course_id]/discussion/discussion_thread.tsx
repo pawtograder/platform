@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
@@ -17,6 +18,7 @@ import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/Datab
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
+import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export function DiscussionThreadReply({
@@ -173,6 +175,8 @@ const DiscussionThreadContent = memo(
     });
 
     const [replyVisible, setReplyVisible] = useState(false);
+    const isGraderOrInstructor = useIsGraderOrInstructor();
+    const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
     const { role } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
@@ -293,6 +297,12 @@ const DiscussionThreadContent = memo(
                       </Text>
                     ) : (
                       <Skeleton width="100px" height="20px" />
+                    )}
+                    {isGraderOrInstructor && authorProfile?.private_profile_id && (
+                      <StudentSummaryTrigger
+                        student_id={authorProfile.private_profile_id}
+                        course_id={Number(course_id)}
+                      />
                     )}
                     {thread.id === root_thread?.answer && <Badge colorPalette="green">Answer to Question</Badge>}
                     {/* Ensure root_thread_id is valid before passing */}

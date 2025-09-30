@@ -8,6 +8,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
+import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
@@ -16,9 +17,9 @@ import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useAssignmentController } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse } from "@/hooks/useCourseController";
+import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
+import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useAssignmentDueDate, useCourse, useIsDroppedStudent } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -26,6 +27,7 @@ import {
   useSubmission,
   useSubmissionComments,
   useSubmissionController,
+  useSubmissionReview,
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
@@ -61,6 +63,8 @@ import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { linkToSubPage } from "./utils";
+import { Alert } from "@/components/ui/alert";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -526,12 +530,23 @@ function ReviewStats() {
   const mostRecentGrader = allRubricInstances.find(
     (instance) => Date.parse(instance.created_at) === mostRecentCreationOrEdit
   )?.author;
+  const isInstructor = useIsInstructor();
   if (!review) {
     return <Skeleton height="20px" />;
   }
   return (
     <DataListRoot orientation="horizontal">
-      <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />
+      {isInstructor && (
+        <DataListItem
+          label="Released to student"
+          value={
+            <HStack>
+              {review.released ? "Yes" : "No"} <ReleaseOrUnreleaseReviewButton submissionReviewId={review.id} />
+            </HStack>
+          }
+        />
+      )}
+      {!isInstructor && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
       {completed_by && <DataListItem label="Completed by" value={<PersonName size="2xs" uid={completed_by} />} />}
       {completed_at && <DataListItem label="Completed at" value={formatRelative(completed_at, new Date())} />}
       {checked_by && <DataListItem label="Checked by" value={<PersonName size="2xs" uid={checked_by} />} />}
@@ -550,7 +565,72 @@ function ReviewStats() {
     </DataListRoot>
   );
 }
-
+function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionReviewId: number }) {
+  const review = useSubmissionReview(submissionReviewId);
+  const submissionController = useSubmissionController();
+  const [updatingReview, setUpdatingReview] = useState(false);
+  if (review?.released) {
+    return (
+      <Button
+        size="xs"
+        variant="outline"
+        colorPalette="red"
+        loading={updatingReview}
+        onClick={async () => {
+          setUpdatingReview(true);
+          try {
+            await submissionController.submission_reviews.update(submissionReviewId, { released: false });
+            toaster.create({
+              title: "Review unreleased",
+              type: "success"
+            });
+          } catch (error) {
+            const errorId = Sentry.captureException(error);
+            toaster.create({
+              title: "Error unreleasing review",
+              description: `Failed to unrelease the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+              type: "error"
+            });
+          } finally {
+            setUpdatingReview(false);
+          }
+        }}
+      >
+        Unrelease
+      </Button>
+    );
+  } else {
+    return (
+      <Button
+        size="xs"
+        variant="outline"
+        colorPalette="green"
+        loading={updatingReview}
+        onClick={async () => {
+          setUpdatingReview(true);
+          try {
+            await submissionController.submission_reviews.update(submissionReviewId, { released: true });
+            toaster.create({
+              title: "Review released",
+              type: "success"
+            });
+          } catch (error) {
+            const errorId = Sentry.captureException(error);
+            toaster.create({
+              title: "Error releasing review",
+              description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+              type: "error"
+            });
+          } finally {
+            setUpdatingReview(false);
+          }
+        }}
+      >
+        Release
+      </Button>
+    );
+  }
+}
 function ReviewActions() {
   const submission = useSubmission();
   const reviewId = submission.grading_review_id;
@@ -558,10 +638,11 @@ function ReviewActions() {
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
-  const { private_profile_id } = useClassProfiles();
-  const submissionController = useSubmissionController();
-  const [updatingReview, setUpdatingReview] = useState(false);
-  const isInstructor = useIsGraderOrInstructor();
+
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+  const showCompleteReviewButton = assignedRubricParts.length == 0 && isInstructorOrGrader;
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -569,12 +650,12 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      {isInstructor && (!review.completed_at || (review.completed_at && !review.checked_at)) && (
+      {showCompleteReviewButton && !review.completed_at && (
         <VStack>
           <Heading size="md">Submission Review Actions</Heading>
           <HStack w="100%" justify="space-between">
             {!review.completed_at && <CompleteReviewButton />}
-            {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
+            {/* {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
               <Button
                 variant="surface"
                 loading={updatingReview}
@@ -592,7 +673,7 @@ function ReviewActions() {
               >
                 Mark as Checked
               </Button>
-            )}
+            )} */}
           </HStack>
         </VStack>
       )}
@@ -752,6 +833,7 @@ function Comments() {
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { course_id } = useParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -763,6 +845,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const safeTimeZone = time_zone || "UTC";
   const hasExtension = hoursExtended && hoursExtended > 0;
   const canStillSubmit = dueDate && isAfter(dueDate, new TZDate(new Date(), safeTimeZone));
+  const isDroppedStudent = useIsDroppedStudent(submission.profile_id);
   useEffect(() => {
     if (isGraderOrInstructor) {
       document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
@@ -774,12 +857,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     <Flex direction="column" minW="0px">
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
-          Student&quot;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={submission.assignments} />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
-            <Text fontSize="xs" color="fg.warning">
-              The student can still make a new submission, grading checks will not transfer.
-            </Text>
+            <Alert status="warning">
+              The student can still make a new submission, grading checks will not transfer. Only begin grading this
+              submission if you are certain that the student will not make new submissions.
+            </Alert>
           )}
         </Box>
       )}
@@ -798,9 +883,22 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   )
                 </Text>
               ) : (
-                <Text>{submitter?.name}</Text>
+                <>
+                  <Text>{submitter?.name}</Text>{" "}
+                  {isGraderOrInstructor && submission.profile_id && (
+                    <StudentSummaryTrigger
+                      student_id={submission.profile_id}
+                      course_id={parseInt(course_id as string, 10)}
+                    />
+                  )}
+                </>
               )}
               - Submission #{submission.ordinal}
+              {isDroppedStudent && (
+                <Text color="fg.inverted" bg="bg.inverted">
+                  (Dropped)
+                </Text>
+              )}
             </HStack>
             <HStack gap={1}>
               <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">

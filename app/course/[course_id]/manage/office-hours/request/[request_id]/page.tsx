@@ -1,14 +1,14 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from "react-icons/bs";
-import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
-import { Alert } from "@/components/ui/alert";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
-import { useHelpRequest, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
+import { Alert } from "@/components/ui/alert";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { Badge, Box, HStack, Icon, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { useParams } from "next/navigation";
 import { useEffect } from "react";
+import { BsCheckCircle, BsClipboardCheck, BsClipboardCheckFill, BsXCircle } from "react-icons/bs";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -83,7 +83,6 @@ export default function HelpRequestPage() {
 
   // Get help request data and connection status using individual hooks
   const request = useHelpRequest(Number(request_id));
-  const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
   const course = useCourseController();
 
   const title = (() => {
@@ -101,27 +100,19 @@ export default function HelpRequestPage() {
     }
   }, [title]);
 
-  if (realtimeLoading || !request) {
+  if (!request) {
     return <Skeleton />;
   }
 
   return (
     <Box>
-      {/* Connection Status Indicator */}
-      {!isConnected && (
-        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
-          Help request updates may not appear immediately. Connection status: {connectionStatus?.overall}
-        </Alert>
-      )}
-
       <Box transition="opacity 0.2s ease-in-out">
         <VStack gap={4} align="stretch" mb={4}>
           <HStack justify="space-between" align="center">
             <HelpRequestStatusIndicator status={request.status} />
           </HStack>
         </VStack>
-
-        <HelpRequestChat request={request} />
+        <HelpRequestChat request_id={request.id} />
       </Box>
     </Box>
   );

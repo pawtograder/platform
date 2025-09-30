@@ -712,3 +712,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/gradebook-column-inserted/deno.json"
 entrypoint = "./functions/gradebook-column-inserted/index.ts"
+
+[functions.github-user-sync]
+enabled = true
+verify_jwt = true
+import_map = "./functions/github-user-sync/deno.json"
+entrypoint = "./functions/github-user-sync/index.ts"

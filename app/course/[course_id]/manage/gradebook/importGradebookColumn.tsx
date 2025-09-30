@@ -3,13 +3,12 @@
 import { Alert } from "@/components/ui/alert";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useStudentRoster } from "@/hooks/useCourseController";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import { GradebookColumn, GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
-import { useInvalidate } from "@refinedev/core";
+import * as Sentry from "@sentry/nextjs";
 import { parse } from "csv-parse/browser/esm/sync";
 import { useCallback, useEffect, useState } from "react";
 import { FiUpload } from "react-icons/fi";
@@ -36,7 +35,6 @@ type PreviewCol = {
   name: string;
   isNew: boolean;
   newColId?: number;
-  newGradebookColumnStudents?: GradebookColumnStudent[];
   existingCol: GradebookColumn | null;
   students: PreviewStudent[];
   maxScore?: number;
@@ -64,7 +62,166 @@ export default function ImportGradebookColumns() {
   const studentRoster = useStudentRoster();
   const [importing, setImporting] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const invalidate = useInvalidate();
+
+  const confirmImport = useCallback(async () => {
+    if (!previewData) return;
+    setImporting(true);
+    const supabase = createClient();
+    const existingColumnsNotFromHook = [...gradebookController.gradebook_columns.rows];
+    try {
+      // 1. For new columns, insert them and get their IDs
+      const newCols = previewData.previewCols.filter((col) => col.isNew);
+      let sortOrder = existingColumnsNotFromHook.length;
+      await Promise.all(
+        newCols.map(async (col) => {
+          const randomChars = Math.random().toString(36).substring(2, 10);
+          const slug =
+            col.name
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/(^-|-$)/g, "") +
+            "-" +
+            randomChars;
+          const maxScore = col.maxScore ?? 100;
+
+          const insertObj = {
+            name: col.name + ` (Imported ${new Date().toLocaleDateString()} #${randomChars})`,
+            gradebook_id: gradebookController.gradebook_id,
+            class_id: gradebookController.class_id,
+            external_data: {
+              source: "csv",
+              fileName: importJob?.filename,
+              date: new Date().toISOString(),
+              creator: private_profile_id
+            },
+            max_score: maxScore,
+            description: null,
+            dependencies: null,
+            slug,
+            sort_order: sortOrder++
+          };
+          const { data, error } = await supabase.from("gradebook_columns").insert(insertObj).select().single();
+          if (error) {
+            throw new Error(error.message);
+          }
+          col.newColId = data.id;
+        })
+      );
+      // 1b. For each OLD column that was created by an import, update its expression to refer to the new file
+      await Promise.all(
+        existingColumnsNotFromHook
+          .filter(
+            (c) =>
+              previewData.previewCols.some((pc) => pc.existingCol?.id === c.id) &&
+              c.external_data &&
+              typeof c.external_data === "object" &&
+              "source" in c.external_data &&
+              c.external_data["source"] === "csv"
+          )
+          .map(async (col) => {
+            const { error } = await supabase
+              .from("gradebook_columns")
+              .update({
+                external_data: {
+                  source: "csv",
+                  fileName: importJob?.filename,
+                  date: new Date().toLocaleDateString(),
+                  creator: private_profile_id
+                }
+              })
+              .eq("id", col.id);
+            if (error) {
+              throw new Error(error.message);
+            }
+            return true;
+          })
+      );
+      // 2. Build a single batched payload and call RPC to update scores server-side
+      const updatesPayload = previewData.previewCols
+        .map((col) => {
+          const colId = col.isNew ? col.newColId : col.existingCol?.id;
+          if (!colId) return null;
+          const entries = col.students
+            .map((s) => {
+              let studentPrivateProfileId: string | null = null;
+              if (previewData.idType === "email") {
+                studentPrivateProfileId =
+                  courseController.getRosterWithUserInfo().data.find((r) => r.users.email === s.identifier)
+                    ?.private_profile_id ?? null;
+              } else if (previewData.idType === "sid") {
+                const trimmedIdentifier = (s.identifier ?? "").trim();
+                const sid = parseInt(trimmedIdentifier, 10);
+                if (!isNaN(sid) && isFinite(sid) && sid > 0) {
+                  studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                }
+              }
+              if (!studentPrivateProfileId) return null;
+              // Determine new score
+              let newScore: number | null = null;
+              if (s.newValue !== "" && s.newValue !== null && s.newValue !== undefined && !isNaN(Number(s.newValue))) {
+                newScore = Number(s.newValue);
+              }
+              // Determine old score (effective)
+              let oldScore: number | null = null;
+              if (
+                s.oldValue !== "" &&
+                s.oldValue !== null &&
+                s.oldValue !== undefined &&
+                !isNaN(Number(s.oldValue as number))
+              ) {
+                oldScore = Number(s.oldValue as number);
+              }
+              // Skip no-ops: both null/empty or numerically equal
+              const bothNull = newScore === null && oldScore === null;
+              const bothEqual = newScore !== null && oldScore !== null && Number(newScore) === Number(oldScore);
+              if (bothNull || bothEqual) return null;
+              return { student_id: studentPrivateProfileId, score: newScore };
+            })
+            .filter((e): e is { student_id: string; score: number | null } => e !== null);
+          if (entries.length === 0) return null;
+          return { gradebook_column_id: colId, entries };
+        })
+        .filter(
+          (
+            u
+          ): u is {
+            gradebook_column_id: number;
+            entries: { student_id: string; score: number | null }[];
+          } => u !== null
+        );
+
+      if (updatesPayload.length > 0) {
+        const { error: rpcError } = await supabase.rpc("import_gradebook_scores", {
+          p_class_id: gradebookController.class_id,
+          p_updates: updatesPayload
+        });
+        if (rpcError) throw new Error(rpcError.message);
+      }
+      gradebookController.gradebook_columns.refetchAll();
+      toaster.success({
+        title: "Import successful!",
+        description: "Gradebook columns and scores have been imported."
+      });
+      setDialogOpen(false);
+    } catch (err: unknown) {
+      const error = err as Error;
+      Sentry.captureException(error);
+      toaster.error({
+        title: "Import failed",
+        description: error.message || "An error occurred during import."
+      });
+    } finally {
+      setImporting(false);
+    }
+  }, [
+    previewData,
+    gradebookController.gradebook_id,
+    gradebookController.class_id,
+    private_profile_id,
+    importJob?.filename,
+    courseController,
+    gradebookController.gradebook_columns
+  ]);
   const importFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -579,211 +736,7 @@ export default function ImportGradebookColumns() {
                       <Button onClick={() => setStep(2)} variant="outline" size="sm">
                         Back
                       </Button>
-                      <Button
-                        colorPalette="green"
-                        size="sm"
-                        loading={importing}
-                        onClick={async () => {
-                          if (!previewData) return;
-                          setImporting(true);
-                          const supabase = createClient();
-                          try {
-                            // 1. For new columns, insert them and get their IDs
-                            const newCols = previewData.previewCols.filter((col) => col.isNew);
-                            let sortOrder = existingColumns.length;
-                            await Promise.all(
-                              newCols.map(async (col) => {
-                                const randomChars = Math.random().toString(36).substring(2, 10);
-                                const slug =
-                                  col.name
-                                    .toLowerCase()
-                                    .replace(/[^a-z0-9]+/g, "-")
-                                    .replace(/(^-|-$)/g, "") +
-                                  "-" +
-                                  randomChars;
-                                const maxScore = col.maxScore ?? 100;
-
-                                const insertObj = {
-                                  name: col.name + ` (Imported ${new Date().toLocaleDateString()} #${randomChars})`,
-                                  gradebook_id: gradebookController.gradebook_id,
-                                  class_id: gradebookController.class_id,
-                                  external_data: {
-                                    source: "csv",
-                                    fileName: importJob?.filename,
-                                    date: new Date().toLocaleDateString(),
-                                    creator: private_profile_id
-                                  },
-                                  max_score: maxScore,
-                                  description: null,
-                                  dependencies: null,
-                                  slug,
-                                  sort_order: sortOrder++
-                                };
-                                const { data, error } = await supabase
-                                  .from("gradebook_columns")
-                                  .insert(insertObj)
-                                  .select()
-                                  .single();
-                                if (error) {
-                                  throw new Error(error.message);
-                                }
-                                col.newColId = data.id;
-                                const { data: newGradebookColumnStudents, error: newGradebookColumnStudentsError } =
-                                  await supabase
-                                    .from("gradebook_column_students")
-                                    .select("*")
-                                    .eq("gradebook_column_id", data.id)
-                                    .eq("is_private", true);
-                                if (newGradebookColumnStudentsError) {
-                                  throw new Error(newGradebookColumnStudentsError.message);
-                                }
-                                col.newGradebookColumnStudents = newGradebookColumnStudents;
-                              })
-                            );
-                            // 1b. For each OLD column that was created by an import, update its expression to refer to the new file
-                            await Promise.all(
-                              existingColumns
-                                .filter(
-                                  (c) =>
-                                    previewData.previewCols.some((pc) => pc.existingCol?.id === c.id) &&
-                                    c.external_data &&
-                                    typeof c.external_data === "object" &&
-                                    "source" in c.external_data &&
-                                    c.external_data["source"] === "csv"
-                                )
-                                .map(async (col) => {
-                                  const { error } = await supabase
-                                    .from("gradebook_columns")
-                                    .update({
-                                      external_data: {
-                                        source: "csv",
-                                        fileName: importJob?.filename,
-                                        date: new Date().toLocaleDateString(),
-                                        creator: private_profile_id
-                                      }
-                                    })
-                                    .eq("id", col.id);
-                                  if (error) {
-                                    throw new Error(error.message);
-                                  }
-                                  return true;
-                                })
-                            );
-                            // 2. For each column, update all student scores
-                            await Promise.all(
-                              previewData.previewCols.map(async (col) => {
-                                const colId = col.isNew ? col.newColId : col.existingCol?.id;
-                                if (!colId) return null;
-                                // Only update for students in the roster
-                                const studentsToUpdate = col.students.filter((s) => {
-                                  if (previewData.idType === "email") {
-                                    return courseController
-                                      .getRosterWithUserInfo()
-                                      .data.some((r) => r.users.email === s.identifier);
-                                  } else if (previewData.idType === "sid") {
-                                    const trimmedIdentifier = (s.identifier ?? "").trim();
-                                    const sid = parseInt(trimmedIdentifier, 10);
-                                    if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
-                                      return false;
-                                    }
-                                    return courseController.getProfileBySisId(sid)?.id != null;
-                                  }
-                                  return false;
-                                });
-                                // Build update payloads by finding the existing gradebook_column_students row
-                                const updateRows = studentsToUpdate
-                                  .map((s) => {
-                                    let studentPrivateProfileId: string | null = null;
-                                    if (previewData.idType === "email") {
-                                      studentPrivateProfileId =
-                                        courseController
-                                          .getRosterWithUserInfo()
-                                          .data.find((r) => r.users.email === s.identifier)?.private_profile_id ?? null;
-                                    } else if (previewData.idType === "sid") {
-                                      const trimmedIdentifier = (s.identifier ?? "").trim();
-                                      const sid = parseInt(trimmedIdentifier, 10);
-                                      if (isNaN(sid) || !isFinite(sid) || sid <= 0) {
-                                        studentPrivateProfileId = null;
-                                      } else {
-                                        studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
-                                      }
-                                    }
-                                    if (!studentPrivateProfileId) return null;
-                                    // Find the gradebook_column_students row for this student/column
-                                    const column = gradebookController.gradebook_columns.rows.find(
-                                      (c) => c.id === colId
-                                    );
-                                    const gcs = col.isNew
-                                      ? col.newGradebookColumnStudents?.find(
-                                          (g) => g.student_id === studentPrivateProfileId && g.is_private
-                                        )
-                                      : gradebookController.getGradebookColumnStudent(
-                                          col.existingCol?.id ?? 0,
-                                          studentPrivateProfileId
-                                        );
-                                    if (!gcs) return null;
-                                    let score: number | undefined = undefined;
-                                    if (
-                                      s.newValue !== "" &&
-                                      s.newValue !== null &&
-                                      s.newValue !== undefined &&
-                                      !isNaN(Number(s.newValue))
-                                    ) {
-                                      score = Number(s.newValue);
-                                    }
-                                    let updateObj: {
-                                      id: number;
-                                      update: { score?: number; score_override?: number };
-                                    } | null = null;
-                                    if (column?.score_expression) {
-                                      // Only update score_override
-                                      updateObj = {
-                                        id: gcs.id,
-                                        update: { score_override: score }
-                                      };
-                                    } else {
-                                      // Update score, clear any overrides
-                                      updateObj = {
-                                        id: gcs.id,
-                                        update: { score: score }
-                                      };
-                                    }
-                                    return updateObj;
-                                  })
-                                  .filter(
-                                    (r): r is { id: number; update: { score?: number; score_override?: number } } =>
-                                      r !== null
-                                  );
-                                if (updateRows.length === 0) return null;
-                                await Promise.all(
-                                  updateRows.map(async (row) => {
-                                    const { error } = await supabase
-                                      .from("gradebook_column_students")
-                                      .update(row.update)
-                                      .eq("id", row.id);
-                                    if (error) throw new Error(error.message);
-                                  })
-                                );
-                                return true;
-                              })
-                            );
-                            invalidate({ resource: "gradebook_columns", invalidates: ["all"] });
-                            toaster.success({
-                              title: "Import successful!",
-                              description: "Gradebook columns and scores have been imported."
-                            });
-                            setDialogOpen(false);
-                          } catch (err: unknown) {
-                            const error = err as Error;
-                            toaster.error({
-                              title: "Import failed",
-                              description: error.message || "An error occurred during import."
-                            });
-                          } finally {
-                            setImporting(false);
-                          }
-                        }}
-                      >
+                      <Button colorPalette="green" size="sm" loading={importing} onClick={confirmImport}>
                         Confirm Import
                       </Button>
                     </HStack>

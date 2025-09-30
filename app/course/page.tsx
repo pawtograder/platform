@@ -14,7 +14,7 @@ export default async function ProtectedPage() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return redirect("/sign-in");
+    return redirect("/sign-in?redirect=/course");
   }
 
   //list identities

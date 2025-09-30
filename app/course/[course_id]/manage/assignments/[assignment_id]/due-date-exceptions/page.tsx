@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourseController, useStudentRoster, useCourse } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse, useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -91,6 +91,7 @@ function AdjustDueDateDialogContent({
     register,
     watch,
     reset,
+    setError,
     formState: { errors, isSubmitting }
   } = useForm<AdjustDueDateInsert>({
     defaultValues: {
@@ -110,6 +111,17 @@ function AdjustDueDateDialogContent({
 
   const onSubmitCallback = useCallback(
     async (values: AdjustDueDateInsert) => {
+      const totalMinutes = (Number(values.hours) || 0) * 60 + (Number(values.minutes) || 0);
+      if (totalMinutes <= 0) {
+        setError("hours", { type: "validate", message: "Enter hours or minutes greater than 0" });
+        setError("minutes", { type: "validate", message: "Enter hours or minutes greater than 0" });
+        toaster.error({
+          title: "Invalid extension",
+          description: "Please set hours or minutes to a value greater than 0.",
+          type: "error"
+        });
+        return;
+      }
       const data: AdjustDueDateInsert = {
         ...values,
         hours: Number.parseInt(values.hours.toString()),
@@ -147,6 +159,7 @@ function AdjustDueDateDialogContent({
       assignmentDueDateExceptions,
       private_profile_id,
       reset,
+      setError,
       setOpen
     ]
   );
@@ -161,13 +174,17 @@ function AdjustDueDateDialogContent({
 
   const formattedDuration = toHoursDays(hoursExtended);
   const hasLabScheduling = assignment.minutes_due_after_lab !== null;
-  const newDueDate = addMinutes(addHours(finalDueDate, watch("hours", 0) || 0), watch("minutes", 0) || 0);
+  const watchedHours = watch("hours", 0) || 0;
+  const watchedMinutes = watch("minutes", 0) || 0;
+  const newDueDate = addMinutes(addHours(finalDueDate, watchedHours), watchedMinutes);
+  const sumIsInvalid = (watchedHours || 0) + (watchedMinutes || 0) <= 0;
 
   return (
     <Dialog.Content p={4}>
       <Dialog.Header>
         <Dialog.Title>
-          Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />}
+          Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />} on{" "}
+          {assignment.title}
         </Dialog.Title>
         <Dialog.CloseTrigger />
       </Dialog.Header>
@@ -208,39 +225,79 @@ function AdjustDueDateDialogContent({
       <Dialog.Body>
         <Heading size="md">Add an Exception</Heading>
         <form id="due-date-form" onSubmit={onSubmit}>
-          <Fieldset.Root bg="surface">
-            <Fieldset.Content w="xl">
+          <Fieldset.Root bg="surface" size="sm">
+            <Fieldset.Content maxW="md" gap={2}>
+              <HStack align="start" gap={4}>
+                <Field
+                  orientation="horizontal"
+                  label="Hours Extended"
+                  errorText={errors.hours?.message?.toString()}
+                  invalid={errors.hours ? true : false}
+                >
+                  <Input
+                    size="sm"
+                    w="110px"
+                    type="number"
+                    {...register("hours", {
+                      valueAsNumber: true,
+                      min: 0,
+                      validate: (_value, formValues) => {
+                        const h =
+                          typeof formValues.hours === "number" && Number.isFinite(formValues.hours)
+                            ? formValues.hours
+                            : 0;
+                        const m =
+                          typeof formValues.minutes === "number" && Number.isFinite(formValues.minutes)
+                            ? formValues.minutes
+                            : 0;
+                        return h + m > 0 || "Enter hours or minutes greater than 0";
+                      }
+                    })}
+                    defaultValue={0}
+                  />
+                </Field>
+                <Field
+                  orientation="horizontal"
+                  label="Minutes Extended"
+                  errorText={errors.minutes?.message?.toString()}
+                  invalid={errors.minutes ? true : false}
+                  helperText="Additional time to extend the due date."
+                >
+                  <Input
+                    size="sm"
+                    w="110px"
+                    type="number"
+                    {...register("minutes", {
+                      valueAsNumber: true,
+                      min: 0,
+                      max: 59,
+                      validate: (_value, formValues) => {
+                        const h =
+                          typeof formValues.hours === "number" && Number.isFinite(formValues.hours)
+                            ? formValues.hours
+                            : 0;
+                        const m =
+                          typeof formValues.minutes === "number" && Number.isFinite(formValues.minutes)
+                            ? formValues.minutes
+                            : 0;
+                        return h + m > 0 || "Enter hours or minutes greater than 0";
+                      }
+                    })}
+                    defaultValue={0}
+                  />
+                </Field>
+              </HStack>
               <Field
-                label="Hours Extended"
-                errorText={errors.hours?.message?.toString()}
-                invalid={errors.hours ? true : false}
-              >
-                <Input
-                  type="number"
-                  {...register("hours", { valueAsNumber: true, min: 0, required: "Hours extended is required" })}
-                  defaultValue={0}
-                />
-              </Field>
-              <Field
-                label="Minutes Extended"
-                errorText={errors.minutes?.message?.toString()}
-                invalid={errors.minutes ? true : false}
-                helperText="Additional minutes to extend the due date."
-              >
-                <Input
-                  type="number"
-                  {...register("minutes", { valueAsNumber: true, min: 0, max: 59 })}
-                  defaultValue={0}
-                />
-              </Field>
-              <Field
+                orientation="horizontal"
                 label="Tokens to Consume"
                 errorText={errors.tokens_consumed?.message?.toString()}
                 invalid={errors.tokens_consumed ? true : false}
-                helperText="The number of late tokens to consume when granting this extension. Leave at 0 to not consume any of the student's tokens."
+                helperText="Deducted from the student's token balance"
                 defaultValue={0}
               >
                 <Input
+                  size="sm"
+                  w="120px"
                   type="number"
                   {...register("tokens_consumed", {
                     valueAsNumber: true,
@@ -250,16 +307,35 @@ function AdjustDueDateDialogContent({
                 />
               </Field>
               <Field
+                orientation="horizontal"
                 label="Notes"
                 errorText={errors.note?.message?.toString()}
                 invalid={errors.note ? true : false}
-                helperText="Any additional notes about this extension."
+                helperText="Visible to the student and the staff."
               >
-                <Textarea {...register("note")} />
+                <Textarea size="sm" {...register("note")} />
               </Field>
-              <Text>
-                <strong>New Due Date:</strong> {formatInTimeZone(newDueDate, time_zone, "MMM d h:mm aaa")}
-              </Text>
+              <Box
+                mb={2}
+                w="100%"
+                p={2}
+                bg={sumIsInvalid ? "bg.error" : "bg.info"}
+                borderWidth="1px"
+                borderColor={sumIsInvalid ? "border.error" : "border.info"}
+                borderRadius="md"
+              >
+                {sumIsInvalid ? (
+                  <Text fontSize="sm" color="fg.error">
+                    {errors.hours?.message?.toString() ||
+                      errors.minutes?.message?.toString() ||
+                      "Enter hours or minutes greater than 0"}
+                  </Text>
+                ) : (
+                  <Text fontSize="sm" color="fg.info">
+                    <strong>New Due Date:</strong> {formatInTimeZone(newDueDate, time_zone, "MMM d h:mm aaa")}
+                  </Text>
+                )}
+              </Box>
             </Fieldset.Content>
           </Fieldset.Root>
         </form>
@@ -291,6 +367,7 @@ function AdjustDueDateDialogContent({
                               <Icon as={FaTrash} />
                             </Button>
                           }
+                          placement="top-start"
                           confirmHeader="Delete extension"
                           confirmText="Are you sure you want to delete this extension?"
                           onConfirm={async () => {
@@ -327,7 +404,7 @@ function AdjustDueDateDialogContent({
     </Dialog.Content>
   );
 }
-function AdjustDueDateDialog({
+export function AdjustDueDateDialog({
   student_id,
   group,
   assignment
