@@ -400,6 +400,8 @@ export default class TableController<
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
+  private _lastFetchTimestamp: number = 0;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
@@ -652,7 +654,11 @@ export default class TableController<
     this._refetchListeners.forEach((listener) => listener(true));
 
     const sinceIso = new Date(this._maxUpdatedAtMs).toISOString();
-    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
+
+    const ourQuery = new PostgrestFilterBuilder(this._query)
+      .gt("updated_at", sinceIso)
+      .order("updated_at", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
 
     try {
       let page = 0;
@@ -660,19 +666,12 @@ export default class TableController<
       const changedRows: ResultOne[] = [];
 
       // Fetch in pages ordered by updated_at to advance watermark monotonically
-      // We intentionally do not attempt to clone original query filters; instead we apply realtimeFilter client-side.
       // This still drastically reduces transferred data compared to a full refetch.
       for (;;) {
         const rangeStart = page * pageSize;
         const rangeEnd = (page + 1) * pageSize - 1;
 
-        const { data, error } = await this._client
-          .from(this._table)
-          .select(selectClause)
-          .gte("updated_at", sinceIso)
-          .order("updated_at", { ascending: true, nullsFirst: false })
-          .order("id", { ascending: true })
-          .range(rangeStart, rangeEnd);
+        const { data, error } = await ourQuery.range(rangeStart, rangeEnd);
 
         if (this._closed) return;
         if (error) {
@@ -778,6 +777,7 @@ export default class TableController<
       page++;
     }
 
+    this._lastFetchTimestamp = Date.now();
     return rows;
   }
 
@@ -882,6 +882,10 @@ export default class TableController<
    * Unified refetch that prefers incremental-by-updated_at when available; otherwise full refresh
    */
   private async _refetchAllData(): Promise<void> {
+    if (this._isRefetching) {
+      return;
+    }
+    this._lastFetchTimestamp = Date.now();
     if (this._maxUpdatedAtMs != null) {
       await this._refetchSinceMaxUpdatedAt();
       return;
@@ -889,6 +893,7 @@ export default class TableController<
     await this._refetchAllDataFull();
   }
 
+  private _lastRefetchAllTime = 0;
   /**
    * Public method to refetch all data for this controller's query and notify subscribers.
    * Useful when entries may have been created after the initial fetch but before
@@ -903,6 +908,11 @@ export default class TableController<
     if (this._isRefetching) {
       return;
     }
+    if (Date.now() - this._lastRefetchAllTime < 3000) {
+      throw new Error("Refetch all called too frequently");
+    }
+    this._lastRefetchAllTime = Date.now();
+
     await this._refetchAllData();
   }
 
@@ -942,7 +952,7 @@ export default class TableController<
   }
 
   /**
-   * Handle connection status changes
+   * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
    */
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     const wasDisconnected =
@@ -951,14 +961,32 @@ export default class TableController<
       this._lastConnectionStatus === "connecting";
     const isNowConnected = status.overall === "connected";
 
-    if (wasDisconnected && isNowConnected && this._ready) {
-      // We've reconnected after being disconnected, refetch data (incremental if possible)
-      this._refetchAllData();
-    }
-
     this._lastConnectionStatus = status.overall;
+
+    // Debounce the refetch to avoid thrashing when channels oscillate
+    if (wasDisconnected && isNowConnected && this._ready) {
+      // Clear any pending refetch
+      if (this._connectionStatusDebounceTimer) {
+        clearTimeout(this._connectionStatusDebounceTimer);
+      }
+
+      // Schedule refetch after a short delay to let connection stabilize
+      this._connectionStatusDebounceTimer = setTimeout(() => {
+        this._connectionStatusDebounceTimer = null;
+        if (!this._closed && this._lastConnectionStatus === "connected") {
+          // Skip refetch if we just fetched within the last 3 seconds (e.g., initial load)
+          const timeSinceLastFetch = Date.now() - this._lastFetchTimestamp;
+          if (timeSinceLastFetch < 3000) {
+            return;
+          }
+          // Only refetch if we're still connected after the debounce period
+          this._refetchAllData();
+        }
+      }, 1000); // 1 second debounce for connection status
+    }
   }
 
+  private _debugID: string = Math.random().toString(36).substring(2, 15);
   constructor({
     query,
     client,
@@ -1089,6 +1117,10 @@ export default class TableController<
     if (this._debounceTimeout) {
       clearTimeout(this._debounceTimeout);
       this._debounceTimeout = null;
+    }
+    if (this._connectionStatusDebounceTimer) {
+      clearTimeout(this._connectionStatusDebounceTimer);
+      this._connectionStatusDebounceTimer = null;
     }
     // Clear all listeners and pending operations
     this._refetchListeners = [];
