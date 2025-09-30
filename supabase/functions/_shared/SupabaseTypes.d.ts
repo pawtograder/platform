@@ -97,6 +97,7 @@ export type Database = {
           note: string | null;
           student_id: string | null;
           tokens_consumed: number;
+          updated_at: string;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -110,6 +111,7 @@ export type Database = {
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
+          updated_at?: string;
         };
         Update: {
           assignment_group_id?: number | null;
@@ -123,6 +125,7 @@ export type Database = {
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -1296,6 +1299,7 @@ export type Database = {
           discussion_thread_root_id: number;
           id: number;
           read_at: string | null;
+          updated_at: string;
           user_id: string;
         };
         Insert: {
@@ -1304,6 +1308,7 @@ export type Database = {
           discussion_thread_root_id: number;
           id?: number;
           read_at?: string | null;
+          updated_at?: string;
           user_id?: string;
         };
         Update: {
@@ -1312,6 +1317,7 @@ export type Database = {
           discussion_thread_root_id?: number;
           id?: number;
           read_at?: string | null;
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -1374,6 +1380,7 @@ export type Database = {
           discussion_thread_root_id: number;
           enabled: boolean;
           id: number;
+          updated_at: string;
           user_id: string;
         };
         Insert: {
@@ -1382,6 +1389,7 @@ export type Database = {
           discussion_thread_root_id: number;
           enabled?: boolean;
           id?: number;
+          updated_at?: string;
           user_id: string;
         };
         Update: {
@@ -1390,6 +1398,7 @@ export type Database = {
           discussion_thread_root_id?: number;
           enabled?: boolean;
           id?: number;
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -1437,6 +1446,7 @@ export type Database = {
           root_class_id: number | null;
           subject: string;
           topic_id: number;
+          updated_at: string;
         };
         Insert: {
           answer?: number | null;
@@ -1458,6 +1468,7 @@ export type Database = {
           root_class_id?: number | null;
           subject: string;
           topic_id: number;
+          updated_at?: string;
         };
         Update: {
           answer?: number | null;
@@ -1479,6 +1490,7 @@ export type Database = {
           root_class_id?: number | null;
           subject?: string;
           topic_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -1916,6 +1928,7 @@ export type Database = {
           score_override: number | null;
           score_override_note: string | null;
           student_id: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -1934,6 +1947,7 @@ export type Database = {
           score_override?: number | null;
           score_override_note?: string | null;
           student_id?: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -1952,6 +1966,7 @@ export type Database = {
           score_override?: number | null;
           score_override_note?: string | null;
           student_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2030,6 +2045,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -2048,6 +2064,7 @@ export type Database = {
           show_max_score?: boolean;
           slug: string;
           sort_order?: number | null;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -2066,6 +2083,7 @@ export type Database = {
           show_max_score?: boolean;
           slug?: string;
           sort_order?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2760,6 +2778,7 @@ export type Database = {
           max_concurrent_students: number;
           started_at: string;
           ta_profile_id: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -2770,6 +2789,7 @@ export type Database = {
           max_concurrent_students?: number;
           started_at?: string;
           ta_profile_id: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -2780,6 +2800,7 @@ export type Database = {
           max_concurrent_students?: number;
           started_at?: string;
           ta_profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2826,6 +2847,7 @@ export type Database = {
           max_concurrent_requests: number | null;
           name: string;
           queue_type: Database["public"]["Enums"]["help_queue_type"];
+          updated_at: string;
         };
         Insert: {
           available?: boolean;
@@ -2840,6 +2862,7 @@ export type Database = {
           max_concurrent_requests?: number | null;
           name: string;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
+          updated_at?: string;
         };
         Update: {
           available?: boolean;
@@ -2854,6 +2877,7 @@ export type Database = {
           max_concurrent_requests?: number | null;
           name?: string;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2874,6 +2898,7 @@ export type Database = {
           id: number;
           student_profile_id: string;
           thumbs_up: boolean;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -2883,6 +2908,7 @@ export type Database = {
           id?: number;
           student_profile_id: string;
           thumbs_up: boolean;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -2892,6 +2918,7 @@ export type Database = {
           id?: number;
           student_profile_id?: string;
           thumbs_up?: boolean;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2934,6 +2961,7 @@ export type Database = {
           line_number: number | null;
           submission_file_id: number | null;
           submission_id: number | null;
+          updated_at: string;
         };
         Insert: {
           assignment_id: number;
@@ -2944,6 +2972,7 @@ export type Database = {
           line_number?: number | null;
           submission_file_id?: number | null;
           submission_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           assignment_id?: number;
@@ -2954,6 +2983,7 @@ export type Database = {
           line_number?: number | null;
           submission_file_id?: number | null;
           submission_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3049,6 +3079,7 @@ export type Database = {
           help_request_id: number | null;
           id: number;
           message_id: number;
+          updated_at: string;
           viewer_id: string;
         };
         Insert: {
@@ -3057,6 +3088,7 @@ export type Database = {
           help_request_id?: number | null;
           id?: number;
           message_id: number;
+          updated_at?: string;
           viewer_id: string;
         };
         Update: {
@@ -3065,6 +3097,7 @@ export type Database = {
           help_request_id?: number | null;
           id?: number;
           message_id?: number;
+          updated_at?: string;
           viewer_id?: string;
         };
         Relationships: [
@@ -3115,6 +3148,7 @@ export type Database = {
           instructors_only: boolean;
           message: string;
           reply_to_message_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -3125,6 +3159,7 @@ export type Database = {
           instructors_only?: boolean;
           message: string;
           reply_to_message_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -3135,6 +3170,7 @@ export type Database = {
           instructors_only?: boolean;
           message?: string;
           reply_to_message_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3188,6 +3224,7 @@ export type Database = {
           moderator_profile_id: string;
           reason: string | null;
           student_profile_id: string;
+          updated_at: string;
         };
         Insert: {
           action_type: Database["public"]["Enums"]["moderation_action_type"];
@@ -3202,6 +3239,7 @@ export type Database = {
           moderator_profile_id: string;
           reason?: string | null;
           student_profile_id: string;
+          updated_at?: string;
         };
         Update: {
           action_type?: Database["public"]["Enums"]["moderation_action_type"];
@@ -3216,6 +3254,7 @@ export type Database = {
           moderator_profile_id?: string;
           reason?: string | null;
           student_profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3276,6 +3315,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           profile_id: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -3283,6 +3323,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           profile_id: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -3290,6 +3331,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3333,6 +3375,7 @@ export type Database = {
           is_active: boolean;
           name: string;
           template_content: string;
+          updated_at: string;
           usage_count: number;
         };
         Insert: {
@@ -3345,6 +3388,7 @@ export type Database = {
           is_active?: boolean;
           name: string;
           template_content: string;
+          updated_at?: string;
           usage_count?: number;
         };
         Update: {
@@ -3357,6 +3401,7 @@ export type Database = {
           is_active?: boolean;
           name?: string;
           template_content?: string;
+          updated_at?: string;
           usage_count?: number;
         };
         Relationships: [
@@ -3443,6 +3488,7 @@ export type Database = {
           resolved_by: string | null;
           status: Database["public"]["Enums"]["help_request_status"];
           template_id: number | null;
+          updated_at: string;
         };
         Insert: {
           assignee?: string | null;
@@ -3461,6 +3507,7 @@ export type Database = {
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
           template_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           assignee?: string | null;
@@ -3479,6 +3526,7 @@ export type Database = {
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
           template_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3703,6 +3751,7 @@ export type Database = {
           lab_section_id: number;
           meeting_date: string;
           notes: string | null;
+          updated_at: string;
         };
         Insert: {
           cancelled?: boolean;
@@ -3712,6 +3761,7 @@ export type Database = {
           lab_section_id: number;
           meeting_date: string;
           notes?: string | null;
+          updated_at?: string;
         };
         Update: {
           cancelled?: boolean;
@@ -3721,6 +3771,7 @@ export type Database = {
           lab_section_id?: number;
           meeting_date?: string;
           notes?: string | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -3754,6 +3805,7 @@ export type Database = {
           name: string;
           sis_crn: number | null;
           start_time: string | null;
+          updated_at: string;
         };
         Insert: {
           campus?: string | null;
@@ -3769,6 +3821,7 @@ export type Database = {
           name: string;
           sis_crn?: number | null;
           start_time?: string | null;
+          updated_at?: string;
         };
         Update: {
           campus?: string | null;
@@ -3784,6 +3837,7 @@ export type Database = {
           name?: string;
           sis_crn?: number | null;
           start_time?: string | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -4390,6 +4444,39 @@ export type Database = {
         };
         Relationships: [];
       };
+      realtime_channel_subscriptions: {
+        Row: {
+          channel: string;
+          class_id: number | null;
+          client_id: string;
+          created_at: string;
+          lease_expires_at: string;
+          profile_id: string | null;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          channel: string;
+          class_id?: number | null;
+          client_id: string;
+          created_at?: string;
+          lease_expires_at: string;
+          profile_id?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          channel?: string;
+          class_id?: number | null;
+          client_id?: string;
+          created_at?: string;
+          lease_expires_at?: string;
+          profile_id?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       repositories: {
         Row: {
           assignment_group_id: number | null;
@@ -4648,6 +4735,7 @@ export type Database = {
           id: number;
           review_assignment_id: number;
           rubric_part_id: number;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -4655,6 +4743,7 @@ export type Database = {
           id?: number;
           review_assignment_id: number;
           rubric_part_id: number;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -4662,6 +4751,7 @@ export type Database = {
           id?: number;
           review_assignment_id?: number;
           rubric_part_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -4709,6 +4799,7 @@ export type Database = {
           rubric_id: number;
           submission_id: number;
           submission_review_id: number;
+          updated_at: string;
         };
         Insert: {
           assignee_profile_id: string;
@@ -4724,6 +4815,7 @@ export type Database = {
           rubric_id: number;
           submission_id: number;
           submission_review_id: number;
+          updated_at?: string;
         };
         Update: {
           assignee_profile_id?: string;
@@ -4739,6 +4831,7 @@ export type Database = {
           rubric_id?: number;
           submission_id?: number;
           submission_review_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5354,6 +5447,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           student_profile_id: string;
+          updated_at: string;
         };
         Insert: {
           activity_description?: string | null;
@@ -5363,6 +5457,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           student_profile_id: string;
+          updated_at?: string;
         };
         Update: {
           activity_description?: string | null;
@@ -5372,6 +5467,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           student_profile_id?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5487,6 +5583,7 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -5505,6 +5602,7 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -5523,6 +5621,7 @@ export type Database = {
           submission_artifact_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5815,6 +5914,7 @@ export type Database = {
           rubric_check_id: number | null;
           submission_id: number;
           submission_review_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -5832,6 +5932,7 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -5849,6 +5950,7 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id?: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5949,6 +6051,7 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id: number | null;
+          updated_at: string;
         };
         Insert: {
           author: string;
@@ -5968,6 +6071,7 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Update: {
           author?: string;
@@ -5987,6 +6091,7 @@ export type Database = {
           submission_file_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6263,6 +6368,7 @@ export type Database = {
           id: number;
           submission_id: number;
           submission_regrade_request_id: number;
+          updated_at: string;
         };
         Insert: {
           assignment_id: number;
@@ -6273,6 +6379,7 @@ export type Database = {
           id?: number;
           submission_id: number;
           submission_regrade_request_id: number;
+          updated_at?: string;
         };
         Update: {
           assignment_id?: number;
@@ -6283,6 +6390,7 @@ export type Database = {
           id?: number;
           submission_id?: number;
           submission_regrade_request_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6404,6 +6512,7 @@ export type Database = {
           submission_comment_id: number | null;
           submission_file_comment_id: number | null;
           submission_id: number;
+          updated_at: string;
         };
         Insert: {
           assignee: string;
@@ -6430,6 +6539,7 @@ export type Database = {
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id: number;
+          updated_at?: string;
         };
         Update: {
           assignee?: string;
@@ -6456,6 +6566,7 @@ export type Database = {
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6625,6 +6736,7 @@ export type Database = {
           total_autograde_score: number;
           total_score: number;
           tweak: number;
+          updated_at: string;
         };
         Insert: {
           checked_at?: string | null;
@@ -6643,6 +6755,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score: number;
           tweak: number;
+          updated_at?: string;
         };
         Update: {
           checked_at?: string | null;
@@ -6661,6 +6774,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score?: number;
           tweak?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -6980,6 +7094,7 @@ export type Database = {
           id: string;
           name: string;
           profile_id: string;
+          updated_at: string;
           visible: boolean;
         };
         Insert: {
@@ -6990,6 +7105,7 @@ export type Database = {
           id?: string;
           name: string;
           profile_id: string;
+          updated_at?: string;
           visible: boolean;
         };
         Update: {
@@ -7000,6 +7116,7 @@ export type Database = {
           id?: string;
           name?: string;
           profile_id?: string;
+          updated_at?: string;
           visible?: boolean;
         };
         Relationships: [
@@ -7071,6 +7188,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          updated_at: string;
           user_id: string;
         };
         Insert: {
@@ -7086,6 +7204,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          updated_at?: string;
           user_id: string;
         };
         Update: {
@@ -7101,6 +7220,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          updated_at?: string;
           user_id?: string;
         };
         Relationships: [
@@ -8840,6 +8960,10 @@ export type Database = {
         Args: { help_request_id: number };
         Returns: boolean;
       };
+      channel_has_subscribers: {
+        Args: { p_channel: string };
+        Returns: boolean;
+      };
       check_assignment_deadlines_passed: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
@@ -9220,6 +9344,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          updated_at: string;
         };
       };
       gradebook_column_move_right: {
@@ -9241,6 +9366,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          updated_at: string;
         };
       };
       help_request_is_private: {
@@ -9340,8 +9466,26 @@ export type Database = {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
       };
+      refresh_realtime_subscription: {
+        Args: {
+          p_channel: string;
+          p_client_id: string;
+          p_lease_seconds?: number;
+        };
+        Returns: undefined;
+      };
       refresh_workflow_events_summary: {
         Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
+      register_realtime_subscription: {
+        Args: {
+          p_channel: string;
+          p_class_id?: number;
+          p_client_id: string;
+          p_lease_seconds?: number;
+          p_profile_id?: string;
+        };
         Returns: undefined;
       };
       release_all_grading_reviews_for_assignment: {
@@ -9350,6 +9494,10 @@ export type Database = {
       };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
+        Returns: undefined;
+      };
+      safe_broadcast: {
+        Args: { p_channel: string; p_payload: Json };
         Returns: undefined;
       };
       send_signup_welcome_message: {
@@ -9388,6 +9536,10 @@ export type Database = {
       trigger_sis_sync: {
         Args: { p_class_id?: number };
         Returns: Json;
+      };
+      unregister_realtime_subscription: {
+        Args: { p_channel: string; p_client_id: string };
+        Returns: undefined;
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };

@@ -152,6 +152,8 @@ export class ClassRealTimeController {
     // Initialize staff channel if user is staff
     if (this._isStaff) {
       await this._subscribeToStaffChannel();
+    } else {
+      await this._subscribeToStudentsChannel();
     }
   }
 
@@ -231,6 +233,24 @@ export class ClassRealTimeController {
     if (!this._isStaff) return;
 
     const topic = `class:${this._classId}:staff`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      this._client,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    this._channelUnsubscribers.set(topic, unsubscriber);
+  }
+
+  private async _subscribeToStudentsChannel() {
+    if (this._isStaff) return;
+
+    const topic = `class:${this._classId}:students`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
       this._client,

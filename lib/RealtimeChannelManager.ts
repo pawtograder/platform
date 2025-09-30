@@ -33,6 +33,8 @@ type ManagedChannel = {
   reconnectAttempts: number;
   lastReconnectTime: number;
   isReconnecting: boolean;
+  leaseTimer: ReturnType<typeof setInterval> | null;
+  leaseRegistered: boolean;
 };
 
 /**
@@ -46,6 +48,11 @@ export class RealtimeChannelManager {
   private _client: SupabaseClient<Database> | null = null;
   // Prevent duplicate channel creation for the same topic when multiple callers subscribe concurrently
   private _pendingChannelCreates: Map<string, Promise<void>> = new Map();
+  // Unique id for this browser/client instance to distinguish multiple tabs
+  private _clientInstanceId: string =
+    typeof crypto !== "undefined" && (crypto as Crypto).randomUUID
+      ? (crypto as Crypto).randomUUID()
+      : `${Date.now()}-${Math.random()}-${Math.random()}`;
 
   // Network connectivity tracking
   private _isOnline: boolean = navigator.onLine;
@@ -82,6 +89,67 @@ export class RealtimeChannelManager {
       RealtimeChannelManager._instance = new RealtimeChannelManager();
     }
     return RealtimeChannelManager._instance;
+  }
+
+  /**
+   * Register a lease for an active channel in the DB so server can avoid sending to empty channels.
+   * Uses RPC helper functions added via migrations. Failures are logged and ignored.
+   */
+  private async _registerLease(managed: ManagedChannel) {
+    try {
+      // Refresh auth user and ensure logged in
+      const { data, error } = await managed.client.auth.getUser();
+      if (error || !data?.user?.id) {
+        this._breadcrumb("lease", "register_skipped_no_user", { topic: managed.topic }, "warning");
+        return;
+      }
+      await managed.client.rpc("register_realtime_subscription", {
+        p_channel: managed.topic,
+        p_client_id: this._clientInstanceId
+      });
+      managed.leaseRegistered = true;
+      this._breadcrumb("lease", "registered", { topic: managed.topic });
+    } catch (err) {
+      this._breadcrumb("lease", "register_error", { topic: managed.topic, message: String(err) }, "warning");
+    }
+  }
+
+  /** Refresh the lease periodically while subscribed */
+  private _startLeaseRefresh(managed: ManagedChannel) {
+    if (managed.leaseTimer) {
+      clearInterval(managed.leaseTimer);
+      managed.leaseTimer = null;
+    }
+    managed.leaseTimer = setInterval(async () => {
+      try {
+        await managed.client.rpc("refresh_realtime_subscription", {
+          p_channel: managed.topic,
+          p_client_id: this._clientInstanceId
+        });
+        this._breadcrumb("lease", "refreshed", { topic: managed.topic }, "debug");
+      } catch (err) {
+        this._breadcrumb("lease", "refresh_error", { topic: managed.topic, message: String(err) }, "warning");
+      }
+    }, 120000); // refresh every 120s to reduce churn; server lease >= 150s
+  }
+
+  /** Stop refreshing lease and unregister */
+  private async _stopAndUnregisterLease(managed: ManagedChannel) {
+    if (managed.leaseTimer) {
+      clearInterval(managed.leaseTimer);
+      managed.leaseTimer = null;
+    }
+    if (!managed.leaseRegistered) return;
+    try {
+      await managed.client.rpc("unregister_realtime_subscription", {
+        p_channel: managed.topic,
+        p_client_id: this._clientInstanceId
+      });
+      managed.leaseRegistered = false;
+      this._breadcrumb("lease", "unregistered", { topic: managed.topic });
+    } catch (err) {
+      this._breadcrumb("lease", "unregister_error", { topic: managed.topic, message: String(err) }, "warning");
+    }
   }
 
   /**
@@ -331,7 +399,9 @@ export class RealtimeChannelManager {
             client,
             reconnectAttempts: 0,
             lastReconnectTime: 0,
-            isReconnecting: false
+            isReconnecting: false,
+            leaseTimer: null,
+            leaseRegistered: false
           };
 
           // Set up broadcast message handler
@@ -350,6 +420,21 @@ export class RealtimeChannelManager {
           // Subscribe to the channel (this should only happen once per topic)
           channel.subscribe(async (status, err) => {
             this._handleSubscriptionStateEvent(topic, status, err, channel);
+            if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+              // Register and start refreshing lease
+              await this._registerLease(newManaged);
+              this._startLeaseRefresh(newManaged);
+            } else if (
+              status === REALTIME_SUBSCRIBE_STATES.CLOSED ||
+              status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
+              status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+            ) {
+              // Stop refreshing during error/closed states
+              if (newManaged.leaseTimer) {
+                clearInterval(newManaged.leaseTimer);
+                newManaged.leaseTimer = null;
+              }
+            }
           });
 
           this._channels.set(topic, newManaged);
@@ -399,6 +484,8 @@ export class RealtimeChannelManager {
       // If no more subscriptions, clean up the channel
       if (managedChannel.subscriptions.length === 0) {
         this._breadcrumb("channel", "teardown", { topic });
+        // Stop and unregister lease before tearing down
+        this._stopAndUnregisterLease(managedChannel);
         managedChannel.channel.unsubscribe();
         managedChannel.client.removeChannel(managedChannel.channel);
         this._channels.delete(topic);
