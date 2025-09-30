@@ -194,7 +194,6 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   if (installations.length === 0) {
     let connection: Bottleneck.IORedisConnection | undefined;
     if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
-      console.log("Using Upstash Redis for GitHub API rate limiting", Deno.env.get("UPSTASH_REDIS_REST_URL"));
       const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
       const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
       connection = new Bottleneck({
@@ -553,6 +552,7 @@ export async function createRepo(
     scope?.setTag("template_owner", owner);
     scope?.setTag("repo_name", repoName);
     scope?.setTag("org", org);
+    console.log("Creating repo", template_repo, owner, repoName, org);
     const resp = await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
@@ -995,11 +995,24 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
 async function getTeamMembers(org: string, team_slug: string, octokit: Octokit): Promise<string[]> {
-  const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
-    org,
-    team_slug
-  });
-  return team.map((m) => m.login.toLowerCase());
+  try {
+    const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
+      org,
+      team_slug
+    });
+    return team.map((m) => m.login.toLowerCase());
+  } catch (e) {
+    // If it's a 404 error from GitHub, add a breadcrumb and return empty array
+    if (e && typeof e === "object" && "status" in e && (e as { status?: number }).status === 404) {
+      Sentry.addBreadcrumb({
+        category: "github.api",
+        message: `404 Not Found when fetching team members for org: ${org}, team_slug: ${team_slug}`,
+        level: "info"
+      });
+      return [];
+    }
+    throw e;
+  }
 }
 async function getOrgMembers(
   org: string,

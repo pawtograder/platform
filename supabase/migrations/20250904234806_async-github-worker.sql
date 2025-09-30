@@ -181,15 +181,6 @@ begin
     raise notice 'Normal queue load (% messages), starting % workers', queue_size, worker_count;
   end if;
   
-  -- If any circuit is OPEN, cap worker count to 1 to mass-slowdown
-  select count(*)::integer into open_circuits
-  from public.github_circuit_breakers
-  where state = 'open' and (open_until is null or open_until > now());
-  if open_circuits > 0 then
-    worker_count := 1;
-    raise notice 'Circuit breaker active (% open). Capping workers to %', open_circuits, worker_count;
-  end if;
-  
   -- Start workers dynamically
   for i in 1..worker_count loop
     perform public.call_edge_function_internal(

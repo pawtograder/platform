@@ -23,11 +23,12 @@ const eventHandler = createEventHandler({
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     sendDefaultPii: true,
     environment: Deno.env.get("ENVIRONMENT") || "development",
     integrations: [],
-    tracesSampleRate: 0
+    tracesSampleRate: 0,
+    ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
   });
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
