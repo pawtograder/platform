@@ -155,7 +155,7 @@ async function handlePushToStudentRepo(
     }
 
     //Check that the workflow file has not been deleted in any commit
-    const removedInCommit = payload.commits.find((commit) => commit.removed.includes(GRADER_WORKFLOW_PATH));
+    const removedInCommit = commit.removed.includes(GRADER_WORKFLOW_PATH);
     if (removedInCommit) {
       // Fail the check run
       await updateCheckRun({
@@ -167,7 +167,7 @@ async function handlePushToStudentRepo(
         output: {
           title: "Submission failed",
           summary: "The autograder workflow file has been deleted",
-          text: `Commit ${removedInCommit.id.substring(0, 7)} removed the file ${GRADER_WORKFLOW_PATH} from the repository. This file is essential for the operation of the autograder. Please add it back and try again.`
+          text: `Commit ${commit.id.substring(0, 7)} removed the file ${GRADER_WORKFLOW_PATH} from the repository. This file is essential for the operation of the autograder. Please add it back and try again.`
         }
       });
       return;
