@@ -294,7 +294,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .filter((m) => m.user_roles && m.user_roles.users.github_username)
             .map((m) => m.user_roles.users.github_username!);
 
-            Sentry.addBreadcrumb({
+          Sentry.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, groupMemberUsernames: ${groupMemberUsernames.join(", ")}`,
             level: "info"
