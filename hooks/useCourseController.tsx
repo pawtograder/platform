@@ -1451,6 +1451,7 @@ export function useRosterWithUserInfo() {
 
 /**
  * Hook to get user roles with full profile and user information for enrollments management
+ * Includes disabled user roles
  */
 export function useUserRolesWithProfiles() {
   const controller = useCourseController();
@@ -1461,6 +1462,26 @@ export function useUserRolesWithProfiles() {
       setUserRoles(updatedUserRoles as UserRoleWithPrivateProfileAndUser[]);
     });
     setUserRoles(data as UserRoleWithPrivateProfileAndUser[]);
+    return unsubscribe;
+  }, [controller]);
+
+  return userRoles;
+}
+
+/**
+ * Hook to get user roles with full profile and user information for enrollments management
+ * Only includes active user roles
+ */
+export function useActiveUserRolesWithProfiles() {
+  const controller = useCourseController();
+  const [userRoles, setUserRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.userRolesWithProfiles.list((updatedUserRoles) => {
+      const activeUserRoles = updatedUserRoles.filter((r) => r.disabled === false);
+      setUserRoles(activeUserRoles as UserRoleWithPrivateProfileAndUser[]);
+    });
+    setUserRoles(data.filter((r) => r.disabled === false) as UserRoleWithPrivateProfileAndUser[]);
     return unsubscribe;
   }, [controller]);
 

@@ -8,6 +8,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useActiveSubmissions, useAssignmentController, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  useActiveUserRolesWithProfiles,
   useAssignments,
   useClassSections,
   useCourseController,
@@ -156,7 +157,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const gradingRubric = rubrics.find((rubric) => rubric.review_round === "grading-review");
   const allActiveSubmissions = useActiveSubmissions();
 
-  const userRoles = useUserRolesWithProfiles();
+  const userRoles = useActiveUserRolesWithProfiles();
 
   const courseController = useCourseController();
 
