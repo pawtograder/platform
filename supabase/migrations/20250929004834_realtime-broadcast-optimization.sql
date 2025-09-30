@@ -1567,7 +1567,7 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 CREATE OR REPLACE FUNCTION broadcast_gradebook_data_change()
 RETURNS TRIGGER AS $$
