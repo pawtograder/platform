@@ -33,7 +33,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
 
   for (const c of classes) {
     if (c!.classes.github_org) {
-      scope.addBreadcrumb({
+      Sentry.addBreadcrumb({
         category: "github",
         message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug! + "-students"}`,
         level: "info"
@@ -94,7 +94,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
 
-        scope.addBreadcrumb({
+        Sentry.addBreadcrumb({
           category: "github",
           message: `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`,
           level: "info"
@@ -102,7 +102,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           madeChanges = true;
-          scope.addBreadcrumb({
+          Sentry.addBreadcrumb({
             category: "github",
             message: `Creating repo ${repoName}`,
             level: "info"
@@ -146,7 +146,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         }
 
         try {
-          scope.addBreadcrumb({
+          Sentry.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repoName}, groupMemberUsernames: ${group.assignment_groups_members
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
@@ -187,7 +187,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         throw new UserVisibleError(`User profile ID not found for class ${assignment.class_id}`);
       }
       if (!assignment.template_repo) {
-        scope.addBreadcrumb({
+        Sentry.addBreadcrumb({
           category: "github",
           message: `No template repo for assignment ${assignment.id}`,
           level: "info"
@@ -198,7 +198,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       const courseSlug = assignment.classes!.slug;
       const repoName = `${courseSlug}-${assignment.slug}-${githubUsername}`;
       if (existingRepos.find((repo) => repo.repository === `${assignment.classes!.github_org}/${repoName}`)) {
-        scope.addBreadcrumb({
+        Sentry.addBreadcrumb({
           category: "github",
           message: `Repo ${repoName} already exists...`,
           level: "info"
@@ -223,7 +223,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       }
 
       try {
-        scope.addBreadcrumb({
+        Sentry.addBreadcrumb({
           category: "github",
           message: `Creating repo and syncing permissions for ${repoName}, githubUsername: ${githubUsername}`,
           level: "info"
@@ -256,7 +256,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         const [orgName, repoName] = repo.repository.split("/");
         const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
         if (classSlug) {
-          scope.addBreadcrumb({
+          Sentry.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, githubUsername: ${githubUsername}`,
             level: "info"
@@ -294,7 +294,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .filter((m) => m.user_roles && m.user_roles.users.github_username)
             .map((m) => m.user_roles.users.github_username!);
 
-          scope.addBreadcrumb({
+            Sentry.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, groupMemberUsernames: ${groupMemberUsernames.join(", ")}`,
             level: "info"
@@ -403,7 +403,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const changedUsername = userData.github_username !== gitHubUser.data.login;
   const messages = [];
   if (changedUsername) {
-    scope.addBreadcrumb({
+    Sentry.addBreadcrumb({
       category: "github",
       message: `GitHub username updated from ${userData.github_username} to ${gitHubUser.data.login}. Please refresh the page.`,
       level: "info"
