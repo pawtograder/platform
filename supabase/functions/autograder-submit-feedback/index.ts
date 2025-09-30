@@ -15,7 +15,6 @@ import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
-type GraderResultRow = Database["public"]["Tables"]["grader_results"]["Row"];
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
 const RESET_WINDOW_MS = 60_000;
@@ -25,13 +24,15 @@ async function insertComments({
   class_id,
   submission_id,
   grading_review_id,
-  comments
+  comments,
+  scope
 }: {
   adminSupabase: SupabaseClient;
   class_id: number;
   submission_id: number;
   grading_review_id: number;
   comments: (FeedbackComment | FeedbackLineComment | FeedbackArtifactComment)[];
+  scope: Sentry.Scope;
 }) {
   const profileMap = new Map<string, string>();
   for (const comment of comments) {
@@ -200,13 +201,15 @@ async function resetExistingGraderResult({
   grader_result_id,
   submission_id,
   autograder_regression_test_id,
-  artifactNames
+  artifactNames,
+  scope
 }: {
   adminSupabase: SupabaseClient<Database>;
   grader_result_id: number;
-  submission_id?: number | null;
+  submission_id: number;
   autograder_regression_test_id?: number | null;
   artifactNames: string[];
+  scope: Sentry.Scope;
 }) {
   const { data: existingTests, error: existingTestsError } = await adminSupabase
     .from("grader_result_tests")
@@ -526,13 +529,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     try {
       const artifactNames =
         requestBody.feedback.artifacts?.map((artifact) => artifact.name).filter((name): name is string => !!name) ?? [];
-      if (reusedExistingResult) {
+      if (reusedExistingResult && submission_id) {
         await resetExistingGraderResult({
           adminSupabase,
           grader_result_id: resultID.id,
           submission_id,
           autograder_regression_test_id,
-          artifactNames
+          artifactNames,
+          scope
         });
       }
       // Insert feedback for each visibility level
@@ -620,7 +624,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               submission_id: submission_id!,
               autograder_regression_test_id,
               name: artifact.name,
-              data: artifact.data as any
+              data: artifact.data as Json
             }))
           )
           .select("id");
@@ -659,7 +663,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           class_id,
           submission_id,
           grading_review_id,
-          comments: requestBody.feedback.annotations
+          comments: requestBody.feedback.annotations,
+          scope
         });
       }
 
