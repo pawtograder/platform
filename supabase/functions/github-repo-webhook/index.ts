@@ -154,6 +154,25 @@ async function handlePushToStudentRepo(
       Sentry.captureException(checkRunError, scope);
       throw checkRunError;
     }
+
+    //Check that the workflow file has not been deleted in any commit
+    const removedInCommit = commit.removed.includes(GRADER_WORKFLOW_PATH);
+    if (removedInCommit) {
+      // Fail the check run
+      await updateCheckRun({
+        owner: payload.repository.owner.login,
+        repo: payload.repository.name,
+        check_run_id: checkRunId,
+        status: "completed",
+        conclusion: "failure",
+        output: {
+          title: "Submission failed",
+          summary: "The autograder workflow file has been deleted",
+          text: `Commit ${commit.id.substring(0, 7)} removed the file ${GRADER_WORKFLOW_PATH} from the repository. This file is essential for the operation of the autograder. Please add it back and try again.`
+        }
+      });
+      return;
+    }
   }
   if (payload.head_commit.message.includes("#submit")) {
     console.log(`Ref: ${payload.ref}`);
@@ -368,7 +387,9 @@ async function handlePushToTemplateRepo(
       Sentry.captureMessage(`File ${GRADER_WORKFLOW_PATH} not found for ${assignments[0].template_repo}`, scope);
       return;
     }
-    hash.update(file.content);
+    // Remove all whitespace (spaces, tabs, newlines, etc.) before hashing
+    const contentWithoutWhitespace = file.content.replace(/\s+/g, "");
+    hash.update(contentWithoutWhitespace);
     const hashStr = hash.digest("hex");
     scope?.setTag("new_autograder_workflow_hash", hashStr);
     for (const assignment of assignments) {

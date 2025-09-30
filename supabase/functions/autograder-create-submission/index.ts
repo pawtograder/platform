@@ -1128,7 +1128,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const workflowFile = zip.files.find(
           (file: { path: string }) => stripTopDir(file.path) === ".github/workflows/grade.yml"
         );
-        const hash = createHash("sha256");
         const contents = await workflowFile?.buffer();
         if (!contents) {
           throw new UserVisibleError(
@@ -1137,13 +1136,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           );
         }
         const contentsStr = contents.toString("utf-8");
+        // Calculate hash with original contents
+        const hash = createHash("sha256");
+        hash.update(contentsStr);
+        const hashStr = hash.digest("hex");
+
+        // Calculate hash with all whitespace removed
+        const contentsNoWhitespace = contentsStr.replace(/\s+/g, "");
+        const hashNoWhitespace = createHash("sha256");
+        hashNoWhitespace.update(contentsNoWhitespace);
+        const hashStrNoWhitespace = hashNoWhitespace.digest("hex");
+
         // Retrieve the autograder config
         const { data: config } = await adminSupabase.from("autograder").select("*").eq("id", assignment_id).single();
         if (!config) {
           throw new UserVisibleError("Grader config not found");
         }
-        hash.update(contentsStr);
-        const hashStr = hash.digest("hex");
 
         // Allow graders and instructors to submit even if the workflow SHA doesn't match, but show a warning.
         const isGraderOrInstructor =
@@ -1151,7 +1159,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         scope.setTag("check_run_profile_id", checkRun.profile_id);
         scope.setTag("check_run_assignment_group_id", checkRun.assignment_group_id);
         scope.setTag("check_run_user_role", checkRun.user_roles?.role);
-        if (hashStr !== config.workflow_sha && !isE2ERun && !isNotGradedSubmission) {
+        if (
+          hashStrNoWhitespace !== config.workflow_sha &&
+          hashStr !== config.workflow_sha &&
+          !isE2ERun &&
+          !isNotGradedSubmission
+        ) {
           scope.setTag("hash_in_db", config.workflow_sha);
           scope.setTag("hash_in_student_repo", hashStr);
           const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
