@@ -132,8 +132,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("repository", repository)
     .maybeSingle();
   if (repoError) {
-    scope?.setTag("db_error", "repository_lookup_failed");
-    scope?.setTag("db_error_message", repoError.message);
+    Sentry.captureException(repoError, scope);
     throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
   }
 
@@ -151,8 +150,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .select("id, title, slug, classes(name, term)")
       .eq("template_repo", repository);
     if (handoutLookupError) {
-      scope?.setTag("db_error", "handout_lookup_failed");
-      scope?.setTag("db_error_message", handoutLookupError.message);
+      Sentry.captureException(handoutLookupError, scope);
       throw new UserVisibleError(`Failed to check handout repository: ${handoutLookupError.message}`);
     }
     if (handoutAssignments && handoutAssignments.length > 0) {
@@ -198,10 +196,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     });
     if (workflowRunErrorError) {
       console.error(workflowRunErrorError);
-      Sentry.addBreadcrumb({
-        level: "error",
-        message: JSON.stringify(workflowRunErrorError)
-      });
+      Sentry.captureException(workflowRunErrorError, scope);
       throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);
     }
   }
@@ -241,6 +236,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           userRoles = userRolesData;
         }
         if (checkRunError) {
+          Sentry.captureException(checkRunError, scope);
           throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
         }
 
@@ -469,6 +465,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
             const { data: negativeDueDateExceptions, error: negativeDueDateExceptionsError } = await query.limit(1000);
             if (negativeDueDateExceptionsError) {
+              Sentry.captureException(negativeDueDateExceptionsError, scope);
               throw new UserVisibleError(
                 `Internal error: Failed to find negative due date exceptions: ${negativeDueDateExceptionsError.message}`
               );
@@ -570,26 +567,114 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
       }
 
+      // First check if there's an existing submission with this unique key
+      const { data: existingSubmission } = await adminSupabase
+        .from("submissions")
+        .select("id, created_at")
+        .eq("repository", repository)
+        .eq("sha", sha)
+        .eq("run_number", Number.parseInt(decoded.run_id))
+        .eq("run_attempt", Number.parseInt(decoded.run_attempt))
+        .maybeSingle();
+
+      if (existingSubmission) {
+        // Check if the existing submission was created less than 3 minutes ago
+        const createdAt = new Date(existingSubmission.created_at);
+        const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+
+        if (createdAt < threeMinutesAgo) {
+          scope?.setTag("db_error", "duplicate_submission_too_old");
+          throw new UserVisibleError(
+            `A submission with the same run number and attempt already exists and was created more than 3 minutes ago. Cannot recreate this submission. Re-trigger the action to make a new submission.`,
+            409
+          );
+        }
+
+        // Clean up existing data for this submission
+        console.log(`Reusing existing submission ${existingSubmission.id}, cleaning up old data`);
+        scope?.addBreadcrumb({
+          category: "duplicate_submission",
+          level: "info",
+          message: `Reusing existing submission ${existingSubmission.id}, cleaning up old data`,
+          data: { submission_id: existingSubmission.id }
+        });
+
+        // Delete related data
+        const { error: deleteSubmissionFilesError } = await adminSupabase
+          .from("submission_files")
+          .delete()
+          .eq("submission_id", existingSubmission.id);
+        if (deleteSubmissionFilesError) {
+          console.error(deleteSubmissionFilesError);
+          Sentry.captureException(deleteSubmissionFilesError, scope);
+          throw new UserVisibleError(`Failed to delete submission files: ${deleteSubmissionFilesError.message}`);
+        }
+
+        const { error: deleteSubmissionArtifactsError } = await adminSupabase
+          .from("submission_artifacts")
+          .delete()
+          .eq("submission_id", existingSubmission.id);
+        if (deleteSubmissionArtifactsError) {
+          console.error(deleteSubmissionArtifactsError);
+          Sentry.captureException(deleteSubmissionArtifactsError, scope);
+          throw new UserVisibleError(
+            `Failed to delete submission artifacts: ${deleteSubmissionArtifactsError.message}`
+          );
+        }
+
+        const { error: deleteGraderResultsError } = await adminSupabase
+          .from("grader_results")
+          .delete()
+          .eq("submission_id", existingSubmission.id);
+        if (deleteGraderResultsError) {
+          console.error(deleteGraderResultsError);
+          Sentry.captureException(deleteGraderResultsError, scope);
+          throw new UserVisibleError(`Failed to delete grader results: ${deleteGraderResultsError.message}`);
+        }
+
+        const { error: deleteWorkflowRunErrorsError } = await adminSupabase
+          .from("workflow_run_error")
+          .delete()
+          .eq("submission_id", existingSubmission.id);
+        if (deleteWorkflowRunErrorsError) {
+          console.error(deleteWorkflowRunErrorsError);
+          Sentry.captureException(deleteWorkflowRunErrorsError, scope);
+          throw new UserVisibleError(`Failed to delete workflow run errors: ${deleteWorkflowRunErrorsError.message}`);
+        }
+      }
+
+      // Use upsert to insert or update the submission
       const { error, data: subID } = await adminSupabase
         .from("submissions")
-        .insert({
-          profile_id: repoData?.profile_id,
-          assignment_group_id: repoData?.assignment_group_id,
-          assignment_id: repoData.assignment_id,
-          repository,
-          repository_id: repoData.id,
-          sha,
-          run_number: Number.parseInt(decoded.run_id),
-          run_attempt: Number.parseInt(decoded.run_attempt),
-          class_id: repoData.assignments.class_id!,
-          repository_check_run_id: checkRun?.id,
-          is_not_graded: isNotGradedSubmission
-        })
+        .upsert(
+          {
+            profile_id: repoData?.profile_id,
+            assignment_group_id: repoData?.assignment_group_id,
+            assignment_id: repoData.assignment_id,
+            repository,
+            repository_id: repoData.id,
+            sha,
+            run_number: Number.parseInt(decoded.run_id),
+            run_attempt: Number.parseInt(decoded.run_attempt),
+            class_id: repoData.assignments.class_id!,
+            repository_check_run_id: checkRun?.id,
+            is_not_graded: isNotGradedSubmission,
+            is_active: false,
+            released: null,
+            grading_review_id: null
+          },
+          {
+            onConflict: "repository,sha,run_number,run_attempt",
+            ignoreDuplicates: false
+          }
+        )
         .select("id")
         .single();
+
       if (error) {
-        scope?.setTag("db_error", "submission_creation_failed");
+        scope?.setTag("db_error", "submission_upsert_failed");
         scope?.setTag("db_error_message", error.message);
+        Sentry.captureException(error, scope);
         console.error(error);
         throw new UserVisibleError(`Failed to create submission for repository ${repository}: ${error.message}`);
       }
@@ -757,28 +842,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           grader_sha
         };
       } catch (err) {
-        //Do we still need this?
         console.error(err);
-        await adminSupabase.from("grader_results").insert({
-          submission_id: submission_id,
-          errors:
-            err instanceof UserVisibleError
-              ? { user_visible_message: err.details }
-              : { error: JSON.parse(JSON.stringify(err)) },
-          grader_sha: "unknown",
-          score: 0,
-          ret_code: -1,
-          execution_time: 0,
-          class_id: repoData.assignments.class_id!,
-          lint_passed: true,
-          lint_output: "",
-          lint_output_format: "text",
-          max_score: 0,
-          grader_action_sha: "unknown",
-          profile_id: repoData.profile_id,
-          assignment_group_id: repoData.assignment_group_id
-        });
-
         throw err;
       }
     } else {

@@ -393,14 +393,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     class_id = regressionTestRun.autograder.assignments.class_id;
     assignment_id = regressionTestRun.autograder.assignments.id;
   } else {
-    const { data: submission } = await adminSupabase
+    const { data: submission, error: submissionError } = await adminSupabase
       .from("submissions")
       .select("*, repository_check_runs(*)")
       .eq("repository", repository)
       .eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
       .eq("run_number", Number.parseInt(decoded.run_id))
-      .single();
+      .maybeSingle();
+    if (submissionError) {
+      console.error(submissionError);
+      Sentry.captureException(submissionError, scope);
+      throw new UserVisibleError(`Internal error: Failed to load submission: ${submissionError.message}`);
+    }
     if (!submission) {
       throw new SecurityError(`Submission not found: ${repository} ${sha} ${decoded.run_id}`);
     }
