@@ -367,7 +367,9 @@ async function handlePushToTemplateRepo(
       Sentry.captureMessage(`File ${GRADER_WORKFLOW_PATH} not found for ${assignments[0].template_repo}`, scope);
       return;
     }
-    hash.update(file.content);
+    // Remove all whitespace (spaces, tabs, newlines, etc.) before hashing
+    const contentWithoutWhitespace = file.content.replace(/\s+/g, "");
+    hash.update(contentWithoutWhitespace);
     const hashStr = hash.digest("hex");
     scope?.setTag("new_autograder_workflow_hash", hashStr);
     for (const assignment of assignments) {
