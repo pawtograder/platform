@@ -257,6 +257,18 @@ async function resetExistingGraderResult({
     );
   }
 
+  const { error: deleteWorkflowRunErrorsError } = await adminSupabase
+    .from("workflow_run_error")
+    .delete()
+    .eq("submission_id", submission_id);
+  if (deleteWorkflowRunErrorsError) {
+    console.error(deleteWorkflowRunErrorsError);
+    Sentry.captureException(deleteWorkflowRunErrorsError, scope);
+    throw new UserVisibleError(
+      `Internal error: Failed to remove previous workflow run errors: ${deleteWorkflowRunErrorsError.message}`
+    );
+  }
+
   if (submission_id && artifactNames.length > 0) {
     const artifactSelect = adminSupabase
       .from("submission_artifacts")
@@ -279,18 +291,6 @@ async function resetExistingGraderResult({
 
     const artifactIds = existingArtifacts?.map((artifact) => artifact.id) ?? [];
     if (artifactIds.length > 0) {
-      const { error: deleteArtifactCommentsError } = await adminSupabase
-        .from("submission_artifact_comments")
-        .delete()
-        .in("submission_artifact_id", artifactIds);
-      if (deleteArtifactCommentsError) {
-        console.error(deleteArtifactCommentsError);
-        Sentry.captureException(deleteArtifactCommentsError, scope);
-        throw new UserVisibleError(
-          `Internal error: Failed to remove previous grader artifact comments: ${deleteArtifactCommentsError.message}`
-        );
-      }
-
       const { error: deleteArtifactsError } = await adminSupabase
         .from("submission_artifacts")
         .delete()

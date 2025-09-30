@@ -195,9 +195,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       is_private
     });
     if (workflowRunErrorError) {
-      console.error(workflowRunErrorError);
-      Sentry.captureException(workflowRunErrorError, scope);
-      throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);
+      // Ignore duplicate workflow run errors (constraint: workflow_run_error_repo_run_attempt_name_key)
+      // This can happen when GitHub retries the workflow run
+      if (workflowRunErrorError.code === "23505") {
+        console.log(`Workflow run error already exists, ignoring duplicate: ${name}`);
+      } else {
+        console.error(workflowRunErrorError);
+        Sentry.captureException(workflowRunErrorError, scope);
+        throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);
+      }
     }
   }
   try {
@@ -643,11 +649,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
       }
 
-      // Use upsert to insert or update the submission
-      const { error, data: subID } = await adminSupabase
-        .from("submissions")
-        .upsert(
-          {
+      // Create or reuse submission
+      if (existingSubmission) {
+        // Reuse the existing submission ID
+        submission_id = existingSubmission.id;
+      } else {
+        // Insert a new submission
+        const { error, data: subID } = await adminSupabase
+          .from("submissions")
+          .insert({
             profile_id: repoData?.profile_id,
             assignment_group_id: repoData?.assignment_group_id,
             assignment_id: repoData.assignment_id,
@@ -658,27 +668,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             run_attempt: Number.parseInt(decoded.run_attempt),
             class_id: repoData.assignments.class_id!,
             repository_check_run_id: checkRun?.id,
-            is_not_graded: isNotGradedSubmission,
-            is_active: false,
-            released: null,
-            grading_review_id: null
-          },
-          {
-            onConflict: "repository,sha,run_number,run_attempt",
-            ignoreDuplicates: false
-          }
-        )
-        .select("id")
-        .single();
+            is_not_graded: isNotGradedSubmission
+          })
+          .select("id")
+          .single();
 
-      if (error) {
-        scope?.setTag("db_error", "submission_upsert_failed");
-        scope?.setTag("db_error_message", error.message);
-        Sentry.captureException(error, scope);
-        console.error(error);
-        throw new UserVisibleError(`Failed to create submission for repository ${repository}: ${error.message}`);
+        if (error) {
+          scope?.setTag("db_error", "submission_creation_failed");
+          scope?.setTag("db_error_message", error.message);
+          Sentry.captureException(error, scope);
+          console.error(error);
+          throw new UserVisibleError(`Failed to create submission for repository ${repository}: ${error.message}`);
+        }
+        submission_id = subID?.id;
       }
-      submission_id = subID?.id;
 
       if (submission_id) {
         scope?.setTag("submission_id", submission_id.toString());
