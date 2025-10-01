@@ -21,6 +21,8 @@ export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();
   const trackEvent = useTrackEvent();
+  const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
+
   const {
     handleSubmit,
     setValue,
@@ -35,7 +37,8 @@ export default function NewDiscussionThread() {
       action: "create",
       onMutationSuccess: (data) => {
         // Track discussion thread creation
-        const isAnonymous = getValues("is_anonymous");
+        // Derive anonymity from the created thread's author field
+        const isAnonymous = data.data.author === public_profile_id;
 
         trackEvent("discussion_thread_created", {
           course_id: Number.parseInt(course_id as string),
@@ -56,7 +59,6 @@ export default function NewDiscussionThread() {
 
     filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }]
   });
-  const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();

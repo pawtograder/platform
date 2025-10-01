@@ -69,20 +69,11 @@ export function DiscussionThreadReply({
       // Track discussion reply
       if (result?.data) {
         const rootId = thread.root || thread.id;
-        // Calculate reply depth by counting parents
-        let depth = 1;
-        let currentThread = thread;
-        while (currentThread.parent) {
-          depth++;
-          currentThread = { ...currentThread, parent: null }; // Simple depth approximation
-          if (depth > 10) break; // Safety limit
-        }
 
         trackEvent("discussion_reply_posted", {
           thread_id: Number(result.data.id),
           root_thread_id: rootId,
           course_id: thread.class_id,
-          reply_depth: depth,
           is_anonymous: profile_id === public_profile_id
         });
       }

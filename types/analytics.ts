@@ -141,7 +141,6 @@ export interface DiscussionReplyPostedEvent {
   thread_id: number;
   root_thread_id: number;
   course_id: number;
-  reply_depth: number;
   is_anonymous: boolean;
 }
 

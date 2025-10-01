@@ -49,7 +49,7 @@ export function useTrackEvent() {
  *
  * Usage:
  * ```tsx
- * const { trackEvent, courseId, role } = useTrackEventWithContext();
+ * const { trackEvent, courseId, posthog } = useTrackEventWithContext();
  *
  * trackEvent('assignment_viewed', {
  *   assignment_id: 123,
