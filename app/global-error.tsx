@@ -6,9 +6,17 @@ import { usePostHog } from "posthog-js/react";
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
   const [errorID, setErrorID] = useState<string | undefined>(undefined);
   const posthog = usePostHog();
+
+  // Call Sentry once per error
   useEffect(() => {
-    posthog.captureException(error);
     setErrorID(Sentry.captureException(error));
+  }, [error]);
+
+  // Call PostHog conditionally when available
+  useEffect(() => {
+    if (posthog) {
+      posthog.captureException(error);
+    }
   }, [error, posthog]);
 
   const handleGoBack = () => {

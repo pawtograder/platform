@@ -33,6 +33,7 @@ import {
   BsTrash,
   BsXCircle
 } from "react-icons/bs";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 
 import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
 import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
@@ -50,6 +51,7 @@ import VideoCallControls from "./video-call-controls";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import {
+  useHelpQueues,
   useHelpRequest,
   useHelpRequestFeedback,
   useHelpRequestFileReferences,
@@ -91,6 +93,8 @@ type EditingFileReference = HelpRequestFormFileReference & {
  */
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
   const { private_profile_id } = useClassProfiles();
+  const trackEvent = useTrackEvent();
+  const allHelpQueues = useHelpQueues();
 
   // Get student data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -184,6 +188,20 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
                   status: "in_progress"
                 });
                 await logActivityForAllStudents("request_updated", "Request assigned and marked as in progress");
+
+                // Track help request claimed
+                const queueData = allHelpQueues.find((q) => q.id === request.help_queue);
+                const waitTimeMinutes = request.created_at
+                  ? (new Date().getTime() - new Date(request.created_at).getTime()) / (1000 * 60)
+                  : 0;
+
+                trackEvent("help_request_claimed", {
+                  help_request_id: request.id,
+                  course_id: request.class_id,
+                  student_wait_time_minutes: Math.round(waitTimeMinutes),
+                  queue_type: (queueData?.queue_type || "text") as "text" | "video" | "in_person"
+                });
+
                 toaster.success({
                   title: "Help request successfully updated",
                   description: `Help request ${request.id} updated`
@@ -870,6 +888,8 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const readOnly = request?.status === "resolved" || request?.status === "closed";
+  const trackEvent = useTrackEvent();
+  const allHelpQueues = useHelpQueues();
 
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";
@@ -1028,6 +1048,24 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             status: "resolved"
           });
           await logActivityForAllStudents("request_resolved", "Request resolved by student");
+
+          // Track help request resolution
+          const queueData = allHelpQueues.find((q) => q.id === request.help_queue);
+          const waitTime = request.created_at
+            ? (new Date().getTime() - new Date(request.created_at).getTime()) / (1000 * 60)
+            : 0;
+          const sessionDuration =
+            request.status === "in_progress" && request.updated_at
+              ? (new Date().getTime() - new Date(request.updated_at).getTime()) / (1000 * 60)
+              : 0;
+
+          trackEvent("help_request_resolved", {
+            help_request_id: request.id,
+            course_id: request.class_id,
+            wait_time_minutes: Math.round(waitTime),
+            session_duration_minutes: Math.round(sessionDuration),
+            queue_type: (queueData?.queue_type || "text") as "text" | "video" | "in_person"
+          });
         } else if (action === "close") {
           await helpRequests.update(request.id, {
             status: "closed"
@@ -1043,7 +1081,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         description: `Failed to ${action} the request: ${error instanceof Error ? error.message : String(error)}`
       });
     }
-  }, [feedbackModal, helpRequests, request, private_profile_id, logActivityForAllStudents]);
+  }, [feedbackModal, helpRequests, request, private_profile_id, logActivityForAllStudents, allHelpQueues, trackEvent]);
 
   const resolveRequest = useCallback(async () => {
     // For students, show feedback modal first
@@ -1059,7 +1097,37 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       status: "resolved"
     });
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
+
+    // Track help request resolution
+    if (request) {
+      const queueData = allHelpQueues.find((q) => q.id === request.help_queue);
+      const waitTime = request.created_at
+        ? (new Date().getTime() - new Date(request.created_at).getTime()) / (1000 * 60)
+        : 0;
+      const sessionDuration =
+        request.status === "in_progress" && request.updated_at
+          ? (new Date().getTime() - new Date(request.updated_at).getTime()) / (1000 * 60)
+          : 0;
+
+      trackEvent("help_request_resolved", {
+        help_request_id: request.id,
+        course_id: request.class_id,
+        wait_time_minutes: Math.round(waitTime),
+        session_duration_minutes: Math.round(sessionDuration),
+        queue_type: (queueData?.queue_type || "text") as "text" | "video" | "in_person"
+      });
+    }
+  }, [
+    helpRequests,
+    request_id,
+    private_profile_id,
+    logActivityForAllStudents,
+    role.role,
+    feedbackModal,
+    request,
+    allHelpQueues,
+    trackEvent
+  ]);
 
   const closeRequest = useCallback(async () => {
     // For students, show feedback modal first

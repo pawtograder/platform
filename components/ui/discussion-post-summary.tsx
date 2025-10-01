@@ -6,6 +6,7 @@ import excerpt from "@stefanprobst/remark-excerpt";
 import Markdown from "@/components/ui/markdown";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { formatRelative } from "date-fns";
@@ -19,6 +20,8 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
   const supabase = createClient();
   const { private_profile_id } = useClassProfiles();
   const likeStatus = useDiscussionThreadLikes(thread.id);
+  const trackEvent = useTrackEvent();
+
   const toggleLike = useCallback(async () => {
     if (likeStatus) {
       await supabase.from("discussion_thread_likes").delete().eq("id", likeStatus.id);
@@ -26,8 +29,14 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
       await supabase
         .from("discussion_thread_likes")
         .insert({ discussion_thread: thread.id, creator: private_profile_id!, emoji: "👍" });
+
+      // Track discussion thread like
+      trackEvent("discussion_thread_liked", {
+        thread_id: thread.id,
+        course_id: thread.class_id
+      });
     }
-  }, [thread.id, likeStatus, private_profile_id, supabase]);
+  }, [thread.id, likeStatus, private_profile_id, supabase, thread.class_id, trackEvent]);
 
   return (
     <Button variant="ghost" size="sm" onClick={toggleLike}>

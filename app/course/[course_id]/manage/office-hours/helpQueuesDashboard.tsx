@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useMemo } from "react";
@@ -31,6 +32,7 @@ export default function HelpQueuesDashboard() {
   const { course_id } = useParams();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
+  const trackEvent = useTrackEvent();
 
   // Get data using individual hooks
   const queues = useHelpQueues();
@@ -71,7 +73,7 @@ export default function HelpQueuesDashboard() {
 
   const handleStartWorking = async (queueId: number) => {
     try {
-      await helpQueueAssignments.create({
+      const createdAssignment = await helpQueueAssignments.create({
         class_id: Number(course_id),
         help_queue_id: queueId,
         ta_profile_id: taProfileId,
@@ -79,6 +81,14 @@ export default function HelpQueuesDashboard() {
         started_at: new Date().toISOString(),
         ended_at: null,
         max_concurrent_students: 1
+      });
+
+      // Track queue assignment started
+      trackEvent("queue_assignment_started", {
+        help_queue_id: queueId,
+        course_id: Number(course_id),
+        max_concurrent_students: 1,
+        queue_assignment_id: createdAssignment.id
       });
 
       toaster.success({
@@ -95,10 +105,26 @@ export default function HelpQueuesDashboard() {
 
   const handleStopWorking = async (assignmentId: number) => {
     try {
+      const assignment = allQueueAssignments.find((a) => a.id === assignmentId);
+
       await helpQueueAssignments.update(assignmentId, {
         is_active: false,
         ended_at: new Date().toISOString()
       });
+
+      // Track queue assignment ended
+      if (assignment) {
+        const durationMinutes = assignment.started_at
+          ? (new Date().getTime() - new Date(assignment.started_at).getTime()) / (1000 * 60)
+          : 0;
+
+        trackEvent("queue_assignment_ended", {
+          help_queue_id: assignment.help_queue_id,
+          course_id: Number(course_id),
+          queue_assignment_id: assignmentId,
+          duration_minutes: Math.round(durationMinutes)
+        });
+      }
 
       toaster.success({
         title: "Success",

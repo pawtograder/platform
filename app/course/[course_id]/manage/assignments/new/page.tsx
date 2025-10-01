@@ -1,6 +1,7 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useCourseController";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import {
   assignmentCreateHandoutRepo,
   assignmentCreateSolutionRepo,
@@ -23,6 +24,7 @@ export default function NewAssignmentPage() {
   const { getValues } = form;
   const { time_zone } = useCourse();
   const timezone = time_zone || "America/New_York";
+  const trackEvent = useTrackEvent();
 
   const { mutateAsync } = useCreate();
   const onSubmit = useCallback(async () => {
@@ -124,6 +126,17 @@ export default function NewAssignmentPage() {
               supabase
             );
           }
+
+          // Track assignment creation
+          trackEvent("assignment_created", {
+            course_id: Number.parseInt(course_id as string),
+            assignment_id: data.id,
+            has_autograder: true,
+            has_handgrader: true,
+            is_group_assignment: getValues("group_config") !== "individual",
+            max_late_tokens: getValues("max_late_tokens") || 0,
+            assignment_slug: getValues("slug")
+          });
 
           // Clear the timer and dismiss the loading toast
           clearTimeout(messageUpdateTimer);

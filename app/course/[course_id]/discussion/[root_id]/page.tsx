@@ -9,6 +9,7 @@ import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
 import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
@@ -92,6 +93,7 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
+  const trackEvent = useTrackEvent();
   const canEdit =
     thread.author === public_profile_id ||
     thread.author === private_profile_id ||
@@ -100,10 +102,19 @@ function ThreadActions({
   const canPin = role.role === "instructor" || role.role === "grader";
 
   const handleTogglePin = useCallback(async () => {
+    const newPinnedStatus = !thread.pinned;
+
     await discussionThreadTeasers.update(thread.id, {
-      pinned: !thread.pinned
+      pinned: newPinnedStatus
     });
-  }, [thread.id, thread.pinned, discussionThreadTeasers]);
+
+    // Track discussion thread pin
+    trackEvent("discussion_thread_pinned", {
+      thread_id: thread.id,
+      course_id: thread.class_id,
+      is_pinned: newPinnedStatus
+    });
+  }, [thread.id, thread.pinned, thread.class_id, discussionThreadTeasers, trackEvent]);
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">

@@ -61,6 +61,7 @@ export default function RequestRegradeDialog({
       } else {
         throw new Error("Unknown comment type for regrade request");
       }
+
       // Close dialog and show inline form
       setIsRegradeDialogOpen(false);
 

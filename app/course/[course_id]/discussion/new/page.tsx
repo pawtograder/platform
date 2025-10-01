@@ -6,6 +6,7 @@ import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -19,6 +20,7 @@ import { TbWorld } from "react-icons/tb";
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();
+  const trackEvent = useTrackEvent();
   const {
     handleSubmit,
     setValue,
@@ -32,6 +34,18 @@ export default function NewDiscussionThread() {
       resource: "discussion_threads",
       action: "create",
       onMutationSuccess: (data) => {
+        // Track discussion thread creation
+        const isAnonymous = getValues("is_anonymous");
+
+        trackEvent("discussion_thread_created", {
+          course_id: Number.parseInt(course_id as string),
+          thread_id: Number(data.data.id),
+          topic_id: data.data.topic_id,
+          is_question: data.data.is_question,
+          is_private: data.data.instructors_only,
+          is_anonymous: isAnonymous
+        });
+
         router.push(`/course/${course_id}/discussion/${data.data.id}`);
       }
     }

@@ -4,11 +4,13 @@ import { useFindTableControllerValue } from "@/lib/TableController";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
 import { useCourseController } from "./useCourseController";
+import { useTrackEvent } from "./useTrackEvent";
 import { toaster } from "@/components/ui/toaster";
 
 export function useDiscussionThreadWatchStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
+  const trackEvent = useTrackEvent();
 
   // Find the current watch status for this user and thread
   const predicate = useMemo(
@@ -43,6 +45,13 @@ export function useDiscussionThreadWatchStatus(threadId: number) {
             enabled: status
           });
         }
+
+        // Track discussion thread watch
+        trackEvent("discussion_thread_watched", {
+          thread_id: threadId,
+          course_id: controller.courseId,
+          is_watching: status
+        });
       } catch (error) {
         toaster.error({
           title: "Error updating watch status",
@@ -52,7 +61,7 @@ export function useDiscussionThreadWatchStatus(threadId: number) {
         console.error("Failed to update thread watch status:", error);
       }
     },
-    [threadId, curWatch, controller, user?.id]
+    [threadId, curWatch, controller, user?.id, trackEvent]
   );
 
   return {

@@ -3,6 +3,7 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { useGradebookController, useLinkToAssignment } from "@/hooks/useGradebook";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, HStack, Heading, Input, Link, Separator, Text, VStack } from "@chakra-ui/react";
 import { useEffect } from "react";
@@ -20,6 +21,7 @@ export function OverrideScoreForm({
   showWarning?: boolean;
 }) {
   const gradebookController = useGradebookController();
+  const trackEvent = useTrackEvent();
   const linkToAssignment = useLinkToAssignment(
     studentGradebookColumn.gradebook_column_id,
     studentGradebookColumn.student_id
@@ -89,6 +91,17 @@ export function OverrideScoreForm({
     }
 
     await gradebookController.updateGradebookColumnStudent(studentGradebookColumn.id, updatePayload);
+
+    // Track score override if one was set
+    if (values.score_override !== undefined && hasActualOverride) {
+      trackEvent("gradebook_score_override", {
+        course_id: gradebookController.class_id,
+        gradebook_column_id: studentGradebookColumn.gradebook_column_id,
+        student_id: studentGradebookColumn.student_id,
+        has_note: !!values.score_override_note?.trim()
+      });
+    }
+
     if (onSuccess) onSuccess();
   };
 

@@ -25,6 +25,7 @@ import {
   useStudentDetailView
 } from "@/hooks/useGradebook";
 import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import {
   ClassSection,
@@ -135,6 +136,8 @@ function ScoreExprDocs() {
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
+  const trackEvent = useTrackEvent();
+  const { course_id } = useParams();
 
   const [isLoading, setIsLoading] = useState(false);
   const onClose = useCallback(() => {
@@ -189,6 +192,23 @@ function AddColumnDialog() {
         gradebook_id: gradebookController.gradebook_id,
         sort_order: gradebookController.gradebook_columns.rows.length
       });
+
+      // Track gradebook column creation
+      const hasFormula = !!data.scoreExpression?.length;
+      const hasAssignmentDeps = dependencies?.assignments && dependencies.assignments.length > 0;
+      const columnType: "assignment" | "calculated" | "manual" = hasAssignmentDeps
+        ? "assignment"
+        : hasFormula
+          ? "calculated"
+          : "manual";
+
+      trackEvent("gradebook_column_created", {
+        course_id: Number(course_id),
+        gradebook_id: gradebookController.gradebook_id,
+        column_type: columnType,
+        has_formula: hasFormula
+      });
+
       setIsLoading(false);
       toaster.create({
         title: "Success",
@@ -338,6 +358,8 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   });
   const [isLoading, setIsLoading] = useState(false);
   const column = useGradebookColumn(columnId);
+  const trackEvent = useTrackEvent();
+  const { course_id } = useParams();
 
   type FormValues = {
     name: string;
@@ -397,6 +419,18 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     setIsLoading(true);
     try {
       const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", columnId);
+
+      // Track which settings changed
+      const settingsChanged: string[] = [];
+      if (column.name !== data.name) settingsChanged.push("name");
+      if (column.description !== data.description) settingsChanged.push("description");
+      if (column.max_score !== data.maxScore) settingsChanged.push("max_score");
+      if (column.slug !== data.slug) settingsChanged.push("slug");
+      if ((column.score_expression ?? "") !== (data.scoreExpression ?? "")) settingsChanged.push("score_expression");
+      if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
+      if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
+        settingsChanged.push("show_calculated_ranges");
+
       await updateColumn({
         resource: "gradebook_columns",
         id: columnId,
@@ -411,6 +445,17 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           dependencies
         }
       });
+
+      // Track gradebook column settings edit
+      if (settingsChanged.length > 0 && course_id) {
+        trackEvent("gradebook_column_settings_edited", {
+          course_id: Number(course_id),
+          gradebook_id: gradebookController.gradebook_id,
+          column_id: columnId,
+          settings_changed: settingsChanged
+        });
+      }
+
       setIsLoading(false);
       toaster.dismiss();
       onClose();
