@@ -1,5 +1,5 @@
 "use client";
-
+import * as Sentry from "@sentry/nextjs";
 import { useEffect, useState } from "react";
 import { usePostHog } from "posthog-js/react";
 
@@ -7,9 +7,8 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
   const [errorID, setErrorID] = useState<string | undefined>(undefined);
   const posthog = usePostHog();
   useEffect(() => {
-    const errorID = posthog.captureException(error);
-    console.log("errorID", errorID);
-    setErrorID(errorID?.event);
+    posthog.captureException(error);
+    setErrorID(Sentry.captureException(error));
   }, [error, posthog]);
 
   const handleGoBack = () => {
