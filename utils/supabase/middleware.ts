@@ -33,18 +33,28 @@ export const updateSession = async (request: NextRequest) => {
 
     // This will refresh session if expired - required for Server Components
     // https://supabase.com/docs/guides/auth/server-side/nextjs
-    const user = await supabase.auth.getUser();
-    if (user && user.data.user) {
+    /*
+      We use the getSession API instead of getUser for performance:
+      - getUser fetches from auth server
+      - getSession fetches the JWT from the browser
+
+      The JWT might have been revoked, so it is best for security to use getUser when
+      relying upon the user object for security checks.
+
+      However, we don't rely on the user object for security checks: we use Postgres RLS!
+    */
+    const session = await supabase.auth.getSession();
+    if (session && session.data.session) {
       Sentry.setUser({
-        id: user.data.user.id,
-        email: user.data.user.email
+        id: session.data.session.user.id,
+        email: session.data.session.user.email
       });
     } else {
       Sentry.setUser(null);
     }
 
     // protected routes
-    if (request.nextUrl.pathname.startsWith("/course") && user.error) {
+    if (request.nextUrl.pathname.startsWith("/course") && session.error) {
       const signInUrl = new URL("/sign-in", request.url);
       const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
       signInUrl.searchParams.set("redirect", originalPathWithSearch);
@@ -54,7 +64,7 @@ export const updateSession = async (request: NextRequest) => {
     // if (urlError && request.nextUrl.pathname !== "/error" && request.nextUrl.pathname !== "/sign-in") {
     // return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
     // }
-    if (request.nextUrl.pathname === "/" && !user.error) {
+    if (request.nextUrl.pathname === "/" && !session.error) {
       return NextResponse.redirect(new URL("/course", request.url));
     }
 
