@@ -12,6 +12,7 @@ import {
 } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren from "@/hooks/useDiscussionThreadRootController";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
@@ -33,6 +34,8 @@ export function DiscussionThreadReply({
   // const invalidate = useInvalidate();
   const { mutateAsync: mutate } = useCreate({ resource: "discussion_threads" });
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const trackEvent = useTrackEvent();
+  const { public_profile_id } = useClassProfiles();
 
   // Focus the textarea when the reply becomes visible
   useEffect(() => {
@@ -49,7 +52,7 @@ export function DiscussionThreadReply({
       if (!thread) {
         return;
       }
-      await mutate({
+      const result = await mutate({
         resource: "discussion_threads",
         values: {
           subject: `Re: ${thread.subject}`,
@@ -62,6 +65,19 @@ export function DiscussionThreadReply({
           body: message
         }
       });
+
+      // Track discussion reply
+      if (result?.data) {
+        const rootId = thread.root || thread.id;
+
+        trackEvent("discussion_reply_posted", {
+          thread_id: Number(result.data.id),
+          root_thread_id: rootId,
+          course_id: thread.class_id,
+          is_anonymous: profile_id === public_profile_id
+        });
+      }
+
       // invalidate({
       //     resource: "discussion_threads",
       //     invalidates: ['detail'],
@@ -71,7 +87,7 @@ export function DiscussionThreadReply({
         setVisible(false);
       }
     },
-    [mutate, setVisible, thread]
+    [mutate, setVisible, thread, trackEvent, public_profile_id]
   );
   if (!visible) {
     return <></>;
@@ -218,6 +234,7 @@ const DiscussionThreadContent = memo(
     }, [thread.children, outerSiblings]);
 
     const updateThread = useUpdateThreadTeaser();
+    const trackEvent = useTrackEvent();
     const showReply = useCallback(() => {
       setReplyVisible(true);
     }, []);
@@ -232,8 +249,15 @@ const DiscussionThreadContent = memo(
         await updateThread({ id: thread.root!, old: root_thread, values: { answer: null } });
       } else {
         await updateThread({ id: thread.root!, old: root_thread, values: { answer: thread.id } });
+
+        // Track discussion thread marked as answer (only when marking, not unmarking)
+        trackEvent("discussion_thread_marked_as_answer", {
+          thread_id: thread.id,
+          root_thread_id: thread.root!,
+          course_id: thread.class_id
+        });
       }
-    }, [is_answer, updateThread, thread, root_thread]);
+    }, [is_answer, updateThread, thread, root_thread, trackEvent]);
 
     const isAnswered = root_thread?.answer !== undefined && root_thread?.answer !== null;
     const descendant = thread.children.length > 0;

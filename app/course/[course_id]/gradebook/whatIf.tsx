@@ -15,6 +15,7 @@ import {
   useGradebookWhatIf,
   useWhatIfGrade
 } from "@/hooks/useGradebookWhatIf";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
 import {
   Accordion,
@@ -34,10 +35,11 @@ import {
 
 import { Alert } from "@/components/ui/alert";
 import pluralize from "pluralize";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaExclamationTriangle, FaMagic } from "react-icons/fa";
 import { FaPencil } from "react-icons/fa6";
 import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
+import { useParams } from "next/navigation";
 
 function WhatIfScoreCell({
   column,
@@ -56,6 +58,9 @@ function WhatIfScoreCell({
   const whatIfController = useGradebookWhatIf();
   const score = studentGrade?.score_override ?? studentGrade?.score;
   const submissionStatus = useSubmissionIDForColumn(column.id, private_profile_id);
+  const trackEvent = useTrackEvent();
+  const { course_id } = useParams();
+  const modifiedColumnsRef = useRef(new Set<number>());
   if (isEditing) {
     return (
       <Box display="flex" flexDirection="column" alignItems="center">
@@ -68,14 +73,36 @@ function WhatIfScoreCell({
             const v = e.target.value === "" ? undefined : Number(e.target.value.trim());
             if (v !== undefined) {
               whatIfController.setWhatIfGrade(column.id, v, null);
+              modifiedColumnsRef.current.add(column.id);
             } else {
               whatIfController.clearGrade(column.id);
+              modifiedColumnsRef.current.delete(column.id);
             }
           }}
-          onBlur={() => setIsEditing(false)}
+          onBlur={() => {
+            setIsEditing(false);
+
+            // Track what-if usage when editing ends with modifications
+            if (modifiedColumnsRef.current.size > 0 && course_id) {
+              trackEvent("gradebook_what_if_used", {
+                course_id: Number(course_id),
+                num_columns_modified: modifiedColumnsRef.current.size
+              });
+              modifiedColumnsRef.current.clear();
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               setIsEditing(false);
+
+              // Track what-if usage when Enter is pressed with modifications
+              if (modifiedColumnsRef.current.size > 0 && course_id) {
+                trackEvent("gradebook_what_if_used", {
+                  course_id: Number(course_id),
+                  num_columns_modified: modifiedColumnsRef.current.size
+                });
+                modifiedColumnsRef.current.clear();
+              }
             }
           }}
         />

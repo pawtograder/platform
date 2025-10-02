@@ -17,7 +17,7 @@ BEGIN
     
     -- Check if user with this SIS ID already exists
     SELECT u.user_id INTO v_user_id
-    FROM users u 
+    FROM public.users u 
     WHERE u.sis_user_id = NEW.sis_user_id;
     
     IF v_user_id IS NOT NULL THEN

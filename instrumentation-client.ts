@@ -1,5 +1,15 @@
 import * as Sentry from "@sentry/nextjs";
+import posthog from "posthog-js";
 
+if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
+  posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
+    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+    ui_host: process.env.NEXT_PUBLIC_POSTHOG_UI_HOST,
+    defaults: "2025-05-24"
+  });
+} else {
+  console.error("NEXT_PUBLIC_POSTHOG_KEY is not set, posthog will not be initialized");
+}
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_BUGSINK_DSN,
   tunnel: "/api/tunnel",

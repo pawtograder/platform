@@ -6,6 +6,7 @@ import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -19,6 +20,9 @@ import { TbWorld } from "react-icons/tb";
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();
+  const trackEvent = useTrackEvent();
+  const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
+
   const {
     handleSubmit,
     setValue,
@@ -32,6 +36,19 @@ export default function NewDiscussionThread() {
       resource: "discussion_threads",
       action: "create",
       onMutationSuccess: (data) => {
+        // Track discussion thread creation
+        // Derive anonymity from the created thread's author field
+        const isAnonymous = data.data.author === public_profile_id;
+
+        trackEvent("discussion_thread_created", {
+          course_id: Number.parseInt(course_id as string),
+          thread_id: Number(data.data.id),
+          topic_id: data.data.topic_id,
+          is_question: data.data.is_question,
+          is_private: data.data.instructors_only,
+          is_anonymous: isAnonymous
+        });
+
         router.push(`/course/${course_id}/discussion/${data.data.id}`);
       }
     }
@@ -42,7 +59,6 @@ export default function NewDiscussionThread() {
 
     filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }]
   });
-  const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();

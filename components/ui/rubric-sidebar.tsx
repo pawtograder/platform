@@ -48,6 +48,7 @@ import {
   useRubricCheck,
   useRubrics
 } from "@/hooks/useAssignment";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useIsGraderOrInstructor, useIsInstructor, useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
@@ -1186,6 +1187,7 @@ function SubmissionCommentForm({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const submissionController = useSubmissionController();
+  const trackEvent = useTrackEvent();
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -1246,6 +1248,18 @@ function SubmissionCommentForm({
             throw new Error("Not implemented");
           } else {
             await submissionController.submission_comments.create(values);
+
+            // Track rubric check application
+            const commentType = linkedArtifactId ? "artifact" : "general";
+            trackEvent("rubric_check_applied", {
+              rubric_check_id: check.id,
+              submission_id: submission.id,
+              assignment_id: submission.assignment_id,
+              course_id: submission.class_id,
+              is_file_comment: false,
+              points: values.points ?? 0,
+              comment_type: commentType
+            });
           }
         }}
         defaultSingleLine={true}
