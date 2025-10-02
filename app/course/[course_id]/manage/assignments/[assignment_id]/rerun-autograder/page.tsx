@@ -21,7 +21,6 @@ import {
   Heading,
   HStack,
   Icon,
-  Input,
   List,
   Skeleton,
   Table,
@@ -35,6 +34,12 @@ import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import { Select as ReactSelect } from "chakra-react-select";
+
+interface SelectOption {
+  label: string;
+  value: string;
+}
 
 function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string }) {
   const { assignment_id, course_id } = useParams();
@@ -82,8 +87,9 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
           if (!row.original.name) return false;
-          const filterString = String(filterValue).toLowerCase();
-          return row.original.name.toLowerCase().includes(filterString);
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) => row.original.name?.toLowerCase().includes(filter.toLowerCase()));
         },
         cell: renderAsLinkToSubmission
       },
@@ -91,18 +97,35 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         id: "groupname",
         accessorKey: "groupname",
         header: "Group",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (!row.original.groupname) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) =>
+            row.original.groupname?.toLowerCase().includes(filter.toLowerCase())
+          );
+        },
         cell: renderAsLinkToSubmission
       },
       {
         id: "autograder_score",
         accessorKey: "autograder_score",
         header: "Autograder Score",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (row.original.autograder_score === null || row.original.autograder_score === undefined) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) => String(row.original.autograder_score) === filter);
+        },
         cell: renderAsLinkToSubmission
       },
       {
         id: "created_at",
         accessorKey: "created_at",
         header: "Submission Date",
+        enableColumnFilter: true,
         cell: (props) => {
           if (props.getValue() === null) {
             return <Text></Text>;
@@ -111,15 +134,51 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         },
         filterFn: (row, id, filterValue) => {
           if (!row.original.created_at) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const date = new TZDate(row.original.created_at, timeZone);
-          const filterString = String(filterValue);
-          return date.toLocaleString().toLowerCase().includes(filterString.toLowerCase());
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) =>
+            date.toLocaleString().toLowerCase().includes(filter.toLowerCase())
+          );
+        }
+      },
+      {
+        id: "rerun_queued_at",
+        accessorKey: "rerun_queued_at",
+        header: "Rerun Status",
+        enableColumnFilter: true,
+        cell: (props) => {
+          const queuedAt = props.getValue() as string | null;
+          if (!queuedAt) {
+            return <Text color="fg.muted">—</Text>;
+          }
+          return (
+            <VStack gap={0} align="start">
+              <Text color="orange.600" fontWeight="medium">
+                Requested
+              </Text>
+              <Text fontSize="xs" color="fg.muted">
+                {new TZDate(queuedAt, timeZone).toLocaleString()}
+              </Text>
+            </VStack>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const hasPending = row.original.rerun_queued_at !== null;
+          return filterArray.some((filter: string) => {
+            if (filter === "Pending") return hasPending;
+            if (filter === "None") return !hasPending;
+            return false;
+          });
         }
       },
       {
         id: "grader_sha",
         accessorKey: "grader_sha",
         header: "Submission Autograder SHA",
+        enableColumnFilter: true,
         cell: (props) => {
           if (!props.getValue()) {
             return <Text></Text>;
@@ -129,17 +188,33 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
               <Code onClick={(e) => e.stopPropagation()}>{(props.getValue() as string).slice(0, 7)}</Code>
             </Link>
           );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!row.original.grader_sha) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) =>
+            (row.original.grader_sha as string).toLowerCase().includes(filter.toLowerCase())
+          );
         }
       },
       {
         id: "rt_autograder_score",
         accessorKey: "rt_autograder_score",
-        header: "Development Autograder Score (Hidden)"
+        header: "Development Autograder Score (Hidden)",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (row.original.rt_autograder_score === null || row.original.rt_autograder_score === undefined) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) => String(row.original.rt_autograder_score) === filter);
+        }
       },
       {
         id: "rt_grader_sha",
         accessorKey: "rt_grader_sha",
         header: "Development Autograder SHA (Hidden)",
+        enableColumnFilter: true,
         cell: (props) => {
           if (!props.getValue()) {
             return <Text></Text>;
@@ -152,8 +227,11 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         },
         filterFn: (row, id, filterValue) => {
           if (!row.original.rt_grader_sha) return false;
-          const filterString = String(filterValue);
-          return (row.original.rt_grader_sha as string).toLowerCase().includes(filterString.toLowerCase());
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) =>
+            (row.original.rt_grader_sha as string).toLowerCase().includes(filter.toLowerCase())
+          );
         }
       }
     ],
@@ -182,15 +260,66 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       classRealTimeController
     });
   }, [supabase, assignment_id, classRealTimeController]);
-  const { getHeaderGroups, getRowModel, getRowCount } = useTableControllerTable({
+  const { getHeaderGroups, getRowModel, getRowCount, getCoreRowModel, data } = useTableControllerTable({
     columns,
     tableController,
     initialState: {
-      sorting: [{ id: "name", desc: false }]
+      sorting: [{ id: "name", desc: false }],
+      pagination: {
+        pageIndex: 0,
+        pageSize: 1000
+      }
     }
   });
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
   const [regrading, setRegrading] = useState<boolean>(false);
+
+  // Compute unique values for each column from ALL rows (before filtering)
+  // Depends on 'data' so it recalculates when async data loads
+  const columnUniqueValues = useMemo(() => {
+    const rows = getCoreRowModel().rows; // Use getCoreRowModel to get ALL rows before filtering
+    const uniqueValuesMap: Record<string, SelectOption[]> = {};
+
+    columns.forEach((column) => {
+      if (!column.enableColumnFilter) return;
+
+      if (column.id === "rerun_queued_at") {
+        // Special handling for rerun status - show Pending/None options
+        const hasPending = rows.some((row) => row.getValue(column.id as string) !== null);
+        const hasNone = rows.some((row) => row.getValue(column.id as string) === null);
+        const options: SelectOption[] = [];
+        if (hasPending) options.push({ label: "Pending", value: "Pending" });
+        if (hasNone) options.push({ label: "None", value: "None" });
+        uniqueValuesMap[column.id as string] = options;
+        return;
+      }
+
+      const uniqueValues = new Set<string>();
+      rows.forEach((row) => {
+        const value = row.getValue(column.id as string);
+        if (value !== null && value !== undefined) {
+          if (column.id === "created_at") {
+            // For dates, show the formatted date string
+            const dateValue = new TZDate(value as string, timeZone).toLocaleString();
+            uniqueValues.add(dateValue);
+          } else if (column.id === "grader_sha" || column.id === "rt_grader_sha") {
+            // For SHAs, show the short version
+            uniqueValues.add((value as string).slice(0, 7));
+          } else {
+            uniqueValues.add(String(value));
+          }
+        }
+      });
+
+      uniqueValuesMap[column.id as string] = Array.from(uniqueValues)
+        .sort()
+        .map((value) => ({ label: value, value }));
+    });
+
+    return uniqueValuesMap;
+    // data is what actually changes, so we need to include it in the dependency array
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, columns, timeZone, getCoreRowModel]);
 
   return (
     <VStack>
@@ -228,6 +357,8 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 {headerGroup.headers
                   .filter((h) => h.id !== "assignment_id")
                   .map((header) => {
+                    const canFilter = header.column.columnDef.enableColumnFilter;
+                    const options = columnUniqueValues[header.id] || [];
                     return (
                       <Table.ColumnHeader key={header.id}>
                         {header.isPlaceholder ? null : (
@@ -251,13 +382,43 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                                 </Icon>
                               )}
                             </Text>
-                            <Input
-                              id={header.id}
-                              value={(header.column.getFilterValue() as string) ?? ""}
-                              onChange={(e) => {
-                                header.column.setFilterValue(e.target.value);
-                              }}
-                            />
+                            {canFilter && (
+                              <ReactSelect
+                                isMulti
+                                name={header.id}
+                                options={options}
+                                placeholder={`Filter ${header.column.columnDef.header}...`}
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                        label: v,
+                                        value: v
+                                      }))
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(selected ? selected.map((option) => option.value) : []);
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({
+                                    ...provided,
+                                    width: "100%"
+                                  }),
+                                  dropdownIndicator: (provided) => ({
+                                    ...provided,
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({
+                                    ...provided,
+                                    display: "none"
+                                  })
+                                }}
+                              />
+                            )}
                           </>
                         )}
                       </Table.ColumnHeader>
@@ -357,9 +518,10 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   },
                   supabase
                 );
+                await tableController.refetchAll();
                 toaster.success({
                   title: "Regrading started",
-                  description: "This may take a while... Be advised that this page will NOT automatically refresh."
+                  description: "This may take a while... Use the Workflow Runs page to view the complete status."
                 });
               } catch (error) {
                 toaster.error({
@@ -415,6 +577,13 @@ export default function RerunAutograderPage() {
         This table will allow you to rerun the autograder (potentially using a newer version) on the currently active
         submissions for students, overriding any due dates. Note that doing so will create a NEW submission for each
         student.
+      </Text>
+      <Text fontSize="sm" color="fg.muted">
+        Re-running the autograder can be a time-consuming process, and it will occur asynchronously. After you select
+        &quot;Regrade selected&quot;, the rows will be updated to show that a re-run was requested. Once it has been
+        received by GitHub, it will no longer show as &quot;Requested&quot; here, but you will be able to see the queued
+        workflow runs begin to appear in the{" "}
+        <Link href={`/course/${course_id}/manage/workflow-runs`}>Workflow Runs Table</Link>.
       </Text>
       <Box fontSize="sm" border="1px solid" borderColor="border.info" borderRadius="md" p={4}>
         <Heading size="sm">How to debug and rerun the autograder</Heading>

@@ -12,7 +12,8 @@ import type {
   SyncTeamArgs,
   CreateRepoArgs,
   SyncRepoPermissionsArgs,
-  ArchiveRepoAndLockArgs
+  ArchiveRepoAndLockArgs,
+  RerunAutograderArgs
 } from "../_shared/GitHubAsyncTypes.ts";
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 
@@ -350,6 +351,10 @@ export async function processEnvelope(
         return (envelope.args as SyncTeamArgs).org;
       if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
         return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
+      if (envelope.method === "rerun_autograder") {
+        const repo = (envelope.args as RerunAutograderArgs).repository;
+        return repo.split("/")[0];
+      }
       return undefined;
     })();
     if (org) {
@@ -656,6 +661,66 @@ export async function processEnvelope(
         );
         return true;
       }
+      case "rerun_autograder": {
+        const { submission_id, repository, sha, repository_check_run_id, triggered_by, repository_id } =
+          envelope.args as RerunAutograderArgs;
+        scope.setTag("submission_id", String(submission_id));
+        scope.setTag("repository", repository);
+        scope.setTag("sha", sha);
+        scope.setTag("triggered_by", triggered_by);
+        scope.setTag("repository_id", String(repository_id));
+
+        Sentry.addBreadcrumb({
+          message: `Rerunning autograder for submission ${submission_id} (${repository}@${sha})`,
+          level: "info"
+        });
+
+        // Update repository_check_runs with triggered_by
+        const { error: updateError } = await adminSupabase
+          .from("repository_check_runs")
+          .update({
+            triggered_by: triggered_by
+          })
+          .eq("id", repository_check_run_id);
+
+        if (updateError) {
+          throw new Error(`Failed to update repository check run: ${updateError.message}`);
+        }
+
+        // Trigger the workflow
+        await github.triggerWorkflow(repository, sha, "grade.yml", scope);
+
+        // Clear the rerun_queued_at flag on the repository after successful trigger
+        const { error: clearError } = await adminSupabase
+          .from("repositories")
+          .update({
+            rerun_queued_at: null
+          })
+          .eq("id", repository_id);
+
+        if (clearError) {
+          // Log the error but don't fail the operation since the workflow was already triggered
+          scope.setContext("clear_rerun_flag_error", {
+            repository_id,
+            error_message: clearError.message
+          });
+          Sentry.captureException(clearError, scope);
+        }
+
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 200,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        return true;
+      }
       default:
         throw new Error(`Unknown async method: ${(envelope as GitHubAsyncEnvelope).method}`);
     }
@@ -674,6 +739,10 @@ export async function processEnvelope(
         return (envelope.args as SyncTeamArgs).org;
       if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
         return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
+      if (envelope.method === "rerun_autograder") {
+        const repo = (envelope.args as RerunAutograderArgs).repository;
+        return repo.split("/")[0];
+      }
       return undefined;
     })();
 

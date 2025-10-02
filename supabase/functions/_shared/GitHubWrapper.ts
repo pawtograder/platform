@@ -1287,6 +1287,7 @@ export async function triggerWorkflow(
     workflow_id: workflow_name,
     ref
   });
+  console.log("Workflow triggered on ", repo_full_name);
   return "Workflow triggered";
 }
 
