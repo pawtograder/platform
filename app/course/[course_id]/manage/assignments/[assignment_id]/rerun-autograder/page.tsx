@@ -143,6 +143,38 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         }
       },
       {
+        id: "rerun_queued_at",
+        accessorKey: "rerun_queued_at",
+        header: "Rerun Status",
+        enableColumnFilter: true,
+        cell: (props) => {
+          const queuedAt = props.getValue() as string | null;
+          if (!queuedAt) {
+            return <Text color="fg.muted">—</Text>;
+          }
+          return (
+            <VStack gap={0} align="start">
+              <Text color="orange.600" fontWeight="medium">
+                Requested
+              </Text>
+              <Text fontSize="xs" color="fg.muted">
+                {new TZDate(queuedAt, timeZone).toLocaleString()}
+              </Text>
+            </VStack>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const hasPending = row.original.rerun_queued_at !== null;
+          return filterArray.some((filter: string) => {
+            if (filter === "Pending") return hasPending;
+            if (filter === "None") return !hasPending;
+            return false;
+          });
+        }
+      },
+      {
         id: "grader_sha",
         accessorKey: "grader_sha",
         header: "Submission Autograder SHA",
@@ -250,6 +282,17 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
 
     columns.forEach((column) => {
       if (!column.enableColumnFilter) return;
+
+      if (column.id === "rerun_queued_at") {
+        // Special handling for rerun status - show Pending/None options
+        const hasPending = rows.some((row) => row.getValue(column.id as string) !== null);
+        const hasNone = rows.some((row) => row.getValue(column.id as string) === null);
+        const options: SelectOption[] = [];
+        if (hasPending) options.push({ label: "Pending", value: "Pending" });
+        if (hasNone) options.push({ label: "None", value: "None" });
+        uniqueValuesMap[column.id as string] = options;
+        return;
+      }
 
       const uniqueValues = new Set<string>();
       rows.forEach((row) => {
@@ -467,12 +510,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             loading={regrading}
             onClick={async () => {
               setRegrading(true);
-              toaster.info({
-                title: "Starting regrade process",
-                description:
-                  "This process is rate-limited to 10 repos at a time and will continue to run in batches. Please be patient.",
-                duration: 8000
-              });
               try {
                 await rerunGrader(
                   {
@@ -481,9 +518,10 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   },
                   supabase
                 );
+                await tableController.refetchAll();
                 toaster.success({
                   title: "Regrading started",
-                  description: "This may take a while... Be advised that this page will NOT automatically refresh."
+                  description: "This may take a while... Use the Workflow Runs page to view the complete status."
                 });
               } catch (error) {
                 toaster.error({
@@ -539,6 +577,13 @@ export default function RerunAutograderPage() {
         This table will allow you to rerun the autograder (potentially using a newer version) on the currently active
         submissions for students, overriding any due dates. Note that doing so will create a NEW submission for each
         student.
+      </Text>
+      <Text fontSize="sm" color="fg.muted">
+        Re-running the autograder can be a time-consuming process, and it will occur asynchronously. After you select
+        &quot;Regrade selected&quot;, the rows will be updated to show that a re-run was requested. Once it has been
+        received by GitHub, it will no longer show as &quot;Requested&quot; here, but you will be able to see the queued
+        workflow runs begin to appear in the{" "}
+        <Link href={`/course/${course_id}/manage/workflow-runs`}>Workflow Runs Table</Link>.
       </Text>
       <Box fontSize="sm" border="1px solid" borderColor="border.info" borderRadius="md" p={4}>
         <Heading size="sm">How to debug and rerun the autograder</Heading>

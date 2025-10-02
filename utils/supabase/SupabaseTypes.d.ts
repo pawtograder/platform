@@ -4597,6 +4597,7 @@ export type Database = {
           is_github_ready: boolean;
           profile_id: string | null;
           repository: string;
+          rerun_queued_at: string | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
         };
@@ -4609,6 +4610,7 @@ export type Database = {
           is_github_ready?: boolean;
           profile_id?: string | null;
           repository: string;
+          rerun_queued_at?: string | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
         };
@@ -4621,6 +4623,7 @@ export type Database = {
           is_github_ready?: boolean;
           profile_id?: string | null;
           repository?: string;
+          rerun_queued_at?: string | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
         };
@@ -8379,6 +8382,7 @@ export type Database = {
           name: string | null;
           released: string | null;
           repository: string | null;
+          rerun_queued_at: string | null;
           rt_autograder_score: number | null;
           rt_grader_action_sha: string | null;
           rt_grader_sha: string | null;
@@ -8700,6 +8704,14 @@ export type Database = {
       };
     };
     Functions: {
+      _help_request_public_payload: {
+        Args: {
+          new_row: Database["public"]["Tables"]["help_requests"]["Row"];
+          old_row: Database["public"]["Tables"]["help_requests"]["Row"];
+          tg_op: string;
+        };
+        Returns: Json;
+      };
       admin_bulk_set_user_roles_disabled: {
         Args: {
           p_admin_user_id?: string;
@@ -9178,6 +9190,10 @@ export type Database = {
       delete_system_notifications_by_campaign: {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
+      };
+      enqueue_autograder_reruns: {
+        Args: { p_class_id: number; p_submission_ids: number[] };
+        Returns: Json;
       };
       enqueue_github_archive_repo: {
         Args: {
@@ -9700,7 +9716,8 @@ export type Database = {
         | "sync_staff_team"
         | "create_repo"
         | "sync_repo_permissions"
-        | "archive_repo_and_lock";
+        | "archive_repo_and_lock"
+        | "rerun_autograder";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
@@ -9859,7 +9876,8 @@ export const Constants = {
         "sync_staff_team",
         "create_repo",
         "sync_repo_permissions",
-        "archive_repo_and_lock"
+        "archive_repo_and_lock",
+        "rerun_autograder"
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],

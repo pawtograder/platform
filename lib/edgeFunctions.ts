@@ -220,12 +220,29 @@ export async function rerunGrader(
   params: FunctionTypes.AutograderRerunGraderRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("autograder-rerun-grader", { body: params });
-  const { error } = data as FunctionTypes.GenericResponse;
+  // Call the new RPC function instead of the edge function
+  // The function uses auth.uid() internally to get the current user
+  const { data, error } = await supabase.rpc("enqueue_autograder_reruns", {
+    p_submission_ids: params.submission_ids,
+    p_class_id: params.class_id
+  });
+
   if (error) {
-    throw new EdgeFunctionError(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: error.message,
+      recoverable: false
+    });
   }
-  return data as { message: string };
+
+  return data as {
+    enqueued_count: number;
+    failed_count: number;
+    skipped_count: number;
+    failed_submissions: unknown[];
+    skipped_submissions: unknown[];
+    total_requested: number;
+  };
 }
 export async function triggerWorkflow(
   params: FunctionTypes.AutograderTriggerGradingWorkflowRequest,

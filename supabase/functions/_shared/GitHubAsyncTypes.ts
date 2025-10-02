@@ -3,7 +3,8 @@ export type GitHubAsyncMethod =
   | "sync_staff_team"
   | "create_repo"
   | "sync_repo_permissions"
-  | "archive_repo_and_lock";
+  | "archive_repo_and_lock"
+  | "rerun_autograder";
 
 export type SyncTeamArgs = {
   org: string;
@@ -68,7 +69,21 @@ export type ArchiveRepoAndLockArgs = {
   repo: string; // may be full_name or short name
 };
 
-export type GitHubAsyncArgs = SyncTeamArgs | CreateRepoArgs | SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs;
+export type RerunAutograderArgs = {
+  submission_id: number;
+  repository: string;
+  sha: string;
+  repository_check_run_id: number;
+  triggered_by: string;
+  repository_id: number;
+};
+
+export type GitHubAsyncArgs =
+  | SyncTeamArgs
+  | CreateRepoArgs
+  | SyncRepoPermissionsArgs
+  | ArchiveRepoAndLockArgs
+  | RerunAutograderArgs;
 
 export type GitHubAsyncEnvelope = {
   method: GitHubAsyncMethod;
