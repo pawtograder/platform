@@ -35,7 +35,6 @@ DECLARE
   v_log_id bigint;
   v_repo_pending timestamptz;
   v_user_id uuid;
-  v_updated_repo_id bigint;
 BEGIN
   -- Get the current user from auth context
   v_user_id := auth.uid();
@@ -94,11 +93,10 @@ BEGIN
         UPDATE public.repositories
         SET rerun_queued_at = NOW()
         WHERE id = v_submission.repository_id
-          AND rerun_queued_at IS NULL
-        RETURNING id INTO v_updated_repo_id;
+          AND rerun_queued_at IS NULL;
 
         -- If no row was updated, another process already set the timestamp
-        IF v_updated_repo_id IS NULL THEN
+        IF NOT FOUND THEN
           -- Get the existing queued_at timestamp for the skip message
           SELECT rerun_queued_at INTO v_repo_pending
           FROM public.repositories
@@ -146,6 +144,19 @@ BEGIN
         v_enqueued_count := v_enqueued_count + 1;
         
       EXCEPTION WHEN OTHERS THEN
+        -- Clear the rerun_queued_at timestamp since the operation failed
+        -- This prevents the repo from being stuck in a pending state
+        BEGIN
+          UPDATE public.repositories
+          SET rerun_queued_at = NULL
+          WHERE id = v_submission.repository_id;
+        EXCEPTION WHEN OTHERS THEN
+          -- If cleanup fails, log it but don't prevent error recording
+          -- The timestamp will eventually need manual cleanup
+          NULL;
+        END;
+        
+        -- Record the failure
         v_failed_count := v_failed_count + 1;
         v_failed_submissions := v_failed_submissions || jsonb_build_object(
           'submission_id', v_submission.id,
