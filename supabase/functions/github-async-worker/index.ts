@@ -45,8 +45,8 @@ function getCreateRepoLimiter(org: string): Bottleneck {
     const password = upstashToken;
     limiter = new Bottleneck({
       id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 100,
-      reservoirRefreshAmount: 100,
+      reservoir: 50,
+      reservoirRefreshAmount: 50,
       reservoirRefreshInterval: 60_000,
       datastore: "ioredis",
       clearDatastore: false,
@@ -61,10 +61,12 @@ function getCreateRepoLimiter(org: string): Bottleneck {
     });
     limiter.on("error", (err: Error) => console.error(err));
   } else {
+    console.log("No Upstash URL or token found, using local limiter");
+    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
     limiter = new Bottleneck({
       id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 80,
-      reservoirRefreshAmount: 80,
+      reservoir: 10,
+      reservoirRefreshAmount: 10,
       reservoirRefreshInterval: 60_000
     });
   }
@@ -286,7 +288,7 @@ async function checkAndTripErrorCircuitBreaker(
     }
 
     const errorCount = result.data as number;
-    if (errorCount >= 5) {
+    if (errorCount >= 20) {
       // Trip the circuit breaker for 8 hours
       const tripResult = await adminSupabase.schema("public").rpc("open_github_circuit", {
         p_scope: "org",

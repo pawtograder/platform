@@ -210,7 +210,7 @@ async function checkAndTripErrorCircuitBreaker(
     }
 
     const errorCount = result.data as number;
-    if (errorCount >= 5) {
+    if (errorCount >= 20) {
       // Trip the circuit breaker for 8 hours
       const tripResult = await adminSupabase.schema("public").rpc("open_github_circuit", {
         p_scope: "org",
