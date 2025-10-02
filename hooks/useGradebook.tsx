@@ -447,6 +447,11 @@ export class GradebookCellController {
   private _unsubscribes: (() => void)[] = [];
   private _closed: boolean = false;
 
+  // Debounce management for refresh
+  private _refreshDataDebounceTimer: NodeJS.Timeout | null = null;
+  private _refreshDataDebounceDelay: number = 3000; // 3 seconds
+  private _lastRefreshCallTime: number = 0;
+
   // Subscriber management
   private _dataListeners: ((data: GradebookRecordsForStudent[]) => void)[] = [];
   private _studentListeners: Map<string, ((data: GradebookRecordsForStudent | undefined) => void)[]> = new Map();
@@ -459,7 +464,18 @@ export class GradebookCellController {
     this._readyPromise = this._initialize();
   }
 
+  private _lastLoadTimestamp: number = 0;
   private async _initializeEntireGradebookForAllStudents(): Promise<void> {
+    const now = Date.now();
+    Sentry.addBreadcrumb({
+      category: "Gradebook",
+      message: "Gradebook data load throttled"
+    });
+    if (now - this._lastLoadTimestamp < 1000) {
+      Sentry.captureMessage("Gradebook data load throttled");
+      return;
+    }
+    this._lastLoadTimestamp = now;
     const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
       p_class_id: this._class_id
     });
@@ -586,6 +602,10 @@ export class GradebookCellController {
   private _handleGradebookColumnChange(message: BroadcastMessage): void {
     if (message.table !== "gradebook_columns") return;
 
+    Sentry.addBreadcrumb({
+      category: "Gradebook",
+      message: "Gradebook column change"
+    });
     // For column changes that might affect the overall structure,
     // we could implement specific handling here or trigger a full refresh
     // For now, let's just trigger a refresh to keep things simple
@@ -695,10 +715,38 @@ export class GradebookCellController {
     // For now, we'll trigger a full refresh to ensure consistency.
     // This is a limitation that could be addressed by enhancing the real-time
     // message format to include more context for delete operations.
+    Sentry.addBreadcrumb({
+      category: "Gradebook",
+      message: "Gradebook column student delete"
+    });
     this._refreshData();
   }
 
-  private async _refreshData(): Promise<void> {
+  private _refreshData(): void {
+    const now = Date.now();
+    const timeSinceLastCall = now - this._lastRefreshCallTime;
+
+    // Clear any existing debounce timer
+    if (this._refreshDataDebounceTimer) {
+      clearTimeout(this._refreshDataDebounceTimer);
+      this._refreshDataDebounceTimer = null;
+    }
+
+    this._lastRefreshCallTime = now;
+
+    // If more than 3 seconds have passed since the last call, execute immediately
+    if (timeSinceLastCall >= this._refreshDataDebounceDelay) {
+      this._refreshDataImmediate();
+    } else {
+      // Otherwise, debounce for the remaining time
+      this._refreshDataDebounceTimer = setTimeout(() => {
+        this._refreshDataImmediate();
+        this._refreshDataDebounceTimer = null;
+      }, this._refreshDataDebounceDelay);
+    }
+  }
+
+  private async _refreshDataImmediate(): Promise<void> {
     try {
       // Reset streaming state for full refresh
       this._data = [];
@@ -798,10 +846,10 @@ export class GradebookCellController {
   }
 
   /**
-   * Force a refresh of all data from the database
+   * Force a refresh of all data from the database (debounced)
    */
-  async refresh(): Promise<void> {
-    await this._refreshData();
+  refresh(): void {
+    this._refreshData();
   }
 
   /**
@@ -834,6 +882,13 @@ export class GradebookCellController {
    */
   close(): void {
     this._closed = true;
+
+    // Clear any pending debounce timer
+    if (this._refreshDataDebounceTimer) {
+      clearTimeout(this._refreshDataDebounceTimer);
+      this._refreshDataDebounceTimer = null;
+    }
+
     this._unsubscribes.forEach((unsubscribe) => unsubscribe());
     this._unsubscribes = [];
     this._dataListeners = [];
