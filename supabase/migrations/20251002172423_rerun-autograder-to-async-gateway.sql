@@ -35,6 +35,7 @@ DECLARE
   v_log_id bigint;
   v_repo_pending timestamptz;
   v_user_id uuid;
+  v_updated_repo_id bigint;
 BEGIN
   -- Get the current user from auth context
   v_user_id := auth.uid();
@@ -88,12 +89,21 @@ BEGIN
         AND s.repository_check_run_id IS NOT NULL
     LOOP
       BEGIN
-        -- Check if this repository already has a pending rerun request
-        SELECT rerun_queued_at INTO v_repo_pending
-        FROM public.repositories
-        WHERE id = v_submission.repository_id;
+        -- Atomically set the rerun_queued_at timestamp only if not already set
+        -- This prevents race conditions where multiple requests try to enqueue the same repo
+        UPDATE public.repositories
+        SET rerun_queued_at = NOW()
+        WHERE id = v_submission.repository_id
+          AND rerun_queued_at IS NULL
+        RETURNING id INTO v_updated_repo_id;
 
-        IF v_repo_pending IS NOT NULL THEN
+        -- If no row was updated, another process already set the timestamp
+        IF v_updated_repo_id IS NULL THEN
+          -- Get the existing queued_at timestamp for the skip message
+          SELECT rerun_queued_at INTO v_repo_pending
+          FROM public.repositories
+          WHERE id = v_submission.repository_id;
+          
           -- Skip this submission - already has a pending rerun
           v_skipped_count := v_skipped_count + 1;
           v_skipped_submissions := v_skipped_submissions || jsonb_build_object(
@@ -104,11 +114,6 @@ BEGIN
           );
           CONTINUE;
         END IF;
-
-        -- Set the rerun_queued_at timestamp on the repository
-        UPDATE public.repositories
-        SET rerun_queued_at = NOW()
-        WHERE id = v_submission.repository_id;
 
         -- Create log entry for metrics tracking
         INSERT INTO public.api_gateway_calls (method, status_code, class_id)
