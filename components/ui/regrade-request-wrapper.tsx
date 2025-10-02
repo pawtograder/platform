@@ -290,10 +290,10 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                       return;
                     }
 
-                    // Parse as float to handle decimal input, then convert to int
+                    // Parse as float to handle decimal input
                     const value = parseFloat(inputValue);
                     if (!isNaN(value)) {
-                      setResolveScore(Math.round(value));
+                      setResolveScore(value);
                     }
                   }}
                   onFocus={(e) => e.stopPropagation()} // Prevent focus events from bubbling
@@ -303,7 +303,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                   w="100px"
                 />
                 {isSignificantChange(resolveScore, initialPoints) && (
-                  <Text fontSize="xs" color="orange.900" mt={1} fontWeight="medium">
+                  <Text fontSize="xs" color="fg.warning" mt={1} fontWeight="medium">
                     ⚠️ This is a significant change ({">"}50%) from the original score
                   </Text>
                 )}
@@ -486,7 +486,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                     // Parse as float to handle decimal input, then convert to int
                     const value = parseFloat(inputValue);
                     if (!isNaN(value)) {
-                      setCloseScore(Math.round(value));
+                      setCloseScore(value);
                     }
                   }}
                   onFocus={(e) => e.stopPropagation()} // Prevent focus events from bubbling
@@ -496,7 +496,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                   w="100px"
                 />
                 {isSignificantChange(closeScore, initialPoints) && (
-                  <Text fontSize="xs" color="orange.900" mt={1} fontWeight="medium">
+                  <Text fontSize="xs" color="fg.warning" mt={1} fontWeight="medium">
                     ⚠️ This is a significant change ({">"}50%) from the original score
                   </Text>
                 )}

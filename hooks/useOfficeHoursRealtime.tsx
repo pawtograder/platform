@@ -12,6 +12,8 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useCourseController } from "./useCourseController";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 
 // Type for broadcast messages from the database trigger
 type DatabaseBroadcastMessage = {
@@ -70,6 +72,7 @@ export class OfficeHoursController {
   constructor(
     public classId: number,
     client: SupabaseClient<Database>,
+    classRealTimeController: ClassRealTimeController,
     officeHoursRealTimeController: OfficeHoursRealTimeController
   ) {
     this._client = client;
@@ -79,10 +82,11 @@ export class OfficeHoursController {
       client,
       table: "help_requests",
       query: client.from("help_requests").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      classRealTimeController,
       realtimeFilter: {
         class_id: classId
-      }
+      },
+      debounceInterval: 0
     });
 
     this.helpQueues = new TableController({
@@ -384,6 +388,7 @@ export function OfficeHoursControllerProvider({
 }) {
   const controller = useRef<OfficeHoursController | null>(null);
   const client = createClient();
+  const { classRealTimeController } = useCourseController();
   const [officeHoursRealTimeController, setOfficeHoursRealTimeController] =
     useState<OfficeHoursRealTimeController | null>(null);
   useEffect(() => {
@@ -399,7 +404,12 @@ export function OfficeHoursControllerProvider({
 
   // Initialize controller with required dependencies
   if (!controller.current && officeHoursRealTimeController) {
-    controller.current = new OfficeHoursController(classId, client, officeHoursRealTimeController);
+    controller.current = new OfficeHoursController(
+      classId,
+      client,
+      classRealTimeController,
+      officeHoursRealTimeController
+    );
   }
 
   useEffect(() => {
