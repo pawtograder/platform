@@ -56,6 +56,7 @@ For development work that requires changes to the database schema or backend fun
 6. Start Supabase Edge Functions: `npx supabase functions serve`
 7. Start the development server: `npm start`
 8. Run end-to-end tests (optional): `npx playwright test --ui`
+9. Create a small testing class with a few students and assignments for interactive testing: `npm run seed`. It will print out a LOT of output. Scroll up or search for "Login Credentials" to find the email addresses and passwords that you can use to log in to the test class.
 
 ### Local development workflow
 
