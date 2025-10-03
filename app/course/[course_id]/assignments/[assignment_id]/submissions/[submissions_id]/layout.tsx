@@ -291,12 +291,8 @@ function SubmissionHistoryContents({
     assignmentGroupId: submission.assignment_group_id || undefined
   });
   const isStaff = useIsGraderOrInstructor();
-  const disableActivationButton = Boolean(
-    dueDate &&
-      TZDate.tz(time_zone ?? "America/New_York").getTime() >
-        new TZDate(dueDate, time_zone ?? "America/New_York").getTime() &&
-      !isStaff
-  );
+  const now = TZDate.tz(time_zone ?? "America/New_York").getTime();
+  const disableActivationButton = Boolean(dueDate && now > dueDate.getTime() && !isStaff);
   if (isLoading) {
     return <Skeleton height="100px" />;
   }

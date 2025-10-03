@@ -32,7 +32,10 @@ type ChannelType =
   | "submission_graders"
   | "submission_user"
   | "help_queue"
-  | "help_request";
+  | "help_request"
+  | "help_request_staff"
+  | "help_queues"
+  | "class_staff";
 
 /**
  * Map of tables to the channel types that broadcast their changes.
@@ -482,8 +485,10 @@ export default class TableController<
   private _temporaryIdCounter: number = -1;
   private _classRealTimeController: ClassRealTimeController | null = null;
   private _officeHoursRealTimeController: OfficeHoursRealTimeController | null = null;
-  private _realtimeUnsubscribe: (() => void) | null = null;
-  private _statusUnsubscribe: (() => void) | null = null;
+  private _classRealtimeUnsubscribe: (() => void) | null = null;
+  private _officeHoursRealtimeUnsubscribe: (() => void) | null = null;
+  private _classStatusUnsubscribe: (() => void) | null = null;
+  private _officeHoursStatusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastChannelStates: Map<string, string> = new Map(); // Track individual channel states
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
@@ -1047,7 +1052,9 @@ export default class TableController<
   /**
    * Check if a channel status is relevant for this table
    */
-  private _isChannelRelevantForTable(channelStatus: ChannelStatus): boolean {
+  private _isChannelRelevantForTable(
+    channelStatus: ChannelStatus | import("./OfficeHoursRealTimeController").ChannelStatus
+  ): boolean {
     const relevantTypes = this._getRelevantChannelTypes();
 
     // If table explicitly has no broadcasts (empty array in map), no channels are relevant
@@ -1092,7 +1099,9 @@ export default class TableController<
    * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
    * Only refetches when channels relevant to this table's data reconnect
    */
-  private _handleConnectionStatusChange(status: ConnectionStatus): void {
+  private _handleConnectionStatusChange(
+    status: ConnectionStatus | import("./OfficeHoursRealTimeController").ConnectionStatus
+  ): void {
     // Track which relevant channels have reconnected
     const relevantReconnections: string[] = [];
 
@@ -1208,17 +1217,17 @@ export default class TableController<
         // Set up realtime subscription if controller is provided
         if (!this._closed && this._classRealTimeController) {
           if (this._submissionId) {
-            this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
+            this._classRealtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
               table,
               this._submissionId,
               messageHandler
             );
           } else {
-            this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTable(table, messageHandler);
+            this._classRealtimeUnsubscribe = this._classRealTimeController.subscribeToTable(table, messageHandler);
           }
 
           // Subscribe to connection status changes for reconnection handling
-          this._statusUnsubscribe = this._classRealTimeController.subscribeToStatus((status) => {
+          this._classStatusUnsubscribe = this._classRealTimeController.subscribeToStatus((status) => {
             if (this._closed) return;
             this._handleConnectionStatusChange(status);
           });
@@ -1231,13 +1240,31 @@ export default class TableController<
             }
           }
         }
+
         if (!this._closed && this._officeHoursRealTimeController) {
-          this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
-        }
-        if (this._classRealTimeController && this._officeHoursRealTimeController) {
-          console.log(
-            "Warning: TableController is subscribing to both class and office hours realtime controllers, will leak subscriptions"
+          this._officeHoursRealtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(
+            table,
+            messageHandler
           );
+
+          // Subscribe to connection status changes for office hours controller
+          this._officeHoursStatusUnsubscribe = this._officeHoursRealTimeController.subscribeToStatus((status) => {
+            if (this._closed) return;
+            this._handleConnectionStatusChange(
+              status as ConnectionStatus | import("./OfficeHoursRealTimeController").ConnectionStatus
+            );
+          });
+
+          // Merge initial channel states from office hours controller (deduplicate by channel.name)
+          const initialStatus = this._officeHoursRealTimeController.getConnectionStatus();
+          for (const channel of initialStatus.channels) {
+            if (this._isChannelRelevantForTable(channel)) {
+              // Only set if not already set by class controller to avoid overwriting
+              if (!this._lastChannelStates.has(channel.name)) {
+                this._lastChannelStates.set(channel.name, channel.state);
+              }
+            }
+          }
         }
 
         if (this._closed) {
@@ -1268,11 +1295,21 @@ export default class TableController<
 
   close() {
     this._closed = true;
-    if (this._realtimeUnsubscribe) {
-      this._realtimeUnsubscribe();
+    if (this._classRealtimeUnsubscribe) {
+      this._classRealtimeUnsubscribe();
+      this._classRealtimeUnsubscribe = null;
     }
-    if (this._statusUnsubscribe) {
-      this._statusUnsubscribe();
+    if (this._officeHoursRealtimeUnsubscribe) {
+      this._officeHoursRealtimeUnsubscribe();
+      this._officeHoursRealtimeUnsubscribe = null;
+    }
+    if (this._classStatusUnsubscribe) {
+      this._classStatusUnsubscribe();
+      this._classStatusUnsubscribe = null;
+    }
+    if (this._officeHoursStatusUnsubscribe) {
+      this._officeHoursStatusUnsubscribe();
+      this._officeHoursStatusUnsubscribe = null;
     }
     if (this._debounceTimeout) {
       clearTimeout(this._debounceTimeout);
@@ -1286,6 +1323,8 @@ export default class TableController<
     this._refetchListeners = [];
     this._listDataListeners = [];
     this._itemDataListeners.clear();
+    // Clear tracked channel states
+    this._lastChannelStates.clear();
     this._pendingOperations = [];
     this._isProcessingBatch = false;
   }
