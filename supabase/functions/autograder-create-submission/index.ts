@@ -1223,7 +1223,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               error: `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
             },
             score: 0,
-            ret_code: 137,
+            ret_code: 101,
             lint_output: "",
             lint_output_format: "text",
             lint_passed: false,
