@@ -126,19 +126,19 @@ export const emailTemplates = {
   regrade_request: {
     comment_challenged: {
       subject: "{course_name} - A regrade request has been opened",
-      body: "{opened_by_name} opened a regrade request on your grading comment. Read more details in Pawtograder at {assignment_url}"
+      body: "{opened_by_name} opened a regrade request on your grading comment. Read more details in Pawtograder at {regrade_request_url}"
     },
     status_change: {
       subject: "{course_name} - Regrade request status updated to {new_status}",
-      body: "{updated_by_name} updated a regrade request to {new_status}. Read more details in Pawtograder at {assignment_url}"
+      body: "{updated_by_name} updated a regrade request to {new_status}. Read more details in Pawtograder at {regrade_request_url}"
     },
     escalated: {
       subject: "{course_name} - Regrade request escalated",
-      body: "{escalated_by_name} escalated a regrade request. Read more details in Pawtograder at {assignment_url}"
+      body: "{escalated_by_name} escalated a regrade request. Read more details in Pawtograder at {regrade_request_url}"
     },
     new_comment: {
       subject: "{course_name} - New comment on a regrade request",
-      body: "{comment_author_name} commented on a regrade request you're involved in. Read more details in Pawtograder at {assignment_url}"
+      body: "{comment_author_name} commented on a regrade request you're involved in. Read more details in Pawtograder at {regrade_request_url}"
     }
   }
 };

@@ -103,6 +103,39 @@ export type CourseEnrollmentNotification = NotificationEnvelope & {
   inviter_email: string;
 };
 
+export type RegradeRequestNotification = NotificationEnvelope & {
+  type: "regrade_request";
+  regrade_request_id: number;
+  submission_id: number;
+  assignment_id: number;
+} & (
+    | {
+        action: "comment_challenged";
+        opened_by: string;
+        opened_by_name: string;
+      }
+    | {
+        action: "status_change";
+        old_status: string;
+        new_status: string;
+        updated_by: string;
+        updated_by_name: string;
+      }
+    | {
+        action: "escalated";
+        old_status: string;
+        new_status: string;
+        escalated_by: string;
+        escalated_by_name: string;
+      }
+    | {
+        action: "new_comment";
+        comment_author: string;
+        comment_author_name: string;
+        comment_id: number;
+      }
+  );
+
 // Helper function to set up Sentry scope with notification context
 function setupSentryScope(scope: Sentry.Scope, notification: QueueMessage<Notification>) {
   scope.setTag("notification_id", notification.message.id);
@@ -188,6 +221,7 @@ function buildEmailUrls(
   help_queue_url?: string;
   help_request_url?: string;
   thread_url?: string;
+  regrade_request_url?: string;
 } {
   const course_url = `https://${Deno.env.get("APP_URL")}/course/${classId}`;
   const urls: {
@@ -196,6 +230,7 @@ function buildEmailUrls(
     help_queue_url?: string;
     help_request_url?: string;
     thread_url?: string;
+    regrade_request_url?: string;
   } = { course_url };
 
   if ("assignment_id" in body) {
@@ -212,6 +247,11 @@ function buildEmailUrls(
 
   if ("root_thread_id" in body) {
     urls.thread_url = `https://${Deno.env.get("APP_URL")}/course/${classId}/discussion/${body.root_thread_id}`;
+  }
+
+  if ("regrade_request_id" in body) {
+    const regradeBody = body as RegradeRequestNotification;
+    urls.regrade_request_url = `https://${Deno.env.get("APP_URL")}/course/${classId}/assignments/${regradeBody.assignment_id}/submissions/${regradeBody.submission_id}/files#regrade-request-${regradeBody.regrade_request_id}`;
   }
 
   return urls;
