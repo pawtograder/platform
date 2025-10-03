@@ -69,6 +69,7 @@ export class ClassRealTimeController {
   private _subscriptionCounter = 0;
   private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
   private _closed = false;
+  private _submissionChannelRefCounts: Map<number, number> = new Map();
 
   //Realtime reliability features
   private _inactiveTabTimeoutSeconds = 10 * 60; // 10 minutes default
@@ -414,10 +415,19 @@ export class ClassRealTimeController {
     if (this._closed) {
       throw new Error("Cannot subscribe to channels after they have been closed");
     }
-    // Ensure submission channels are created
+
+    // Ensure submission channels are created and increment ref count
     this._ensureSubmissionChannels(submissionId);
 
-    return this.subscribe({ table, submission_id: submissionId }, callback);
+
+    // Create the message filter subscription
+    const filterUnsubscriber = this.subscribe({ table, submission_id: submissionId }, callback);
+
+    // Return unsubscriber that cleans up both filter subscription and submission channels
+    return () => {
+      filterUnsubscriber();
+      this._cleanupSubmissionChannels(submissionId);
+    };
   }
 
   /**
@@ -427,7 +437,18 @@ export class ClassRealTimeController {
     if (this._closed) {
       throw new Error("Cannot subscribe to channels after they have been closed");
     }
-    return this.subscribe({ submission_id: submissionId }, callback);
+
+    // Ensure submission channels are created and increment ref count
+    this._ensureSubmissionChannels(submissionId);
+
+    // Create the message filter subscription
+    const filterUnsubscriber = this.subscribe({ submission_id: submissionId }, callback);
+
+    // Return unsubscriber that cleans up both filter subscription and submission channels
+    return () => {
+      filterUnsubscriber();
+      this._cleanupSubmissionChannels(submissionId);
+    };
   }
 
   /**
@@ -443,15 +464,55 @@ export class ClassRealTimeController {
 
   /**
    * Ensure submission-specific channels are created for a given submission
+   * Increments reference count for tracking
    */
   private _ensureSubmissionChannels(submissionId: number) {
-    // Create graders channel if user is staff
-    if (this._isStaff) {
-      this._subscribeToSubmissionGradersChannel(submissionId);
+    const currentRefCount = this._submissionChannelRefCounts.get(submissionId) || 0;
+
+    // Only create channels if this is the first subscription
+    if (currentRefCount === 0) {
+      // Create graders channel if user is staff
+      if (this._isStaff) {
+        this._subscribeToSubmissionGradersChannel(submissionId);
+      }
+
+      // Create user channel for this submission
+      this._subscribeToSubmissionUserChannel(submissionId);
     }
 
-    // Create user channel for this submission
-    this._subscribeToSubmissionUserChannel(submissionId);
+    // Increment reference count
+    this._submissionChannelRefCounts.set(submissionId, currentRefCount + 1);
+  }
+
+  /**
+   * Clean up submission-specific channels when no longer needed
+   * Decrements reference count and removes channels when count reaches 0
+   */
+  private _cleanupSubmissionChannels(submissionId: number) {
+    const currentRefCount = this._submissionChannelRefCounts.get(submissionId) || 0;
+
+    if (currentRefCount <= 1) {
+      // Last reference, unsubscribe from channels
+      const gradersChannelKey = `submission:${submissionId}:graders`;
+      const userChannelKey = `submission:${submissionId}:profile_id:${this._profileId}`;
+
+      const gradersUnsubscriber = this._channelUnsubscribers.get(gradersChannelKey);
+      if (gradersUnsubscriber) {
+        gradersUnsubscriber();
+        this._channelUnsubscribers.delete(gradersChannelKey);
+      }
+
+      const userUnsubscriber = this._channelUnsubscribers.get(userChannelKey);
+      if (userUnsubscriber) {
+        userUnsubscriber();
+        this._channelUnsubscribers.delete(userChannelKey);
+      }
+
+      this._submissionChannelRefCounts.delete(submissionId);
+    } else {
+      // Decrement reference count
+      this._submissionChannelRefCounts.set(submissionId, currentRefCount - 1);
+    }
   }
 
   /**
@@ -460,6 +521,7 @@ export class ClassRealTimeController {
   async close() {
     this._subscriptions.clear();
     this._statusChangeListeners = [];
+    this._submissionChannelRefCounts.clear();
 
     // Clear timers and listeners
     if (this._inactiveTabTimer) {
@@ -590,6 +652,7 @@ export class ClassRealTimeController {
         id: sub.id,
         filter: sub.filter
       })),
+      submissionChannelRefCounts: Object.fromEntries(this._submissionChannelRefCounts),
       channelManagerInfo: this._channelManager.getDebugInfo()
     };
   }

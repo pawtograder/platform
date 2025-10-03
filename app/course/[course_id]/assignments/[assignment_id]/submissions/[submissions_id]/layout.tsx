@@ -241,11 +241,11 @@ function SubmissionReviewScoreTweak() {
     </Box>
   );
 }
-function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
-  const pathname = usePathname();
-  const invalidate = useInvalidate();
-  const router = useRouter();
-  const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+function SubmissionHistoryContents({
+  submission
+}: {
+  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+}) {
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -257,6 +257,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
         operator: "eq",
         value: submission.profile_id
       };
+  const invalidate = useInvalidate();
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -280,10 +281,156 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       pageSize: 1000
     }
   });
+  const router = useRouter();
+  const { time_zone } = useCourse();
+  const [isActivating, setIsActivating] = useState(false);
+  const pathname = usePathname();
+  const isGraderInterface = pathname.includes("/grade");
+  const { dueDate } = useAssignmentDueDate(submission.assignments, {
+    studentPrivateProfileId: submission.profile_id || undefined,
+    assignmentGroupId: submission.assignment_group_id || undefined
+  });
+  const isStaff = useIsGraderOrInstructor();
+  const disableActivationButton = Boolean(
+    dueDate &&
+      TZDate.tz(time_zone ?? "America/New_York").getTime() >
+        new TZDate(dueDate, time_zone ?? "America/New_York").getTime() &&
+      !isStaff
+  );
+  if (isLoading) {
+    return <Skeleton height="100px" />;
+  }
+  return (
+    <>
+      <Text>Submission History</Text>
+      <Box
+        maxHeight="400px"
+        overflowY="auto"
+        css={{
+          "&::-webkit-scrollbar": {
+            width: "8px"
+          },
+          "&::-webkit-scrollbar-track": {
+            background: "#f1f1f1",
+            borderRadius: "4px"
+          },
+          "&::-webkit-scrollbar-thumb": {
+            background: "#888",
+            borderRadius: "4px"
+          },
+          "&::-webkit-scrollbar-thumb:hover": {
+            background: "#555"
+          }
+        }}
+      >
+        <Toaster />
+        <Table.Root>
+          <Table.Header>
+            <Table.Row>
+              <Table.ColumnHeader>#</Table.ColumnHeader>
+              <Table.ColumnHeader>Date</Table.ColumnHeader>
+              <Table.ColumnHeader>Auto Grader Score</Table.ColumnHeader>
+              <Table.ColumnHeader>Total Score</Table.ColumnHeader>
+              <Table.ColumnHeader>Actions</Table.ColumnHeader>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {data?.data.map((historical_submission) => {
+              const link = isGraderInterface
+                ? `/course/${historical_submission.class_id}/grade/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`
+                : `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
+              return (
+                <Table.Row key={historical_submission.id} bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}>
+                  <Table.Cell>
+                    <Link href={link}>
+                      {historical_submission.is_active && <ActiveSubmissionIcon />}
+                      {historical_submission.ordinal}
+                    </Link>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Link href={link}>
+                      {formatRelative(
+                        new TZDate(
+                          historical_submission.created_at || new Date().toUTCString(),
+                          time_zone || "America/New_York"
+                        ),
+                        TZDate.tz(time_zone || "America/New_York")
+                      )}
+                    </Link>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Link href={link}>
+                      {!historical_submission.grader_results
+                        ? "In Progress"
+                        : historical_submission.grader_results && historical_submission.grader_results.errors
+                          ? "Error"
+                          : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
+                    </Link>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Link href={link}>
+                      {historical_submission.submission_reviews?.completed_at &&
+                        historical_submission.submission_reviews?.total_score +
+                          "/" +
+                          historical_submission.assignments.total_points}
+                    </Link>
+                  </Table.Cell>
+                  <Table.Cell>
+                    {historical_submission.is_active ? (
+                      <>This submission is active</>
+                    ) : historical_submission.is_not_graded ? (
+                      <>Not for grading</>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        disabled={disableActivationButton}
+                        loading={isActivating}
+                        onClick={async () => {
+                          setIsActivating(true);
+                          try {
+                            const supabase = createClient();
+                            await activateSubmission({ submission_id: historical_submission.id }, supabase);
+                            invalidate({ resource: "submissions", invalidates: ["list"] });
+                            toaster.create({
+                              title: "Active submission changed",
+                              type: "success"
+                            });
+                            router.push(link);
+                          } catch (error) {
+                            const errorId = Sentry.captureException(error);
+                            toaster.create({
+                              title: "Error activating submission",
+                              description: `We have recorded this error with trace ID: ${errorId}`,
+                              type: "error"
+                            });
+                          } finally {
+                            setIsActivating(false);
+                          }
+                        }}
+                      >
+                        <Icon as={FaCheckCircle} />
+                        Activate
+                      </Button>
+                    )}
+                  </Table.Cell>
+                </Table.Row>
+              );
+            })}
+          </Table.Body>
+        </Table.Root>
+      </Box>
+    </>
+  );
+}
+function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
+  const invalidate = useInvalidate();
+  const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+
   useList<Submission>({
     resource: "submissions",
     meta: {
-      select: "*"
+      select: "id, assignment_group_id, profile_id, is_active"
     },
     filters: [
       {
@@ -306,25 +453,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       invalidate({ resource: "submissions", invalidates: ["list"] });
     }
   });
-  const { time_zone } = useCourse();
-  const [isActivating, setIsActivating] = useState(false);
-  const isGraderInterface = pathname.includes("/grade");
-  const { dueDate } = useAssignmentDueDate(submission.assignments, {
-    studentPrivateProfileId: submission.profile_id || undefined,
-    assignmentGroupId: submission.assignment_group_id || undefined
-  });
-  const isStaff = useIsGraderOrInstructor();
-  const disableActivationButton = Boolean(
-    dueDate &&
-      TZDate.tz(time_zone ?? "America/New_York").getTime() >
-        new TZDate(dueDate, time_zone ?? "America/New_York").getTime() &&
-      !isStaff
-  );
-  if (isLoading || !submission.assignments) {
+
+  if (!submission.assignments) {
     return <Skeleton height="20px" />;
   }
   return (
-    <PopoverRoot>
+    <PopoverRoot lazyMount unmountOnExit>
       <PopoverTrigger asChild>
         <Button variant={hasNewSubmission ? "solid" : "outline"} colorPalette={hasNewSubmission ? "yellow" : "default"}>
           <Icon as={FaHistory} />
@@ -335,127 +469,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       <PopoverContent minWidth={{ base: "none", md: "lg" }}>
         <PopoverArrow />
         <PopoverBody>
-          <Text>Submission History</Text>
-          <Box
-            maxHeight="400px"
-            overflowY="auto"
-            css={{
-              "&::-webkit-scrollbar": {
-                width: "8px"
-              },
-              "&::-webkit-scrollbar-track": {
-                background: "#f1f1f1",
-                borderRadius: "4px"
-              },
-              "&::-webkit-scrollbar-thumb": {
-                background: "#888",
-                borderRadius: "4px"
-              },
-              "&::-webkit-scrollbar-thumb:hover": {
-                background: "#555"
-              }
-            }}
-          >
-            <Toaster />
-            <Table.Root>
-              <Table.Header>
-                <Table.Row>
-                  <Table.ColumnHeader>#</Table.ColumnHeader>
-                  <Table.ColumnHeader>Date</Table.ColumnHeader>
-                  <Table.ColumnHeader>Auto Grader Score</Table.ColumnHeader>
-                  <Table.ColumnHeader>Total Score</Table.ColumnHeader>
-                  <Table.ColumnHeader>Actions</Table.ColumnHeader>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {data?.data.map((historical_submission) => {
-                  const link = isGraderInterface
-                    ? `/course/${historical_submission.class_id}/grade/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`
-                    : `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
-                  return (
-                    <Table.Row
-                      key={historical_submission.id}
-                      bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}
-                    >
-                      <Table.Cell>
-                        <Link href={link}>
-                          {historical_submission.is_active && <ActiveSubmissionIcon />}
-                          {historical_submission.ordinal}
-                        </Link>
-                      </Table.Cell>
-                      <Table.Cell>
-                        <Link href={link}>
-                          {formatRelative(
-                            new TZDate(
-                              historical_submission.created_at || new Date().toUTCString(),
-                              time_zone || "America/New_York"
-                            ),
-                            TZDate.tz(time_zone || "America/New_York")
-                          )}
-                        </Link>
-                      </Table.Cell>
-                      <Table.Cell>
-                        <Link href={link}>
-                          {!historical_submission.grader_results
-                            ? "In Progress"
-                            : historical_submission.grader_results && historical_submission.grader_results.errors
-                              ? "Error"
-                              : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
-                        </Link>
-                      </Table.Cell>
-                      <Table.Cell>
-                        <Link href={link}>
-                          {historical_submission.submission_reviews?.completed_at &&
-                            historical_submission.submission_reviews?.total_score +
-                              "/" +
-                              historical_submission.assignments.total_points}
-                        </Link>
-                      </Table.Cell>
-                      <Table.Cell>
-                        {historical_submission.is_active ? (
-                          <>This submission is active</>
-                        ) : historical_submission.is_not_graded ? (
-                          <>Not for grading</>
-                        ) : (
-                          <Button
-                            variant="outline"
-                            size="xs"
-                            disabled={disableActivationButton}
-                            loading={isActivating}
-                            onClick={async () => {
-                              setIsActivating(true);
-                              try {
-                                const supabase = createClient();
-                                await activateSubmission({ submission_id: historical_submission.id }, supabase);
-                                invalidate({ resource: "submissions", invalidates: ["list"] });
-                                toaster.create({
-                                  title: "Active submission changed",
-                                  type: "success"
-                                });
-                                router.push(link);
-                              } catch (error) {
-                                const errorId = Sentry.captureException(error);
-                                toaster.create({
-                                  title: "Error activating submission",
-                                  description: `We have recorded this error with trace ID: ${errorId}`,
-                                  type: "error"
-                                });
-                              } finally {
-                                setIsActivating(false);
-                              }
-                            }}
-                          >
-                            <Icon as={FaCheckCircle} />
-                            Activate
-                          </Button>
-                        )}
-                      </Table.Cell>
-                    </Table.Row>
-                  );
-                })}
-              </Table.Body>
-            </Table.Root>
-          </Box>
+          <SubmissionHistoryContents submission={submission} />
         </PopoverBody>
       </PopoverContent>
     </PopoverRoot>

@@ -3,7 +3,7 @@ import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
+import { ClassRealTimeController, ConnectionStatus, ChannelStatus } from "./ClassRealTimeController";
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
 import * as Sentry from "@sentry/nextjs";
 
@@ -13,6 +13,92 @@ export type TablesThatHaveAnIDField = {
 }[keyof DatabaseTableTypes];
 
 type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
+
+/**
+ * Channel types that broadcast table changes.
+ * Each channel type corresponds to a realtime broadcast channel pattern in the database:
+ * - staff: class:$class_id:staff (instructors/graders for a class)
+ * - user: class:$class_id:user:$profile_id (individual user in a class)
+ * - students: class:$class_id:students (all students in a class)
+ * - submission_graders: submission:$submission_id:graders (graders for a specific submission)
+ * - submission_user: submission:$submission_id:profile_id:$profile_id (student for a specific submission)
+ * - help_queue: help_queue:$help_queue_id (specific help queue)
+ * - help_request: help_request:$help_request_id (specific help request)
+ */
+type ChannelType =
+  | "staff"
+  | "user"
+  | "students"
+  | "submission_graders"
+  | "submission_user"
+  | "help_queue"
+  | "help_request";
+
+/**
+ * Map of tables to the channel types that broadcast their changes.
+ * This allows TableController to only refetch when relevant channels reconnect,
+ * preventing unnecessary refetches when unrelated channels (e.g., submission channels)
+ * reconnect while viewing data from other tables (e.g., user_roles).
+ *
+ * Based on the database trigger functions in schema.sql:
+ * - broadcast_course_table_change_unified: staff/students channels
+ * - broadcast_submission_data_change: submission_graders/submission_user channels
+ * - broadcast_help_request_data_change: help_request channel
+ * - broadcast_help_queue_data_change: help_queue channel
+ * - etc.
+ *
+ * Tables with empty arrays ([]) have NO realtime broadcasts - they are relatively static
+ * and must be explicitly fetched. These should NOT refetch on reconnection since no
+ * broadcasts were missed during disconnection. This data architecture should be improved in the future.
+ */
+const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[]>> = {
+  // Static tables with no realtime broadcasts - future work might add that!
+  submissions: [],
+  assignments: [],
+  assignment_groups: [],
+  assignment_groups_members: [],
+  classes: [],
+  notifications: [], // Only triggers email queue, no realtime broadcasts
+  // Tables broadcast via class:$class_id:staff channel
+  assignment_due_date_exceptions: ["staff"],
+  lab_section_meetings: ["staff", "students"],
+  lab_sections: ["staff", "students"],
+  student_deadline_extensions: ["staff"],
+  tags: ["staff"],
+  user_roles: ["staff"],
+  discussion_threads: ["staff", "students"],
+  gradebook_columns: ["staff", "students"],
+  gradebook_column_students: ["staff", "user"], // Also to individual users when not private
+  help_queue_assignments: ["help_queue"],
+  help_queues: ["help_queue"],
+  help_request_moderation: ["help_request"],
+  help_request_templates: ["help_request"],
+  student_karma_notes: ["help_request"],
+  help_requests: ["staff", "help_queue", "help_request"],
+  submission_regrade_requests: ["staff", "user"],
+  review_assignments: ["staff", "user"],
+  review_assignment_rubric_parts: ["staff", "user"],
+  profiles: ["staff", "students"],
+
+  // Tables broadcast only to individual users
+  discussion_thread_read_status: ["user"],
+  discussion_thread_watchers: ["user"],
+
+  // Tables broadcast via submission-specific channels
+  submission_artifact_comments: ["submission_graders", "submission_user"],
+  submission_comments: ["submission_graders", "submission_user"],
+  submission_file_comments: ["submission_graders", "submission_user"],
+  submission_reviews: ["submission_graders", "submission_user"],
+  submission_regrade_request_comments: ["submission_graders", "submission_user"],
+
+  // Help request related tables
+  help_request_feedback: ["help_request"],
+  help_request_file_references: ["help_request"],
+  help_request_message_read_receipts: ["help_request"],
+  help_request_messages: ["help_request"],
+  help_request_students: ["help_request"],
+  student_help_activity: ["help_request"]
+};
 
 /**
  * Type-safe filter for real-time event filtering.
@@ -399,7 +485,7 @@ export default class TableController<
   private _realtimeUnsubscribe: (() => void) | null = null;
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
-  private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _lastChannelStates: Map<string, string> = new Map(); // Track individual channel states
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
   private _lastFetchTimestamp: number = 0;
   private _closed: boolean = false;
@@ -952,19 +1038,84 @@ export default class TableController<
   }
 
   /**
+   * Get the list of relevant channel types for this table
+   */
+  private _getRelevantChannelTypes(): ChannelType[] {
+    return TABLE_TO_CHANNEL_MAP[this._table] || [];
+  }
+
+  /**
+   * Check if a channel status is relevant for this table
+   */
+  private _isChannelRelevantForTable(channelStatus: ChannelStatus): boolean {
+    const relevantTypes = this._getRelevantChannelTypes();
+
+    // If table explicitly has no broadcasts (empty array in map), no channels are relevant
+    if (this._table in TABLE_TO_CHANNEL_MAP && relevantTypes.length === 0) {
+      return false;
+    }
+
+    // If table is not in map at all, consider all channels relevant (conservative approach)
+    if (!(this._table in TABLE_TO_CHANNEL_MAP)) {
+      return true;
+    }
+
+    // Check if this channel type is relevant for our table
+    if (!relevantTypes.includes(channelStatus.type as ChannelType)) {
+      return false;
+    }
+
+    // For submission-specific channels, verify the submission ID matches if we're tracking a submission
+    if (
+      this._submissionId &&
+      (channelStatus.type === "submission_graders" || channelStatus.type === "submission_user")
+    ) {
+      return channelStatus.submissionId === this._submissionId;
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if all relevant channels are currently in a connected state
+   */
+  private _areRelevantChannelsConnected(): boolean {
+    for (const [, state] of this._lastChannelStates) {
+      if (state !== "joined") {
+        return false;
+      }
+    }
+    return this._lastChannelStates.size > 0; // Must have at least one channel tracked
+  }
+
+  /**
    * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
+   * Only refetches when channels relevant to this table's data reconnect
    */
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
-    const wasDisconnected =
-      this._lastConnectionStatus === "disconnected" ||
-      this._lastConnectionStatus === "partial" ||
-      this._lastConnectionStatus === "connecting";
-    const isNowConnected = status.overall === "connected";
+    // Track which relevant channels have reconnected
+    const relevantReconnections: string[] = [];
 
-    this._lastConnectionStatus = status.overall;
+    for (const channel of status.channels) {
+      if (!this._isChannelRelevantForTable(channel)) {
+        continue; // Skip channels not relevant to this table
+      }
 
-    // Debounce the refetch to avoid thrashing when channels oscillate
-    if (wasDisconnected && isNowConnected && this._ready) {
+      const previousState = this._lastChannelStates.get(channel.name);
+      const wasChannelDisconnected = !previousState || previousState !== "joined";
+      const isChannelNowConnected = channel.state === "joined";
+
+      if (wasChannelDisconnected && isChannelNowConnected) {
+        relevantReconnections.push(channel.name);
+      }
+
+      // Update tracked state
+      this._lastChannelStates.set(channel.name, channel.state);
+    }
+
+    // Only refetch if a relevant channel has reconnected
+    if (relevantReconnections.length > 0 && this._ready) {
+
       // Clear any pending refetch
       if (this._connectionStatusDebounceTimer) {
         clearTimeout(this._connectionStatusDebounceTimer);
@@ -973,13 +1124,13 @@ export default class TableController<
       // Schedule refetch after a short delay to let connection stabilize
       this._connectionStatusDebounceTimer = setTimeout(() => {
         this._connectionStatusDebounceTimer = null;
-        if (!this._closed && this._lastConnectionStatus === "connected") {
+        if (!this._closed && this._areRelevantChannelsConnected()) {
           // Skip refetch if we just fetched within the last 3 seconds (e.g., initial load)
           const timeSinceLastFetch = Date.now() - this._lastFetchTimestamp;
           if (timeSinceLastFetch < 3000) {
             return;
           }
-          // Only refetch if we're still connected after the debounce period
+          // Only refetch if relevant channels are still connected after the debounce period
           this._refetchAllData();
         }
       }, 1000); // 1 second debounce for connection status
@@ -1073,11 +1224,21 @@ export default class TableController<
             this._handleConnectionStatusChange(status);
           });
 
-          // Get initial connection status
-          this._lastConnectionStatus = this._classRealTimeController.getConnectionStatus().overall;
+          // Initialize channel state tracking with current states
+          const initialStatus = this._classRealTimeController.getConnectionStatus();
+          for (const channel of initialStatus.channels) {
+            if (this._isChannelRelevantForTable(channel)) {
+              this._lastChannelStates.set(channel.name, channel.state);
+            }
+          }
         }
         if (!this._closed && this._officeHoursRealTimeController) {
           this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
+        }
+        if (this._classRealTimeController && this._officeHoursRealTimeController) {
+          console.log(
+            "Warning: TableController is subscribing to both class and office hours realtime controllers, will leak subscriptions"
+          );
         }
 
         if (this._closed) {
