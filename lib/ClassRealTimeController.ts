@@ -419,7 +419,6 @@ export class ClassRealTimeController {
     // Ensure submission channels are created and increment ref count
     this._ensureSubmissionChannels(submissionId);
 
-
     // Create the message filter subscription
     const filterUnsubscriber = this.subscribe({ table, submission_id: submissionId }, callback);
 

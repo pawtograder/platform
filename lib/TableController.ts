@@ -1115,7 +1115,6 @@ export default class TableController<
 
     // Only refetch if a relevant channel has reconnected
     if (relevantReconnections.length > 0 && this._ready) {
-
       // Clear any pending refetch
       if (this._connectionStatusDebounceTimer) {
         clearTimeout(this._connectionStatusDebounceTimer);
