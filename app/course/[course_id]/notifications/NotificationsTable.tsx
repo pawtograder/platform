@@ -47,6 +47,25 @@ type DiscussionBody = {
   teaser?: string;
 };
 
+type RegradeRequestBody = {
+  type: "regrade_request";
+  regrade_request_id: number;
+  submission_id: number;
+  assignment_id: number;
+  action: "comment_challenged" | "status_change" | "escalated" | "new_comment";
+  opened_by?: string;
+  opened_by_name?: string;
+  updated_by?: string;
+  updated_by_name?: string;
+  escalated_by?: string;
+  escalated_by_name?: string;
+  comment_author?: string;
+  comment_author_name?: string;
+  old_status?: string;
+  new_status?: string;
+  comment_id?: number;
+};
+
 // Keeping getSystemField around if we later reintroduce system columns
 // function getSystemField<T extends string>(n: Notification, field: "display" | "severity"): T | undefined {
 //   const body = n.body && typeof n.body === "object" ? (n.body as Record<string, unknown>) : undefined;
@@ -61,6 +80,10 @@ export default function NotificationsTable() {
 
   const isLoading = notifications === undefined;
 
+  const regradeRequests = useMemo(
+    () => (notifications || []).filter((n) => getType(n) === "regrade_request"),
+    [notifications]
+  );
   const officeHoursMessages = useMemo(
     () => (notifications || []).filter((n) => getType(n) === "help_request_message" || getType(n) === "help_request"),
     [notifications]
@@ -72,7 +95,7 @@ export default function NotificationsTable() {
   const other = useMemo(
     () =>
       (notifications || []).filter(
-        (n) => !["help_request", "help_request_message", "discussion_thread"].includes(getType(n))
+        (n) => !["help_request", "help_request_message", "discussion_thread", "regrade_request"].includes(getType(n))
       ),
     [notifications]
   );
@@ -113,6 +136,17 @@ export default function NotificationsTable() {
     }
   }
 
+  function openRegradeRequest(n: Notification) {
+    try {
+      const body = (n.body || {}) as Partial<RegradeRequestBody>;
+      const url = `/course/${course_id}/assignments/${String(body.assignment_id ?? "")}/submissions/${String(body.submission_id ?? "")}/files#regrade-request-${String(body.regrade_request_id ?? "")}`;
+      router.push(url);
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.error({ title: "Failed to open", description: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   return (
     <VStack w="100%" align="stretch" gap={6} p={4}>
       <HStack justify="space-between" w="100%">
@@ -142,6 +176,144 @@ export default function NotificationsTable() {
           />
         </HStack>
       </HStack>
+
+      {/* Regrade Requests */}
+      <VStack align="stretch" gap={3}>
+        <HStack justify="space-between">
+          <Text fontSize="md" fontWeight="semibold">
+            Regrade Requests
+          </Text>
+          <HStack gap={2}>
+            <Text color="fg.muted">{regradeRequests.length} items</Text>
+            <Button
+              size="xs"
+              variant="subtle"
+              colorPalette="green"
+              onClick={() => mark_all_read(regradeRequests)}
+              disabled={isLoading || !regradeRequests.some((n) => !n.viewed_at)}
+            >
+              Mark all as read
+            </Button>
+            <PopConfirm
+              triggerLabel="Delete all regrade request notifications"
+              trigger={
+                <Button size="xs" variant="ghost" colorPalette="red" disabled={isLoading || !regradeRequests.length}>
+                  Delete all
+                </Button>
+              }
+              confirmHeader="Delete all regrade request notifications"
+              confirmText="Are you sure you want to delete all regrade request notifications? This action cannot be undone."
+              onConfirm={() => delete_all(regradeRequests)}
+            />
+          </HStack>
+        </HStack>
+        <Box overflowX="auto">
+          <Table.Root minW="0" w="100%">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeader bg="bg.muted">When</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted">Action</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted">User</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted">Status</Table.ColumnHeader>
+                <Table.ColumnHeader bg="bg.muted" textAlign="right">
+                  Actions
+                </Table.ColumnHeader>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {isLoading ? (
+                <Table.Row>
+                  <Table.Cell colSpan={5} bg="bg.subtle">
+                    <VStack w="100%" alignItems="center" justifyContent="center" h="100%" p={12}>
+                      <Spinner size="lg" />
+                      <Text>Loading...</Text>
+                    </VStack>
+                  </Table.Cell>
+                </Table.Row>
+              ) : regradeRequests.length === 0 ? (
+                <Table.Row>
+                  <Table.Cell colSpan={5}>
+                    <Text color="fg.muted">No regrade request notifications</Text>
+                  </Table.Cell>
+                </Table.Row>
+              ) : (
+                regradeRequests.map((n) => {
+                  const b = (n.body || {}) as Partial<RegradeRequestBody>;
+
+                  let actorName = "";
+                  let actionText = "";
+                  let statusText = "";
+                  let badgeColor: "blue" | "orange" | "red" | "green" = "blue";
+
+                  if (b.action === "comment_challenged") {
+                    actorName = b.opened_by_name || "";
+                    actionText = "Opened";
+                    statusText = "Opened";
+                    badgeColor = "blue";
+                  } else if (b.action === "status_change") {
+                    actorName = b.updated_by_name || "";
+                    actionText = "Updated";
+                    statusText = b.new_status || "";
+                    badgeColor = b.new_status === "resolved" ? "green" : b.new_status === "closed" ? "red" : "blue";
+                  } else if (b.action === "escalated") {
+                    actorName = b.escalated_by_name || "";
+                    actionText = "Escalated";
+                    statusText = "Escalated";
+                    badgeColor = "orange";
+                  } else if (b.action === "new_comment") {
+                    actorName = b.comment_author_name || "";
+                    actionText = "Commented";
+                    statusText = "Comment";
+                    badgeColor = "blue";
+                  }
+
+                  return (
+                    <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
+                      <Table.Cell>
+                        <Text color="fg.muted">
+                          {n.created_at ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : ""}
+                        </Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text>{actionText}</Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text fontWeight="medium">{actorName}</Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Badge variant="subtle" colorPalette={badgeColor}>
+                          {statusText}
+                        </Badge>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <HStack justifyContent="flex-end" gap={2}>
+                          <Button size="xs" variant="ghost" colorPalette="blue" onClick={() => openRegradeRequest(n)}>
+                            Open <FaExternalLinkAlt style={{ marginLeft: 6 }} />
+                          </Button>
+                          {!n.viewed_at && (
+                            <Button size="xs" variant="subtle" colorPalette="green" onClick={() => set_read(n, true)}>
+                              Mark read
+                            </Button>
+                          )}
+                          <IconButton
+                            size="xs"
+                            variant="ghost"
+                            colorPalette="red"
+                            aria-label="Dismiss"
+                            onClick={() => dismiss(n)}
+                          >
+                            <FaTrash />
+                          </IconButton>
+                        </HStack>
+                      </Table.Cell>
+                    </Table.Row>
+                  );
+                })
+              )}
+            </Table.Body>
+          </Table.Root>
+        </Box>
+      </VStack>
 
       {/* Office Hours */}
       <VStack align="stretch" gap={3}>

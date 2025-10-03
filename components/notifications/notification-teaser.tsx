@@ -170,6 +170,39 @@ export type HelpRequestMessageNotification = NotificationEnvelope & {
   is_private: boolean;
 };
 
+export type RegradeRequestNotification = NotificationEnvelope & {
+  type: "regrade_request";
+  regrade_request_id: number;
+  submission_id: number;
+  assignment_id: number;
+} & (
+    | {
+        action: "comment_challenged";
+        opened_by: string;
+        opened_by_name: string;
+      }
+    | {
+        action: "status_change";
+        old_status: string;
+        new_status: string;
+        updated_by: string;
+        updated_by_name: string;
+      }
+    | {
+        action: "escalated";
+        old_status: string;
+        new_status: string;
+        escalated_by: string;
+        escalated_by_name: string;
+      }
+    | {
+        action: "new_comment";
+        comment_author: string;
+        comment_author_name: string;
+        comment_id: number;
+      }
+  );
+
 // function truncateString(str: string, maxLength: number) {
 //   if (str.length <= maxLength) {
 //     return str;
@@ -394,6 +427,67 @@ function CourseEnrollmentNotificationTeaser({ notification }: { notification: No
   );
 }
 
+function RegradeRequestNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as RegradeRequestNotification;
+
+  let actorProfileId: string;
+  let actorName: string;
+  let message: React.ReactNode;
+
+  if (body.action === "comment_challenged") {
+    actorProfileId = body.opened_by;
+    actorName = body.opened_by_name;
+    message = (
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${actorName}** opened a regrade request on your grading comment`}
+      </Markdown>
+    );
+  } else if (body.action === "status_change") {
+    actorProfileId = body.updated_by;
+    actorName = body.updated_by_name;
+    message = (
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${actorName}** updated a regrade request to **${body.new_status}**`}
+      </Markdown>
+    );
+  } else if (body.action === "escalated") {
+    actorProfileId = body.escalated_by;
+    actorName = body.escalated_by_name;
+    message = (
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${actorName}** escalated a regrade request`}
+      </Markdown>
+    );
+  } else {
+    // action === "new_comment"
+    actorProfileId = body.comment_author;
+    actorName = body.comment_author_name;
+    message = (
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${actorName}** commented on a regrade request`}
+      </Markdown>
+    );
+  }
+
+  const actor = useUserProfile(actorProfileId);
+
+  if (!actor) {
+    return <Skeleton height="40px" width="100%" />;
+  }
+
+  return (
+    <HStack align="flex-start" gap="3">
+      <Avatar.Root size="sm" flexShrink="0">
+        <Avatar.Image src={actor.avatar_url} />
+        <Avatar.Fallback fontSize="xs">{actor.name?.charAt(0)}</Avatar.Fallback>
+      </Avatar.Root>
+      <VStack align="flex-start" gap="1" flex="1">
+        {message}
+      </VStack>
+    </HStack>
+  );
+}
+
 function SystemNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as SystemNotification;
 
@@ -485,6 +579,9 @@ function getNotificationUrl(notification: Notification, course_id: string): stri
   } else if (body.type === "course_enrollment") {
     const enrollmentBody = body as CourseEnrollmentNotification;
     return `/course/${enrollmentBody.course_id}`;
+  } else if (body.type === "regrade_request") {
+    const regradeBody = body as RegradeRequestNotification;
+    return `/course/${course_id}/assignments/${regradeBody.assignment_id}/submissions/${regradeBody.submission_id}/files#regrade-request-${regradeBody.regrade_request_id}`;
   }
 
   // Email notifications and assignment group member notifications don't have specific URLs
@@ -602,6 +699,8 @@ export default function NotificationTeaser({
     teaser = <HelpRequestMessageNotificationTeaser notification={notification} />;
   } else if (body.type === "system") {
     teaser = <SystemNotificationTeaser notification={notification} />;
+  } else if (body.type === "regrade_request") {
+    teaser = <RegradeRequestNotificationTeaser notification={notification} />;
   } else {
     teaser = <Markdown>{`*Unknown notification type: ${body.type}*`}</Markdown>;
   }

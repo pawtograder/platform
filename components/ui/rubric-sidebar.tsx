@@ -478,9 +478,28 @@ export function RubricCheckComment({
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
+  const boxRef = useRef<HTMLDivElement>(null);
 
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const pathname = usePathname();
+
+  // Auto-scroll to this regrade request if the URL hash matches
+  useEffect(() => {
+    if (comment?.regrade_request_id && boxRef.current) {
+      const hash = window.location.hash;
+      const targetId = `#regrade-request-${comment.regrade_request_id}`;
+
+      if (hash === targetId) {
+        // Small delay to ensure all rendering is complete
+        setTimeout(() => {
+          boxRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "center"
+          });
+        }, 100);
+      }
+    }
+  }, [comment?.regrade_request_id]);
 
   const handleEditComment = useCallback(
     async (message: string) => {
@@ -527,7 +546,12 @@ export function RubricCheckComment({
   const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
 
   return (
-    <Box role="region" aria-label={`Grading check ${check?.name}`}>
+    <Box
+      ref={boxRef}
+      role="region"
+      aria-label={`Grading check ${check?.name}`}
+      id={comment.regrade_request_id ? `regrade-request-${comment.regrade_request_id}` : undefined}
+    >
       <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
         <Box
           border="1px solid"
