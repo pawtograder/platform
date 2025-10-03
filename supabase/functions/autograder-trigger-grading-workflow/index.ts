@@ -2,7 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { AutograderTriggerGradingWorkflowRequest } from "../_shared/FunctionTypes.d.ts";
 import { triggerWorkflow } from "../_shared/GitHubWrapper.ts";
-import { assertUserIsInCourse, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import {
+  assertUserIsInCourse,
+  assertUserIsInstructorOrGrader,
+  SecurityError,
+  wrapRequestHandler
+} from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 export async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -11,7 +16,10 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("repository", repository);
   scope?.setTag("sha", sha);
   scope?.setTag("class_id", class_id.toString());
-  const { supabase, enrollment } = await assertUserIsInCourse(class_id, req.headers.get("Authorization") || "");
+  const { supabase, enrollment } = await assertUserIsInstructorOrGrader(
+    class_id,
+    req.headers.get("Authorization") || ""
+  );
   const { data: repoData } = await supabase
     .from("repositories")
     .select("*, repository_check_runs(*)")

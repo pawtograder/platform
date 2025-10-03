@@ -1216,6 +1216,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)
         );
         if (!allNonGlobFilesPresent) {
+          //Add a placeholder grader result so that this is not marked as a catastrophic failure
+          const { error: graderResultError } = await adminSupabase.from("grader_results").insert({
+            submission_id: submission_id,
+            errors: {
+              error: `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+            },
+            score: 0,
+            ret_code: 137,
+            lint_output: "",
+            lint_output_format: "text",
+            lint_passed: false,
+            class_id: repoData.assignments.class_id!,
+            profile_id: repoData.profile_id,
+            assignment_group_id: repoData.assignment_group_id
+          });
+          if (graderResultError) {
+            Sentry.captureException(graderResultError, scope);
+          }
           throw new UserVisibleError(
             `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`,
             400

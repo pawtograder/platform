@@ -6,51 +6,12 @@ import { Box, CloseButton, Dialog, Flex, Heading, Skeleton, Table, Text } from "
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import Link from "@/components/ui/link";
 import { useCourse } from "@/hooks/useCourseController";
-import { triggerWorkflow } from "@/lib/edgeFunctions";
 import { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
-import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
-import { useParams } from "next/navigation";
-import { useState } from "react";
 import { FaGitAlt } from "react-icons/fa";
-
-function TriggerWorkflowButton({ repository, sha }: { repository: string; sha: string }) {
-  const { course_id } = useParams();
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
-  const [isError, setIsError] = useState(false);
-  if (isSuccess) {
-    return "Submission triggered, check back soon";
-  }
-  if (isError) {
-    return "Error triggering submission";
-  }
-  return (
-    <Button
-      loading={isLoading}
-      variant="outline"
-      size="xs"
-      onClick={async () => {
-        setIsLoading(true);
-        try {
-          const supabase = createClient();
-          await triggerWorkflow({ repository, sha, class_id: Number(course_id) }, supabase);
-          setIsSuccess(true);
-        } catch (error) {
-          console.error(error);
-          setIsError(true);
-        } finally {
-          setIsLoading(false);
-        }
-      }}
-    >
-      Create Submission
-    </Button>
-  );
-}
 
 function CommitHistory({
   repository_id,
@@ -118,7 +79,6 @@ function CommitHistory({
                       <Text fontSize="sm" color="text.muted">
                         Not submitted
                       </Text>
-                      <TriggerWorkflowButton repository={repository_full_name} sha={commit.sha} />
                     </Box>
                   )}
                 </Table.Cell>
