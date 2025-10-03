@@ -309,6 +309,12 @@ class AssignmentController {
   }) {
     this._client = client;
     this._classRealTimeController = classRealTimeController;
+    this.autograder = new TableController({
+      query: client.from("autograder").select("*").eq("id", assignment_id),
+      client: client,
+      table: "autograder",
+      classRealTimeController
+    });
     this.submissions = new TableController({
       query: client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true),
       client: client,

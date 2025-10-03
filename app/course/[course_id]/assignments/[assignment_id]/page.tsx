@@ -15,19 +15,20 @@ import {
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
-  UserRole
+  UserRole,
+  AutograderWithAssignment
 } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
-import { differenceInDays, format } from "date-fns";
+import { differenceInDays, format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 
 export default function AssignmentPage() {
-  const { course_id, assignment_id } = useParams();
+  const { course_id, assignment_id, id } = useParams();
   const { private_profile_id } = useClassProfiles();
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
@@ -54,6 +55,11 @@ export default function AssignmentPage() {
     }
     return filters;
   }, [assignment_id, assignmentGroup, private_profile_id]);
+  const autograderFilters = useMemo(() => {
+    const filters: CrudFilter[] = [];
+    filters.push({ field: "id", operator: "eq", value: assignment_id });
+    return filters;
+  }, [assignment_id]);
   const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -72,7 +78,27 @@ export default function AssignmentPage() {
     ]
   });
 
+  const { data: autograderData } = useList<AutograderWithAssignment>({
+     resource: "autograder",
+     meta: {
+	select: "*",
+	order: "created_at, { ascending: false }"
+     },
+     pagination: {
+	pageSize: 1000
+     },
+     filters: autograderFilters,
+     sorters: [
+	{
+	  field: "created_at",
+	  order: "desc"
+	}
+      ]
+  });
+
   const submissions = submissionsData?.data;
+  const autograder = autograderData?.data;
+
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
@@ -84,17 +110,19 @@ export default function AssignmentPage() {
       const daysUntilDue = assignment.due_date ? differenceInDays(new Date(assignment.due_date), new Date()) : null;
       const isGroupAssignment = assignment.group_config !== "individual";
       const hasSubmissions = (submissions?.length ?? 0) > 0;
-
       trackEvent("assignment_viewed", {
         assignment_id: Number(assignment_id),
         course_id: Number(course_id),
         is_group_assignment: isGroupAssignment,
         days_until_due: daysUntilDue,
         has_submissions: hasSubmissions,
-        assignment_slug: assignment.slug
+	assignment_slug: assignment.slug
       });
     }
   }, [assignment, course_id, assignment_id, submissions, trackEvent]); // Include all values used inside
+
+  const submissionsPeriod = secondsToHours(autograder?.[0].max_submissions_period_secs);
+  const maxSubmissions = autograder?.[0].max_submissions_count;
 
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
@@ -135,7 +163,18 @@ export default function AssignmentPage() {
           return sm.is_active;
         })}
       />
-
+      {submissionsPeriod > 0 ? (
+	<Box w="925px">
+      	<Alert.Root status="info" flexDirection="column" size="md">
+      	   <Alert.Title>Submission Limit for this assignment</Alert.Title>
+	   <Alert.Description>
+	   This assignment has a submission limit of {maxSubmissions} submissions per every {submissionsPeriod} hour(s).
+	   </Alert.Description>
+         </Alert.Root>
+	 </Box>
+      ) : (
+      	<></>
+      )}
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
         assignment={assignment}
