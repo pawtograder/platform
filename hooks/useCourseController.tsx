@@ -214,6 +214,9 @@ export function useDiscussionThreadReadStatus(threadId: number) {
         }
       } else {
         // There is a Postgres trigger that creates a read status for every user for every thread. So, if we don't have one, we just haven't fetched it yet!
+        if(!user?.id){
+          return;
+        }
         const readStatus = await controller.discussionThreadReadStatus.getOneByFilters([
           {
             column: "discussion_thread_id",
@@ -223,7 +226,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
           {
             column: "user_id",
             operator: "eq",
-            value: user?.id || ""
+            value: user.id
           }
         ]);
         if (readStatus) {
@@ -1204,7 +1207,7 @@ export function CourseControllerProvider({
     }
   }, [course_id, profile_id, role, userId]);
 
-  if (!courseController) {
+  if (!courseController || !userId) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
