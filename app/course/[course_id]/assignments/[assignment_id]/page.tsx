@@ -121,9 +121,10 @@ export default function AssignmentPage() {
     }
   }, [assignment, course_id, assignment_id, submissions, trackEvent]); // Include all values used inside
 
-  const submissionsPeriod = autograder?.[0]?.max_submissions_period_secs 
-	  ? secondsToHours(autograder[0].max_submissions_period_secs) : 0;
-  const maxSubmissions = autograder?.[0]?.max_submissions_count;
+  const autograderRow = autograder?.[0];
+  const submissionsPeriod = autograderRow?.max_submissions_period_secs != null
+      ? secondsToHours(autograderRow.max_submissions_period_secs) : 0;
+  const maxSubmissions = autograderRow?.max_submissions_count;
 
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
