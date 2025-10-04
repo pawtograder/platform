@@ -57,7 +57,7 @@ export default function AssignmentPage() {
   }, [assignment_id, assignmentGroup, private_profile_id]);
   const autograderFilters = useMemo(() => {
     const filters: CrudFilter[] = [];
-    filters.push({ field: "id", operator: "eq", value: assignment_id });
+    filters.push({ field: "assignment_id", operator: "eq", value: assignment_id });
     return filters;
   }, [assignment_id]);
   const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
