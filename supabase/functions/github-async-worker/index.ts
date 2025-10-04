@@ -5,7 +5,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import { Redis } from "https://esm.sh/ioredis?target=deno";
+import { Redis } from "../_shared/Redis.ts";
 import type {
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
