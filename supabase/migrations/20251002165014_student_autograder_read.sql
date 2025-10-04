@@ -2,9 +2,14 @@
 
 CREATE POLICY "Students can view autograder data"
 ON public.autograder
+FOR SELECT
 USING (
-	SELECT up.private_profile_id
-	FROM public.user_privileges up
-	WHERE up.role = ('student')
-	AND up.user_id = auth.uid()
-);
+	EXISTS (
+		SELECT 1
+		FROM public.user_privileges up
+		JOIN public.assignments a ON a.id = autograder.id
+		WHERE up.role = ('student')
+		    AND up.user_id = auth.uid()
+		    AND up.course_id = a.course_id
+		)
+	);

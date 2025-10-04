@@ -28,7 +28,7 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 
 export default function AssignmentPage() {
-  const { course_id, assignment_id, id } = useParams();
+  const { course_id, assignment_id } = useParams();
   const { private_profile_id } = useClassProfiles();
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
@@ -121,8 +121,9 @@ export default function AssignmentPage() {
     }
   }, [assignment, course_id, assignment_id, submissions, trackEvent]); // Include all values used inside
 
-  const submissionsPeriod = secondsToHours(autograder?.[0].max_submissions_period_secs);
-  const maxSubmissions = autograder?.[0].max_submissions_count;
+  const submissionsPeriod = autograder?.[0]?.max_submissions_period_secs 
+	  ? secondsToHours(autograder[0].max_submissions_period_secs) : 0;
+  const maxSubmissions = autograder?.[0]?.max_submissions_count;
 
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;

@@ -285,6 +285,7 @@ class AssignmentController {
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
+  readonly autograder: TableController<"autograder">;
   private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
     number,
     TableController<"review_assignment_rubric_parts">
@@ -345,6 +346,7 @@ class AssignmentController {
     this.regradeRequests.close();
     this.submissions.close();
     this.assignmentGroups.close();
+    this.autograder.close();
     for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
       controller.close();
     }
