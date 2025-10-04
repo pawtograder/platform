@@ -285,6 +285,7 @@ class AssignmentController {
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
+  readonly autograder: TableController<"autograder">;
   private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
     number,
     TableController<"review_assignment_rubric_parts">
@@ -309,6 +310,12 @@ class AssignmentController {
   }) {
     this._client = client;
     this._classRealTimeController = classRealTimeController;
+    this.autograder = new TableController({
+      query: client.from("autograder").select("*").eq("id", assignment_id),
+      client: client,
+      table: "autograder",
+      classRealTimeController
+    });
     this.submissions = new TableController({
       query: client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true),
       client: client,
@@ -339,6 +346,7 @@ class AssignmentController {
     this.regradeRequests.close();
     this.submissions.close();
     this.assignmentGroups.close();
+    this.autograder.close();
     for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
       controller.close();
     }
