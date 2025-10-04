@@ -57,7 +57,7 @@ export default function AssignmentPage() {
   }, [assignment_id, assignmentGroup, private_profile_id]);
   const autograderFilters = useMemo(() => {
     const filters: CrudFilter[] = [];
-    filters.push({ field: "assignment_id", operator: "eq", value: assignment_id });
+    filters.push({ field: "id", operator: "eq", value: assignment_id });
     return filters;
   }, [assignment_id]);
   const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
@@ -81,7 +81,7 @@ export default function AssignmentPage() {
   const { data: autograderData } = useList<AutograderWithAssignment>({
      resource: "autograder",
      meta: {
-	select: "*",
+	select: "*, assignments(*)",
 	order: "created_at, { ascending: false }"
      },
      pagination: {
@@ -169,7 +169,7 @@ export default function AssignmentPage() {
       	<Alert.Root status="info" flexDirection="column" size="md">
       	   <Alert.Title>Submission Limit for this assignment</Alert.Title>
 	   <Alert.Description>
-	   This assignment has a submission limit of {maxSubmissions} submissions per every {submissionsPeriod} hour(s).
+	   This assignment has a submission limit of {maxSubmissions} submission{maxSubmissions !== 1 ? 's' : ''} per {submissionsPeriod} hour{submissionsPeriod !== 1 ? 's' : ''}.	   
 	   </Alert.Description>
          </Alert.Root>
 	 </Box>
