@@ -188,7 +188,8 @@ export class Redis {
         channel,
         message
       );
-    } catch {
+    } catch (err) {
+      throw err;
       // Ignore remote publish failures; still deliver locally
     }
     if (Deno.env.get("REDIS_DEBUG") === "true") {
