@@ -4,7 +4,8 @@ export type GitHubAsyncMethod =
   | "create_repo"
   | "sync_repo_permissions"
   | "archive_repo_and_lock"
-  | "rerun_autograder";
+  | "rerun_autograder"
+  | "sync_repo_to_handout";
 
 export type SyncTeamArgs = {
   org: string;
@@ -78,12 +79,22 @@ export type RerunAutograderArgs = {
   repository_id: number;
 };
 
+export type SyncRepoToHandoutArgs = {
+  repository_id: number;
+  repository_full_name: string;
+  template_repo: string;
+  from_sha: string | null; // synced_handout_sha
+  to_sha: string; // desired_handout_sha
+  assignment_title: string;
+};
+
 export type GitHubAsyncArgs =
   | SyncTeamArgs
   | CreateRepoArgs
   | SyncRepoPermissionsArgs
   | ArchiveRepoAndLockArgs
-  | RerunAutograderArgs;
+  | RerunAutograderArgs
+  | SyncRepoToHandoutArgs;
 
 export type GitHubAsyncEnvelope = {
   method: GitHubAsyncMethod;

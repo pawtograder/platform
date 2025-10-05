@@ -4593,11 +4593,13 @@ export type Database = {
           assignment_id: number;
           class_id: number;
           created_at: string;
+          desired_handout_sha: string | null;
           id: number;
           is_github_ready: boolean;
           profile_id: string | null;
           repository: string;
           rerun_queued_at: string | null;
+          sync_data: Json | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
         };
@@ -4606,11 +4608,13 @@ export type Database = {
           assignment_id: number;
           class_id: number;
           created_at?: string;
+          desired_handout_sha?: string | null;
           id?: number;
           is_github_ready?: boolean;
           profile_id?: string | null;
           repository: string;
           rerun_queued_at?: string | null;
+          sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
         };
@@ -4619,11 +4623,13 @@ export type Database = {
           assignment_id?: number;
           class_id?: number;
           created_at?: string;
+          desired_handout_sha?: string | null;
           id?: number;
           is_github_ready?: boolean;
           profile_id?: string | null;
           repository?: string;
           rerun_queued_at?: string | null;
+          sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
         };
@@ -9536,6 +9542,10 @@ export type Database = {
           p_scope: string;
         };
         Returns: number;
+      };
+      queue_repository_syncs: {
+        Args: { p_repository_ids: number[] };
+        Returns: Json;
       };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };

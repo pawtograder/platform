@@ -1,22 +1,23 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { Redis } from "https://esm.sh/ioredis?target=deno";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 import type {
+  ArchiveRepoAndLockArgs,
+  CreateRepoArgs,
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
-  SyncTeamArgs,
-  CreateRepoArgs,
+  RerunAutograderArgs,
   SyncRepoPermissionsArgs,
-  ArchiveRepoAndLockArgs,
-  RerunAutograderArgs
+  SyncRepoToHandoutArgs,
+  SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
-import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
-
+import * as github from "../_shared/GitHubWrapper.ts";
+import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { syncRepositoryToHandout } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -721,6 +722,96 @@ export async function processEnvelope(
         );
         return true;
       }
+      case "sync_repo_to_handout": {
+        const { repository_id, repository_full_name, template_repo, from_sha, to_sha } =
+          envelope.args as SyncRepoToHandoutArgs;
+
+        scope.setTag("repository_id", String(repository_id));
+        scope.setTag("repository", repository_full_name);
+        scope.setTag("template_repo", template_repo);
+        scope.setTag("to_sha", to_sha);
+
+        Sentry.addBreadcrumb({
+          message: `Syncing ${repository_full_name} to handout SHA ${to_sha}`,
+          level: "info"
+        });
+
+        try {
+          // Use the shared sync helper
+          const result = await syncRepositoryToHandout({
+            repositoryFullName: repository_full_name,
+            templateRepo: template_repo,
+            fromSha: from_sha,
+            toSha: to_sha,
+            autoMerge: true,
+            waitBeforeMerge: 2000,
+            scope
+          });
+
+          if (!result.success) {
+            throw new Error(result.error || "Sync failed");
+          }
+
+          // Update repository with sync status
+          if (result.no_changes) {
+            await adminSupabase
+              .from("repositories")
+              .update({
+                synced_handout_sha: to_sha,
+                desired_handout_sha: to_sha,
+                sync_data: {
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "no_changes_needed"
+                }
+              })
+              .eq("id", repository_id);
+          } else {
+            await adminSupabase
+              .from("repositories")
+              .update({
+                synced_handout_sha: result.merged ? to_sha : from_sha,
+                synced_repo_sha: result.merged ? result.merge_sha : undefined,
+                desired_handout_sha: to_sha,
+                sync_data: {
+                  pr_number: result.pr_number,
+                  pr_url: result.pr_url,
+                  pr_state: result.merged ? "merged" : "open",
+                  branch_name: `sync-to-${to_sha.substring(0, 7)}`,
+                  last_sync_attempt: new Date().toISOString(),
+                  merge_sha: result.merge_sha
+                }
+              })
+              .eq("id", repository_id);
+          }
+
+          recordMetric(
+            adminSupabase,
+            {
+              method: envelope.method,
+              status_code: 200,
+              class_id: envelope.class_id,
+              debug_id: envelope.debug_id,
+              enqueued_at: meta.enqueued_at,
+              log_id: envelope.log_id
+            },
+            scope
+          );
+          return true;
+        } catch (error) {
+          // Update repository with error status
+          await adminSupabase
+            .from("repositories")
+            .update({
+              sync_data: {
+                last_sync_attempt: new Date().toISOString(),
+                last_sync_error: error instanceof Error ? error.message : String(error),
+                status: "error"
+              }
+            })
+            .eq("id", repository_id);
+          throw error;
+        }
+      }
       default:
         throw new Error(`Unknown async method: ${(envelope as GitHubAsyncEnvelope).method}`);
     }
@@ -739,6 +830,10 @@ export async function processEnvelope(
         return (envelope.args as SyncTeamArgs).org;
       if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
         return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
+      if (envelope.method === "sync_repo_to_handout") {
+        const repo = (envelope.args as SyncRepoToHandoutArgs).repository_full_name;
+        return repo.split("/")[0];
+      }
       if (envelope.method === "rerun_autograder") {
         const repo = (envelope.args as RerunAutograderArgs).repository;
         return repo.split("/")[0];

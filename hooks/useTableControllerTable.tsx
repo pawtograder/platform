@@ -26,6 +26,7 @@ export interface UseTableControllerTableProps<
   columns: ColumnDef<TData>[];
   tableController?: TableController<RelationName, Query, IDType, TData>;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
+  enableRowSelection?: boolean;
 }
 
 /**
@@ -72,7 +73,12 @@ export function useTableControllerTable<
   IDType = DatabaseTableTypes[RelationName]["Row"]["id"],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TData = any
->({ columns, tableController, initialState = {} }: UseTableControllerTableProps<RelationName, Query, IDType, TData>) {
+>({
+  columns,
+  tableController,
+  initialState = {},
+  enableRowSelection = false
+}: UseTableControllerTableProps<RelationName, Query, IDType, TData>) {
   const [data, setData] = useState<PossiblyTentativeResult<TData>[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -148,6 +154,7 @@ export function useTableControllerTable<
     manualFiltering: false,
     manualSorting: false,
     filterFromLeafRows: true,
+    enableRowSelection,
     initialState: {
       pagination: {
         pageIndex: 0,

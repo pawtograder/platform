@@ -31,6 +31,19 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaPen,
     instructorsOnly: true
   },
+  { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
+  {
+    label: "Repository Status",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
+    icon: FaCode,
+    instructorsOnly: true
+  },
+  {
+    label: "Rerun Autograder",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
+    icon: FaPooStorm,
+    instructorsOnly: true
+  },
   {
     label: "Manage Due Date Exceptions",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/due-date-exceptions`,
@@ -52,19 +65,6 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Manage Regrade Requests",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
     icon: FaPooStorm
-  },
-  { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
-  {
-    label: "Rerun Autograder",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
-    icon: FaPooStorm,
-    instructorsOnly: true
-  },
-  {
-    label: "Repository Status",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
-    icon: FaCode,
-    instructorsOnly: true
   }
 ];
 
