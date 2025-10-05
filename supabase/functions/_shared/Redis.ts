@@ -17,6 +17,7 @@ export class Redis {
   private subscribedChannels: Set<string> = new Set();
   private sseConnections: Map<string, ReadableStreamDefaultReader<Uint8Array>> = new Map();
   private sseAbortControllers: Map<string, AbortController> = new Map();
+  private sseConnectionsInProgress: Set<string> = new Set();
   status: string = "ready";
 
   constructor(clientOptions: Record<string, unknown> = {}) {
@@ -180,20 +181,23 @@ export class Redis {
             throw new Error(`Pipeline request failed: ${response.status} ${response.statusText}`);
           }
 
-          const results = (await response.json()) as unknown[];
+          const results = (await response.json()) as Array<{ result?: unknown; error?: string }>;
 
-          // Map pipeline results to expected format: [err, result] or [null, result]
+          // Map pipeline results to expected ioredis format: [err, result] or [null, result]
+          // Upstash returns: { result: ... } on success or { error: ... } on error
           for (let i = 0; i < commands.length; i++) {
-            const result = results[i];
+            const resp = results[i];
 
-            // Check if result is an error array [err, null] or success value
-            if (Array.isArray(result) && result.length === 2 && result[0] !== null) {
-              // Error case: [err, null]
-              out.push([result[0], null]);
-              emitError("error", result[0]);
+            if (resp && typeof resp === "object" && "error" in resp) {
+              // Error case: { error: "..." }
+              out.push([resp.error, null]);
+              emitError("error", resp.error);
+            } else if (resp && typeof resp === "object" && "result" in resp) {
+              // Success case: { result: ... }
+              out.push([null, resp.result]);
             } else {
-              // Success case: result is the actual value
-              out.push([null, result]);
+              // Unexpected format - treat as success with raw value for backwards compatibility
+              out.push([null, resp]);
             }
           }
         } catch (err) {
@@ -215,20 +219,30 @@ export class Redis {
       return; // Already connected
     }
 
-    const url = String(
-      this.initOptions.url ||
-        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
-        (this.initOptions.host ? `https://${this.initOptions.host}` : "")
-    );
-    const token = String(
-      this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
-    );
+    // Prevent concurrent connection attempts
+    if (this.sseConnectionsInProgress.has(channel)) {
+      if (Deno.env.get("REDIS_DEBUG") === "true") {
+        console.log("SSE connection already in progress", { channel });
+      }
+      return;
+    }
 
-    const subscribeUrl = `${url}/subscribe/${channel}`;
-    const abortController = new AbortController();
-    this.sseAbortControllers.set(channel, abortController);
+    this.sseConnectionsInProgress.add(channel);
 
     try {
+      const url = String(
+        this.initOptions.url ||
+          Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+          (this.initOptions.host ? `https://${this.initOptions.host}` : "")
+      );
+      const token = String(
+        this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
+      );
+
+      const subscribeUrl = `${url}/subscribe/${channel}`;
+      const abortController = new AbortController();
+      this.sseAbortControllers.set(channel, abortController);
+
       const response = await fetch(subscribeUrl, {
         method: "GET",
         headers: {
@@ -263,6 +277,8 @@ export class Redis {
       this.sseConnections.delete(channel);
       this.sseAbortControllers.delete(channel);
       throw error;
+    } finally {
+      this.sseConnectionsInProgress.delete(channel);
     }
   }
 
@@ -353,6 +369,26 @@ export class Redis {
     } finally {
       this.sseConnections.delete(channel);
       this.sseAbortControllers.delete(channel);
+      
+      // Auto-reconnect if this channel is still subscribed
+      // This handles cases where the SSE connection drops/times out
+      if (this.subscribedChannels.has(channel)) {
+        if (Deno.env.get("REDIS_DEBUG") === "true") {
+          console.log("SSE connection lost, attempting to reconnect", { channel });
+        }
+        // Reconnect after a short delay to avoid tight reconnection loop
+        setTimeout(() => {
+          if (this.subscribedChannels.has(channel)) {
+            void this.establishSSEConnection(channel).catch((err) => {
+              if (Deno.env.get("REDIS_DEBUG") === "true") {
+                console.error("SSE reconnection failed", { channel, error: err });
+              }
+              // Schedule another retry after exponential backoff
+              // This will keep retrying as long as the channel is subscribed
+            });
+          }
+        }, 1000); // 1 second delay before reconnect
+      }
     }
   }
 

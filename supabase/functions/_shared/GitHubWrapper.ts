@@ -564,13 +564,18 @@ export async function createRepo(
     scope?.setTag("repo_name", repoName);
     scope?.setTag("org", org);
     console.log("Creating repo", template_repo, owner, repoName, org);
-    const resp = await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+    const resp = await retryWithBackoff(
+      () => octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
       owner: org,
       name: repoName,
       private: true
-    });
+    }),
+      2, // maxRetries
+      5000, // baseDelayMs
+      scope
+    );
     console.log(JSON.stringify(resp.headers, null, 2));
     scope?.setTag("github_operation", "create_repo_request_done");
     //Disable squash merging, make template
