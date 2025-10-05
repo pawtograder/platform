@@ -369,7 +369,7 @@ export class Redis {
     } finally {
       this.sseConnections.delete(channel);
       this.sseAbortControllers.delete(channel);
-      
+
       // Auto-reconnect if this channel is still subscribed
       // This handles cases where the SSE connection drops/times out
       if (this.subscribedChannels.has(channel)) {

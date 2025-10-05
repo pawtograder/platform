@@ -565,13 +565,14 @@ export async function createRepo(
     scope?.setTag("org", org);
     console.log("Creating repo", template_repo, owner, repoName, org);
     const resp = await retryWithBackoff(
-      () => octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
-      template_repo: repo,
-      template_owner: owner,
-      owner: org,
-      name: repoName,
-      private: true
-    }),
+      () =>
+        octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+          template_repo: repo,
+          template_owner: owner,
+          owner: org,
+          name: repoName,
+          private: true
+        }),
       2, // maxRetries
       5000, // baseDelayMs
       scope
