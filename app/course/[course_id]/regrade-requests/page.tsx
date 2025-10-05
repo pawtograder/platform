@@ -4,53 +4,65 @@ import { Box, Heading, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
+import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import RegradeRequestsTable from "../RegradeRequestsTable";
-
-type RegradeRequest = {
-  id: number;
-  status: string;
-  assignment_id: number;
-  submission_id: number;
-  initial_points: number | null;
-  resolved_points: number | null;
-  closed_points: number | null;
-  created_at: string;
-  last_updated_at: string;
-  assignments: { id: number; title: string } | null;
-  submissions: { id: number; ordinal: number } | null;
-  submission_file_comments?: Array<{ rubric_check_id: number | null; rubric_checks: { name: string } | null }> | null;
-  submission_artifact_comments?: Array<{
-    rubric_check_id: number | null;
-    rubric_checks: { name: string } | null;
-  }> | null;
-  submission_comments?: Array<{ rubric_check_id: number | null; rubric_checks: { name: string } | null }> | null;
-};
+import { toaster } from "@/components/ui/toaster";
+import * as Sentry from "@sentry/nextjs";
 
 export default function StudentRegradeRequestsPage() {
   const { course_id } = useParams();
-  const [regradeRequests, setRegradeRequests] = useState<RegradeRequest[]>([]);
+  const [regradeRequests, setRegradeRequests] = useState<RegradeRequestWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchRegradeRequests() {
       const supabase = createClient();
-      const { data } = await supabase
-        .from("submission_regrade_requests")
-        .select(
+      try {
+        const { data, error } = await supabase
+          .from("submission_regrade_requests")
+          .select(
+            `
+            *,
+            assignments(id, title),
+            submissions!inner(id, ordinal),
+            submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
+            submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
+            submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
           `
-          *,
-          assignments(id, title),
-          submissions!inner(id, ordinal),
-          submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
-          submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
-          submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
-        `
-        )
-        .eq("class_id", Number(course_id))
-        .order("created_at", { ascending: false });
+          )
+          .eq("class_id", Number(course_id))
+          .order("created_at", { ascending: false });
 
-      setRegradeRequests(data || []);
-      setIsLoading(false);
+        if (error) {
+          throw error;
+        }
+
+        setRegradeRequests(data || []);
+        setError(null);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to load regrade requests";
+
+        // Log to Sentry with context
+        Sentry.withScope((scope) => {
+          scope.setContext("regrade_requests_fetch", {
+            course_id: Number(course_id),
+            error: errorMessage
+          });
+          Sentry.captureException(error);
+        });
+
+        // Show user-friendly error message
+        toaster.error({
+          title: "Error loading regrade requests",
+          description: errorMessage
+        });
+
+        setError(errorMessage);
+        setRegradeRequests([]);
+      } finally {
+        setIsLoading(false);
+      }
     }
 
     fetchRegradeRequests();
@@ -69,6 +81,10 @@ export default function StudentRegradeRequestsPage() {
       </Box>
       {isLoading ? (
         <Box>Loading...</Box>
+      ) : error ? (
+        <Box>
+          <Text color="red.500">Error: {error}</Text>
+        </Box>
       ) : (
         <RegradeRequestsTable regradeRequests={regradeRequests} courseId={Number(course_id)} />
       )}

@@ -4,32 +4,13 @@ import { Badge, Box, HStack, Icon, Table, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
 import Link from "next/link";
-
-type RegradeRequest = {
-  id: number;
-  status: string;
-  assignment_id: number;
-  submission_id: number;
-  initial_points: number | null;
-  resolved_points: number | null;
-  closed_points: number | null;
-  created_at: string;
-  last_updated_at: string;
-  assignments: { id: number; title: string } | null;
-  submissions: { id: number; ordinal: number } | null;
-  submission_file_comments?: Array<{ rubric_check_id: number | null; rubric_checks: { name: string } | null }> | null;
-  submission_artifact_comments?: Array<{
-    rubric_check_id: number | null;
-    rubric_checks: { name: string } | null;
-  }> | null;
-  submission_comments?: Array<{ rubric_check_id: number | null; rubric_checks: { name: string } | null }> | null;
-};
+import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 
 export default function RegradeRequestsTable({
   regradeRequests,
   courseId
 }: {
-  regradeRequests: RegradeRequest[];
+  regradeRequests: RegradeRequestWithDetails[];
   courseId: number;
 }) {
   // Sort regrade requests so closed/resolved are at bottom
