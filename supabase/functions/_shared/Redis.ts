@@ -1,5 +1,5 @@
 import { Redis as UpstashRedis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
-
+import * as Sentry from "npm:@sentry/deno";
 type EventHandler = (...args: unknown[]) => void;
 
 // Simple in-process channel bus to emulate pub/sub across duplicate() connections in the same runtime
@@ -15,6 +15,8 @@ export class Redis {
   private scripts: Map<string, string> = new Map();
   private initOptions: Record<string, unknown>;
   private subscribedChannels: Set<string> = new Set();
+  private sseConnections: Map<string, ReadableStreamDefaultReader<Uint8Array>> = new Map();
+  private sseAbortControllers: Map<string, AbortController> = new Map();
   status: string = "ready";
 
   constructor(clientOptions: Record<string, unknown> = {}) {
@@ -100,6 +102,7 @@ export class Redis {
         if (cb) cb(null, result);
         return result;
       } catch (error) {
+        Sentry.captureException(error);
         if (Deno.env.get("REDIS_DEBUG") === "true") {
           console.error("eval script error", { name, error });
         }
@@ -134,26 +137,246 @@ export class Redis {
 
   // ioredis API: pipeline([...]).exec() => [[err, result], ...]
   pipeline(commands: Array<[string, ...unknown[]]>) {
-    const execCmd = this.executeCommand.bind(this);
     const emitError = this.emit.bind(this);
+
+    // Capture credentials at pipeline creation time
+    const url = String(
+      this.initOptions.url ||
+        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+        (this.initOptions.host ? `https://${this.initOptions.host}` : "")
+    );
+    const token = String(
+      this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
+    );
+
     return {
       async exec() {
         const out: Array<[unknown, unknown]> = [];
-        for (const cmd of commands) {
-          try {
-            if (Deno.env.get("REDIS_DEBUG") === "true") {
-              console.log("pipeline exec", { cmd: cmd[0] });
+
+        if (commands.length === 0) {
+          return out;
+        }
+
+        try {
+          // Build 2D JSON array of commands for Upstash pipeline
+          const pipelineCommands = commands.map((cmd) => cmd);
+
+          if (Deno.env.get("REDIS_DEBUG") === "true") {
+            console.log("pipeline exec", { commandCount: commands.length, commands: commands.map((cmd) => cmd[0]) });
+          }
+
+          // Make single REST POST to Upstash pipeline endpoint
+          const pipelineUrl = `${url}/pipeline`;
+          const response = await fetch(pipelineUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(pipelineCommands)
+          });
+
+          if (!response.ok) {
+            throw new Error(`Pipeline request failed: ${response.status} ${response.statusText}`);
+          }
+
+          const results = (await response.json()) as unknown[];
+
+          // Map pipeline results to expected format: [err, result] or [null, result]
+          for (let i = 0; i < commands.length; i++) {
+            const result = results[i];
+
+            // Check if result is an error array [err, null] or success value
+            if (Array.isArray(result) && result.length === 2 && result[0] !== null) {
+              // Error case: [err, null]
+              out.push([result[0], null]);
+              emitError("error", result[0]);
+            } else {
+              // Success case: result is the actual value
+              out.push([null, result]);
             }
-            const res = await execCmd(cmd);
-            out.push([null, res]);
-          } catch (err) {
+          }
+        } catch (err) {
+          // If pipeline request fails entirely, treat all commands as failed
+          for (let i = 0; i < commands.length; i++) {
             out.push([err, null]);
             emitError("error", err);
           }
         }
+
         return out;
       }
     };
+  }
+
+  // Helper method to establish SSE connection for a channel
+  private async establishSSEConnection(channel: string) {
+    if (this.sseConnections.has(channel)) {
+      return; // Already connected
+    }
+
+    const url = String(
+      this.initOptions.url ||
+        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+        (this.initOptions.host ? `https://${this.initOptions.host}` : "")
+    );
+    const token = String(
+      this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
+    );
+
+    const subscribeUrl = `${url}/subscribe/${channel}`;
+    const abortController = new AbortController();
+    this.sseAbortControllers.set(channel, abortController);
+
+    try {
+      const response = await fetch(subscribeUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache"
+        },
+        signal: abortController.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`SSE subscription failed: ${response.status} ${response.statusText}`);
+      }
+
+      if (!response.body) {
+        throw new Error("No response body for SSE connection");
+      }
+
+      const reader = response.body.getReader();
+      this.sseConnections.set(channel, reader);
+
+      if (Deno.env.get("REDIS_DEBUG") === "true") {
+        console.log("SSE connection established", { channel });
+      }
+
+      // Start reading SSE events
+      this.readSSEEvents(channel, reader);
+    } catch (error) {
+      if (Deno.env.get("REDIS_DEBUG") === "true") {
+        console.error("SSE connection failed", { channel, error });
+      }
+      this.sseConnections.delete(channel);
+      this.sseAbortControllers.delete(channel);
+      throw error;
+    }
+  }
+
+  // Helper method to read and parse SSE events
+  private async readSSEEvents(channel: string, reader: ReadableStreamDefaultReader<Uint8Array>) {
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          if (Deno.env.get("REDIS_DEBUG") === "true") {
+            console.log("SSE stream ended", { channel });
+          }
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.trim() === "") continue;
+
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6); // Remove 'data: ' prefix
+            if (data.trim() !== "") {
+              try {
+                // Upstash SSE format for Redis pub/sub messages:
+                // "subscribe,channel,count" - subscription confirmation
+                // "unsubscribe,channel,count" - unsubscription confirmation
+                // "message,channel,payload" - actual pub/sub message
+                // "psubscribe,pattern,count" - pattern subscription confirmation
+                // "punsubscribe,pattern,count" - pattern unsubscription confirmation
+                // "pmessage,pattern,channel,payload" - pattern message
+
+                const parts = data.split(",");
+                const messageType = parts[0];
+
+                if (messageType === "message" && parts.length >= 3) {
+                  // Extract the actual message payload (everything after the second comma)
+                  const messagePayload = parts.slice(2).join(",");
+                  if (Deno.env.get("REDIS_DEBUG") === "true") {
+                    console.log("SSE message received", { channel, messagePayload });
+                  }
+                  // Emit message to local subscribers (channel and message payload)
+                  this.emit("message", channel, messagePayload);
+                } else if (messageType === "subscribe" || messageType === "unsubscribe") {
+                  // Subscription/unsubscription confirmation - just log if debugging
+                  if (Deno.env.get("REDIS_DEBUG") === "true") {
+                    console.log(`SSE ${messageType} confirmation`, { data });
+                  }
+                } else if (messageType === "pmessage" && parts.length >= 4) {
+                  // Pattern message - extract payload (everything after third comma)
+                  const messagePayload = parts.slice(3).join(",");
+                  if (Deno.env.get("REDIS_DEBUG") === "true") {
+                    console.log("SSE pmessage received", { channel, messagePayload });
+                  }
+                  this.emit("pmessage", parts[1], parts[2], messagePayload);
+                } else if (messageType === "psubscribe" || messageType === "punsubscribe") {
+                  // Pattern subscription confirmation - just log if debugging
+                  if (Deno.env.get("REDIS_DEBUG") === "true") {
+                    console.log(`SSE ${messageType} confirmation`, { data });
+                  }
+                } else {
+                  // Unknown message type - log but don't treat as error
+                  if (Deno.env.get("REDIS_DEBUG") === "true") {
+                    console.log("SSE unknown message type", { channel, data });
+                  }
+                }
+              } catch (parseError) {
+                Sentry.captureException(parseError);
+                if (Deno.env.get("REDIS_DEBUG") === "true") {
+                  console.error("Failed to parse SSE message", { channel, data, parseError });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      Sentry.captureException(error);
+      if (Deno.env.get("REDIS_DEBUG") === "true") {
+        console.error("SSE read error", { channel, error });
+      }
+    } finally {
+      this.sseConnections.delete(channel);
+      this.sseAbortControllers.delete(channel);
+    }
+  }
+
+  // Helper method to cleanup SSE connection
+  private async cleanupSSEConnection(channel: string) {
+    const abortController = this.sseAbortControllers.get(channel);
+    if (abortController) {
+      abortController.abort();
+      this.sseAbortControllers.delete(channel);
+    }
+
+    const reader = this.sseConnections.get(channel);
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore cancellation errors
+      }
+      this.sseConnections.delete(channel);
+    }
+
+    if (Deno.env.get("REDIS_DEBUG") === "true") {
+      console.log("SSE connection cleaned up", { channel });
+    }
   }
 
   // Pub/Sub
@@ -161,6 +384,11 @@ export class Redis {
     if (!channelBus.has(channel)) channelBus.set(channel, new Set());
     channelBus.get(channel)!.add(this);
     this.subscribedChannels.add(channel);
+
+    // Establish SSE connection for remote pub/sub
+    // If not successful, we must throw an error to break the subscription chain
+    await this.establishSSEConnection(channel);
+
     if (cb) cb();
     if (Deno.env.get("REDIS_DEBUG") === "true") {
       console.log("subscribe", { channel });
@@ -173,7 +401,11 @@ export class Redis {
     const set = channelBus.get(channel);
     if (set) {
       set.delete(this);
-      if (set.size === 0) channelBus.delete(channel);
+      if (set.size === 0) {
+        channelBus.delete(channel);
+        // Cleanup SSE connection when no more local subscribers
+        await this.cleanupSSEConnection(channel);
+      }
     }
     if (Deno.env.get("REDIS_DEBUG") === "true") {
       console.log("unsubscribe", { channel });
@@ -190,7 +422,6 @@ export class Redis {
       );
     } catch (err) {
       throw err;
-      // Ignore remote publish failures; still deliver locally
     }
     if (Deno.env.get("REDIS_DEBUG") === "true") {
       console.log("publish", { channel });
@@ -211,6 +442,11 @@ export class Redis {
     // Cleanup local subscriptions
     for (const ch of Array.from(this.subscribedChannels)) {
       void this.unsubscribe(ch);
+    }
+
+    // Cleanup any remaining SSE connections
+    for (const channel of Array.from(this.sseConnections.keys())) {
+      void this.cleanupSSEConnection(channel);
     }
   }
 }
