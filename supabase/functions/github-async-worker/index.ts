@@ -1,9 +1,9 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import { Redis } from "https://esm.sh/ioredis?target=deno";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { Redis } from "../_shared/Redis.ts";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,

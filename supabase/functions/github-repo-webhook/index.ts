@@ -93,6 +93,8 @@ async function handlePushToStudentRepo(
       .select("id, check_run_id, status")
       .eq("repository_id", studentRepo.id)
       .eq("sha", commit.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     if (existingErr) {
       console.error(existingErr);
