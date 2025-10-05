@@ -21,18 +21,16 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
+import RegradeRequestsTable from "./RegradeRequestsTable";
 export default async function StudentDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
-  const { data: assignments, error: assignmentsError } = await supabase
+  const { data: assignments } = await supabase
     .from("assignments_with_effective_due_dates")
     .select("*, submissions!submissio_assignment_id_fkey(*, grader_results(*)), classes(time_zone)")
     .eq("class_id", course_id)
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: false })
     .limit(5);
-  if (assignmentsError) {
-    console.error(assignmentsError);
-  }
   const { data: topics } = await supabase.from("discussion_topics").select("*").eq("class_id", course_id);
 
   const { data: discussions } = await supabase
@@ -48,6 +46,23 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .eq("class_id", course_id)
     .eq("status", "open")
     .order("created_at", { ascending: true });
+
+  // Query 5 most recent regrade requests for the student
+  const { data: regradeRequests } = await supabase
+    .from("submission_regrade_requests")
+    .select(
+      `
+      *,
+      assignments(id, title),
+      submissions!inner(id, ordinal),
+      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
+      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
+      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
+    `
+    )
+    .eq("class_id", course_id)
+    .order("created_at", { ascending: false })
+    .limit(5);
 
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
@@ -131,6 +146,22 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
             );
           })}
         </Stack>
+      </Box>
+
+      <Box>
+        <Heading size="lg" mb={4}>
+          Recent Regrade Requests
+        </Heading>
+        <RegradeRequestsTable regradeRequests={regradeRequests || []} courseId={course_id} />
+        {regradeRequests && regradeRequests.length > 0 && (
+          <Link href={`/course/${course_id}/regrade-requests`}>
+            <Box mt={4} textAlign="center">
+              <span style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}>
+                View all regrade requests →
+              </span>
+            </Box>
+          </Link>
+        )}
       </Box>
 
       <Box>

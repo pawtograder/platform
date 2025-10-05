@@ -91,10 +91,12 @@ function StatusCell({ status }: { status: RegradeStatus }) {
  */
 function StudentCell({
   submission,
-  submissionId
+  submissionId,
+  regradeRequestId
 }: {
   submission?: RegradeRequestRow["submissions"];
   submissionId: number;
+  regradeRequestId: number;
 }) {
   const { course_id, assignment_id } = useParams();
 
@@ -112,7 +114,10 @@ function StudentCell({
         variant="ghost"
         size="sm"
         onClick={() => {
-          window.open(`/course/${course_id}/assignments/${assignment_id}/submissions/${submissionId}`, "_blank");
+          window.open(
+            `/course/${course_id}/assignments/${assignment_id}/submissions/${submissionId}#regrade-request-${regradeRequestId}`,
+            "_blank"
+          );
         }}
       >
         <Icon as={FaExternalLinkAlt} boxSize={3} />
@@ -262,7 +267,11 @@ export default function RegradeRequestsTable() {
           return row.submissions?.profiles?.name || "Unknown";
         },
         cell: ({ row }) => (
-          <StudentCell submission={row.original.submissions} submissionId={row.original.submission_id} />
+          <StudentCell
+            submission={row.original.submissions}
+            submissionId={row.original.submission_id}
+            regradeRequestId={row.original.id}
+          />
         ),
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {

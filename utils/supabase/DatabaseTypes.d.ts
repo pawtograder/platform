@@ -972,6 +972,15 @@ export type RegradeStatus = Database["public"]["Enums"]["regrade_status"];
 export type RegradeRequest = Database["public"]["Tables"]["submission_regrade_requests"]["Row"];
 export type RegradeRequestComment = Database["public"]["Tables"]["submission_regrade_request_comments"]["Row"];
 
+// Type for regrade request with assignment, submission, and comment details including rubric check names
+export type RegradeRequestWithDetails = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["submission_regrade_requests"]["Row"],
+  "submission_regrade_requests",
+  Database["public"]["Tables"]["submission_regrade_requests"]["Relationships"],
+  "*, assignments(id, title), submissions!inner(id, ordinal), submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)), submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)), submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))"
+>;
+
 export type AdminGetClassesResponse = Database["public"]["Functions"]["admin_get_classes"]["Returns"];
 
 export type StudentDeadlineExtension = GetResult<
