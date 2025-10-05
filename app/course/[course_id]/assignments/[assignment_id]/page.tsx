@@ -79,35 +79,18 @@ export default function AssignmentPage() {
     ]
   });
 
-  const client = createClient();
+  const supabaseClient = createClient();
   useEffect(() => {
 	async function fetchSubmissionLimits() {
-  	   const { data, error } = await client
-  	   .rpc('get_submissions_limits');
-  	   console.log(error);
+  	   const { data, error } = await supabaseClient
+  	   .rpc('get_submissions_limits', { p_assignment_id : assignment_id });
+  	   if (error) {
+		   console.log('Failed to fetch submission limits:', error);
+	   }
   	   autograderData.current = data;
-	   console.log(autograderData);
 	}
 	fetchSubmissionLimits();
       }, [autograderData]);
-
-  /*const { data: autograderData } = useList<StudentAutograder>({
-     resource: "autograder_student",
-     meta: {
-	select: "*",
-	order: "created_at, { ascending: false }"
-     },
-     pagination: {
-	pageSize: 1000
-     },
-     filters: autograderFilters,
-     sorters: [
-	{
-	  field: "created_at",
-	  order: "desc"
-	}
-      ]
-  });*/
 
   const submissions = submissionsData?.data;
   const autograder = autograderData?.data;
