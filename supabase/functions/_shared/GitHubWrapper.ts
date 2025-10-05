@@ -1,9 +1,9 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
+import { Redis } from "./Redis.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import { Redis } from "https://esm.sh/ioredis?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -196,10 +196,7 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
     if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
       const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
       const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-      connection = new Bottleneck({
-        datastore: "ioredis",
-        clearDatastore: false,
-        id: "gitHubRateLimiter" + (Deno.env.get("GITHUB_APP_ID") || ""),
+      connection = new Bottleneck.IORedisConnection({
         clientOptions: {
           host,
           password,
@@ -209,6 +206,20 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
         },
         Redis
       });
+      try {
+        // Log connection lifecycle for verification
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        connection.ready
+          .then(() => {
+            console.log("IORedisConnection ready for GitHub throttling");
+          })
+          .catch((e: unknown) => {
+            console.error("IORedisConnection failed to initialize", e);
+          });
+        connection.on("error", (err: Error) => console.error(err));
+      } catch (e) {
+        console.error("Failed to attach IORedisConnection logging", e);
+      }
       connection.on("error", (err: Error) => console.error(err));
     }
     const _installations = await app.octokit.request("GET /app/installations");
@@ -553,13 +564,19 @@ export async function createRepo(
     scope?.setTag("repo_name", repoName);
     scope?.setTag("org", org);
     console.log("Creating repo", template_repo, owner, repoName, org);
-    const resp = await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
-      template_repo: repo,
-      template_owner: owner,
-      owner: org,
-      name: repoName,
-      private: true
-    });
+    const resp = await retryWithBackoff(
+      () =>
+        octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+          template_repo: repo,
+          template_owner: owner,
+          owner: org,
+          name: repoName,
+          private: true
+        }),
+      2, // maxRetries
+      5000, // baseDelayMs
+      scope
+    );
     console.log(JSON.stringify(resp.headers, null, 2));
     scope?.setTag("github_operation", "create_repo_request_done");
     //Disable squash merging, make template
