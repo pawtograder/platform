@@ -35,7 +35,7 @@ type QueueMessage<T> = {
 };
 
 const createRepoLimiters = new Map<string, Bottleneck>();
-function getCreateRepoLimiter(org: string): Bottleneck {
+export function getCreateRepoLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = createRepoLimiters.get(key);
   if (existing) return existing;
