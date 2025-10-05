@@ -16,16 +16,16 @@ import {
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
   UserRole,
-  AutograderWithAssignment
 } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
 import { differenceInDays, format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import { createClient } from "@/utils/supabase/client";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -35,6 +35,7 @@ export default function AssignmentPage() {
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
   const trackEvent = useTrackEvent();
   const hasTrackedView = useRef(false);
+  const autograderData = useRef(null);
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
   const ourAssignmentGroupPredicate = useMemo(() => {
     return (group: AssignmentGroup) =>
@@ -78,10 +79,22 @@ export default function AssignmentPage() {
     ]
   });
 
-  const { data: autograderData } = useList<AutograderWithAssignment>({
-     resource: "autograder",
+  const client = createClient();
+  useEffect(() => {
+	async function fetchSubmissionLimits() {
+  	   const { data, error } = await client
+  	   .rpc('get_submissions_limits');
+  	   console.log(error);
+  	   autograderData.current = data;
+	   console.log(autograderData);
+	}
+	fetchSubmissionLimits();
+      }, [autograderData]);
+
+  /*const { data: autograderData } = useList<StudentAutograder>({
+     resource: "autograder_student",
      meta: {
-	select: "*, assignments(*)",
+	select: "*",
 	order: "created_at, { ascending: false }"
      },
      pagination: {
@@ -94,7 +107,7 @@ export default function AssignmentPage() {
 	  order: "desc"
 	}
       ]
-  });
+  });*/
 
   const submissions = submissionsData?.data;
   const autograder = autograderData?.data;
