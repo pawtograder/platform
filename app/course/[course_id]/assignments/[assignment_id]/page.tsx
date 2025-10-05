@@ -56,11 +56,6 @@ export default function AssignmentPage() {
     }
     return filters;
   }, [assignment_id, assignmentGroup, private_profile_id]);
-  const autograderFilters = useMemo(() => {
-    const filters: CrudFilter[] = [];
-    filters.push({ field: "id", operator: "eq", value: assignment_id });
-    return filters;
-  }, [assignment_id]);
   const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -90,10 +85,10 @@ export default function AssignmentPage() {
   	   autograderData.current = data;
 	}
 	fetchSubmissionLimits();
-      }, [autograderData]);
+      }, [assignment_id, supabaseClient]);
 
   const submissions = submissionsData?.data;
-  const autograder = autograderData?.data;
+  const autograder = autograderData.current;
 
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
