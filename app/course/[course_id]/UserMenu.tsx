@@ -4,6 +4,8 @@ import NotificationPreferences from "@/components/notifications/notification-pre
 import NotificationsBox from "@/components/notifications/notifications-box";
 import { Button } from "@/components/ui/button";
 import { ColorModeButton } from "@/components/ui/color-mode";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -20,6 +22,7 @@ import {
   Dialog,
   Drawer,
   Flex,
+  Heading,
   HStack,
   IconButton,
   Menu,
@@ -264,6 +267,7 @@ const DropBoxAvatar = ({
 const ProfileChangesMenu = () => {
   const [publicAvatarLink, setPublicAvatarLink] = useState<string | null>(null);
   const [privateAvatarLink, setPrivateAvatarLink] = useState<string | null>(null);
+  const [name, setName] = useState<string>("");
   const supabase = useMemo(() => createClient(), []);
   const { course_id } = useParams();
   const { user } = useAuthState();
@@ -286,12 +290,13 @@ const ProfileChangesMenu = () => {
     }
     if (privateProfile) {
       setPrivateAvatarLink(privateProfile?.data.avatar_url);
+      setName(privateProfile?.data.name ?? "");
     }
   }, [publicProfile, privateProfile]);
 
   /**
-   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar
-   * storage bucket.
+   * Updates user profile on "Save" by replacing avatar_url and name in database with new file.
+   * Removes extra files in user's avatar storage bucket.
    */
   const updateProfile = async () => {
     removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
@@ -321,6 +326,21 @@ const ProfileChangesMenu = () => {
         });
       }
     }
+
+    if (name && privateProfile) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ name: name })
+        .eq("id", privateProfile.data.id)
+        .single();
+      if (error) {
+        toaster.error({
+          title: "Error updating preferred name",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      }
+    }
+
     invalidate({
       resource: "profiles",
       invalidates: ["list", "detail"],
@@ -374,7 +394,7 @@ const ProfileChangesMenu = () => {
             py={0}
           >
             <FaCircleUser />
-            Edit Avatar
+            Edit Profile
           </Button>
         </Dialog.Trigger>
         <Portal>
@@ -382,28 +402,46 @@ const ProfileChangesMenu = () => {
           <Dialog.Positioner>
             <Dialog.Content>
               <Dialog.Header>
-                <Dialog.Title>Edit Avatar</Dialog.Title>
+                <Dialog.Title>Edit Profile</Dialog.Title>
               </Dialog.Header>
               <Dialog.Body>
                 <Flex flexDirection={"column"} gap="50px">
-                  <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
-                    <DropBoxAvatar
-                      avatarLink={publicAvatarLink}
-                      setAvatarLink={setPublicAvatarLink}
-                      avatarType="Public"
-                      profile={publicProfile?.data ?? null}
-                    />
-                    <DropBoxAvatar
-                      avatarLink={privateAvatarLink}
-                      setAvatarLink={setPrivateAvatarLink}
-                      avatarType="Private"
-                      profile={privateProfile?.data ?? null}
+                  <Flex flexDirection={"column"} gap="4">
+                    <Heading as="h3" size="md">
+                      Preferred Name
+                    </Heading>
+                    <Label htmlFor="preferred-name">Enter Your Preferred Name</Label>
+                    <Input
+                      value={name}
+                      id="preferred-name"
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Enter your preferred name"
                     />
                   </Flex>
-                  <Text fontSize="sm" color="fg.muted">
-                    Your public avatar will be used on anonymous posts along with your pseudonym, &quot;
-                    {publicProfile?.data.name}&quot;.
-                  </Text>
+
+                  <Flex flexDirection={"column"} gap="4">
+                    <Heading as="h3" size="md">
+                      Avatars
+                    </Heading>
+                    <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
+                      <DropBoxAvatar
+                        avatarLink={publicAvatarLink}
+                        setAvatarLink={setPublicAvatarLink}
+                        avatarType="Public"
+                        profile={publicProfile?.data ?? null}
+                      />
+                      <DropBoxAvatar
+                        avatarLink={privateAvatarLink}
+                        setAvatarLink={setPrivateAvatarLink}
+                        avatarType="Private"
+                        profile={privateProfile?.data ?? null}
+                      />
+                    </Flex>
+                    <Text fontSize="sm" color="fg.muted" mt={6}>
+                      Your public avatar will be used on anonymous posts along with your pseudonym, &quot;
+                      {publicProfile?.data.name}&quot;.
+                    </Text>
+                  </Flex>
                 </Flex>
               </Dialog.Body>
               <Dialog.Footer>
@@ -413,6 +451,7 @@ const ProfileChangesMenu = () => {
                     onClick={() => {
                       setPrivateAvatarLink(privateProfile?.data.avatar_url ?? null);
                       setPublicAvatarLink(publicProfile?.data.avatar_url ?? null);
+                      setName(privateProfile?.data.name ?? "");
                       removeUnusedImages(
                         privateProfile?.data.avatar_url ?? null,
                         publicProfile?.data.avatar_url ?? null
