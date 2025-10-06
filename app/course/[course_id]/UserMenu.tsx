@@ -327,10 +327,18 @@ const ProfileChangesMenu = () => {
       }
     }
 
-    if (name && privateProfile) {
+    if (privateProfile) {
+      const trimmedName = name?.trim() || "";
+      if (trimmedName.length === 0) {
+        toaster.error({
+          title: "Invalid preferred name",
+          description: "Preferred name cannot be empty or only whitespace"
+        });
+        return;
+      }
       const { error } = await supabase
         .from("profiles")
-        .update({ name: name })
+        .update({ name: trimmedName })
         .eq("id", privateProfile.data.id)
         .single();
       if (error) {
