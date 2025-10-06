@@ -74,18 +74,18 @@ export default function AssignmentPage() {
     ]
   });
 
-  const supabaseClient = createClient();
   useEffect(() => {
 	async function fetchSubmissionLimits() {
+	   const supabaseClient = createClient();
   	   const { data, error } = await supabaseClient
   	   .rpc('get_submissions_limits', { p_assignment_id : assignment_id });
   	   if (error) {
-		   console.log('Failed to fetch submission limits:', error);
+		   console.error('Failed to fetch submission limits:', error);
 	   }
   	   autograderData.current = data;
 	}
 	fetchSubmissionLimits();
-      }, [assignment_id, supabaseClient]);
+      }, [assignment_id]);
 
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
