@@ -8,6 +8,8 @@ const channelBus: Map<string, Set<Redis>> = new Map();
 /**
  * IORedis-compatible adapter backed by Upstash Redis REST client.
  * Implements the subset of the API used by Bottleneck's IORedis store.
+ * 
+ * Uses Proxy to forward all unknown methods to the underlying Upstash client.
  */
 export class Redis {
   private client: UpstashRedis;
@@ -39,6 +41,29 @@ export class Redis {
 
     // Emit ready asynchronously to mimic ioredis behavior
     queueMicrotask(() => this.emit("ready"));
+    
+    // Return a Proxy that forwards unknown method calls to the underlying Upstash client
+    // This allows Redis commands like get, set, incr, etc. to work transparently
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        // First check if the property exists on the Redis wrapper class
+        const targetValue = Reflect.get(target, prop, receiver);
+        if (targetValue !== undefined) {
+          return targetValue;
+        }
+        
+        // Then check the underlying Upstash client
+        const clientAsAny = target.client as unknown as Record<string, unknown>;
+        const clientMethod = clientAsAny[String(prop)];
+        
+        if (typeof clientMethod === "function") {
+          // Bind the method to the client so 'this' works correctly
+          return clientMethod.bind(target.client);
+        }
+        
+        return undefined;
+      }
+    });
   }
 
   // EventEmitter-like API expected by bottleneck
@@ -74,7 +99,12 @@ export class Redis {
 
   // ioredis API: duplicate returns a new connection with same options
   duplicate() {
-    return new Redis(this.initOptions);
+    const newRedis = new Redis(this.initOptions);
+    // Copy defined scripts to the new instance
+    for (const [name, script] of this.scripts.entries()) {
+      newRedis.defineCommand(name, { lua: script });
+    }
+    return newRedis;
   }
 
   // ioredis API: defineCommand(name, { lua }) registers a script callable as client[name](...)
@@ -93,13 +123,33 @@ export class Redis {
 
       try {
         if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("eval script", { name, numKeys, keysCount: keys.length, argvCount: argv.length });
+          console.log("eval script", { 
+            name, 
+            numKeys, 
+            keysCount: keys.length, 
+            argvCount: argv.length,
+            rawArgsCount: args.length,
+            firstKey: keys[0],
+            firstArg: argv[0],
+            allKeys: keys,
+            scriptLength: script.length
+          });
         }
+        
+        // Check if Upstash client has eval method
+        const clientAsAny = this.client as unknown as Record<string, unknown>;
+        if (typeof clientAsAny.eval !== "function") {
+          throw new Error("Upstash Redis client does not support EVAL command");
+        }
+        
         const result = await (
           this.client as unknown as {
             eval: (script: string, keys: string[], args: (string | number)[]) => Promise<unknown>;
           }
         ).eval(script, keys, argv);
+        if (Deno.env.get("REDIS_DEBUG") === "true") {
+          console.log("eval script result", { name, result });
+        }
         if (cb) cb(null, result);
         return result;
       } catch (error) {
@@ -139,6 +189,8 @@ export class Redis {
   // ioredis API: pipeline([...]).exec() => [[err, result], ...]
   pipeline(commands: Array<[string, ...unknown[]]>) {
     const emitError = this.emit.bind(this);
+    const executeCommand = this.executeCommand.bind(this);
+    const scripts = this.scripts; // Capture for closure
 
     // Capture credentials at pipeline creation time
     const url = String(
@@ -158,15 +210,42 @@ export class Redis {
           return out;
         }
 
+        if (Deno.env.get("REDIS_DEBUG") === "true") {
+          console.log("pipeline exec", { 
+            commandCount: commands.length, 
+            commands: commands.map((cmd) => cmd[0])
+          });
+        }
+
+        // Check if ANY commands are custom scripts (defined via defineCommand)
+        const hasCustomScripts = commands.some(cmd => {
+          const commandName = String(cmd[0]);
+          return scripts.has(commandName);
+        });
+        
+        if (Deno.env.get("REDIS_DEBUG") === "true") {
+          console.log(`  pipeline hasCustomScripts: ${hasCustomScripts}, executing ${hasCustomScripts ? 'SEQUENTIALLY' : 'BATCHED'}`);
+        }
+
+        // If there are custom scripts, we must execute sequentially because
+        // Upstash pipeline doesn't support our defineCommand Lua scripts
+        if (hasCustomScripts) {
+          for (const cmd of commands) {
+            try {
+              const result = await executeCommand(cmd);
+              out.push([null, result]);
+            } catch (err) {
+              out.push([err, null]);
+              emitError("error", err);
+            }
+          }
+          return out;
+        }
+
+        // No custom scripts - use Upstash's atomic pipeline endpoint
         try {
-          // Build 2D JSON array of commands for Upstash pipeline
           const pipelineCommands = commands.map((cmd) => cmd);
 
-          if (Deno.env.get("REDIS_DEBUG") === "true") {
-            console.log("pipeline exec", { commandCount: commands.length, commands: commands.map((cmd) => cmd[0]) });
-          }
-
-          // Make single REST POST to Upstash pipeline endpoint
           const pipelineUrl = `${url}/pipeline`;
           const response = await fetch(pipelineUrl, {
             method: "POST",
@@ -183,25 +262,19 @@ export class Redis {
 
           const results = (await response.json()) as Array<{ result?: unknown; error?: string }>;
 
-          // Map pipeline results to expected ioredis format: [err, result] or [null, result]
-          // Upstash returns: { result: ... } on success or { error: ... } on error
           for (let i = 0; i < commands.length; i++) {
             const resp = results[i];
 
             if (resp && typeof resp === "object" && "error" in resp) {
-              // Error case: { error: "..." }
               out.push([resp.error, null]);
               emitError("error", resp.error);
             } else if (resp && typeof resp === "object" && "result" in resp) {
-              // Success case: { result: ... }
               out.push([null, resp.result]);
             } else {
-              // Unexpected format - treat as success with raw value for backwards compatibility
               out.push([null, resp]);
             }
           }
         } catch (err) {
-          // If pipeline request fails entirely, treat all commands as failed
           for (let i = 0; i < commands.length; i++) {
             out.push([err, null]);
             emitError("error", err);

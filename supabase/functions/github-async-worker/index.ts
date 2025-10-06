@@ -34,10 +34,15 @@ type QueueMessage<T> = {
   message: T;
 };
 
-const createRepoLimiters = new Map<string, Bottleneck>();
-export function getCreateRepoLimiter(org: string): Bottleneck {
+const createContentLimiters = new Map<string, Bottleneck>();
+/**
+ * GitHub limits the number of content-creating requests per organization per-minute and per-hour
+ * @param org GitHub organization
+ * @returns 
+ */
+export function getCreateContentLimiter(org: string): Bottleneck {
   const key = org || "unknown";
-  const existing = createRepoLimiters.get(key);
+  const existing = createContentLimiters.get(key);
   if (existing) return existing;
   let limiter: Bottleneck;
   const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
@@ -46,10 +51,11 @@ export function getCreateRepoLimiter(org: string): Bottleneck {
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
-      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 50,
       reservoirRefreshAmount: 50,
       reservoirRefreshInterval: 60_000,
+      maxConcurrent: 50,
       datastore: "ioredis",
       clearDatastore: false,
       clientOptions: {
@@ -68,11 +74,12 @@ export function getCreateRepoLimiter(org: string): Bottleneck {
     limiter = new Bottleneck({
       id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 10,
+      maxConcurrent: 10,
       reservoirRefreshAmount: 10,
       reservoirRefreshInterval: 60_000
     });
   }
-  createRepoLimiters.set(key, limiter);
+  createContentLimiters.set(key, limiter);
   return limiter;
 }
 
@@ -275,6 +282,7 @@ async function recordGitHubAsyncError(
 async function checkAndTripErrorCircuitBreaker(
   adminSupabase: SupabaseClient<Database>,
   org: string,
+  method: GitHubAsyncMethod,
   scope: Sentry.Scope
 ): Promise<boolean> {
   try {
@@ -291,13 +299,14 @@ async function checkAndTripErrorCircuitBreaker(
 
     const errorCount = result.data as number;
     if (errorCount >= 20) {
-      // Trip the circuit breaker for 8 hours
+      // Trip the circuit breaker for 8 hours - scoped to this method
+      const circuitKey = `${org}:${method}`;
       const tripResult = await adminSupabase.schema("public").rpc("open_github_circuit", {
-        p_scope: "org",
-        p_key: org,
+        p_scope: "org_method",
+        p_key: circuitKey,
         p_event: "error_threshold",
         p_retry_after_seconds: 28800, // 8 hours
-        p_reason: `Error threshold exceeded: ${errorCount} errors in 5 minutes`
+        p_reason: `Error threshold exceeded for ${method}: ${errorCount} errors in 5 minutes`
       });
 
       if (!tripResult.error) {
@@ -305,13 +314,14 @@ async function checkAndTripErrorCircuitBreaker(
         scope.setTag("circuit_breaker_reason", "error_threshold");
         scope.setContext("error_threshold_breach", {
           org,
+          method,
           error_count: errorCount,
           window_minutes: 5,
           circuit_duration_hours: 8
         });
 
         Sentry.captureMessage(
-          `GitHub async worker circuit breaker tripped for org ${org}: error threshold exceeded. Circuit open for 8 hours.`,
+          `GitHub async worker circuit breaker tripped for org ${org} method ${method}: error threshold exceeded. Circuit open for 8 hours.`,
           {
             level: "error"
           }
@@ -325,6 +335,7 @@ async function checkAndTripErrorCircuitBreaker(
   } catch (e) {
     scope.setContext("circuit_check_error", {
       org,
+      method,
       error_message: e instanceof Error ? e.message : String(e)
     });
     Sentry.captureException(e, scope);
@@ -344,7 +355,7 @@ export async function processEnvelope(
   scope.setTag("async_method", envelope.method);
   if (envelope.class_id) scope.setTag("class_id", String(envelope.class_id));
   if (envelope.debug_id) scope.setTag("debug_id", envelope.debug_id);
-  // Circuit breaker: if org-level circuit is open, requeue immediately with a minimum delay
+  // Circuit breaker: check both org-level and method-specific circuits
   try {
     const org = ((): string | undefined => {
       if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
@@ -359,12 +370,36 @@ export async function processEnvelope(
       return undefined;
     })();
     if (org) {
-      const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
-      if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
-        const row = circ.data[0] as { state?: string; open_until?: string };
+      // Check org-level circuit breaker first (highest priority - blocks everything)
+      const orgCirc = await adminSupabase.schema("public").rpc("get_github_circuit", { 
+        p_scope: "org", 
+        p_key: org 
+      });
+      if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
+        const row = orgCirc.data[0] as { state?: string; open_until?: string };
         if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
+          scope.setTag("circuit_scope", "org");
+          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          return false;
+        }
+      }
+
+      // Check method-specific circuit breaker (only blocks this specific method)
+      const circuitKey = `${org}:${envelope.method}`;
+      const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", { 
+        p_scope: "org_method", 
+        p_key: circuitKey 
+      });
+      if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
+        const row = methodCirc.data[0] as { state?: string; open_until?: string };
+        if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          const delaySeconds = 180; // minimum enforced delay while circuit open
+          scope.setTag("circuit_state", "open");
+          scope.setTag("circuit_scope", "org_method");
+          scope.setTag("circuit_method", envelope.method);
           await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
           await archiveMessage(adminSupabase, meta.msg_id, scope);
           return false;
@@ -566,7 +601,7 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
-        const limiter = getCreateRepoLimiter(org);
+        const limiter = getCreateContentLimiter(org);
         const headSha = await limiter.schedule(() =>
           github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
@@ -744,6 +779,21 @@ export async function processEnvelope(
         });
 
         try {
+
+          // Check to see if the repo is already up to date, using first 6 chars of SHA
+         const {data: currentRepo} = await adminSupabase
+          .from("repositories")
+          .select("synced_handout_sha")
+          .eq("id", repository_id)
+          .maybeSingle();
+          if (currentRepo?.synced_handout_sha?.substring(0, 6) === to_sha.substring(0, 6)) {
+            Sentry.addBreadcrumb({
+              message: `Repository ${repository_full_name} is already up to date`,
+              level: "info"
+            });
+            return true;
+          }
+
           // Use the shared sync helper
           const result = await syncRepositoryToHandout({
             repositoryFullName: repository_full_name,
@@ -910,7 +960,7 @@ export async function processEnvelope(
           Sentry.captureException(e, scope);
         }
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
-        const circuitTripped = org ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope) : false;
+        const circuitTripped = org ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope) : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
           await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
@@ -929,17 +979,19 @@ export async function processEnvelope(
         // Record the error for tracking
         await recordGitHubAsyncError(adminSupabase, org, envelope.method, error, scope);
 
-        // Immediately open circuit breaker for 30 seconds on any error
+        // Immediately open circuit breaker for 30 seconds on any error - scoped to this method
+        const circuitKey = `${org}:${envelope.method}`;
         try {
           await adminSupabase.schema("public").rpc("open_github_circuit", {
-            p_scope: "org",
-            p_key: org,
+            p_scope: "org_method",
+            p_key: circuitKey,
             p_event: "immediate_error",
             p_retry_after_seconds: 30,
             p_reason: `Immediate circuit breaker: ${envelope.method} error - ${error instanceof Error ? error.message : String(error)}`
           });
 
           scope.setTag("immediate_circuit_breaker", "30s");
+          scope.setTag("circuit_method", envelope.method);
           scope.setContext("immediate_circuit_detail", {
             org,
             method: envelope.method,
@@ -952,7 +1004,7 @@ export async function processEnvelope(
         }
 
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
-        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
           await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours

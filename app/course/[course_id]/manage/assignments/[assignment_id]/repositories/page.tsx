@@ -21,7 +21,6 @@ import {
   Skeleton,
   Table,
   Text,
-  Tooltip,
   VStack
 } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
@@ -170,12 +169,23 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
 
   if (syncData?.last_sync_error) {
     return (
-      <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <Badge colorPalette="red">Error</Badge>
-        </Tooltip.Trigger>
-        <Tooltip.Content>{syncData.last_sync_error}</Tooltip.Content>
-      </Tooltip.Root>
+      <VStack gap={2} alignItems="flex-start" width="full">
+        <Badge colorPalette="red">Sync Error</Badge>
+        <Box
+          borderWidth="1px"
+          borderColor="red.500"
+          bg="red.50"
+          _dark={{ bg: "red.950", borderColor: "red.800" }}
+          px={3}
+          py={2}
+          borderRadius="md"
+          width="full"
+        >
+          <Text fontSize="sm" color="red.700" _dark={{ color: "red.300" }} wordBreak="break-word">
+            {syncData.last_sync_error}
+          </Text>
+        </Box>
+      </VStack>
     );
   }
 

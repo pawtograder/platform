@@ -184,6 +184,11 @@ const installations: {
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
+export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
+  const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
+  const installationId = installations.find((i) => i.orgName === org)?.id;
+  return { octokit: await getOctoKit(repoOrOrgName, scope), installationId };
+}
 export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   scope?.addBreadcrumb({

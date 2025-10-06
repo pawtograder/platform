@@ -5,16 +5,16 @@
  * PushChangesToRepoFromHandout.ts
  *
  * This script syncs changes from a template/autograder repository to a student repository
- * by creating a pull request with the updated files.
+ * by creating a pull request with the updated files using shared sync helpers.
  *
  * Usage: deno run --allow-env --allow-net PushChangesToRepoFromHandout.ts <repository_id_or_full_name>
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "@sentry/deno";
-import { Buffer } from "node:buffer";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";
+import { syncRepositoryToHandout } from "../_shared/GitHubSyncHelpers.ts";
 
 interface RepositoryData {
   id: number;
@@ -27,12 +27,6 @@ interface RepositoryData {
     template_repo: string | null;
     title: string;
   };
-}
-
-interface FileChange {
-  path: string;
-  sha: string;
-  content: string;
 }
 
 async function getRepositoryFromDB(
@@ -72,273 +66,6 @@ async function getRepositoryFromDB(
   }
 
   return data as RepositoryData;
-}
-
-async function getChangedFiles(
-  templateRepo: string,
-  fromSha: string | null,
-  toSha: string,
-  scope: Sentry.Scope
-): Promise<FileChange[]> {
-  const octokit = await getOctoKit(templateRepo, scope);
-  if (!octokit) {
-    throw new Error(`No octokit found for repository ${templateRepo}`);
-  }
-
-  const [owner, repo] = templateRepo.split("/");
-
-  // If there's no previous sync, we need to get all files at the toSha
-  if (!fromSha) {
-    console.log(`No previous sync found, fetching all files at ${toSha}`);
-    const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
-      owner,
-      repo,
-      tree_sha: toSha,
-      recursive: "true"
-    });
-
-    const fileChanges: FileChange[] = [];
-    for (const item of tree.tree) {
-      if (item.type === "blob" && item.path && item.sha) {
-        // Get the file content
-        const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
-          owner,
-          repo,
-          file_sha: item.sha
-        });
-        fileChanges.push({
-          path: item.path,
-          sha: item.sha,
-          content: blob.content
-        });
-      }
-    }
-    return fileChanges;
-  }
-
-  // Compare the two commits to get the diff
-  const { data: comparison } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
-    owner,
-    repo,
-    basehead: `${fromSha}...${toSha}`
-  });
-
-  const fileChanges: FileChange[] = [];
-
-  for (const file of comparison.files || []) {
-    // Handle deleted files - we'll mark them with null content to remove them
-    if (file.status === "removed") {
-      console.log(`File deleted: ${file.filename}`);
-      fileChanges.push({
-        path: file.filename,
-        sha: "", // Will be set to null when creating tree
-        content: "" // Empty content indicates deletion
-      });
-      continue;
-    }
-
-    // Get the file content from the new commit
-    const { data: fileContent } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-      owner,
-      repo,
-      path: file.filename,
-      ref: toSha
-    });
-
-    if ("content" in fileContent && fileContent.sha) {
-      fileChanges.push({
-        path: file.filename,
-        sha: fileContent.sha,
-        content: fileContent.content
-      });
-    } else {
-      console.log(`File ${file.filename} not found in the new commit`);
-    }
-  }
-
-  return fileChanges;
-}
-
-async function createBranchAndCommit(
-  repoFullName: string,
-  branchName: string,
-  baseBranch: string,
-  files: FileChange[],
-  commitMessage: string,
-  scope: Sentry.Scope
-): Promise<void> {
-  const octokit = await getOctoKit(repoFullName, scope);
-  if (!octokit) {
-    throw new Error(`No octokit found for repository ${repoFullName}`);
-  }
-
-  const [owner, repo] = repoFullName.split("/");
-
-  // Get the base branch reference
-  const { data: baseRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${baseBranch}`
-  });
-
-  const baseSha = baseRef.object.sha;
-
-  // Check if the branch already exists
-  try {
-    await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-      owner,
-      repo,
-      ref: `heads/${branchName}`
-    });
-    console.log(`Branch ${branchName} already exists, deleting it first...`);
-    // Delete the existing branch
-    await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
-      owner,
-      repo,
-      ref: `heads/${branchName}`
-    });
-  } catch {
-    // Branch doesn't exist, which is fine
-    console.log(`Branch ${branchName} does not exist, creating new branch`);
-  }
-
-  // Create the new branch
-  await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-    owner,
-    repo,
-    ref: `refs/heads/${branchName}`,
-    sha: baseSha
-  });
-
-  // Get the base tree
-  const { data: baseCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
-    owner,
-    repo,
-    commit_sha: baseSha
-  });
-
-  // Create blobs for all changed files in the target repository
-  // We need to create new blobs because the SHAs from the template repo won't work here
-  const treeItems = await Promise.all(
-    files.map(async (file) => {
-      // Handle deleted files - set sha to null to remove them from the tree
-      if (file.content === "") {
-        console.log(`Marking file for deletion: ${file.path}`);
-        return {
-          path: file.path,
-          mode: "100644" as const,
-          type: "blob" as const,
-          sha: null as unknown as string // null tells Git to delete the file
-        };
-      }
-
-      // Decode the base64 content
-      const content = Buffer.from(file.content, "base64").toString("utf-8");
-
-      // Create a blob in the target repository
-      const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
-        owner,
-        repo,
-        content,
-        encoding: "utf-8"
-      });
-
-      return {
-        path: file.path,
-        mode: "100644" as const,
-        type: "blob" as const,
-        sha: blob.sha
-      };
-    })
-  );
-
-  // Create a new tree
-  const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
-    owner,
-    repo,
-    base_tree: baseCommit.tree.sha,
-    tree: treeItems
-  });
-
-  // Create a new commit
-  const { data: newCommit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
-    owner,
-    repo,
-    message: commitMessage,
-    tree: newTree.sha,
-    parents: [baseSha]
-  });
-
-  // Update the branch reference to point to the new commit
-  await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${branchName}`,
-    sha: newCommit.sha
-  });
-}
-
-async function createPullRequest(
-  repoFullName: string,
-  branchName: string,
-  baseBranch: string,
-  title: string,
-  body: string,
-  scope: Sentry.Scope
-): Promise<number> {
-  const octokit = await getOctoKit(repoFullName, scope);
-  if (!octokit) {
-    throw new Error(`No octokit found for repository ${repoFullName}`);
-  }
-
-  const [owner, repo] = repoFullName.split("/");
-
-  const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-    owner,
-    repo,
-    title,
-    body,
-    head: branchName,
-    base: baseBranch
-  });
-
-  return pr.number;
-}
-
-async function mergePullRequest(
-  repoFullName: string,
-  prNumber: number,
-  scope: Sentry.Scope
-): Promise<{ merged: boolean; mergeSha?: string }> {
-  const octokit = await getOctoKit(repoFullName, scope);
-  if (!octokit) {
-    throw new Error(`No octokit found for repository ${repoFullName}`);
-  }
-
-  const [owner, repo] = repoFullName.split("/");
-
-  // Check if the PR is mergeable
-  const { data: pr } = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
-    owner,
-    repo,
-    pull_number: prNumber
-  });
-
-  if (!pr.mergeable) {
-    console.log(`PR #${prNumber} has merge conflicts and cannot be auto-merged`);
-    return { merged: false };
-  }
-
-  // Merge the PR
-  const { data: mergeResult } = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
-    owner,
-    repo,
-    pull_number: prNumber,
-    merge_method: "merge"
-  });
-
-  console.log(`Successfully merged PR #${prNumber}`);
-  return { merged: true, mergeSha: mergeResult.sha };
 }
 
 async function updateSyncedShas(
@@ -498,79 +225,82 @@ async function main() {
       Deno.exit(0);
     }
 
-    // 4. Get changed files
-    console.log("\nFetching changed files...");
-    const changedFiles = await getChangedFiles(
-      repo.assignments.template_repo,
-      repo.synced_handout_sha,
-      repo.assignments.latest_template_sha,
+    // 4. Sync repository using shared helper (mirrors async worker behavior)
+    console.log("\nSyncing repository to handout...");
+    console.log(`  From SHA: ${repo.synced_handout_sha || "(initial)"}`);
+    console.log(`  To SHA:   ${repo.assignments.latest_template_sha}`);
+
+    const result = await syncRepositoryToHandout({
+      repositoryFullName: repo.repository,
+      templateRepo: repo.assignments.template_repo,
+      fromSha: repo.synced_handout_sha,
+      toSha: repo.assignments.latest_template_sha,
+      autoMerge: true,
+      waitBeforeMerge: 2000,
       scope
-    );
-    console.log(`Found ${changedFiles.length} changed file(s)`);
+    });
 
-    if (changedFiles.length === 0) {
-      console.log("No files changed, nothing to sync.");
-      Deno.exit(0);
+    if (!result.success) {
+      throw new Error(result.error || "Sync failed");
     }
 
-    // List changed files
-    console.log("\nChanged files:");
-    for (const file of changedFiles) {
-      console.log(`  - ${file.path}`);
-    }
-
-    // 5. Create branch and commit changes
-    const branchName = `sync-to-${repo.assignments.latest_template_sha.substring(0, 7)}`;
-    const commitMessage = `Sync handout updates to ${repo.assignments.latest_template_sha.substring(0, 7)}
-
-This commit was automatically generated by an instructor to sync
-changes from the template repository.
-
-Changed files:
-${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
-
-    console.log(`\nCreating branch: ${branchName}`);
-    await createBranchAndCommit(repo.repository, branchName, "main", changedFiles, commitMessage, scope);
-    console.log("Branch created and files committed");
-
-    // 6. Create pull request
-    const prTitle = `[Instructor Update] Sync handout to ${repo.assignments.latest_template_sha.substring(0, 7)}`;
-    const prBody = `## Handout Update
-
-This pull request syncs the latest changes from the assignment template repository.
-
-**Triggered by:** Instructor
-**Template commit:** ${repo.assignments.latest_template_sha}
-**Previous sync:** ${repo.synced_handout_sha || "Initial sync"}
-
-### Changed Files
-${changedFiles.map((f) => `- \`${f.path}\``).join("\n")}
-
----
-*This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are conflicts, please review the changes and merge when ready, or ask your course staff for help.*`;
-
-    console.log("\nCreating pull request...");
-    const prNumber = await createPullRequest(repo.repository, branchName, "main", prTitle, prBody, scope);
-    console.log(`Pull request created: #${prNumber}`);
-    console.log(`View at: https://github.com/${repo.repository}/pull/${prNumber}`);
-
-    // 7. Attempt to auto-merge
-    console.log("\nChecking if PR can be auto-merged...");
-    // Wait a bit for GitHub to update the mergeable state
-    // TODO - do a retry loop here
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    const mergeResult = await mergePullRequest(repo.repository, prNumber, scope);
-
-    if (mergeResult.merged) {
-      console.log("✓ Pull request auto-merged successfully");
-      // Update both synced_handout_sha and synced_repo_sha in the database
-      await updateSyncedShas(adminSupabase, repo.id, repo.assignments.latest_template_sha, mergeResult.mergeSha);
-      console.log(
-        `✓ Database updated (handout SHA: ${repo.assignments.latest_template_sha}, merge SHA: ${mergeResult.mergeSha})`
-      );
+    // 5. Update database based on result (mirrors async worker behavior)
+    if (result.no_changes) {
+      console.log("\n✓ No changes needed - repository already up to date");
+      await adminSupabase
+        .from("repositories")
+        .update({
+          synced_handout_sha: repo.assignments.latest_template_sha,
+          desired_handout_sha: repo.assignments.latest_template_sha,
+          sync_data: {
+            last_sync_attempt: new Date().toISOString(),
+            status: "no_changes_needed"
+          }
+        })
+        .eq("id", repo.id);
+      console.log("✓ Database updated");
     } else {
-      console.log("⚠ Pull request created but requires manual merge due to conflicts or checks");
+      console.log(`\n✓ Pull request created: #${result.pr_number}`);
+      console.log(`  View at: ${result.pr_url}`);
+
+      if (result.merged) {
+        console.log("✓ Pull request auto-merged successfully");
+        await adminSupabase
+          .from("repositories")
+          .update({
+            synced_handout_sha: repo.assignments.latest_template_sha,
+            synced_repo_sha: result.merge_sha,
+            desired_handout_sha: repo.assignments.latest_template_sha,
+            sync_data: {
+              pr_number: result.pr_number,
+              pr_url: result.pr_url,
+              pr_state: "merged",
+              branch_name: `sync-to-${repo.assignments.latest_template_sha.substring(0, 7)}`,
+              last_sync_attempt: new Date().toISOString(),
+              merge_sha: result.merge_sha
+            }
+          })
+          .eq("id", repo.id);
+        console.log(
+          `✓ Database updated (handout SHA: ${repo.assignments.latest_template_sha}, merge SHA: ${result.merge_sha})`
+        );
+      } else {
+        console.log("⚠ Pull request created but requires manual merge due to conflicts or checks");
+        await adminSupabase
+          .from("repositories")
+          .update({
+            desired_handout_sha: repo.assignments.latest_template_sha,
+            sync_data: {
+              pr_number: result.pr_number,
+              pr_url: result.pr_url,
+              pr_state: "open",
+              branch_name: `sync-to-${repo.assignments.latest_template_sha.substring(0, 7)}`,
+              last_sync_attempt: new Date().toISOString()
+            }
+          })
+          .eq("id", repo.id);
+        console.log("✓ Database updated with PR info");
+      }
     }
 
     console.log("\n✓ Done!");
