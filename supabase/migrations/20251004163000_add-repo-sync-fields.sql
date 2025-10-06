@@ -1,6 +1,8 @@
 -- Migration to add fields for tracking handout sync status
 -- Adds desired_handout_sha and sync_data fields to repositories table
 
+ALTER TYPE public.github_async_method ADD VALUE IF NOT EXISTS 'sync_repo_to_handout';
+
 -- Add comment to the synced_handout_sha column to document its purpose
 COMMENT ON COLUMN public.repositories.synced_handout_sha IS 
 'The SHA of the last template repository commit that was synced to this student repository. 

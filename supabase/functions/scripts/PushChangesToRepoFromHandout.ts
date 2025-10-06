@@ -408,7 +408,7 @@ async function main() {
   const repoIdOrFullName = Deno.args[0];
   if (!repoIdOrFullName) {
     console.error(
-      "Usage: deno run --allow-env --allow-net PushChangesToRepoFromHandout.ts <repository_id_or_full_name>"
+      "Usage: ❯ deno run --allow-env --env-file=.env.local --allow-net --allow-import supabase/functions/scripts/PushChangesToRepoFromHandout.ts <repository_id_or_full_name>"
     );
     Deno.exit(1);
   }

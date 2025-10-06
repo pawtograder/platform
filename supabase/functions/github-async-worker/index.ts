@@ -575,13 +575,19 @@ export async function processEnvelope(
 
         // Update repository record using the repo_id if provided (preferred method)
         try {
+          const { data: latestHandoutCommit } = await adminSupabase
+            .from("assignments")
+            .select("latest_template_sha")
+            .eq("template_repo", templateRepo)
+            .maybeSingle();
           if (envelope.repo_id) {
             // Direct update using repo_id (more efficient and reliable)
             await adminSupabase
               .from("repositories")
               .update({
                 is_github_ready: true,
-                synced_repo_sha: headSha
+                synced_repo_sha: headSha,
+                synced_handout_sha: latestHandoutCommit?.latest_template_sha
               })
               .eq("id", envelope.repo_id);
           } else if (envelope.class_id) {
@@ -591,7 +597,8 @@ export async function processEnvelope(
               .from("repositories")
               .update({
                 is_github_ready: true,
-                synced_repo_sha: headSha
+                synced_repo_sha: headSha,
+                synced_handout_sha: latestHandoutCommit?.latest_template_sha
               })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);

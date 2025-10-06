@@ -179,10 +179,16 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
     );
   }
 
-  return <Badge colorPalette="yellow">Needs Sync</Badge>;
+  return <Badge colorPalette="yellow">Sync in Progress</Badge>;
 }
 
-function SyncButton({ repoId, onSuccess }: { repoId: number; onSuccess: () => void }) {
+function SyncButton({
+  repoId,
+  tableController
+}: {
+  repoId: number;
+  tableController: TableController<"repositories", typeof joinedSelect, number>;
+}) {
   const [isSyncing, setIsSyncing] = useState(false);
 
   const handleSync = async () => {
@@ -203,7 +209,8 @@ function SyncButton({ repoId, onSuccess }: { repoId: number; onSuccess: () => vo
           title: "Sync Queued",
           description: "Repository sync has been queued. This page will automatically update."
         });
-        onSuccess();
+        // Invalidate the row to refetch its updated state
+        await tableController.invalidate(repoId);
       } else if (result.skipped_count > 0) {
         toaster.info({
           title: "Already Up to Date",
@@ -309,6 +316,8 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
   );
 }
 
+const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
+
 export default function RepositoriesPage() {
   const { assignment_id } = useParams();
   const courseController = useCourseController();
@@ -319,7 +328,6 @@ export default function RepositoriesPage() {
     id: Number(assignment_id)
   });
 
-  const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
   const repositories: TableController<"repositories", typeof joinedSelect, number> = useMemo(() => {
     const client = createClient();
     const query = client
@@ -339,7 +347,6 @@ export default function RepositoriesPage() {
   }, [assignment_id, courseController]);
 
   const [isBulkSyncing, setIsBulkSyncing] = useState(false);
-  const [tableRefetch, setTableRefetch] = useState<(() => Promise<void>) | null>(null);
 
   const columns = useMemo<ColumnDef<RepositoryRow>[]>(
     () => [
@@ -494,7 +501,7 @@ export default function RepositoriesPage() {
           if (!desiredSha) status = "No Sync";
           else if (desiredSha === syncedSha) status = "Synced";
           else if (syncData?.pr_state === "open") status = "PR Open";
-          else status = "Needs Sync";
+          else status = "Sync in Progress";
 
           return values.includes(status);
         }
@@ -502,10 +509,10 @@ export default function RepositoriesPage() {
       {
         id: "actions",
         header: "Actions",
-        cell: ({ row }) => <SyncButton repoId={row.original.id} onSuccess={() => tableRefetch?.()} />
+        cell: ({ row }) => <SyncButton repoId={row.original.id} tableController={repositories} />
       }
     ],
-    [tableRefetch, assignment]
+    [repositories, assignment]
   );
 
   const {
@@ -519,7 +526,6 @@ export default function RepositoriesPage() {
     previousPage,
     setPageSize,
     data,
-    refetch,
     getSelectedRowModel,
     toggleAllRowsSelected
   } = useTableControllerTable({
@@ -533,11 +539,6 @@ export default function RepositoriesPage() {
       }
     }
   });
-
-  // Store refetch in state for column callbacks
-  useEffect(() => {
-    setTableRefetch(() => refetch);
-  }, [refetch]);
 
   const handleBulkSync = useCallback(async () => {
     const selectedRows = getSelectedRowModel().rows;
@@ -569,7 +570,8 @@ export default function RepositoriesPage() {
       });
 
       toggleAllRowsSelected(false);
-      await tableRefetch?.();
+      // Invalidate all synced rows to refetch their updated state
+      await repositories.refetchByIds(selectedIds);
     } catch (error) {
       console.error(error);
       toaster.error({
@@ -579,7 +581,7 @@ export default function RepositoriesPage() {
     } finally {
       setIsBulkSyncing(false);
     }
-  }, [getSelectedRowModel, toggleAllRowsSelected, tableRefetch]);
+  }, [getSelectedRowModel, toggleAllRowsSelected, repositories]);
 
   const [pageCount, setPageCount] = useState(0);
   const nRows = getRowModel().rows.length;
@@ -732,7 +734,7 @@ export default function RepositoriesPage() {
                               }}
                               options={[
                                 { label: "Synced", value: "Synced" },
-                                { label: "Needs Sync", value: "Needs Sync" },
+                                { label: "Sync in Progress", value: "Sync in Progress" },
                                 { label: "PR Open", value: "PR Open" },
                                 { label: "No Sync", value: "No Sync" }
                               ]}
