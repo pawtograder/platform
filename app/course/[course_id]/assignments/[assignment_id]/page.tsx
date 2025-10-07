@@ -26,6 +26,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -35,7 +36,7 @@ export default function AssignmentPage() {
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
   const trackEvent = useTrackEvent();
   const hasTrackedView = useRef(false);
-  const autograderData = useRef(null);
+  const autograderData = useRef<Database["public"]["Functions"]["get_submissions_limits"]["Returns"] | null>(null);
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
   const ourAssignmentGroupPredicate = useMemo(() => {
     return (group: AssignmentGroup) =>
@@ -77,10 +78,12 @@ export default function AssignmentPage() {
   useEffect(() => {
     async function fetchSubmissionLimits() {
       const supabaseClient = createClient();
-      const { data, error } = await supabaseClient.rpc("get_submissions_limits", { p_assignment_id: assignment_id });
+      if (!assignment_id) return;
+      const { data, error } = await supabaseClient.rpc("get_submissions_limits", { p_assignment_id: Number(assignment_id) });
       if (error) {
         console.error("Failed to fetch submission limits:", error);
       }
+      if(!data) return;
       autograderData.current = data;
     }
     fetchSubmissionLimits();
