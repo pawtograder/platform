@@ -1210,7 +1210,7 @@ Deno.serve(async (req) => {
 
   try {
     maybeCrash("entry.before_status_upsert");
-    
+
     // Use Redis for webhook status tracking with 24-hour TTL
     const redis = getRedisClient();
     if (!redis) {
@@ -1227,7 +1227,7 @@ Deno.serve(async (req) => {
       try {
         // Try to get existing status from Redis
         const existingStatus = await redis.get(webhookKey);
-        
+
         if (!existingStatus) {
           // First delivery - create new status
           const newStatus: WebhookStatus = {
@@ -1241,14 +1241,15 @@ Deno.serve(async (req) => {
         } else {
           // Redelivery - parse existing status
           // Upstash Redis client may return object directly or as string
-          const status = typeof existingStatus === "string" 
-            ? JSON.parse(existingStatus) as WebhookStatus
-            : existingStatus as WebhookStatus;
-          
+          const status =
+            typeof existingStatus === "string"
+              ? (JSON.parse(existingStatus) as WebhookStatus)
+              : (existingStatus as WebhookStatus);
+
           if (status.completed) {
             return Response.json({ message: "Duplicate webhook received" }, { status: 200 });
           }
-          
+
           // Increment attempt count
           attemptCount = (status.attempt_count || 0) + 1;
           const updatedStatus: WebhookStatus = {
@@ -1262,7 +1263,10 @@ Deno.serve(async (req) => {
 
         if (attemptCount >= 3) {
           scope.setTag("attempt_count", String(attemptCount));
-          Sentry.captureMessage("Uncompleted webhook redelivered 3+ times. Consider processing duplicate webhooks safely?", scope);
+          Sentry.captureMessage(
+            "Uncompleted webhook redelivered 3+ times. Consider processing duplicate webhooks safely?",
+            scope
+          );
         }
       } catch (redisError) {
         console.error("Redis error during webhook status check:", redisError);
@@ -1280,15 +1284,16 @@ Deno.serve(async (req) => {
         payload: body.detail
       });
       maybeCrash("entry.after_dispatch_before_complete");
-      
+
       // Mark as completed in Redis
       if (redis) {
         try {
           const existingStatus = await redis.get(webhookKey);
           if (existingStatus) {
-            const status = typeof existingStatus === "string"
-              ? JSON.parse(existingStatus) as WebhookStatus
-              : existingStatus as WebhookStatus;
+            const status =
+              typeof existingStatus === "string"
+                ? (JSON.parse(existingStatus) as WebhookStatus)
+                : (existingStatus as WebhookStatus);
             const completedStatus: WebhookStatus = {
               ...status,
               completed: true,
@@ -1305,15 +1310,16 @@ Deno.serve(async (req) => {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
       Sentry.captureException(err, scope);
-      
+
       // Log error in Redis
       if (redis) {
         try {
           const existingStatus = await redis.get(webhookKey);
           if (existingStatus) {
-            const status = typeof existingStatus === "string"
-              ? JSON.parse(existingStatus) as WebhookStatus
-              : existingStatus as WebhookStatus;
+            const status =
+              typeof existingStatus === "string"
+                ? (JSON.parse(existingStatus) as WebhookStatus)
+                : (existingStatus as WebhookStatus);
             const errorStatus: WebhookStatus = {
               ...status,
               last_error: (err as Error)?.message || "unknown error",
@@ -1326,7 +1332,7 @@ Deno.serve(async (req) => {
           Sentry.captureException(redisError, scope);
         }
       }
-      
+
       return Response.json(
         {
           message: "Error processing webhook"

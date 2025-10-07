@@ -25,7 +25,8 @@ export default function WorkflowRunsPage() {
       </Heading>
       <Text fontSize="sm" color="fg.muted" mb={6}>
         History of recent GitHub Actions workflow executions for student submissions. This page shows detailed timing
-        information and execution status. Data updated in real-time (click refresh icon to update), showing the most recent 1000 runs.
+        information and execution status. Data updated in real-time (click refresh icon to update), showing the most
+        recent 1000 runs.
       </Text>
       <WorkflowRunTable />
     </Box>
@@ -406,11 +407,17 @@ function WorkflowRunTable() {
       query: query,
       client: supabase,
       table: "workflow_runs",
-      classRealTimeController,
+      classRealTimeController
     });
   }, [supabase, course_id, classRealTimeController]);
 
-  const { getHeaderGroups, getRowModel, getCoreRowModel, data, tableController: controller } = useTableControllerTable({
+  const {
+    getHeaderGroups,
+    getRowModel,
+    getCoreRowModel,
+    data,
+    tableController: controller
+  } = useTableControllerTable({
     columns,
     tableController,
     initialState: {
