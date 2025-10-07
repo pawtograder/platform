@@ -9352,6 +9352,15 @@ export type Database = {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
       };
+      get_submissions_limits: {
+        Args: { p_assignment_id: number };
+        Returns: {
+          created_at: string;
+          id: number;
+          max_submissions_count: number;
+          max_submissions_period_secs: number;
+        }[];
+      };
       get_system_notification_stats: {
         Args: { p_requested_by?: string };
         Returns: {
