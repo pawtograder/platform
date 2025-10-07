@@ -1,4 +1,4 @@
-import { Redis as UpstashRedis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
+import { Redis as UpstashRedis } from "https://esm.sh/@upstash/redis";
 import * as Sentry from "npm:@sentry/deno";
 type EventHandler = (...args: unknown[]) => void;
 
@@ -15,6 +15,7 @@ export class Redis {
   private client: UpstashRedis;
   private eventHandlers: Map<string, Set<EventHandler>> = new Map();
   private scripts: Map<string, string> = new Map();
+  private scriptSHAs: Map<string, string> = new Map();
   private initOptions: Record<string, unknown>;
   private subscribedChannels: Set<string> = new Set();
   private sseConnections: Map<string, ReadableStreamDefaultReader<Uint8Array>> = new Map();
@@ -27,17 +28,20 @@ export class Redis {
     // Support both env-based and passed-in credentials
     const url = String(
       clientOptions.url ||
-        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
-        (clientOptions.host ? `https://${clientOptions.host}` : "")
+      Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+      (clientOptions.host ? `https://${clientOptions.host}` : "")
     );
     const token = String(
       clientOptions.token || clientOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
     );
     this.client = new UpstashRedis({ url, token });
 
-    if (Deno.env.get("REDIS_DEBUG") === "true") {
-      console.log("Redis adapter initialized", { hasUrl: Boolean(url), hasToken: Boolean(token) });
-    }
+    Sentry.addBreadcrumb({
+      category: "redis",
+      message: "Redis adapter initialized",
+      data: { hasUrl: Boolean(url), hasToken: Boolean(token) },
+      level: "debug"
+    });
 
     // Emit ready asynchronously to mimic ioredis behavior
     queueMicrotask(() => this.emit("ready"));
@@ -100,9 +104,14 @@ export class Redis {
   // ioredis API: duplicate returns a new connection with same options
   duplicate() {
     const newRedis = new Redis(this.initOptions);
-    // Copy defined scripts to the new instance
+    // Copy defined scripts and their SHAs to the new instance
     for (const [name, script] of this.scripts.entries()) {
       newRedis.defineCommand(name, { lua: script });
+      // Copy the SHA if it was already loaded
+      const sha = this.scriptSHAs.get(name);
+      if (sha) {
+        newRedis.scriptSHAs.set(name, sha);
+      }
     }
     return newRedis;
   }
@@ -110,6 +119,12 @@ export class Redis {
   // ioredis API: defineCommand(name, { lua }) registers a script callable as client[name](...)
   defineCommand(name: string, options: { lua: string }) {
     this.scripts.set(name, options.lua);
+    // Capture the actual client and map references, not 'this'
+    // This ensures each duplicated instance uses its own client and scripts
+    const client = this.client;
+    const scripts = this.scripts;
+    const scriptSHAs = this.scriptSHAs;
+
     const fn = async (...args: unknown[]) => {
       const maybeCb = args[args.length - 1];
       const hasCallback = typeof maybeCb === "function";
@@ -119,173 +134,133 @@ export class Redis {
       const numKeys = Number(args[0]);
       const keys = (args.slice(1, 1 + numKeys) as string[]) || [];
       const argv = (args.slice(1 + numKeys, hasCallback ? -1 : undefined) as (string | number)[]) || [];
-      const script = this.scripts.get(name) || "";
+      const script = scripts.get(name) || "";
 
-      try {
-        if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("eval script", {
-            name,
-            numKeys,
-            keysCount: keys.length,
-            argvCount: argv.length,
-            rawArgsCount: args.length,
-            firstKey: keys[0],
-            firstArg: argv[0],
-            allKeys: keys,
-            scriptLength: script.length
-          });
-        }
+      const maxRetries = 3;
+      let lastError: unknown;
 
-        // Check if Upstash client has eval method
-        const clientAsAny = this.client as unknown as Record<string, unknown>;
-        if (typeof clientAsAny.eval !== "function") {
-          throw new Error("Upstash Redis client does not support EVAL command");
-        }
-
-        const result = await (
-          this.client as unknown as {
-            eval: (script: string, keys: string[], args: (string | number)[]) => Promise<unknown>;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          // Load script and get SHA if not already loaded
+          let sha = scriptSHAs.get(name);
+          if (!sha) {
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Loading script",
+              data: { name, scriptLength: script.length, attempt },
+              level: "debug"
+            });
+            sha = await client.scriptLoad(script);
+            scriptSHAs.set(name, sha);
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Script loaded",
+              data: { name, sha, attempt },
+              level: "debug"
+            });
           }
-        ).eval(script, keys, argv);
-        if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("eval script result", { name, result });
+
+          Sentry.addBreadcrumb({
+            category: "redis",
+            message: "evalsha script",
+            data: {
+              name,
+              sha,
+              numKeys,
+              keysCount: keys.length,
+              argvCount: argv.length,
+              rawArgsCount: args.length,
+              firstKey: keys[0],
+              firstArg: argv[0],
+              allKeys: keys,
+              attempt
+            },
+            level: "debug"
+          });
+
+          const result = await client.evalsha(sha, keys, argv);
+          Sentry.addBreadcrumb({
+            category: "redis",
+            message: "evalsha script result",
+            data: { name, result, attempt },
+            level: "debug"
+          });
+          if (cb) cb(null, result);
+          return result;
+        } catch (error) {
+          lastError = error;
+          const errorMessage = String(error);
+          console.log("evalsha script error", { name, errorMessage, attempt });
+
+          // If script was evicted from cache, reload it
+          if (errorMessage.includes("NOSCRIPT")) {
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Script evicted from cache, reloading",
+              data: { name, attempt },
+              level: "warning"
+            });
+            // Clear the cached SHA and retry on next iteration
+            scriptSHAs.delete(name);
+
+            // If this is the last attempt, don't wait
+            if (attempt < maxRetries - 1) {
+              const backoffMs = Math.pow(2, attempt) * 100; // 100ms, 200ms, 400ms
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+            }
+            continue;
+          }
+
+          // For UNKNOWN_CLIENT or other transient errors, retry with exponential backoff
+          if (errorMessage.includes("UNKNOWN_CLIENT") || errorMessage.includes("timeout")) {
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Transient error, retrying",
+              data: { name, errorMessage, attempt },
+              level: "warning"
+            });
+            const pong = await this.client.ping();
+            console.log("Ping pong", { pong });
+
+            // If this is the last attempt, don't wait
+            if (attempt < maxRetries - 1) {
+              const backoffMs = Math.pow(2, attempt) * 2000; // 2000ms, 4000ms, 8000ms
+              console.log("Transient error, retrying", { name, errorMessage, attempt, backoffMs });
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+            }
+            continue;
+          }
+
+          // For non-retryable errors, throw immediately
+          console.trace(error);
+          console.error("evalsha script error (non-retryable)", { name, error, attempt });
+          Sentry.addBreadcrumb({
+            category: "redis",
+            message: "evalsha script error (non-retryable)",
+            data: { name, error, attempt },
+            level: "error"
+          });
+          Sentry.captureException(error);
+          if (cb) cb(error);
+          else throw error;
         }
-        if (cb) cb(null, result);
-        return result;
-      } catch (error) {
-        Sentry.captureException(error);
-        if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.error("eval script error", { name, error });
-        }
-        if (cb) cb(error);
-        else throw error;
       }
+
+      // All retries exhausted
+      console.trace(lastError);
+      console.error("evalsha script error after all retries", { name, error: lastError });
+      Sentry.addBreadcrumb({
+        category: "redis",
+        message: "evalsha script error after all retries",
+        data: { name, error: lastError, maxRetries },
+        level: "error"
+      });
+      Sentry.captureException(lastError);
+      if (cb) cb(lastError);
+      else throw lastError;
     };
     // Attach callable script function directly on the instance
     (this as unknown as Record<string, unknown>)[name] = fn;
-  }
-
-  // Command executor used by pipeline
-  private async executeCommand(cmd: [string, ...unknown[]]) {
-    const [command, ...args] = cmd;
-    const commandName = String(command);
-
-    // Custom script defined via defineCommand
-    const selfTarget = this as unknown as Record<string, unknown>;
-    const selfFn = selfTarget[commandName];
-    if (typeof selfFn === "function") {
-      return await (selfFn as (...p: unknown[]) => Promise<unknown>)(...args);
-    }
-
-    // Direct Upstash command
-    const target = this.client as unknown as Record<string, unknown>;
-    const method = target[commandName];
-    if (typeof method === "function") {
-      return await (method as (...p: unknown[]) => Promise<unknown>).apply(this.client, args);
-    }
-    throw new Error(`Unsupported command in pipeline: ${commandName}`);
-  }
-
-  // ioredis API: pipeline([...]).exec() => [[err, result], ...]
-  pipeline(commands: Array<[string, ...unknown[]]>) {
-    const emitError = this.emit.bind(this);
-    const executeCommand = this.executeCommand.bind(this);
-    const scripts = this.scripts; // Capture for closure
-
-    // Capture credentials at pipeline creation time
-    const url = String(
-      this.initOptions.url ||
-        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
-        (this.initOptions.host ? `https://${this.initOptions.host}` : "")
-    );
-    const token = String(
-      this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
-    );
-
-    return {
-      async exec() {
-        const out: Array<[unknown, unknown]> = [];
-
-        if (commands.length === 0) {
-          return out;
-        }
-
-        if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("pipeline exec", {
-            commandCount: commands.length,
-            commands: commands.map((cmd) => cmd[0])
-          });
-        }
-
-        // Check if ANY commands are custom scripts (defined via defineCommand)
-        const hasCustomScripts = commands.some((cmd) => {
-          const commandName = String(cmd[0]);
-          return scripts.has(commandName);
-        });
-
-        if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log(
-            `  pipeline hasCustomScripts: ${hasCustomScripts}, executing ${hasCustomScripts ? "SEQUENTIALLY" : "BATCHED"}`
-          );
-        }
-
-        // If there are custom scripts, we must execute sequentially because
-        // Upstash pipeline doesn't support our defineCommand Lua scripts
-        if (hasCustomScripts) {
-          for (const cmd of commands) {
-            try {
-              const result = await executeCommand(cmd);
-              out.push([null, result]);
-            } catch (err) {
-              out.push([err, null]);
-              emitError("error", err);
-            }
-          }
-          return out;
-        }
-
-        // No custom scripts - use Upstash's atomic pipeline endpoint
-        try {
-          const pipelineCommands = commands.map((cmd) => cmd);
-
-          const pipelineUrl = `${url}/pipeline`;
-          const response = await fetch(pipelineUrl, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(pipelineCommands)
-          });
-
-          if (!response.ok) {
-            throw new Error(`Pipeline request failed: ${response.status} ${response.statusText}`);
-          }
-
-          const results = (await response.json()) as Array<{ result?: unknown; error?: string }>;
-
-          for (let i = 0; i < commands.length; i++) {
-            const resp = results[i];
-
-            if (resp && typeof resp === "object" && "error" in resp) {
-              out.push([resp.error, null]);
-              emitError("error", resp.error);
-            } else if (resp && typeof resp === "object" && "result" in resp) {
-              out.push([null, resp.result]);
-            } else {
-              out.push([null, resp]);
-            }
-          }
-        } catch (err) {
-          for (let i = 0; i < commands.length; i++) {
-            out.push([err, null]);
-            emitError("error", err);
-          }
-        }
-
-        return out;
-      }
-    };
   }
 
   // Helper method to establish SSE connection for a channel
@@ -296,9 +271,12 @@ export class Redis {
 
     // Prevent concurrent connection attempts
     if (this.sseConnectionsInProgress.has(channel)) {
-      if (Deno.env.get("REDIS_DEBUG") === "true") {
-        console.log("SSE connection already in progress", { channel });
-      }
+      Sentry.addBreadcrumb({
+        category: "redis",
+        message: "SSE connection already in progress",
+        data: { channel },
+        level: "debug"
+      });
       return;
     }
 
@@ -307,8 +285,8 @@ export class Redis {
     try {
       const url = String(
         this.initOptions.url ||
-          Deno.env.get("UPSTASH_REDIS_REST_URL") ||
-          (this.initOptions.host ? `https://${this.initOptions.host}` : "")
+        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+        (this.initOptions.host ? `https://${this.initOptions.host}` : "")
       );
       const token = String(
         this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
@@ -339,16 +317,22 @@ export class Redis {
       const reader = response.body.getReader();
       this.sseConnections.set(channel, reader);
 
-      if (Deno.env.get("REDIS_DEBUG") === "true") {
-        console.log("SSE connection established", { channel });
-      }
+      Sentry.addBreadcrumb({
+        category: "redis",
+        message: "SSE connection established",
+        data: { channel },
+        level: "debug"
+      });
 
       // Start reading SSE events
       this.readSSEEvents(channel, reader);
     } catch (error) {
-      if (Deno.env.get("REDIS_DEBUG") === "true") {
-        console.error("SSE connection failed", { channel, error });
-      }
+      Sentry.addBreadcrumb({
+        category: "redis",
+        message: "SSE connection failed",
+        data: { channel, error },
+        level: "error"
+      });
       this.sseConnections.delete(channel);
       this.sseAbortControllers.delete(channel);
       throw error;
@@ -367,9 +351,12 @@ export class Redis {
         const { done, value } = await reader.read();
 
         if (done) {
-          if (Deno.env.get("REDIS_DEBUG") === "true") {
-            console.log("SSE stream ended", { channel });
-          }
+          Sentry.addBreadcrumb({
+            category: "redis",
+            message: "SSE stream ended",
+            data: { channel },
+            level: "debug"
+          });
           break;
         }
 
@@ -398,39 +385,57 @@ export class Redis {
                 if (messageType === "message" && parts.length >= 3) {
                   // Extract the actual message payload (everything after the second comma)
                   const messagePayload = parts.slice(2).join(",");
-                  if (Deno.env.get("REDIS_DEBUG") === "true") {
-                    console.log("SSE message received", { channel, messagePayload });
-                  }
+                  Sentry.addBreadcrumb({
+                    category: "redis",
+                    message: "SSE message received",
+                    data: { channel, messagePayload },
+                    level: "debug"
+                  });
                   // Emit message to local subscribers (channel and message payload)
                   this.emit("message", channel, messagePayload);
                 } else if (messageType === "subscribe" || messageType === "unsubscribe") {
                   // Subscription/unsubscription confirmation - just log if debugging
-                  if (Deno.env.get("REDIS_DEBUG") === "true") {
-                    console.log(`SSE ${messageType} confirmation`, { data });
-                  }
+                  Sentry.addBreadcrumb({
+                    category: "redis",
+                    message: `SSE ${messageType} confirmation`,
+                    data: { data },
+                    level: "debug"
+                  });
                 } else if (messageType === "pmessage" && parts.length >= 4) {
                   // Pattern message - extract payload (everything after third comma)
                   const messagePayload = parts.slice(3).join(",");
-                  if (Deno.env.get("REDIS_DEBUG") === "true") {
-                    console.log("SSE pmessage received", { channel, messagePayload });
-                  }
+                  Sentry.addBreadcrumb({
+                    category: "redis",
+                    message: "SSE pmessage received",
+                    data: { channel, messagePayload },
+                    level: "debug"
+                  });
                   this.emit("pmessage", parts[1], parts[2], messagePayload);
                 } else if (messageType === "psubscribe" || messageType === "punsubscribe") {
                   // Pattern subscription confirmation - just log if debugging
-                  if (Deno.env.get("REDIS_DEBUG") === "true") {
-                    console.log(`SSE ${messageType} confirmation`, { data });
-                  }
+                  Sentry.addBreadcrumb({
+                    category: "redis",
+                    message: `SSE ${messageType} confirmation`,
+                    data: { data },
+                    level: "debug"
+                  });
                 } else {
                   // Unknown message type - log but don't treat as error
-                  if (Deno.env.get("REDIS_DEBUG") === "true") {
-                    console.log("SSE unknown message type", { channel, data });
-                  }
+                  Sentry.addBreadcrumb({
+                    category: "redis",
+                    message: "SSE unknown message type",
+                    data: { channel, data },
+                    level: "warning"
+                  });
                 }
               } catch (parseError) {
                 Sentry.captureException(parseError);
-                if (Deno.env.get("REDIS_DEBUG") === "true") {
-                  console.error("Failed to parse SSE message", { channel, data, parseError });
-                }
+                Sentry.addBreadcrumb({
+                  category: "redis",
+                  message: "Failed to parse SSE message",
+                  data: { channel, data, parseError },
+                  level: "error"
+                });
               }
             }
           }
@@ -438,9 +443,12 @@ export class Redis {
       }
     } catch (error) {
       Sentry.captureException(error);
-      if (Deno.env.get("REDIS_DEBUG") === "true") {
-        console.error("SSE read error", { channel, error });
-      }
+      Sentry.addBreadcrumb({
+        category: "redis",
+        message: "SSE read error",
+        data: { channel, error },
+        level: "error"
+      });
     } finally {
       this.sseConnections.delete(channel);
       this.sseAbortControllers.delete(channel);
@@ -448,16 +456,22 @@ export class Redis {
       // Auto-reconnect if this channel is still subscribed
       // This handles cases where the SSE connection drops/times out
       if (this.subscribedChannels.has(channel)) {
-        if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("SSE connection lost, attempting to reconnect", { channel });
-        }
+        Sentry.addBreadcrumb({
+          category: "redis",
+          message: "SSE connection lost, attempting to reconnect",
+          data: { channel },
+          level: "warning"
+        });
         // Reconnect after a short delay to avoid tight reconnection loop
         setTimeout(() => {
           if (this.subscribedChannels.has(channel)) {
             void this.establishSSEConnection(channel).catch((err) => {
-              if (Deno.env.get("REDIS_DEBUG") === "true") {
-                console.error("SSE reconnection failed", { channel, error: err });
-              }
+              Sentry.addBreadcrumb({
+                category: "redis",
+                message: "SSE reconnection failed",
+                data: { channel, error: err },
+                level: "error"
+              });
               // Schedule another retry after exponential backoff
               // This will keep retrying as long as the channel is subscribed
             });
@@ -485,9 +499,12 @@ export class Redis {
       this.sseConnections.delete(channel);
     }
 
-    if (Deno.env.get("REDIS_DEBUG") === "true") {
-      console.log("SSE connection cleaned up", { channel });
-    }
+    Sentry.addBreadcrumb({
+      category: "redis",
+      message: "SSE connection cleaned up",
+      data: { channel },
+      level: "debug"
+    });
   }
 
   // Pub/Sub
@@ -501,9 +518,12 @@ export class Redis {
     await this.establishSSEConnection(channel);
 
     if (cb) cb();
-    if (Deno.env.get("REDIS_DEBUG") === "true") {
-      console.log("subscribe", { channel });
-    }
+    Sentry.addBreadcrumb({
+      category: "redis",
+      message: "subscribe",
+      data: { channel },
+      level: "debug"
+    });
     await Promise.resolve();
   }
 
@@ -518,25 +538,28 @@ export class Redis {
         await this.cleanupSSEConnection(channel);
       }
     }
-    if (Deno.env.get("REDIS_DEBUG") === "true") {
-      console.log("unsubscribe", { channel });
-    }
+    Sentry.addBreadcrumb({
+      category: "redis",
+      message: "unsubscribe",
+      data: { channel },
+      level: "debug"
+    });
     await Promise.resolve();
   }
 
   async publish(channel: string, message: string) {
     try {
       // Upstash client supports PUBLISH
-      await (this.client as unknown as { publish: (c: string, m: string) => Promise<number> }).publish(
-        channel,
-        message
-      );
+      await this.client.publish(channel, message);
     } catch (err) {
       throw err;
     }
-    if (Deno.env.get("REDIS_DEBUG") === "true") {
-      console.log("publish", { channel });
-    }
+    Sentry.addBreadcrumb({
+      category: "redis",
+      message: "publish",
+      data: { channel },
+      level: "debug"
+    });
     const set = channelBus.get(channel);
     if (set) {
       for (const sub of set) sub.emit("message", channel, message);

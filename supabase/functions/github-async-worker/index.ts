@@ -62,8 +62,6 @@ export function getCreateContentLimiter(org: string): Bottleneck {
         host,
         password,
         username: "default",
-        tls: {},
-        port: 6379
       },
       Redis
     });
@@ -308,6 +306,7 @@ async function checkAndTripErrorCircuitBreaker(
         p_retry_after_seconds: 28800, // 8 hours
         p_reason: `Error threshold exceeded for ${method}: ${errorCount} errors in 5 minutes`
       });
+      Sentry.captureMessage(`Opened BIG circuit breaker for ${method}`);
 
       if (!tripResult.error) {
         // Log special error to Sentry
@@ -367,7 +366,11 @@ export async function processEnvelope(
         const repo = (envelope.args as RerunAutograderArgs).repository;
         return repo.split("/")[0];
       }
-      return undefined;
+      if (envelope.method === "sync_repo_to_handout") {
+        const repo = (envelope.args as SyncRepoToHandoutArgs).repository_full_name;
+        return repo.split("/")[0];
+      }
+      throw new Error(`Unknown method, ignoring circuit breaker, seems dangerous. ${envelope.method}`);
     })();
     if (org) {
       // Check org-level circuit breaker first (highest priority - blocks everything)
@@ -859,6 +862,7 @@ export async function processEnvelope(
           );
           return true;
         } catch (error) {
+          console.trace(error);
           // Update repository with error status
           const { error: updateError } = await adminSupabase
             .from("repositories")
@@ -999,6 +1003,7 @@ export async function processEnvelope(
             p_retry_after_seconds: 30,
             p_reason: `Immediate circuit breaker: ${envelope.method} error - ${error instanceof Error ? error.message : String(error)}`
           });
+          Sentry.captureMessage(`Opened immediate circuit breaker for ${envelope.method}`);
 
           scope.setTag("immediate_circuit_breaker", "30s");
           scope.setTag("circuit_method", envelope.method);

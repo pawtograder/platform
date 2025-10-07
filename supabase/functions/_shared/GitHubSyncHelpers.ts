@@ -61,9 +61,9 @@ function getSyncLimiter(org: string): Bottleneck {
     const password = upstashToken;
     limiter = new Bottleneck({
       id: `sync_repo_to_handout:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 50,
-      maxConcurrent: 50,
-      reservoirRefreshAmount: 50,
+      reservoir: 40,
+      maxConcurrent: 40,
+      reservoirRefreshAmount: 40,
       reservoirRefreshInterval: 60_000,
       datastore: "ioredis",
       clearDatastore: false,
@@ -71,8 +71,6 @@ function getSyncLimiter(org: string): Bottleneck {
         host,
         password,
         username: "default",
-        tls: {},
-        port: 6379
       },
       Redis
     });
@@ -239,7 +237,11 @@ export async function createBranchAndCommit(
   }
 
   const [owner, repo] = repoFullName.split("/");
-
+  scope?.setTag("owner", owner);
+  scope?.setTag("repo", repo);
+  scope?.setTag("base_branch", baseBranch);
+  scope?.setTag("branch_name", branchName);
+  scope?.setTag("commit_message", commitMessage);
   const { data: baseRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
     owner,
     repo,
@@ -247,9 +249,10 @@ export async function createBranchAndCommit(
   });
 
   const baseSha = baseRef.object.sha;
-  const createContentLimiter = getCreateContentLimiter(owner);
+  scope?.setTag("base_sha", baseSha);
 
-  // Delete existing branch if it exists
+  console.log("createBranchAndCommit", repoFullName, branchName, baseBranch, files, commitMessage);
+  // Create new branch
   try {
     await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
       owner,
@@ -259,24 +262,20 @@ export async function createBranchAndCommit(
   } catch {
     // Branch doesn't exist, which is fine
   }
-
-  // Create new branch
-  await createContentLimiter.schedule(
-    async () =>
-      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-        owner,
-        repo,
-        ref: `refs/heads/${branchName}`,
-        sha: baseSha
-      })
-  );
+  const { data: newRef } = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+    owner,
+    repo,
+    ref: `refs/heads/${branchName}`,
+    sha: baseSha
+  });
+  scope?.setTag("new_ref", newRef.ref);
 
   const { data: baseCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
     owner,
     repo,
     commit_sha: baseSha
   });
-
+  scope?.setTag("base_commit_sha", baseCommit.sha);
   // Create blobs for all changed files
   const treeItems = await Promise.all(
     files.map(async (file) => {
@@ -290,16 +289,12 @@ export async function createBranchAndCommit(
         };
       }
 
-      const { data: blob } = await createContentLimiter.schedule(
-        async () =>
-          await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
-            owner,
-            repo,
-            content: file.content,
-            encoding: "base64"
-          })
-      );
-
+      const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+        owner,
+        repo,
+        content: file.content,
+        encoding: "base64"
+      });
       return {
         path: file.path,
         mode: "100644" as const,
@@ -309,36 +304,26 @@ export async function createBranchAndCommit(
     })
   );
 
-  const { data: newTree } = await createContentLimiter.schedule(
-    async () =>
-      await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
-        owner,
-        repo,
-        base_tree: baseCommit.tree.sha,
-        tree: treeItems
-      })
-  );
-
-  const { data: newCommit } = await createContentLimiter.schedule(
-    async () =>
-      await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
-        owner,
-        repo,
-        message: commitMessage,
-        tree: newTree.sha,
-        parents: [baseSha]
-      })
-  );
-
-  await createContentLimiter.schedule(
-    async () =>
-      await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-        owner,
-        repo,
-        ref: `heads/${branchName}`,
-        sha: newCommit.sha
-      })
-  );
+  const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
+    owner,
+    repo,
+    base_tree: baseCommit.tree.sha,
+    tree: treeItems
+  });
+  const { data: newCommit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
+    owner,
+    repo,
+    message: commitMessage,
+    tree: newTree.sha,
+    parents: [baseSha]
+  });
+  scope?.setTag("new_commit_sha", newCommit.sha);
+  await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${branchName}`,
+    sha: newCommit.sha
+  });
 }
 
 /**
@@ -358,19 +343,22 @@ export async function createPullRequest(
   }
 
   const [owner, repo] = repoFullName.split("/");
-  const createContentLimiter = getCreateContentLimiter(owner);
 
-  const { data: pr } = await createContentLimiter.schedule(
-    async () =>
-      await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-        owner,
-        repo,
-        title,
-        body,
-        head: branchName,
-        base: baseBranch
-      })
-  );
+  scope?.setTag("owner", owner);
+  scope?.setTag("repo", repo);
+  scope?.setTag("branch_name", branchName);
+  scope?.setTag("base_branch", baseBranch);
+  scope?.setTag("title", title);
+  scope?.setTag("body", body);
+  scope?.setTag("github_operation", "create_pull_request");
+  const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
+    owner,
+    repo,
+    title,
+    body,
+    head: branchName,
+    base: baseBranch
+  })
 
   return pr.number;
 }
@@ -427,39 +415,50 @@ export async function syncRepositoryToHandout(params: {
 }): Promise<SyncResult> {
   const org = params.repositoryFullName.split("/")[0];
   const limiter = getSyncLimiter(org);
+  const createContentLimiter = getCreateContentLimiter(org);
+  console.log("Waiting for createContentLimiter to be available", org);
+  return await createContentLimiter.schedule(async () => {
+    console.log("Waiting for sync limiter to be available", org);
+    return await limiter.schedule(async () => {
+      // Wrap the sync operation in the rate limiter
+      console.log("syncRepositoryToHandout", params);
+      const {
+        repositoryFullName,
+        templateRepo,
+        fromSha,
+        toSha,
+        autoMerge = true,
+        waitBeforeMerge = 2000,
+        scope
+      } = params;
+      scope?.setTag("repository", repositoryFullName);
+      scope?.setTag("template_repo", templateRepo);
+      scope?.setTag("from_sha", fromSha);
+      scope?.setTag("to_sha", toSha);
+      scope?.setTag("auto_merge", autoMerge.toString());
+      scope?.setTag("wait_before_merge", waitBeforeMerge.toString());
+      scope?.setTag("sync_operation", "sync_repository_to_handout");
 
-  // Wrap the sync operation in the rate limiter
-  return limiter.schedule(async () => {
-    const {
-      repositoryFullName,
-      templateRepo,
-      fromSha,
-      toSha,
-      autoMerge = true,
-      waitBeforeMerge = 2000,
-      scope
-    } = params;
+      scope?.addBreadcrumb({
+        message: `Starting rate-limited sync for ${repositoryFullName}`,
+        category: "sync",
+        level: "info"
+      });
 
-    scope?.addBreadcrumb({
-      message: `Starting rate-limited sync for ${repositoryFullName}`,
-      category: "sync",
-      level: "info"
-    });
+      try {
+        // Get changed files (with caching)
+        const changedFiles = await getChangedFiles(templateRepo, fromSha, toSha, scope);
 
-    try {
-      // Get changed files (with caching)
-      const changedFiles = await getChangedFiles(templateRepo, fromSha, toSha, scope);
+        if (changedFiles.length === 0) {
+          return {
+            success: true,
+            no_changes: true
+          };
+        }
 
-      if (changedFiles.length === 0) {
-        return {
-          success: true,
-          no_changes: true
-        };
-      }
-
-      // Create branch and commit
-      const branchName = `sync-to-${toSha.substring(0, 7)}`;
-      const commitMessage = `Sync handout updates to ${toSha.substring(0, 7)}
+        // Create branch and commit
+        const branchName = `sync-to-${toSha.substring(0, 7)}`;
+        const commitMessage = `Sync handout updates to ${toSha.substring(0, 7)}
 
 This commit was automatically generated by an instructor to sync
 changes from the template repository.
@@ -467,11 +466,11 @@ changes from the template repository.
 Changed files:
 ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
-      await createBranchAndCommit(repositoryFullName, branchName, "main", changedFiles, commitMessage, scope);
+        await createBranchAndCommit(repositoryFullName, branchName, "main", changedFiles, commitMessage, scope);
 
-      // Create PR
-      const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
-      const prBody = `## Handout Update
+        // Create PR
+        const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
+        const prBody = `## Handout Update
 
 This pull request syncs the latest changes from the assignment template repository.
 
@@ -485,71 +484,72 @@ ${changedFiles.map((f) => `- \`${f.path}\``).join("\n")}
 ---
 *This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are conflicts, please review the changes and merge when ready, or ask your course staff for help.*`;
 
-      let prNumber: number;
-      try {
-        prNumber = await createPullRequest(repositoryFullName, branchName, "main", prTitle, prBody, scope);
-      } catch (error) {
-        // Handle case where there are no commits between branches (repo already up to date)
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("No commits between")) {
-          scope?.addBreadcrumb({
-            message: `No commits between branches - repository already up to date`,
-            category: "sync",
-            level: "info"
-          });
+        let prNumber: number;
+        try {
+          prNumber = await createPullRequest(repositoryFullName, branchName, "main", prTitle, prBody, scope);
+        } catch (error) {
+          // Handle case where there are no commits between branches (repo already up to date)
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes("No commits between")) {
+            scope?.addBreadcrumb({
+              message: `No commits between branches - repository already up to date`,
+              category: "sync",
+              level: "info"
+            });
 
-          // Clean up the branch we created
-          const octokit = await github.getOctoKit(repositoryFullName, scope);
-          if (octokit) {
-            const [owner, repo] = repositoryFullName.split("/");
-            try {
-              await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
-                owner,
-                repo,
-                ref: `heads/${branchName}`
-              });
-            } catch {
-              // Ignore cleanup errors
+            // Clean up the branch we created
+            const octokit = await github.getOctoKit(repositoryFullName, scope);
+            if (octokit) {
+              const [owner, repo] = repositoryFullName.split("/");
+              try {
+                await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+                  owner,
+                  repo,
+                  ref: `heads/${branchName}`
+                });
+              } catch {
+                // Ignore cleanup errors
+              }
             }
+
+            return {
+              success: true,
+              no_changes: true
+            };
           }
-
-          return {
-            success: true,
-            no_changes: true
-          };
+          // Re-throw if it's a different error
+          throw error;
         }
-        // Re-throw if it's a different error
-        throw error;
+
+        const prUrl = `https://github.com/${repositoryFullName}/pull/${prNumber}`;
+
+        // Attempt auto-merge if requested
+        let merged = false;
+        let mergeSha: string | undefined;
+
+        if (autoMerge) {
+          // Wait for GitHub to update mergeable state
+          await new Promise((resolve) => setTimeout(resolve, waitBeforeMerge));
+          const mergeResult = await attemptAutoMerge(repositoryFullName, prNumber, scope);
+          merged = mergeResult.merged;
+          mergeSha = mergeResult.mergeSha;
+        }
+
+        return {
+          success: true,
+          pr_number: prNumber,
+          pr_url: prUrl,
+          merged,
+          merge_sha: mergeSha
+        };
+      } catch (error) {
+        console.trace(error);
+        Sentry.captureException(error, scope);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
       }
-
-      const prUrl = `https://github.com/${repositoryFullName}/pull/${prNumber}`;
-
-      // Attempt auto-merge if requested
-      let merged = false;
-      let mergeSha: string | undefined;
-
-      if (autoMerge) {
-        // Wait for GitHub to update mergeable state
-        await new Promise((resolve) => setTimeout(resolve, waitBeforeMerge));
-        const mergeResult = await attemptAutoMerge(repositoryFullName, prNumber, scope);
-        merged = mergeResult.merged;
-        mergeSha = mergeResult.mergeSha;
-      }
-
-      return {
-        success: true,
-        pr_number: prNumber,
-        pr_url: prUrl,
-        merged,
-        merge_sha: mergeSha
-      };
-    } catch (error) {
-      console.trace(error);
-      Sentry.captureException(error, scope);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
+    });
   });
 }

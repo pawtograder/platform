@@ -351,6 +351,9 @@ export default function RepositoriesPage() {
       table: "repositories",
       selectForSingleRow: joinedSelect,
       classRealTimeController: courseController.classRealTimeController,
+      realtimeFilter: {
+        assignment_id: Number(assignment_id)
+      },
       debounceInterval: 500 // Debounce rapid updates during bulk syncs
     });
     return controller;
@@ -505,13 +508,33 @@ export default function RepositoriesPage() {
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           const desiredSha = (row.original as RepositoryRow).desired_handout_sha;
           const syncedSha = (row.original as RepositoryRow).synced_handout_sha;
-          const syncData = (row.original as RepositoryRow).sync_data as { pr_state?: string } | null;
+          const syncData = (row.original as RepositoryRow).sync_data as {
+            pr_state?: string;
+            last_sync_error?: string;
+          } | null;
+          const latestSha = assignment?.data?.latest_template_sha;
 
-          let status = "No Sync";
-          if (!desiredSha) status = "No Sync";
-          else if (desiredSha === syncedSha) status = "Synced";
-          else if (syncData?.pr_state === "open") status = "PR Open";
-          else status = "Sync in Progress";
+          // Match the exact logic from SyncStatusBadge
+          let status = "No Sync Requested";
+
+          if (!desiredSha) {
+            status = "No Sync Requested";
+          } else if (desiredSha === syncedSha) {
+            // Check if synced SHA matches latest template SHA
+            if (latestSha && syncedSha !== latestSha) {
+              status = "Not Up-to-date";
+            } else {
+              status = "Synced";
+            }
+          } else if (syncData?.pr_state === "open") {
+            status = "PR Open";
+          } else if (syncData?.pr_state === "merged") {
+            status = "Sync Finalizing";
+          } else if (syncData?.last_sync_error) {
+            status = "Sync Error";
+          } else {
+            status = "Sync in Progress";
+          }
 
           return values.includes(status);
         }
@@ -640,7 +663,15 @@ export default function RepositoriesPage() {
             you need to make changes to the template repository after release, you can use the &quot;Sync&quot; feature,
             which will create a pull request to the student repository, auto-merging if there are no conflicts, which
             will create a new submission. This procedure is also heavily rate-limited by GitHub, working at a rate of no
-            more than 50 pull requests per-minute per-class.
+            more than 50 pull requests per-minute per-class. The &quot;Sync&quot; feature is currently in beta, and may
+            not support all use cases; please do not rely heavily on it, and report any issues{" "}
+            <Link
+              href="https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md"
+              target="_blank"
+            >
+              on GitHub
+            </Link>
+            .
           </Text>
         </Box>
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />
@@ -743,10 +774,13 @@ export default function RepositoriesPage() {
                                 header.column.setFilterValue(values.length > 0 ? values : undefined);
                               }}
                               options={[
+                                { label: "No Sync Requested", value: "No Sync Requested" },
                                 { label: "Synced", value: "Synced" },
-                                { label: "Sync in Progress", value: "Sync in Progress" },
+                                { label: "Not Up-to-date", value: "Not Up-to-date" },
                                 { label: "PR Open", value: "PR Open" },
-                                { label: "No Sync", value: "No Sync" }
+                                { label: "Sync Finalizing", value: "Sync Finalizing" },
+                                { label: "Sync in Progress", value: "Sync in Progress" },
+                                { label: "Sync Error", value: "Sync Error" }
                               ]}
                               placeholder="Filter by sync status..."
                             />
