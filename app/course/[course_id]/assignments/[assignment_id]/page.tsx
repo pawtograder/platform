@@ -15,7 +15,7 @@ import {
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
-  UserRole,
+  UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -75,17 +75,16 @@ export default function AssignmentPage() {
   });
 
   useEffect(() => {
-	async function fetchSubmissionLimits() {
-	   const supabaseClient = createClient();
-  	   const { data, error } = await supabaseClient
-  	   .rpc('get_submissions_limits', { p_assignment_id : assignment_id });
-  	   if (error) {
-		   console.error('Failed to fetch submission limits:', error);
-	   }
-  	   autograderData.current = data;
-	}
-	fetchSubmissionLimits();
-      }, [assignment_id]);
+    async function fetchSubmissionLimits() {
+      const supabaseClient = createClient();
+      const { data, error } = await supabaseClient.rpc("get_submissions_limits", { p_assignment_id: assignment_id });
+      if (error) {
+        console.error("Failed to fetch submission limits:", error);
+      }
+      autograderData.current = data;
+    }
+    fetchSubmissionLimits();
+  }, [assignment_id]);
 
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
@@ -107,14 +106,14 @@ export default function AssignmentPage() {
         is_group_assignment: isGroupAssignment,
         days_until_due: daysUntilDue,
         has_submissions: hasSubmissions,
-	assignment_slug: assignment.slug
+        assignment_slug: assignment.slug
       });
     }
   }, [assignment, course_id, assignment_id, submissions, trackEvent]); // Include all values used inside
 
   const autograderRow = autograder?.[0];
-  const submissionsPeriod = autograderRow?.max_submissions_period_secs != null
-      ? secondsToHours(autograderRow.max_submissions_period_secs) : 0;
+  const submissionsPeriod =
+    autograderRow?.max_submissions_period_secs != null ? secondsToHours(autograderRow.max_submissions_period_secs) : 0;
   const maxSubmissions = autograderRow?.max_submissions_count;
 
   if (!assignment) {
@@ -157,16 +156,17 @@ export default function AssignmentPage() {
         })}
       />
       {submissionsPeriod > 0 ? (
-	<Box w="925px">
-      	<Alert.Root status="info" flexDirection="column" size="md">
-      	   <Alert.Title>Submission Limit for this assignment</Alert.Title>
-	   <Alert.Description>
-	   This assignment has a submission limit of {maxSubmissions} submission{maxSubmissions !== 1 ? 's' : ''} per {submissionsPeriod} hour{submissionsPeriod !== 1 ? 's' : ''}.	   
-	   </Alert.Description>
-         </Alert.Root>
-	 </Box>
+        <Box w="925px">
+          <Alert.Root status="info" flexDirection="column" size="md">
+            <Alert.Title>Submission Limit for this assignment</Alert.Title>
+            <Alert.Description>
+              This assignment has a submission limit of {maxSubmissions} submission{maxSubmissions !== 1 ? "s" : ""} per{" "}
+              {submissionsPeriod} hour{submissionsPeriod !== 1 ? "s" : ""}.
+            </Alert.Description>
+          </Alert.Root>
+        </Box>
       ) : (
-      	<></>
+        <></>
       )}
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
