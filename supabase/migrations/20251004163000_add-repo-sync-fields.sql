@@ -78,9 +78,11 @@ BEGIN
     END IF;
     
     -- Verify all repositories belong to the same class and user has instructor access
-    SELECT DISTINCT r.class_id INTO v_class_id
+    -- First, get a single class_id to avoid too_many_rows error
+    SELECT r.class_id INTO v_class_id
     FROM public.repositories r
-    WHERE r.id = ANY(p_repository_ids);
+    WHERE r.id = ANY(p_repository_ids)
+    LIMIT 1;
     
     IF v_class_id IS NULL THEN
         RAISE EXCEPTION 'No repositories found with provided IDs';

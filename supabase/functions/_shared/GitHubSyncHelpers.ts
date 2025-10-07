@@ -177,6 +177,16 @@ export async function getChangedFiles(
         continue;
       }
 
+      // Handle renamed files: delete the old path, then add the new path
+      if (file.status === "renamed" && file.previous_filename) {
+        fileChanges.push({
+          path: file.previous_filename,
+          sha: "",
+          content: ""
+        });
+        // Continue to add the new filename entry below
+      }
+
       const { data: fileContent } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
         owner,
         repo,
@@ -280,14 +290,13 @@ export async function createBranchAndCommit(
         };
       }
 
-      const content = atob(file.content);
       const { data: blob } = await createContentLimiter.schedule(
         async () =>
           await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
             owner,
             repo,
-            content,
-            encoding: "utf-8"
+            content: file.content,
+            encoding: "base64"
           })
       );
 

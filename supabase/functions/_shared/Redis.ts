@@ -8,7 +8,7 @@ const channelBus: Map<string, Set<Redis>> = new Map();
 /**
  * IORedis-compatible adapter backed by Upstash Redis REST client.
  * Implements the subset of the API used by Bottleneck's IORedis store.
- * 
+ *
  * Uses Proxy to forward all unknown methods to the underlying Upstash client.
  */
 export class Redis {
@@ -41,7 +41,7 @@ export class Redis {
 
     // Emit ready asynchronously to mimic ioredis behavior
     queueMicrotask(() => this.emit("ready"));
-    
+
     // Return a Proxy that forwards unknown method calls to the underlying Upstash client
     // This allows Redis commands like get, set, incr, etc. to work transparently
     return new Proxy(this, {
@@ -51,16 +51,16 @@ export class Redis {
         if (targetValue !== undefined) {
           return targetValue;
         }
-        
+
         // Then check the underlying Upstash client
         const clientAsAny = target.client as unknown as Record<string, unknown>;
         const clientMethod = clientAsAny[String(prop)];
-        
+
         if (typeof clientMethod === "function") {
           // Bind the method to the client so 'this' works correctly
           return clientMethod.bind(target.client);
         }
-        
+
         return undefined;
       }
     });
@@ -123,10 +123,10 @@ export class Redis {
 
       try {
         if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("eval script", { 
-            name, 
-            numKeys, 
-            keysCount: keys.length, 
+          console.log("eval script", {
+            name,
+            numKeys,
+            keysCount: keys.length,
             argvCount: argv.length,
             rawArgsCount: args.length,
             firstKey: keys[0],
@@ -135,13 +135,13 @@ export class Redis {
             scriptLength: script.length
           });
         }
-        
+
         // Check if Upstash client has eval method
         const clientAsAny = this.client as unknown as Record<string, unknown>;
         if (typeof clientAsAny.eval !== "function") {
           throw new Error("Upstash Redis client does not support EVAL command");
         }
-        
+
         const result = await (
           this.client as unknown as {
             eval: (script: string, keys: string[], args: (string | number)[]) => Promise<unknown>;
@@ -211,20 +211,22 @@ export class Redis {
         }
 
         if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log("pipeline exec", { 
-            commandCount: commands.length, 
+          console.log("pipeline exec", {
+            commandCount: commands.length,
             commands: commands.map((cmd) => cmd[0])
           });
         }
 
         // Check if ANY commands are custom scripts (defined via defineCommand)
-        const hasCustomScripts = commands.some(cmd => {
+        const hasCustomScripts = commands.some((cmd) => {
           const commandName = String(cmd[0]);
           return scripts.has(commandName);
         });
-        
+
         if (Deno.env.get("REDIS_DEBUG") === "true") {
-          console.log(`  pipeline hasCustomScripts: ${hasCustomScripts}, executing ${hasCustomScripts ? 'SEQUENTIALLY' : 'BATCHED'}`);
+          console.log(
+            `  pipeline hasCustomScripts: ${hasCustomScripts}, executing ${hasCustomScripts ? "SEQUENTIALLY" : "BATCHED"}`
+          );
         }
 
         // If there are custom scripts, we must execute sequentially because

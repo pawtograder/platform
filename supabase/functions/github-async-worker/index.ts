@@ -38,7 +38,7 @@ const createContentLimiters = new Map<string, Bottleneck>();
 /**
  * GitHub limits the number of content-creating requests per organization per-minute and per-hour
  * @param org GitHub organization
- * @returns 
+ * @returns
  */
 export function getCreateContentLimiter(org: string): Bottleneck {
   const key = org || "unknown";
@@ -371,9 +371,9 @@ export async function processEnvelope(
     })();
     if (org) {
       // Check org-level circuit breaker first (highest priority - blocks everything)
-      const orgCirc = await adminSupabase.schema("public").rpc("get_github_circuit", { 
-        p_scope: "org", 
-        p_key: org 
+      const orgCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+        p_scope: "org",
+        p_key: org
       });
       if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
         const row = orgCirc.data[0] as { state?: string; open_until?: string };
@@ -389,9 +389,9 @@ export async function processEnvelope(
 
       // Check method-specific circuit breaker (only blocks this specific method)
       const circuitKey = `${org}:${envelope.method}`;
-      const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", { 
-        p_scope: "org_method", 
-        p_key: circuitKey 
+      const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+        p_scope: "org_method",
+        p_key: circuitKey
       });
       if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
         const row = methodCirc.data[0] as { state?: string; open_until?: string };
@@ -610,14 +610,15 @@ export async function processEnvelope(
 
         // Update repository record using the repo_id if provided (preferred method)
         try {
-          const { data: latestHandoutCommit } = await adminSupabase
+          const { data: latestHandoutCommit, error: latestHandoutCommitError } = await adminSupabase
             .from("assignments")
             .select("latest_template_sha")
             .eq("template_repo", templateRepo)
             .maybeSingle();
+          if (latestHandoutCommitError) throw latestHandoutCommitError;
           if (envelope.repo_id) {
             // Direct update using repo_id (more efficient and reliable)
-            await adminSupabase
+            const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 is_github_ready: true,
@@ -625,10 +626,11 @@ export async function processEnvelope(
                 synced_handout_sha: latestHandoutCommit?.latest_template_sha
               })
               .eq("id", envelope.repo_id);
+            if (updateError) throw updateError;
           } else if (envelope.class_id) {
             // Fallback to old method for backward compatibility
             const fullName = `${org}/${repoName}`;
-            await adminSupabase
+            const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 is_github_ready: true,
@@ -637,6 +639,7 @@ export async function processEnvelope(
               })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);
+            if (updateError) throw updateError;
           }
         } catch (e) {
           scope.setContext("repo_ready_update_error", {
@@ -779,13 +782,12 @@ export async function processEnvelope(
         });
 
         try {
-
           // Check to see if the repo is already up to date, using first 6 chars of SHA
-         const {data: currentRepo} = await adminSupabase
-          .from("repositories")
-          .select("synced_handout_sha")
-          .eq("id", repository_id)
-          .maybeSingle();
+          const { data: currentRepo } = await adminSupabase
+            .from("repositories")
+            .select("synced_handout_sha")
+            .eq("id", repository_id)
+            .maybeSingle();
           if (currentRepo?.synced_handout_sha?.substring(0, 6) === to_sha.substring(0, 6)) {
             Sentry.addBreadcrumb({
               message: `Repository ${repository_full_name} is already up to date`,
@@ -811,7 +813,7 @@ export async function processEnvelope(
 
           // Update repository with sync status
           if (result.no_changes) {
-            await adminSupabase
+            const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 synced_handout_sha: to_sha,
@@ -822,8 +824,9 @@ export async function processEnvelope(
                 }
               })
               .eq("id", repository_id);
+            if (updateError) throw updateError;
           } else {
-            await adminSupabase
+            const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 synced_handout_sha: result.merged ? to_sha : from_sha,
@@ -839,6 +842,7 @@ export async function processEnvelope(
                 }
               })
               .eq("id", repository_id);
+            if (updateError) throw updateError;
           }
 
           recordMetric(
@@ -856,7 +860,7 @@ export async function processEnvelope(
           return true;
         } catch (error) {
           // Update repository with error status
-          await adminSupabase
+          const { error: updateError } = await adminSupabase
             .from("repositories")
             .update({
               sync_data: {
@@ -866,6 +870,10 @@ export async function processEnvelope(
               }
             })
             .eq("id", repository_id);
+          if (updateError) {
+            console.error("Failed to update repository with error status:", updateError);
+            Sentry.captureException(updateError, scope);
+          }
           throw error;
         }
       }
@@ -960,7 +968,9 @@ export async function processEnvelope(
           Sentry.captureException(e, scope);
         }
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
-        const circuitTripped = org ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope) : false;
+        const circuitTripped = org
+          ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope)
+          : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
           await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours

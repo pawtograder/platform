@@ -1190,24 +1190,25 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
     // Extract the SHA from the branch name (sync-to-abc1234 -> abc1234)
     const syncedSha = branchName.replace("sync-to-", "");
-    const mergeSha = payload.pull_request.merge_commit_sha;
+    // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
+    const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
 
     scope.setTag("synced_sha", syncedSha);
-    scope.setTag("merge_sha", mergeSha || "none");
+    scope.setTag("merge_sha", effectiveMergeSha);
 
     // Update the repository sync status
     const { error: updateError } = await adminSupabase
       .from("repositories")
       .update({
         synced_handout_sha: syncedSha,
-        synced_repo_sha: mergeSha,
+        synced_repo_sha: effectiveMergeSha,
         sync_data: {
           pr_number: payload.pull_request.number,
           pr_url: payload.pull_request.html_url,
           pr_state: "merged",
           branch_name: branchName,
           last_sync_attempt: new Date().toISOString(),
-          merge_sha: mergeSha,
+          merge_sha: effectiveMergeSha,
           merged_by: payload.pull_request.merged_by?.login,
           merged_at: payload.pull_request.merged_at
         }
