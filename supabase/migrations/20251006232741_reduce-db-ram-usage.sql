@@ -241,11 +241,22 @@ BEGIN
                 profile_id = COALESCE(workflow_runs.profile_id, EXCLUDED.profile_id),
                 -- Calculate queue time if we now have both timestamps and it was NULL
                 queue_time_seconds = CASE
-                    WHEN workflow_runs.queue_time_seconds IS NULL 
-                         AND workflow_runs.requested_at IS NOT NULL 
+                    WHEN workflow_runs.queue_time_seconds IS NULL
+                         AND workflow_runs.requested_at IS NOT NULL
                          AND EXCLUDED.in_progress_at IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (EXCLUDED.in_progress_at - workflow_runs.requested_at))
                     ELSE workflow_runs.queue_time_seconds
+                END,
+                -- Backfill run time if completed arrived before in_progress and run_time_seconds is NULL
+                run_time_seconds = CASE
+                    WHEN workflow_runs.run_time_seconds IS NULL
+                         AND workflow_runs.completed_at IS NOT NULL
+                         AND COALESCE(workflow_runs.in_progress_at, EXCLUDED.in_progress_at) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (
+                        workflow_runs.completed_at
+                        - COALESCE(workflow_runs.in_progress_at, EXCLUDED.in_progress_at)
+                    ))
+                    ELSE workflow_runs.run_time_seconds
                 END,
                 updated_at = NOW();
                 
