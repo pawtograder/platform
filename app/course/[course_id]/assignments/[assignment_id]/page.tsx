@@ -79,11 +79,13 @@ export default function AssignmentPage() {
     async function fetchSubmissionLimits() {
       const supabaseClient = createClient();
       if (!assignment_id) return;
-      const { data, error } = await supabaseClient.rpc("get_submissions_limits", { p_assignment_id: Number(assignment_id) });
+      const { data, error } = await supabaseClient.rpc("get_submissions_limits", {
+        p_assignment_id: Number(assignment_id)
+      });
       if (error) {
         console.error("Failed to fetch submission limits:", error);
       }
-      if(!data) return;
+      if (!data) return;
       autograderData.current = data;
     }
     fetchSubmissionLimits();
