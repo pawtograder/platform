@@ -429,7 +429,7 @@ function WorkflowRunTable() {
   });
 
   const workflowRuns = getCoreRowModel().rows;
-  
+
   // Compute unique values for filter options from ALL rows (before filtering)
   const columnUniqueValues = useMemo(() => {
     const uniqueValuesMap: Record<string, SelectOption[]> = {};
