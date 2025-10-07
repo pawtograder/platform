@@ -16,9 +16,37 @@ import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { Redis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
+
+// Redis client for webhook status tracking
+let redisClient: Redis | null = null;
+function getRedisClient(): Redis | null {
+  if (redisClient) {
+    return redisClient;
+  }
+
+  const redisUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const redisToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+
+  if (redisUrl && redisToken) {
+    redisClient = new Redis({ url: redisUrl, token: redisToken });
+    return redisClient;
+  }
+
+  return null;
+}
+
+// Webhook status structure stored in Redis
+interface WebhookStatus {
+  completed: boolean;
+  attempt_count: number;
+  event_name: string;
+  last_attempt_at: string;
+  last_error?: string;
+}
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
@@ -68,6 +96,7 @@ async function handlePushToStudentRepo(
   scope.setTag("class_id", studentRepo.class_id.toString());
   scope.setTag("commits_count", payload.commits.length.toString());
 
+  console.log(`Handling push to student repo ${payload.repository.full_name}, ref: ${payload.ref}`);
   //Get the repo name from the payload
   const repoName = payload.repository.full_name;
   if (payload.ref.includes("refs/tags/pawtograder-submit/")) {
@@ -488,6 +517,9 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
         throw studentRepoError;
       }
       if (studentRepo) {
+        if (payload.ref !== "refs/heads/main") {
+          return;
+        }
         scope.setTag("student_repo", studentRepo.id.toString());
         maybeCrash("push.before_student_repo");
         await handlePushToStudentRepo(adminSupabase, payload, studentRepo, scope);
@@ -1175,79 +1207,68 @@ Deno.serve(async (req) => {
   const eventName = body["detail-type"];
   const id = body.id;
   console.log(`[ENTRY] id=${id} type=${eventName}`);
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
 
   try {
     maybeCrash("entry.before_status_upsert");
-    // Read existing status row
-    const existingResult = await adminSupabase
-      .from("webhook_process_status")
-      .select("id, completed, attempt_count")
-      .eq("webhook_id", id)
-      .maybeSingle();
-    const existingError = existingResult.error;
-    const existingRow = existingResult.data as { id: number; completed: boolean; attempt_count: number } | null;
-    if (existingError) {
-      Sentry.captureException(existingError, scope);
-      console.error(existingError);
-      return Response.json({ message: "Error processing webhook" }, { status: 500 });
+    
+    // Use Redis for webhook status tracking with 24-hour TTL
+    const redis = getRedisClient();
+    if (!redis) {
+      console.error("Redis client not available, cannot track webhook status");
+      Sentry.captureMessage("Redis client not available for webhook status tracking", scope);
+      // Continue processing without status tracking
     }
 
     let attemptCount = 1;
-    if (!existingRow) {
-      // First delivery
-      const { error: insertErr } = await adminSupabase.from("webhook_process_status").insert({
-        webhook_id: id,
-        completed: false,
-        attempt_count: 1,
-        event_name: eventName,
-        last_attempt_at: new Date().toISOString()
-      } as unknown as never);
-      if (insertErr) {
-        // If unique violation due to race, re-read
-        if ((insertErr as { code?: string }).code !== "23505") {
-          Sentry.captureException(insertErr, scope);
-          console.error(insertErr);
-          return Response.json({ message: "Error processing webhook" }, { status: 500 });
-        }
-        const reread = await adminSupabase
-          .from("webhook_process_status")
-          .select("id, completed, attempt_count")
-          .eq("webhook_id", id)
-          .maybeSingle();
-        if (reread.error) {
-          Sentry.captureException(reread.error, scope);
-          return Response.json({ message: "Error processing webhook" }, { status: 500 });
-        }
-        attemptCount = (reread.data?.attempt_count || 1) + 1;
-        await adminSupabase
-          .from("webhook_process_status")
-          .update({ attempt_count: attemptCount, last_attempt_at: new Date().toISOString(), event_name: eventName })
-          .eq("webhook_id", id);
-      }
-    } else {
-      // Redelivery
-      if (existingRow.completed) {
-        if (existingRow.attempt_count >= 3) {
-          scope.setTag("attempt_count", String(existingRow.attempt_count));
-          Sentry.captureMessage("Webhook redelivered 3+ times after completion", scope);
-        }
-        console.log(`[ENTRY] Duplicate completed id=${id}`);
-        return Response.json({ message: "Duplicate webhook received" }, { status: 200 });
-      }
-      attemptCount = (existingRow.attempt_count || 0) + 1;
-      await adminSupabase
-        .from("webhook_process_status")
-        .update({ attempt_count: attemptCount, last_attempt_at: new Date().toISOString(), event_name: eventName })
-        .eq("id", existingRow.id);
-    }
+    const webhookKey = `webhook:${id}`;
+    const ttlSeconds = 10800; // 3 hours
 
-    if (attemptCount >= 3) {
-      scope.setTag("attempt_count", String(attemptCount));
-      Sentry.captureMessage("Webhook redelivered 3+ times", scope);
+    if (redis) {
+      try {
+        // Try to get existing status from Redis
+        const existingStatus = await redis.get(webhookKey);
+        
+        if (!existingStatus) {
+          // First delivery - create new status
+          const newStatus: WebhookStatus = {
+            completed: false,
+            attempt_count: 1,
+            event_name: eventName,
+            last_attempt_at: new Date().toISOString()
+          };
+          await redis.set(webhookKey, JSON.stringify(newStatus), { ex: ttlSeconds });
+          attemptCount = 1;
+        } else {
+          // Redelivery - parse existing status
+          // Upstash Redis client may return object directly or as string
+          const status = typeof existingStatus === "string" 
+            ? JSON.parse(existingStatus) as WebhookStatus
+            : existingStatus as WebhookStatus;
+          
+          if (status.completed) {
+            return Response.json({ message: "Duplicate webhook received" }, { status: 200 });
+          }
+          
+          // Increment attempt count
+          attemptCount = (status.attempt_count || 0) + 1;
+          const updatedStatus: WebhookStatus = {
+            ...status,
+            attempt_count: attemptCount,
+            last_attempt_at: new Date().toISOString(),
+            event_name: eventName
+          };
+          await redis.set(webhookKey, JSON.stringify(updatedStatus), { ex: ttlSeconds });
+        }
+
+        if (attemptCount >= 3) {
+          scope.setTag("attempt_count", String(attemptCount));
+          Sentry.captureMessage("Uncompleted webhook redelivered 3+ times. Consider processing duplicate webhooks safely?", scope);
+        }
+      } catch (redisError) {
+        console.error("Redis error during webhook status check:", redisError);
+        Sentry.captureException(redisError, scope);
+        // Continue processing despite Redis error
+      }
     }
 
     try {
@@ -1259,22 +1280,53 @@ Deno.serve(async (req) => {
         payload: body.detail
       });
       maybeCrash("entry.after_dispatch_before_complete");
-      await adminSupabase
-        .from("webhook_process_status")
-        .update({
-          completed: true,
-          last_error: null
-        })
-        .eq("webhook_id", id);
+      
+      // Mark as completed in Redis
+      if (redis) {
+        try {
+          const existingStatus = await redis.get(webhookKey);
+          if (existingStatus) {
+            const status = typeof existingStatus === "string"
+              ? JSON.parse(existingStatus) as WebhookStatus
+              : existingStatus as WebhookStatus;
+            const completedStatus: WebhookStatus = {
+              ...status,
+              completed: true,
+              last_error: undefined
+            };
+            await redis.set(webhookKey, JSON.stringify(completedStatus), { ex: ttlSeconds });
+          }
+        } catch (redisError) {
+          console.error("Redis error marking webhook complete:", redisError);
+          Sentry.captureException(redisError, scope);
+        }
+      }
     } catch (err) {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
       Sentry.captureException(err, scope);
-      // Log transient error and leave completed=false for retry
-      await adminSupabase
-        .from("webhook_process_status")
-        .update({ last_error: (err as Error)?.message || "unknown error", last_attempt_at: new Date().toISOString() })
-        .eq("webhook_id", id);
+      
+      // Log error in Redis
+      if (redis) {
+        try {
+          const existingStatus = await redis.get(webhookKey);
+          if (existingStatus) {
+            const status = typeof existingStatus === "string"
+              ? JSON.parse(existingStatus) as WebhookStatus
+              : existingStatus as WebhookStatus;
+            const errorStatus: WebhookStatus = {
+              ...status,
+              last_error: (err as Error)?.message || "unknown error",
+              last_attempt_at: new Date().toISOString()
+            };
+            await redis.set(webhookKey, JSON.stringify(errorStatus), { ex: ttlSeconds });
+          }
+        } catch (redisError) {
+          console.error("Redis error logging webhook error:", redisError);
+          Sentry.captureException(redisError, scope);
+        }
+      }
+      
       return Response.json(
         {
           message: "Error processing webhook"
