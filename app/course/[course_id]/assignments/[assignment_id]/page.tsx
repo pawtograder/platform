@@ -11,6 +11,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
 import {
   Repository,
   SelfReviewSettings,
@@ -22,10 +23,9 @@ import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
 import { differenceInDays, format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import { createClient } from "@/utils/supabase/client";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
