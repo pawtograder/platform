@@ -413,7 +413,6 @@ function WorkflowRunTable() {
 
   const {
     getHeaderGroups,
-    getRowModel,
     getCoreRowModel,
     data,
     tableController: controller
@@ -429,9 +428,10 @@ function WorkflowRunTable() {
     }
   });
 
+  const workflowRuns = getCoreRowModel().rows;
+  
   // Compute unique values for filter options from ALL rows (before filtering)
   const columnUniqueValues = useMemo(() => {
-    const rows = getCoreRowModel().rows;
     const uniqueValuesMap: Record<string, SelectOption[]> = {};
 
     columns.forEach((column) => {
@@ -440,7 +440,7 @@ function WorkflowRunTable() {
       if (column.id === "status") {
         // Status is computed from timestamps
         const statuses = new Set<string>();
-        rows.forEach((row) => {
+        workflowRuns.forEach((row) => {
           const { requested_at, in_progress_at, completed_at } = row.original;
           if (completed_at) statuses.add("completed");
           else if (in_progress_at) statuses.add("in progress");
@@ -455,7 +455,7 @@ function WorkflowRunTable() {
       }
 
       const uniqueValues = new Set<string>();
-      rows.forEach((row) => {
+      workflowRuns.forEach((row) => {
         const value = row.getValue(column.id as string);
         if (value !== null && value !== undefined) {
           uniqueValues.add(String(value));
@@ -471,9 +471,7 @@ function WorkflowRunTable() {
     });
 
     return uniqueValuesMap;
-  }, [columns, getCoreRowModel]);
-
-  const workflowRuns = getRowModel().rows;
+  }, [columns, workflowRuns]);
 
   return (
     <Box>

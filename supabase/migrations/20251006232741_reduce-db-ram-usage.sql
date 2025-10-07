@@ -53,6 +53,65 @@ CREATE INDEX idx_workflow_runs_profile_id ON public.workflow_runs USING btree (p
 -- Index for efficient upsert lookups (supports the UNIQUE constraint)
 CREATE INDEX idx_workflow_runs_unique_lookup ON public.workflow_runs USING btree (workflow_run_id, run_attempt, class_id);
 
+-- Backfill workflow_runs table with existing data from the materialized view
+-- This preserves historical data before we drop the view
+INSERT INTO public.workflow_runs (
+    workflow_run_id,
+    class_id,
+    repository_name,
+    workflow_name,
+    workflow_path,
+    head_sha,
+    head_branch,
+    run_number,
+    run_attempt,
+    actor_login,
+    triggering_actor_login,
+    assignment_id,
+    profile_id,
+    requested_at,
+    in_progress_at,
+    completed_at,
+    conclusion,
+    queue_time_seconds,
+    run_time_seconds,
+    created_at,
+    updated_at
+)
+SELECT 
+    workflow_run_id,
+    class_id,
+    repository_name,
+    workflow_name,
+    workflow_path,
+    head_sha,
+    head_branch,
+    run_number,
+    run_attempt,
+    actor_login,
+    triggering_actor_login,
+    assignment_id,
+    profile_id,
+    requested_at,
+    in_progress_at,
+    completed_at,
+    conclusion,
+    queue_time_seconds,
+    run_time_seconds,
+    NOW() as created_at,
+    NOW() as updated_at
+FROM public.workflow_events_summary
+ON CONFLICT ON CONSTRAINT workflow_runs_unique_run DO NOTHING;
+
+-- Log the backfill results
+DO $$
+DECLARE
+    backfilled_count bigint;
+BEGIN
+    SELECT COUNT(*) INTO backfilled_count FROM public.workflow_runs;
+    RAISE NOTICE 'Backfilled % workflow runs from materialized view', backfilled_count;
+END $$;
+
 -- Enable RLS
 ALTER TABLE public.workflow_runs ENABLE ROW LEVEL SECURITY;
 
@@ -105,9 +164,11 @@ BEGIN
 
     -- Event-specific upsert: only update fields relevant to each event type
     -- This avoids unnecessary COALESCE operations and reduces UPDATE overhead
+    -- CRITICAL: Handles out-of-order webhook delivery (retries, race conditions)
     CASE NEW.event_type
         WHEN 'requested' THEN
             -- First event: INSERT with metadata, only requested_at timestamp
+            -- If row exists (in_progress/completed arrived first), backfill requested_at and metadata
             INSERT INTO public.workflow_runs (
                 workflow_run_id, class_id, run_attempt, repository_name,
                 workflow_name, workflow_path, head_sha, head_branch, run_number,
@@ -121,10 +182,35 @@ BEGIN
                 NEW.updated_at, NULL, NULL, NULL,
                 NULL, NULL, NOW(), NOW()
             )
-            ON CONFLICT ON CONSTRAINT workflow_runs_unique_run DO NOTHING;
+            ON CONFLICT ON CONSTRAINT workflow_runs_unique_run
+            DO UPDATE SET
+                -- Backfill requested_at if it's NULL (out-of-order arrival)
+                requested_at = COALESCE(workflow_runs.requested_at, EXCLUDED.requested_at),
+                -- Backfill metadata fields if NULL (they may be missing if later events arrived first)
+                repository_name = COALESCE(workflow_runs.repository_name, EXCLUDED.repository_name),
+                workflow_name = COALESCE(workflow_runs.workflow_name, EXCLUDED.workflow_name),
+                workflow_path = COALESCE(workflow_runs.workflow_path, EXCLUDED.workflow_path),
+                head_sha = COALESCE(workflow_runs.head_sha, EXCLUDED.head_sha),
+                head_branch = COALESCE(workflow_runs.head_branch, EXCLUDED.head_branch),
+                run_number = COALESCE(workflow_runs.run_number, EXCLUDED.run_number),
+                actor_login = COALESCE(workflow_runs.actor_login, EXCLUDED.actor_login),
+                triggering_actor_login = COALESCE(workflow_runs.triggering_actor_login, EXCLUDED.triggering_actor_login),
+                assignment_id = COALESCE(workflow_runs.assignment_id, EXCLUDED.assignment_id),
+                profile_id = COALESCE(workflow_runs.profile_id, EXCLUDED.profile_id),
+                -- Recalculate queue_time if we now have both timestamps and it was NULL
+                queue_time_seconds = CASE
+                    WHEN workflow_runs.queue_time_seconds IS NULL 
+                         AND workflow_runs.in_progress_at IS NOT NULL 
+                         AND EXCLUDED.requested_at IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (workflow_runs.in_progress_at - EXCLUDED.requested_at))
+                    ELSE workflow_runs.queue_time_seconds
+                END,
+                updated_at = NOW();
             
         WHEN 'in_progress' THEN
-            -- Second event: only update in_progress_at and calculate queue time
+            -- Second event: update in_progress_at and calculate queue time
+            -- If row exists (requested/completed arrived first), backfill in_progress_at
+            -- If row doesn't exist yet (requested not received), create with available data
             INSERT INTO public.workflow_runs (
                 workflow_run_id, class_id, run_attempt, repository_name,
                 workflow_name, workflow_path, head_sha, head_branch, run_number,
@@ -140,17 +226,33 @@ BEGIN
             )
             ON CONFLICT ON CONSTRAINT workflow_runs_unique_run
             DO UPDATE SET
-                in_progress_at = EXCLUDED.in_progress_at,
-                -- Calculate queue time if we now have both timestamps
+                -- Always update in_progress_at (may arrive late or be a retry)
+                in_progress_at = COALESCE(workflow_runs.in_progress_at, EXCLUDED.in_progress_at),
+                -- Backfill metadata fields if NULL (requested event may not have arrived yet)
+                repository_name = COALESCE(workflow_runs.repository_name, EXCLUDED.repository_name),
+                workflow_name = COALESCE(workflow_runs.workflow_name, EXCLUDED.workflow_name),
+                workflow_path = COALESCE(workflow_runs.workflow_path, EXCLUDED.workflow_path),
+                head_sha = COALESCE(workflow_runs.head_sha, EXCLUDED.head_sha),
+                head_branch = COALESCE(workflow_runs.head_branch, EXCLUDED.head_branch),
+                run_number = COALESCE(workflow_runs.run_number, EXCLUDED.run_number),
+                actor_login = COALESCE(workflow_runs.actor_login, EXCLUDED.actor_login),
+                triggering_actor_login = COALESCE(workflow_runs.triggering_actor_login, EXCLUDED.triggering_actor_login),
+                assignment_id = COALESCE(workflow_runs.assignment_id, EXCLUDED.assignment_id),
+                profile_id = COALESCE(workflow_runs.profile_id, EXCLUDED.profile_id),
+                -- Calculate queue time if we now have both timestamps and it was NULL
                 queue_time_seconds = CASE
-                    WHEN workflow_runs.requested_at IS NOT NULL AND EXCLUDED.in_progress_at IS NOT NULL
+                    WHEN workflow_runs.queue_time_seconds IS NULL 
+                         AND workflow_runs.requested_at IS NOT NULL 
+                         AND EXCLUDED.in_progress_at IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (EXCLUDED.in_progress_at - workflow_runs.requested_at))
                     ELSE workflow_runs.queue_time_seconds
                 END,
                 updated_at = NOW();
                 
         WHEN 'completed' THEN
-            -- Third event: only update completed_at, conclusion, and calculate run time
+            -- Third event: update completed_at, conclusion, and calculate run time
+            -- If row exists (requested/in_progress arrived first), backfill completed_at
+            -- If row doesn't exist yet, create with available data
             INSERT INTO public.workflow_runs (
                 workflow_run_id, class_id, run_attempt, repository_name,
                 workflow_name, workflow_path, head_sha, head_branch, run_number,
@@ -166,11 +268,25 @@ BEGIN
             )
             ON CONFLICT ON CONSTRAINT workflow_runs_unique_run
             DO UPDATE SET
-                completed_at = EXCLUDED.completed_at,
-                conclusion = EXCLUDED.conclusion,
-                -- Calculate run time if we now have both timestamps
+                -- Always update completed_at and conclusion (may arrive late or be a retry)
+                completed_at = COALESCE(workflow_runs.completed_at, EXCLUDED.completed_at),
+                conclusion = COALESCE(workflow_runs.conclusion, EXCLUDED.conclusion),
+                -- Backfill metadata fields if NULL (earlier events may not have arrived yet)
+                repository_name = COALESCE(workflow_runs.repository_name, EXCLUDED.repository_name),
+                workflow_name = COALESCE(workflow_runs.workflow_name, EXCLUDED.workflow_name),
+                workflow_path = COALESCE(workflow_runs.workflow_path, EXCLUDED.workflow_path),
+                head_sha = COALESCE(workflow_runs.head_sha, EXCLUDED.head_sha),
+                head_branch = COALESCE(workflow_runs.head_branch, EXCLUDED.head_branch),
+                run_number = COALESCE(workflow_runs.run_number, EXCLUDED.run_number),
+                actor_login = COALESCE(workflow_runs.actor_login, EXCLUDED.actor_login),
+                triggering_actor_login = COALESCE(workflow_runs.triggering_actor_login, EXCLUDED.triggering_actor_login),
+                assignment_id = COALESCE(workflow_runs.assignment_id, EXCLUDED.assignment_id),
+                profile_id = COALESCE(workflow_runs.profile_id, EXCLUDED.profile_id),
+                -- Calculate run time if we now have both timestamps and it was NULL
                 run_time_seconds = CASE
-                    WHEN workflow_runs.in_progress_at IS NOT NULL AND EXCLUDED.completed_at IS NOT NULL
+                    WHEN workflow_runs.run_time_seconds IS NULL 
+                         AND workflow_runs.in_progress_at IS NOT NULL 
+                         AND EXCLUDED.completed_at IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (EXCLUDED.completed_at - workflow_runs.in_progress_at))
                     ELSE workflow_runs.run_time_seconds
                 END,
@@ -182,7 +298,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.maintain_workflow_runs() IS 
-    'Automatically maintains workflow_runs table by aggregating workflow_events. Replaces the expensive materialized view refresh with real-time updates.';
+    'Automatically maintains workflow_runs table by aggregating workflow_events. Replaces the expensive materialized view refresh with real-time updates. Handles out-of-order webhook delivery by backfilling missing fields and recalculating metrics when late events arrive.';
 
 -- Create trigger on workflow_events
 CREATE TRIGGER trigger_maintain_workflow_runs
