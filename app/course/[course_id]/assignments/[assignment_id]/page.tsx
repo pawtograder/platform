@@ -11,6 +11,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
 import {
   Repository,
   SelfReviewSettings,
@@ -20,7 +21,7 @@ import {
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
-import { differenceInDays, format } from "date-fns";
+import { differenceInDays, format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
@@ -34,6 +35,7 @@ export default function AssignmentPage() {
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
   const trackEvent = useTrackEvent();
   const hasTrackedView = useRef(false);
+  const autograderData = useRef(null);
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
   const ourAssignmentGroupPredicate = useMemo(() => {
     return (group: AssignmentGroup) =>
@@ -72,7 +74,21 @@ export default function AssignmentPage() {
     ]
   });
 
+  useEffect(() => {
+    async function fetchSubmissionLimits() {
+      const supabaseClient = createClient();
+      const { data, error } = await supabaseClient.rpc("get_submissions_limits", { p_assignment_id: assignment_id });
+      if (error) {
+        console.error("Failed to fetch submission limits:", error);
+      }
+      autograderData.current = data;
+    }
+    fetchSubmissionLimits();
+  }, [assignment_id]);
+
   const submissions = submissionsData?.data;
+  const autograder = autograderData.current;
+
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
@@ -84,7 +100,6 @@ export default function AssignmentPage() {
       const daysUntilDue = assignment.due_date ? differenceInDays(new Date(assignment.due_date), new Date()) : null;
       const isGroupAssignment = assignment.group_config !== "individual";
       const hasSubmissions = (submissions?.length ?? 0) > 0;
-
       trackEvent("assignment_viewed", {
         assignment_id: Number(assignment_id),
         course_id: Number(course_id),
@@ -95,6 +110,11 @@ export default function AssignmentPage() {
       });
     }
   }, [assignment, course_id, assignment_id, submissions, trackEvent]); // Include all values used inside
+
+  const autograderRow = autograder?.[0];
+  const submissionsPeriod =
+    autograderRow?.max_submissions_period_secs != null ? secondsToHours(autograderRow.max_submissions_period_secs) : 0;
+  const maxSubmissions = autograderRow?.max_submissions_count;
 
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
@@ -135,7 +155,19 @@ export default function AssignmentPage() {
           return sm.is_active;
         })}
       />
-
+      {submissionsPeriod > 0 ? (
+        <Box w="925px">
+          <Alert.Root status="info" flexDirection="column" size="md">
+            <Alert.Title>Submission Limit for this assignment</Alert.Title>
+            <Alert.Description>
+              This assignment has a submission limit of {maxSubmissions} submission{maxSubmissions !== 1 ? "s" : ""} per{" "}
+              {submissionsPeriod} hour{submissionsPeriod !== 1 ? "s" : ""}.
+            </Alert.Description>
+          </Alert.Root>
+        </Box>
+      ) : (
+        <></>
+      )}
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
         assignment={assignment}
