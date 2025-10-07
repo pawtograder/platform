@@ -599,6 +599,14 @@ export type Autograder = GetResult<
   "*"
 >;
 
+export type StudentAutograder = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["students_autograder"]["Row"],
+  "autograder_student",
+  Database["public"]["Tables"]["autograder"]["Relationships"],
+  "*"
+>;
+
 export type AutograderCommit = GetResult<
   Database["public"],
   Database["public"]["Tables"]["autograder_commits"]["Row"],
