@@ -892,7 +892,7 @@ export default class TableController<
 
     try {
       const oldRows = [...this._rows];
-      const newData = await this._fetchInitialData();
+      const newData = await this._fetchInitialData(true);
 
       // Convert new data to our internal format
       const newRows = newData.map((row) => ({
