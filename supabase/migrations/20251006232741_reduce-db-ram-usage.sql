@@ -1,10 +1,6 @@
 -- Replaced with Redis for webhook status tracking
 DROP TABLE IF EXISTS public.webhook_process_status;
 
--- Replace materialized view with regular table for better performance
--- Drop the materialized view and its indices first
-DROP MATERIALIZED VIEW IF EXISTS public.workflow_events_summary CASCADE;
-
 -- Create workflow_runs table (replacing the materialized view)
 -- This table will be directly upserted to by the webhook handler
 CREATE TABLE IF NOT EXISTS public.workflow_runs (
@@ -55,6 +51,7 @@ CREATE INDEX idx_workflow_runs_unique_lookup ON public.workflow_runs USING btree
 
 -- Backfill workflow_runs table with existing data from the materialized view
 -- This preserves historical data before we drop the view
+-- Join with repositories table to get repository_name (matching how the view was built)
 INSERT INTO public.workflow_runs (
     workflow_run_id,
     class_id,
@@ -79,28 +76,35 @@ INSERT INTO public.workflow_runs (
     updated_at
 )
 SELECT 
-    workflow_run_id,
-    class_id,
-    repository_name,
-    workflow_name,
-    workflow_path,
-    head_sha,
-    head_branch,
-    run_number,
-    run_attempt,
-    actor_login,
-    triggering_actor_login,
-    assignment_id,
-    profile_id,
-    requested_at,
-    in_progress_at,
-    completed_at,
-    conclusion,
-    queue_time_seconds,
-    run_time_seconds,
+    wes.workflow_run_id,
+    wes.class_id,
+    r.repository as repository_name,  -- Get repository name from repositories table
+    wes.workflow_name,
+    wes.workflow_path,
+    wes.head_sha,
+    wes.head_branch,
+    wes.run_number,
+    wes.run_attempt,
+    wes.actor_login,
+    wes.triggering_actor_login,
+    wes.assignment_id,
+    wes.profile_id,
+    wes.requested_at,
+    wes.in_progress_at,
+    wes.completed_at,
+    wes.conclusion,
+    wes.queue_time_seconds,
+    wes.run_time_seconds,
     NOW() as created_at,
     NOW() as updated_at
-FROM public.workflow_events_summary
+FROM public.workflow_events_summary wes
+LEFT JOIN public.repositories r ON (
+    r.assignment_id = wes.assignment_id 
+    AND (
+        (wes.profile_id IS NOT NULL AND r.profile_id = wes.profile_id)
+        OR (wes.profile_id IS NULL AND r.assignment_group_id IS NOT NULL)
+    )
+)
 ON CONFLICT ON CONSTRAINT workflow_runs_unique_run DO NOTHING;
 
 -- Log the backfill results
@@ -320,7 +324,10 @@ CREATE TRIGGER trigger_maintain_workflow_runs
 COMMENT ON TRIGGER trigger_maintain_workflow_runs ON public.workflow_events IS
     'Maintains workflow_runs table in real-time by aggregating events as they arrive. Eliminates need for materialized view refreshes.';
 
--- Update get_workflow_events_summary_for_class to use workflow_runs table
+-- Drop public.get_workflow_events_summary_for_class function
+DROP FUNCTION IF EXISTS public.get_workflow_events_summary_for_class(bigint);
+
+-- Create new get_workflow_events_summary_for_class function
 CREATE OR REPLACE FUNCTION public.get_workflow_events_summary_for_class(p_class_id bigint)
 RETURNS SETOF public.workflow_runs
 LANGUAGE plpgsql
@@ -589,6 +596,10 @@ COMMENT ON FUNCTION public.get_all_class_metrics() IS
 
 -- Drop the now-obsolete refresh function and its scheduled job
 DROP FUNCTION IF EXISTS public.refresh_workflow_events_summary();
+
+-- Replace materialized view with regular table for better performance
+-- Drop the materialized view and its indices 
+DROP MATERIALIZED VIEW IF EXISTS public.workflow_events_summary CASCADE;
 
 -- Drop the pg_cron job that was refreshing the materialized view every 5 minutes
 DO $$
