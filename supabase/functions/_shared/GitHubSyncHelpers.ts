@@ -63,10 +63,10 @@ function getSyncLimiter(org: string): Bottleneck {
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
-      id: `sync_repo_to_handout:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 40,
-      maxConcurrent: 40,
-      reservoirRefreshAmount: 40,
+      id: `sync_repo_to_handout_new:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 30,
+      maxConcurrent: 30,
+      reservoirRefreshAmount: 30,
       reservoirRefreshInterval: 60_000,
       datastore: "ioredis",
       clearDatastore: false,
@@ -364,12 +364,12 @@ export async function createPullRequest(
       p_key: circuitKey
     });
     if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
-      const row = methodCirc.data[0] as { state?: string; open_until?: string };
-      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
-        throw new UserVisibleError(
-          `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
-        );
-      }
+      // const row = methodCirc.data[0] as { state?: string; open_until?: string };
+      // if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+      //   throw new UserVisibleError(
+      //     `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
+      //   );
+      // }
     }
     return await octokit.request("POST /repos/{owner}/{repo}/pulls", {
       owner,
@@ -437,11 +437,12 @@ export async function syncRepositoryToHandout(params: {
 }): Promise<SyncResult> {
   const org = params.repositoryFullName.split("/")[0];
   const limiter = getSyncLimiter(org);
+  const { adminSupabase } = params;
   const createContentLimiter = getCreateContentLimiter(org);
-  console.log("Waiting for createContentLimiter to be available", org);
-  return await createContentLimiter.schedule(async () => {
+  console.log("Waiting for sync limiter to be available", org);
+  return await limiter.schedule(async () => {
     console.log("Waiting for sync limiter to be available", org);
-    return await limiter.schedule(async () => {
+    return await createContentLimiter.schedule(async () => {
       // Wrap the sync operation in the rate limiter
       console.log("syncRepositoryToHandout", params);
       const {

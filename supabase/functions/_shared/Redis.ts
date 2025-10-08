@@ -219,6 +219,7 @@ export class Redis {
               data: { name, errorMessage, attempt },
               level: "warning"
             });
+            this.client = this.duplicate().client;
             const pong = await this.client.ping();
             console.log("Ping pong", { pong });
 
