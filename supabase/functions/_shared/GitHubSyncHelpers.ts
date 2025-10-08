@@ -6,11 +6,14 @@
  */
 
 import { Redis as UpstashRedis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
-import { Redis } from "./Redis.ts";
+import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
 import { getCreateContentLimiter } from "../github-async-worker/index.ts";
 import * as github from "./GitHubWrapper.ts";
+import { UserVisibleError } from "./HandlerUtils.ts";
+import { Redis } from "./Redis.ts";
+import { Database } from "./SupabaseTypes.d.ts";
 
 export interface FileChange {
   path: string;
@@ -70,7 +73,7 @@ function getSyncLimiter(org: string): Bottleneck {
       clientOptions: {
         host,
         password,
-        username: "default",
+        username: "default"
       },
       Redis
     });
@@ -335,6 +338,7 @@ export async function createPullRequest(
   baseBranch: string,
   title: string,
   body: string,
+  adminSupabase: SupabaseClient<Database>,
   scope?: Sentry.Scope
 ): Promise<number> {
   const octokit = await github.getOctoKit(repoFullName, scope);
@@ -351,14 +355,31 @@ export async function createPullRequest(
   scope?.setTag("title", title);
   scope?.setTag("body", body);
   scope?.setTag("github_operation", "create_pull_request");
-  const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-    owner,
-    repo,
-    title,
-    body,
-    head: branchName,
-    base: baseBranch
-  })
+  const createContentLimiter = getCreateContentLimiter(owner);
+  const { data: pr } = await createContentLimiter.schedule(async () => {
+    //Also check the circuit breaker before we hit this, and fail if we have already bit the big one
+    const circuitKey = `${owner}:sync_repo_to_handout`;
+    const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+      p_scope: "org_method",
+      p_key: circuitKey
+    });
+    if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
+      const row = methodCirc.data[0] as { state?: string; open_until?: string };
+      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+        throw new UserVisibleError(
+          `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
+        );
+      }
+    }
+    return await octokit.request("POST /repos/{owner}/{repo}/pulls", {
+      owner,
+      repo,
+      title,
+      body,
+      head: branchName,
+      base: baseBranch
+    });
+  });
 
   return pr.number;
 }
@@ -409,6 +430,7 @@ export async function syncRepositoryToHandout(params: {
   templateRepo: string;
   fromSha: string | null;
   toSha: string;
+  adminSupabase: SupabaseClient<Database>;
   autoMerge?: boolean;
   waitBeforeMerge?: number; // milliseconds to wait before attempting merge
   scope?: Sentry.Scope;
@@ -486,7 +508,15 @@ ${changedFiles.map((f) => `- \`${f.path}\``).join("\n")}
 
         let prNumber: number;
         try {
-          prNumber = await createPullRequest(repositoryFullName, branchName, "main", prTitle, prBody, scope);
+          prNumber = await createPullRequest(
+            repositoryFullName,
+            branchName,
+            "main",
+            prTitle,
+            prBody,
+            adminSupabase,
+            scope
+          );
         } catch (error) {
           // Handle case where there are no commits between branches (repo already up to date)
           const errorMessage = error instanceof Error ? error.message : String(error);

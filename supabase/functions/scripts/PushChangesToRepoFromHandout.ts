@@ -237,6 +237,7 @@ async function main() {
       toSha: repo.assignments.latest_template_sha,
       autoMerge: true,
       waitBeforeMerge: 2000,
+      adminSupabase,
       scope
     });
 

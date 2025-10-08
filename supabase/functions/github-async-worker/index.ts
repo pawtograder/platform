@@ -61,7 +61,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
       clientOptions: {
         host,
         password,
-        username: "default",
+        username: "default"
       },
       Redis
     });
@@ -807,6 +807,7 @@ export async function processEnvelope(
             toSha: to_sha,
             autoMerge: true,
             waitBeforeMerge: 2000,
+            adminSupabase,
             scope
           });
 

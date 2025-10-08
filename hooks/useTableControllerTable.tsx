@@ -137,9 +137,7 @@ export function useTableControllerTable<
             if (updatedRow) {
               // Update only this specific row in the data array
               setData((currentData) => {
-                const index = currentData.findIndex(
-                  (item) => (item as TData & { id: IDType }).id === rowWithId.id
-                );
+                const index = currentData.findIndex((item) => (item as TData & { id: IDType }).id === rowWithId.id);
                 if (index !== -1) {
                   const newData = [...currentData];
                   newData[index] = updatedRow as PossiblyTentativeResult<TData>;
@@ -169,11 +167,11 @@ export function useTableControllerTable<
     try {
       setError(null);
       setIsLoading(true);
-      
+
       // Call refetchAll to fetch the latest data from the database
       // The list subscription will automatically update our data state
       await tableController.refetchAll();
-      
+
       setIsLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err : new Error("Failed to refetch data"));

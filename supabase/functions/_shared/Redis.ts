@@ -28,8 +28,8 @@ export class Redis {
     // Support both env-based and passed-in credentials
     const url = String(
       clientOptions.url ||
-      Deno.env.get("UPSTASH_REDIS_REST_URL") ||
-      (clientOptions.host ? `https://${clientOptions.host}` : "")
+        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+        (clientOptions.host ? `https://${clientOptions.host}` : "")
     );
     const token = String(
       clientOptions.token || clientOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
@@ -206,7 +206,7 @@ export class Redis {
             // If this is the last attempt, don't wait
             if (attempt < maxRetries - 1) {
               const backoffMs = Math.pow(2, attempt) * 100; // 100ms, 200ms, 400ms
-              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              await new Promise((resolve) => setTimeout(resolve, backoffMs));
             }
             continue;
           }
@@ -226,7 +226,7 @@ export class Redis {
             if (attempt < maxRetries - 1) {
               const backoffMs = Math.pow(2, attempt) * 2000; // 2000ms, 4000ms, 8000ms
               console.log("Transient error, retrying", { name, errorMessage, attempt, backoffMs });
-              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              await new Promise((resolve) => setTimeout(resolve, backoffMs));
             }
             continue;
           }
@@ -285,8 +285,8 @@ export class Redis {
     try {
       const url = String(
         this.initOptions.url ||
-        Deno.env.get("UPSTASH_REDIS_REST_URL") ||
-        (this.initOptions.host ? `https://${this.initOptions.host}` : "")
+          Deno.env.get("UPSTASH_REDIS_REST_URL") ||
+          (this.initOptions.host ? `https://${this.initOptions.host}` : "")
       );
       const token = String(
         this.initOptions.token || this.initOptions.password || Deno.env.get("UPSTASH_REDIS_REST_TOKEN") || ""
