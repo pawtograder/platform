@@ -407,7 +407,8 @@ function WorkflowRunTable() {
       query: query,
       client: supabase,
       table: "workflow_runs",
-      classRealTimeController
+      classRealTimeController,
+      loadEntireTable: false
     });
   }, [supabase, course_id, classRealTimeController]);
 

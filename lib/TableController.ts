@@ -836,36 +836,46 @@ export default class TableController<
   /**
    * Fetch initial data with pagination
    */
-  private async _fetchInitialData(): Promise<ResultOne[]> {
+  private async _fetchInitialData(loadEntireTable: boolean): Promise<ResultOne[]> {
     const rows: ResultOne[] = [];
     let page = 0;
     const pageSize = 1000;
     let nRows: number | undefined;
-
-    // Load initial data, do all of the pages.
-    // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
-    while (!this._closed) {
-      const rangeStart = page * pageSize;
-      let rangeEnd = (page + 1) * pageSize - 1;
-      if (typeof nRows === "number") {
-        if (rangeStart >= nRows) break;
-        rangeEnd = Math.min(rangeEnd, nRows - 1);
+    if (loadEntireTable) {
+      // Load initial data, do all of the pages.
+      // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
+      while (!this._closed) {
+        const rangeStart = page * pageSize;
+        let rangeEnd = (page + 1) * pageSize - 1;
+        if (typeof nRows === "number") {
+          if (rangeStart >= nRows) break;
+          rangeEnd = Math.min(rangeEnd, nRows - 1);
+        }
+        const { data, error } = await this._query.range(rangeStart, rangeEnd);
+        if (this._closed) {
+          return [];
+        }
+        if (error) {
+          throw error;
+        }
+        if (!data || data.length === 0) {
+          break;
+        }
+        rows.push(...(data as unknown as ResultOne[]));
+        if (data.length < pageSize) {
+          break;
+        }
+        page++;
       }
-      const { data, error } = await this._query.range(rangeStart, rangeEnd);
-      if (this._closed) {
-        return [];
-      }
+    } else {
+      const { data, error } = await this._query;
       if (error) {
         throw error;
       }
       if (!data || data.length === 0) {
-        break;
+        return [];
       }
       rows.push(...(data as unknown as ResultOne[]));
-      if (data.length < pageSize) {
-        break;
-      }
-      page++;
     }
 
     this._lastFetchTimestamp = Date.now();
@@ -882,7 +892,7 @@ export default class TableController<
 
     try {
       const oldRows = [...this._rows];
-      const newData = await this._fetchInitialData();
+      const newData = await this._fetchInitialData(true);
 
       // Convert new data to our internal format
       const newRows = newData.map((row) => ({
@@ -1155,7 +1165,8 @@ export default class TableController<
     submissionId,
     officeHoursRealTimeController,
     realtimeFilter,
-    debounceInterval
+    debounceInterval,
+    loadEntireTable = true
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1174,6 +1185,7 @@ export default class TableController<
     /** Optional filter for real-time events to match only rows that would be included in the query */
     realtimeFilter?: RealtimeFilter<RelationName>;
     debounceInterval?: number;
+    loadEntireTable?: boolean;
   }) {
     this._rows = [];
     this._client = client;
@@ -1199,7 +1211,7 @@ export default class TableController<
           resolve();
           return;
         }
-        const initialData = await this._fetchInitialData();
+        const initialData = await this._fetchInitialData(loadEntireTable);
         if (this._closed) {
           resolve();
           return;
