@@ -14,12 +14,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";
-import { syncRepositoryToHandout } from "../_shared/GitHubSyncHelpers.ts";
+import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 
 interface RepositoryData {
   id: number;
   repository: string;
   synced_handout_sha: string | null;
+  synced_repo_sha: string | null;
   assignment_id: number;
   class_id: number;
   assignments: {
@@ -43,7 +44,7 @@ async function getRepositoryFromDB(
     const result = await adminSupabase
       .from("repositories")
       .select(
-        "id, repository, synced_handout_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
+        "id, repository, synced_handout_sha, synced_repo_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
       )
       .eq("id", parseInt(repoIdOrFullName))
       .single();
@@ -53,7 +54,7 @@ async function getRepositoryFromDB(
     const result = await adminSupabase
       .from("repositories")
       .select(
-        "id, repository, synced_handout_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
+        "id, repository, synced_handout_sha, synced_repo_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
       )
       .eq("repository", repoIdOrFullName)
       .single();
@@ -230,11 +231,20 @@ async function main() {
     console.log(`  From SHA: ${repo.synced_handout_sha || "(initial)"}`);
     console.log(`  To SHA:   ${repo.assignments.latest_template_sha}`);
 
+    // Get syncedRepoSha - either from DB or fetch first commit if not set
+    let syncedRepoSha = repo.synced_repo_sha;
+    if (!syncedRepoSha) {
+      console.log("  No synced_repo_sha found, fetching first commit in main branch...");
+      syncedRepoSha = await getFirstCommit(repo.repository, "main", scope);
+      console.log(`  Using first commit: ${syncedRepoSha}`);
+    }
+
     const result = await syncRepositoryToHandout({
       repositoryFullName: repo.repository,
       templateRepo: repo.assignments.template_repo,
       fromSha: repo.synced_handout_sha,
       toSha: repo.assignments.latest_template_sha,
+      syncedRepoSha,
       autoMerge: true,
       waitBeforeMerge: 2000,
       adminSupabase,

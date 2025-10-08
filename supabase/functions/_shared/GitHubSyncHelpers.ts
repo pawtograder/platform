@@ -9,16 +9,20 @@ import { Redis as UpstashRedis } from "https://deno.land/x/upstash_redis@v1.22.0
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
+import { applyPatch } from "https://esm.sh/diff@5.1.0";
 import { getCreateContentLimiter } from "../github-async-worker/index.ts";
 import * as github from "./GitHubWrapper.ts";
-import { UserVisibleError } from "./HandlerUtils.ts";
 import { Redis } from "./Redis.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 
 export interface FileChange {
   path: string;
-  sha: string;
-  content: string;
+  sha?: string;
+  content?: string; // Only for binary files or initial sync
+  patch?: string; // Unified diff for text files
+  isBinary?: boolean;
+  status?: string; // "added", "modified", "removed", "renamed"
+  previous_filename?: string; // For renamed files
 }
 
 export interface SyncResult {
@@ -92,6 +96,109 @@ function getSyncLimiter(org: string): Bottleneck {
 }
 
 /**
+ * Get the first (initial) commit in a repository
+ */
+export async function getFirstCommit(repoFullName: string, branch: string, scope?: Sentry.Scope): Promise<string> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) {
+    throw new Error(`No octokit found for repository ${repoFullName}`);
+  }
+
+  const [owner, repo] = repoFullName.split("/");
+
+  // Start from the branch HEAD and traverse back to find the first commit
+  let oldestSha: string | undefined;
+  const { data: headRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${branch}`
+  });
+
+  let currentSha = headRef.object.sha;
+
+  // Keep following parent commits until we find one with no parents
+  while (currentSha) {
+    const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      owner,
+      repo,
+      commit_sha: currentSha
+    });
+
+    if (!commit.parents || commit.parents.length === 0) {
+      // Found the first commit (no parents)
+      oldestSha = commit.sha;
+      break;
+    }
+
+    // Follow the first parent (in case of merge commits)
+    currentSha = commit.parents[0].sha;
+  }
+
+  if (!oldestSha) {
+    throw new Error(`Could not find first commit in repository ${repoFullName}`);
+  }
+
+  scope?.addBreadcrumb({
+    message: `Found first commit in ${repoFullName}: ${oldestSha}`,
+    category: "git",
+    level: "info"
+  });
+
+  return oldestSha;
+}
+
+/**
+ * Detect if a file is binary based on its extension/path
+ */
+function isBinaryPath(path: string): boolean {
+  const binaryExtensions = [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".ico",
+    ".pdf",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".rar",
+    ".7z",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".class",
+    ".jar",
+    ".war",
+    ".ear",
+    ".pyc",
+    ".pyo",
+    ".o",
+    ".a",
+    ".lib",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".otf",
+    ".mp3",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".flv",
+    ".webm",
+    ".ogg",
+    ".wav",
+    ".flac"
+  ];
+
+  const lowerPath = path.toLowerCase();
+  return binaryExtensions.some((ext) => lowerPath.endsWith(ext));
+}
+
+/**
  * Get all changed files between two commits in a template repository
  * Results are cached in Redis with a 12-hour TTL
  */
@@ -138,7 +245,7 @@ export async function getChangedFiles(
   const fileChanges: FileChange[] = [];
 
   if (!fromSha) {
-    // Initial sync - get all files
+    // Initial sync - get all files with full content (no patches available)
     const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
       owner,
       repo,
@@ -156,7 +263,9 @@ export async function getChangedFiles(
         fileChanges.push({
           path: item.path,
           sha: item.sha,
-          content: blob.content
+          content: blob.content,
+          isBinary: isBinaryPath(item.path),
+          status: "added"
         });
       }
     }
@@ -173,7 +282,8 @@ export async function getChangedFiles(
         fileChanges.push({
           path: file.filename,
           sha: "",
-          content: ""
+          content: "",
+          status: "removed"
         });
         continue;
       }
@@ -183,23 +293,40 @@ export async function getChangedFiles(
         fileChanges.push({
           path: file.previous_filename,
           sha: "",
-          content: ""
+          content: "",
+          status: "removed"
         });
         // Continue to add the new filename entry below
       }
 
-      const { data: fileContent } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-        owner,
-        repo,
-        path: file.filename,
-        ref: toSha
-      });
+      const isBinary = !file.patch || isBinaryPath(file.filename);
 
-      if ("content" in fileContent && fileContent.sha) {
+      if (isBinary) {
+        // For binary files, fetch the complete content
+        const { data: fileContent } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+          owner,
+          repo,
+          path: file.filename,
+          ref: toSha
+        });
+
+        if ("content" in fileContent && fileContent.sha) {
+          fileChanges.push({
+            path: file.filename,
+            sha: fileContent.sha,
+            content: fileContent.content,
+            isBinary: true,
+            status: file.status
+          });
+        }
+      } else {
+        // For text files, use the patch from GitHub
         fileChanges.push({
           path: file.filename,
-          sha: fileContent.sha,
-          content: fileContent.content
+          patch: file.patch,
+          isBinary: false,
+          status: file.status,
+          previous_filename: file.previous_filename
         });
       }
     }
@@ -225,11 +352,13 @@ export async function getChangedFiles(
 
 /**
  * Create a branch and commit changes to a target repository
+ * For text files with patches, applies the patch to the content at baseSha
+ * For binary files or files with full content, uses the provided content
  */
 export async function createBranchAndCommit(
   repoFullName: string,
   branchName: string,
-  baseBranch: string,
+  baseSha: string,
   files: FileChange[],
   commitMessage: string,
   scope?: Sentry.Scope
@@ -242,19 +371,12 @@ export async function createBranchAndCommit(
   const [owner, repo] = repoFullName.split("/");
   scope?.setTag("owner", owner);
   scope?.setTag("repo", repo);
-  scope?.setTag("base_branch", baseBranch);
+  scope?.setTag("base_sha", baseSha);
   scope?.setTag("branch_name", branchName);
   scope?.setTag("commit_message", commitMessage);
-  const { data: baseRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${baseBranch}`
-  });
 
-  const baseSha = baseRef.object.sha;
-  scope?.setTag("base_sha", baseSha);
+  console.log("createBranchAndCommit", repoFullName, branchName, baseSha, files.length, "files");
 
-  console.log("createBranchAndCommit", repoFullName, branchName, baseBranch, files, commitMessage);
   // Create new branch
   try {
     await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
@@ -279,11 +401,12 @@ export async function createBranchAndCommit(
     commit_sha: baseSha
   });
   scope?.setTag("base_commit_sha", baseCommit.sha);
+
   // Create blobs for all changed files
   const treeItems = await Promise.all(
     files.map(async (file) => {
-      if (file.content === "") {
-        // Deleted file
+      // Handle removed files
+      if (file.status === "removed" || file.content === "") {
         return {
           path: file.path,
           mode: "100644" as const,
@@ -292,18 +415,88 @@ export async function createBranchAndCommit(
         };
       }
 
-      const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
-        owner,
-        repo,
-        content: file.content,
-        encoding: "base64"
-      });
-      return {
-        path: file.path,
-        mode: "100644" as const,
-        type: "blob" as const,
-        sha: blob.sha
-      };
+      // Handle files with patches (text files that need to be merged)
+      if (file.patch && !file.isBinary) {
+        scope?.addBreadcrumb({
+          message: `Applying patch to ${file.path}`,
+          category: "patch",
+          level: "info"
+        });
+
+        // Fetch the current content from the student repo at baseSha
+        let baseContent = "";
+        try {
+          const { data: fileData } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+            owner,
+            repo,
+            path: file.path,
+            ref: baseSha
+          });
+
+          if ("content" in fileData && fileData.content) {
+            // Decode base64 content
+            baseContent = atob(fileData.content);
+          }
+        } catch {
+          // File doesn't exist in student repo (new file), use empty content
+          scope?.addBreadcrumb({
+            message: `File ${file.path} doesn't exist at baseSha, treating as new file`,
+            category: "patch",
+            level: "info"
+          });
+        }
+
+        // Apply the patch
+        let patchedContent: string;
+        try {
+          const result = applyPatch(baseContent, file.patch);
+          if (result === false) {
+            throw new Error("Patch application failed");
+          }
+          patchedContent = result;
+        } catch (patchError) {
+          scope?.addBreadcrumb({
+            message: `Failed to apply patch to ${file.path}: ${patchError}`,
+            category: "patch",
+            level: "error"
+          });
+          console.error(`Failed to apply patch to ${file.path}:`, patchError);
+          throw patchError;
+        }
+
+        // Create blob with patched content
+        const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+          owner,
+          repo,
+          content: btoa(patchedContent), // Encode to base64
+          encoding: "base64"
+        });
+
+        return {
+          path: file.path,
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: blob.sha
+        };
+      }
+
+      // Handle files with full content (binary files or initial sync)
+      if (file.content) {
+        const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+          owner,
+          repo,
+          content: file.content,
+          encoding: "base64"
+        });
+        return {
+          path: file.path,
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: blob.sha
+        };
+      }
+
+      throw new Error(`File ${file.path} has neither patch nor content`);
     })
   );
 
@@ -424,12 +617,16 @@ export async function attemptAutoMerge(
  *
  * This is the main entry point for syncing a repository to a template
  * Rate-limited using Bottleneck to prevent overwhelming GitHub API
+ *
+ * @param syncedRepoSha - The SHA of the student repo at the last successful sync (Student_orig).
+ *                        This is used as the base for the PR branch to enable proper 3-way merging.
  */
 export async function syncRepositoryToHandout(params: {
   repositoryFullName: string;
   templateRepo: string;
   fromSha: string | null;
   toSha: string;
+  syncedRepoSha: string;
   adminSupabase: SupabaseClient<Database>;
   autoMerge?: boolean;
   waitBeforeMerge?: number; // milliseconds to wait before attempting merge
@@ -450,6 +647,7 @@ export async function syncRepositoryToHandout(params: {
         templateRepo,
         fromSha,
         toSha,
+        syncedRepoSha,
         autoMerge = true,
         waitBeforeMerge = 2000,
         scope
@@ -458,6 +656,7 @@ export async function syncRepositoryToHandout(params: {
       scope?.setTag("template_repo", templateRepo);
       scope?.setTag("from_sha", fromSha);
       scope?.setTag("to_sha", toSha);
+      scope?.setTag("synced_repo_sha", syncedRepoSha);
       scope?.setTag("auto_merge", autoMerge.toString());
       scope?.setTag("wait_before_merge", waitBeforeMerge.toString());
       scope?.setTag("sync_operation", "sync_repository_to_handout");
@@ -479,7 +678,8 @@ export async function syncRepositoryToHandout(params: {
           };
         }
 
-        // Create branch and commit
+        // Create branch and commit based on syncedRepoSha (Student_orig)
+        // This enables proper 3-way merging when the PR targets current main
         const branchName = `sync-to-${toSha.substring(0, 7)}`;
         const commitMessage = `Sync handout updates to ${toSha.substring(0, 7)}
 
@@ -489,10 +689,16 @@ changes from the template repository.
 Changed files:
 ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
-        await createBranchAndCommit(repositoryFullName, branchName, "main", changedFiles, commitMessage, scope);
+        await createBranchAndCommit(repositoryFullName, branchName, syncedRepoSha, changedFiles, commitMessage, scope);
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
+
+        // Categorize files for better PR description
+        const textFiles = changedFiles.filter((f) => !f.isBinary && f.status !== "removed");
+        const binaryFiles = changedFiles.filter((f) => f.isBinary && f.status !== "removed");
+        const removedFiles = changedFiles.filter((f) => f.status === "removed");
+
         const prBody = `## Handout Update
 
 This pull request syncs the latest changes from the assignment template repository.
@@ -500,12 +706,22 @@ This pull request syncs the latest changes from the assignment template reposito
 **Triggered by:** Instructor
 **Template commit:** ${toSha}
 **Previous sync:** ${fromSha || "Initial sync"}
+**Base commit:** ${syncedRepoSha.substring(0, 7)}
+
+### How This Works
+
+This PR uses a **3-way merge strategy** to preserve your work:
+- **Base**: The state of your repo at the last sync (${syncedRepoSha.substring(0, 7)})
+- **Changes**: Updates from the handout template
+- **Your Work**: Any commits you've made since the last sync
+
+GitHub will automatically merge these together. If you modified the same parts of files that the instructor updated, you'll see merge conflicts that need to be resolved.
 
 ### Changed Files
-${changedFiles.map((f) => `- \`${f.path}\``).join("\n")}
 
+${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (will overwrite your version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
 ---
-*This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are conflicts, please review the changes and merge when ready, or ask your course staff for help.*`;
+*This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
 
         let prNumber: number;
         try {

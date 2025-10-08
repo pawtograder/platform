@@ -17,7 +17,7 @@ import type {
 import * as github from "../_shared/GitHubWrapper.ts";
 import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { syncRepositoryToHandout } from "../_shared/GitHubSyncHelpers.ts";
+import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -788,7 +788,7 @@ export async function processEnvelope(
           // Check to see if the repo is already up to date, using first 6 chars of SHA
           const { data: currentRepo } = await adminSupabase
             .from("repositories")
-            .select("synced_handout_sha")
+            .select("synced_handout_sha, synced_repo_sha")
             .eq("id", repository_id)
             .maybeSingle();
           if (currentRepo?.synced_handout_sha?.substring(0, 6) === to_sha.substring(0, 6)) {
@@ -799,12 +799,27 @@ export async function processEnvelope(
             return true;
           }
 
+          // Get syncedRepoSha - either from DB or fetch first commit if not set
+          let syncedRepoSha = currentRepo?.synced_repo_sha;
+          if (!syncedRepoSha) {
+            Sentry.addBreadcrumb({
+              message: `No synced_repo_sha found for ${repository_full_name}, fetching first commit`,
+              level: "info"
+            });
+            syncedRepoSha = await getFirstCommit(repository_full_name, "main", scope);
+            Sentry.addBreadcrumb({
+              message: `Using first commit as base: ${syncedRepoSha}`,
+              level: "info"
+            });
+          }
+
           // Use the shared sync helper
           const result = await syncRepositoryToHandout({
             repositoryFullName: repository_full_name,
             templateRepo: template_repo,
             fromSha: from_sha,
             toSha: to_sha,
+            syncedRepoSha,
             autoMerge: true,
             waitBeforeMerge: 2000,
             adminSupabase,

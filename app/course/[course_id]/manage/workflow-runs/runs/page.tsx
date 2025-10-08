@@ -1,6 +1,18 @@
 "use client";
 
-import { Box, Heading, Text, Icon, IconButton, HStack, Link } from "@chakra-ui/react";
+import {
+  Box,
+  Heading,
+  Text,
+  Icon,
+  IconButton,
+  HStack,
+  Link,
+  Button,
+  VStack,
+  NativeSelect,
+  Spinner
+} from "@chakra-ui/react";
 import { useMemo } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
@@ -37,13 +49,37 @@ type WorkflowRunRow = Database["public"]["Tables"]["workflow_runs"]["Row"] & {
   repository_name?: string | null;
 };
 
-interface SelectOption {
-  label: string;
-  value: string;
-}
-
 function WorkflowRunTable() {
   const { course_id } = useParams();
+  const supabase = useMemo(() => createClient(), []);
+  const {
+    classRealTimeController,
+    assignments: assignmentsController,
+    profiles: profilesController
+  } = useCourseController();
+
+  // Get data from TableControllers
+  const assignmentsData = assignmentsController.rows;
+  const profilesData = profilesController.rows;
+
+  // Create maps for quick lookups
+  const assignments = useMemo(() => {
+    const map = new Map<number, string>();
+    assignmentsData.forEach((assignment) => {
+      map.set(assignment.id, assignment.title);
+    });
+    return map;
+  }, [assignmentsData]);
+
+  const profiles = useMemo(() => {
+    const map = new Map<string, string>();
+    profilesData.forEach((profile) => {
+      if (profile.name) {
+        map.set(profile.id, profile.name);
+      }
+    });
+    return map;
+  }, [profilesData]);
 
   const columns = useMemo<ColumnDef<WorkflowRunRow>[]>(
     () => [
@@ -90,22 +126,6 @@ function WorkflowRunTable() {
         }
       },
       {
-        id: "run_attempt",
-        accessorKey: "run_attempt",
-        header: "Attempt",
-        enableColumnFilter: true,
-        enableSorting: true,
-        cell: ({ getValue }: CellContext<WorkflowRunRow, unknown>) => (
-          <Text fontSize="sm">{(getValue() as number) || "-"}</Text>
-        ),
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const attempt = String(row.original.run_attempt || "");
-          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
-          return filterArray.some((filter: string) => attempt.toLowerCase().includes(filter.toLowerCase()));
-        }
-      },
-      {
         id: "profile_id",
         accessorKey: "profile_id",
         header: "Student",
@@ -124,6 +144,27 @@ function WorkflowRunTable() {
         }
       },
       {
+        id: "assignment_id",
+        accessorKey: "assignment_id",
+        header: "Assignment",
+        enableColumnFilter: true,
+        enableSorting: true,
+        cell: ({ getValue }: CellContext<WorkflowRunRow, unknown>) => {
+          const assignmentId = getValue() as number | null;
+          if (!assignmentId) return <Text fontSize="sm">-</Text>;
+          const assignmentName = assignments.get(assignmentId);
+          return <Text fontSize="sm">{assignmentName || `Assignment #${assignmentId}`}</Text>;
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const assignmentId = row.original.assignment_id;
+          if (!assignmentId) return false;
+          const assignmentName = assignments.get(assignmentId) || String(assignmentId);
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) => assignmentName.toLowerCase().includes(filter.toLowerCase()));
+        }
+      },
+      {
         id: "actor_login",
         accessorKey: "actor_login",
         header: "Triggered By",
@@ -137,24 +178,6 @@ function WorkflowRunTable() {
           const actor = String(row.original.actor_login || "unknown");
           const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
           return filterArray.some((filter: string) => actor.toLowerCase().includes(filter.toLowerCase()));
-        }
-      },
-      {
-        id: "head_branch",
-        accessorKey: "head_branch",
-        header: "Branch",
-        enableColumnFilter: true,
-        enableSorting: true,
-        cell: ({ getValue }: CellContext<WorkflowRunRow, unknown>) => (
-          <Box as="span" px={2} py={1} bg="bg.subtle" borderRadius="sm" fontSize="xs" fontFamily="mono">
-            {(getValue() as string) || "Unknown"}
-          </Box>
-        ),
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const branch = String(row.original.head_branch || "unknown");
-          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
-          return filterArray.some((filter: string) => branch.toLowerCase().includes(filter.toLowerCase()));
         }
       },
       {
@@ -389,11 +412,9 @@ function WorkflowRunTable() {
         }
       }
     ],
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assignments, profiles]
   );
-
-  const supabase = useMemo(() => createClient(), []);
-  const { classRealTimeController } = useCourseController();
 
   const tableController = useMemo(() => {
     const query = supabase
@@ -414,7 +435,17 @@ function WorkflowRunTable() {
 
   const {
     getHeaderGroups,
-    getCoreRowModel,
+    getRowModel,
+    getState,
+    getRowCount,
+    setPageIndex,
+    getCanPreviousPage,
+    getPageCount,
+    getCanNextPage,
+    nextPage,
+    previousPage,
+    setPageSize,
+    isLoading,
     data,
     tableController: controller
   } = useTableControllerTable({
@@ -429,50 +460,8 @@ function WorkflowRunTable() {
     }
   });
 
-  const workflowRuns = getCoreRowModel().rows;
-
-  // Compute unique values for filter options from ALL rows (before filtering)
-  const columnUniqueValues = useMemo(() => {
-    const uniqueValuesMap: Record<string, SelectOption[]> = {};
-
-    columns.forEach((column) => {
-      if (!column.enableColumnFilter || !column.id) return;
-
-      if (column.id === "status") {
-        // Status is computed from timestamps
-        const statuses = new Set<string>();
-        workflowRuns.forEach((row) => {
-          const { requested_at, in_progress_at, completed_at } = row.original;
-          if (completed_at) statuses.add("completed");
-          else if (in_progress_at) statuses.add("in progress");
-          else if (requested_at) statuses.add("requested");
-          else statuses.add("unknown");
-        });
-        uniqueValuesMap[column.id] = Array.from(statuses).map((status) => ({
-          label: status.charAt(0).toUpperCase() + status.slice(1),
-          value: status
-        }));
-        return;
-      }
-
-      const uniqueValues = new Set<string>();
-      workflowRuns.forEach((row) => {
-        const value = row.getValue(column.id as string);
-        if (value !== null && value !== undefined) {
-          uniqueValues.add(String(value));
-        }
-      });
-
-      uniqueValuesMap[column.id] = Array.from(uniqueValues)
-        .sort()
-        .map((value) => ({
-          label: column.id === "workflow_run_id" ? `#${value}` : value,
-          value: value
-        }));
-    });
-
-    return uniqueValuesMap;
-  }, [columns, workflowRuns]);
+  // Use getRowModel for displaying filtered data
+  const filteredWorkflowRuns = getRowModel().rows;
 
   return (
     <Box>
@@ -490,7 +479,14 @@ function WorkflowRunTable() {
         </IconButton>
       </HStack>
 
-      {workflowRuns.length === 0 && data.length === 0 ? (
+      {isLoading ? (
+        <Box p={6} borderRadius="md" textAlign="center">
+          <VStack w="100%" alignItems="center" justifyContent="center" h="100%" p={12}>
+            <Spinner size="lg" />
+            <Text>Loading workflow runs...</Text>
+          </VStack>
+        </Box>
+      ) : filteredWorkflowRuns.length === 0 && data.length === 0 ? (
         <Box p={6} borderRadius="md" textAlign="center">
           <Text fontSize="lg" fontWeight="medium">
             🚀 No workflow runs found!
@@ -506,9 +502,6 @@ function WorkflowRunTable() {
               {getHeaderGroups().map((headerGroup) => (
                 <Table.Row bg="bg.subtle" key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
-                    const canFilter = header.column.columnDef.enableColumnFilter;
-                    const options = columnUniqueValues[header.id] || [];
-
                     return (
                       <Table.ColumnHeader key={header.id}>
                         {header.isPlaceholder ? null : (
@@ -532,40 +525,315 @@ function WorkflowRunTable() {
                                 </Icon>
                               )}
                             </Text>
-                            {canFilter && (
+                            {header.id === "workflow_run_id" && (
                               <CreatableSelect
                                 isMulti
                                 name={header.id}
-                                options={options}
-                                placeholder={`Filter ${header.column.columnDef.header}...`}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const runId = row.original.workflow_run_id;
+                                      if (runId && !map.has(runId)) {
+                                        map.set(runId, runId);
+                                      }
+                                      return map;
+                                    }, new Map<number, number>())
+                                    .values()
+                                ).map((runId) => ({ label: `#${runId}`, value: String(runId) }))}
+                                placeholder="Filter Run ID..."
                                 closeMenuOnSelect={false}
                                 size="sm"
                                 value={
                                   Array.isArray(header.column.getFilterValue())
                                     ? (header.column.getFilterValue() as string[]).map((v) => ({
-                                        label: v,
+                                        label: `#${v}`,
                                         value: v
                                       }))
                                     : []
                                 }
                                 onChange={(selected) => {
-                                  header.column.setFilterValue(selected ? selected.map((option) => option.value) : []);
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
                                 }}
                                 chakraStyles={{
-                                  container: (provided) => ({
-                                    ...provided,
-                                    width: "100%"
-                                  }),
+                                  container: (provided) => ({ ...provided, width: "100%" }),
                                   dropdownIndicator: (provided) => ({
                                     ...provided,
                                     bg: "transparent",
                                     px: 2,
                                     cursor: "pointer"
                                   }),
-                                  indicatorSeparator: (provided) => ({
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                }}
+                              />
+                            )}
+                            {header.id === "profile_id" && (
+                              <CreatableSelect
+                                isMulti
+                                name={header.id}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const profileId = row.original.profile_id;
+                                      if (profileId && !map.has(profileId)) {
+                                        const profileName = profiles.get(profileId) || profileId;
+                                        map.set(profileId, profileName);
+                                      }
+                                      return map;
+                                    }, new Map<string, string>())
+                                    .entries()
+                                )
+                                  .sort((a, b) => a[1].localeCompare(b[1]))
+                                  .map(([id, name]) => ({ label: name, value: id }))}
+                                placeholder="Filter Student..."
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => {
+                                        const name = profiles.get(v) || v;
+                                        return { label: name, value: v };
+                                      })
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({ ...provided, width: "100%" }),
+                                  dropdownIndicator: (provided) => ({
                                     ...provided,
-                                    display: "none"
-                                  })
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                }}
+                              />
+                            )}
+                            {header.id === "assignment_id" && (
+                              <CreatableSelect
+                                isMulti
+                                name={header.id}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const assignmentId = row.original.assignment_id;
+                                      if (assignmentId && !map.has(assignmentId)) {
+                                        const assignmentName =
+                                          assignments.get(assignmentId) || `Assignment #${assignmentId}`;
+                                        map.set(assignmentId, assignmentName);
+                                      }
+                                      return map;
+                                    }, new Map<number, string>())
+                                    .entries()
+                                )
+                                  .sort((a, b) => a[1].localeCompare(b[1]))
+                                  .map(([, name]) => ({ label: name, value: name }))}
+                                placeholder="Filter by assignment..."
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => ({ label: v, value: v }))
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({ ...provided, width: "100%" }),
+                                  dropdownIndicator: (provided) => ({
+                                    ...provided,
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                }}
+                              />
+                            )}
+                            {header.id === "actor_login" && (
+                              <CreatableSelect
+                                isMulti
+                                name={header.id}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const actor = row.original.actor_login || "Unknown";
+                                      if (!map.has(actor)) {
+                                        map.set(actor, actor);
+                                      }
+                                      return map;
+                                    }, new Map<string, string>())
+                                    .values()
+                                )
+                                  .sort()
+                                  .map((actor) => ({ label: actor, value: actor }))}
+                                placeholder="Filter by actor..."
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => ({ label: v, value: v }))
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({ ...provided, width: "100%" }),
+                                  dropdownIndicator: (provided) => ({
+                                    ...provided,
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                }}
+                              />
+                            )}
+                            {header.id === "head_sha" && (
+                              <CreatableSelect
+                                isMulti
+                                name={header.id}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const sha = row.original.head_sha;
+                                      if (sha && !map.has(sha)) {
+                                        map.set(sha, sha);
+                                      }
+                                      return map;
+                                    }, new Map<string, string>())
+                                    .values()
+                                )
+                                  .sort()
+                                  .map((sha) => ({ label: sha.substring(0, 7), value: sha }))}
+                                placeholder="Filter by commit..."
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                        label: v.substring(0, 7),
+                                        value: v
+                                      }))
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({ ...provided, width: "100%" }),
+                                  dropdownIndicator: (provided) => ({
+                                    ...provided,
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                }}
+                              />
+                            )}
+                            {header.id === "status" && (
+                              <CreatableSelect
+                                isMulti
+                                name={header.id}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const { requested_at, in_progress_at, completed_at } = row.original;
+                                      let status = "unknown";
+                                      if (completed_at) status = "completed";
+                                      else if (in_progress_at) status = "in progress";
+                                      else if (requested_at) status = "requested";
+                                      if (!map.has(status)) {
+                                        map.set(status, status);
+                                      }
+                                      return map;
+                                    }, new Map<string, string>())
+                                    .values()
+                                ).map((status) => ({
+                                  label: status.charAt(0).toUpperCase() + status.slice(1),
+                                  value: status
+                                }))}
+                                placeholder="Filter by status..."
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                        label: v.charAt(0).toUpperCase() + v.slice(1),
+                                        value: v
+                                      }))
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({ ...provided, width: "100%" }),
+                                  dropdownIndicator: (provided) => ({
+                                    ...provided,
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                }}
+                              />
+                            )}
+                            {header.id === "run_number" && (
+                              <CreatableSelect
+                                isMulti
+                                name={header.id}
+                                options={Array.from(
+                                  getRowModel()
+                                    .rows.reduce((map, row) => {
+                                      const runNumber = row.original.run_number;
+                                      if (runNumber && !map.has(runNumber)) {
+                                        map.set(runNumber, runNumber);
+                                      }
+                                      return map;
+                                    }, new Map<number, number>())
+                                    .values()
+                                )
+                                  .sort((a, b) => a - b)
+                                  .map((runNumber) => ({ label: String(runNumber), value: String(runNumber) }))}
+                                placeholder="Filter Run #..."
+                                closeMenuOnSelect={false}
+                                size="sm"
+                                value={
+                                  Array.isArray(header.column.getFilterValue())
+                                    ? (header.column.getFilterValue() as string[]).map((v) => ({ label: v, value: v }))
+                                    : []
+                                }
+                                onChange={(selected) => {
+                                  header.column.setFilterValue(
+                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
+                                  );
+                                }}
+                                chakraStyles={{
+                                  container: (provided) => ({ ...provided, width: "100%" }),
+                                  dropdownIndicator: (provided) => ({
+                                    ...provided,
+                                    bg: "transparent",
+                                    px: 2,
+                                    cursor: "pointer"
+                                  }),
+                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
                                 }}
                               />
                             )}
@@ -578,7 +846,7 @@ function WorkflowRunTable() {
               ))}
             </Table.Header>
             <Table.Body>
-              {workflowRuns.map((row) => (
+              {filteredWorkflowRuns.map((row) => (
                 <Table.Row key={row.id}>
                   {row.getVisibleCells().map((cell) => {
                     return (
@@ -589,6 +857,66 @@ function WorkflowRunTable() {
               ))}
             </Table.Body>
           </Table.Root>
+          <VStack w="100%" gap={4} mt={4}>
+            <HStack>
+              <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
+                {"<<"}
+              </Button>
+              <Button id="previous-button" onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
+                {"<"}
+              </Button>
+              <Button id="next-button" onClick={() => nextPage()} disabled={!getCanNextPage()}>
+                {">"}
+              </Button>
+              <Button onClick={() => setPageIndex(getPageCount() - 1)} disabled={!getCanNextPage()}>
+                {">>"}
+              </Button>
+              <VStack gap={1}>
+                <Text fontSize="sm">Page</Text>
+                <Text fontSize="sm" fontWeight="medium">
+                  {getState().pagination.pageIndex + 1} of {getPageCount()}
+                </Text>
+              </VStack>
+              <VStack gap={1}>
+                <Text fontSize="sm">Go to page:</Text>
+                <input
+                  title="Go to page"
+                  type="number"
+                  defaultValue={getState().pagination.pageIndex + 1}
+                  onChange={(e) => {
+                    const page = e.target.value ? Number(e.target.value) - 1 : 0;
+                    setPageIndex(page);
+                  }}
+                  style={{
+                    width: "80px",
+                    padding: "4px 8px",
+                    borderRadius: "4px",
+                    border: "1px solid #e2e8f0"
+                  }}
+                />
+              </VStack>
+              <VStack gap={1}>
+                <Text fontSize="sm">Show</Text>
+                <NativeSelect.Root title="Select page size" width="120px">
+                  <NativeSelect.Field
+                    value={"" + getState().pagination.pageSize}
+                    onChange={(event) => {
+                      setPageSize(Number(event.target.value));
+                    }}
+                  >
+                    {[10, 25, 50, 100, 200, 500, 1000].map((pageSize) => (
+                      <option key={pageSize} value={pageSize}>
+                        Show {pageSize}
+                      </option>
+                    ))}
+                  </NativeSelect.Field>
+                </NativeSelect.Root>
+              </VStack>
+            </HStack>
+            <Text fontSize="sm" color="fg.muted">
+              {getRowCount()} Workflow Runs Total
+            </Text>
+          </VStack>
         </>
       )}
     </Box>
