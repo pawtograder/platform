@@ -11,7 +11,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "@sentry/deno";
+import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
@@ -258,7 +258,7 @@ async function main() {
     // 5. Update database based on result (mirrors async worker behavior)
     if (result.no_changes) {
       console.log("\n✓ No changes needed - repository already up to date");
-      await adminSupabase
+      const { error } = await adminSupabase
         .from("repositories")
         .update({
           synced_handout_sha: repo.assignments.latest_template_sha,
@@ -269,6 +269,10 @@ async function main() {
           }
         })
         .eq("id", repo.id);
+
+      if (error) {
+        throw new Error(`Failed to update repository ${repo.id} (no changes): ${error.message}`);
+      }
       console.log("✓ Database updated");
     } else {
       console.log(`\n✓ Pull request created: #${result.pr_number}`);
@@ -276,7 +280,7 @@ async function main() {
 
       if (result.merged) {
         console.log("✓ Pull request auto-merged successfully");
-        await adminSupabase
+        const { error } = await adminSupabase
           .from("repositories")
           .update({
             synced_handout_sha: repo.assignments.latest_template_sha,
@@ -292,12 +296,16 @@ async function main() {
             }
           })
           .eq("id", repo.id);
+
+        if (error) {
+          throw new Error(`Failed to update repository ${repo.id} (merged PR): ${error.message}`);
+        }
         console.log(
           `✓ Database updated (handout SHA: ${repo.assignments.latest_template_sha}, merge SHA: ${result.merge_sha})`
         );
       } else {
         console.log("⚠ Pull request created but requires manual merge due to conflicts or checks");
-        await adminSupabase
+        const { error } = await adminSupabase
           .from("repositories")
           .update({
             desired_handout_sha: repo.assignments.latest_template_sha,
@@ -310,6 +318,10 @@ async function main() {
             }
           })
           .eq("id", repo.id);
+
+        if (error) {
+          throw new Error(`Failed to update repository ${repo.id} (open PR): ${error.message}`);
+        }
         console.log("✓ Database updated with PR info");
       }
     }

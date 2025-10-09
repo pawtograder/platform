@@ -23,7 +23,6 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon, RefreshCw, GitPullRequest } from "lucide-react";
@@ -34,14 +33,7 @@ import { FaExternalLinkAlt, FaTimes } from "react-icons/fa";
 import { useList, useOne } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { TZDate } from "@date-fns/tz";
-
-type RepositoryRow = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["repositories"]["Row"],
-  "repositories",
-  Database["public"]["Tables"]["repositories"]["Relationships"],
-  "*, assignment_groups(*), profiles(*), user_roles(*)"
->;
+import { computeSyncStatus, type RepositoryRow, type SyncData } from "./sync-status-utils";
 
 function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: number }) {
   const [isResending, setIsResending] = useState(false);
@@ -83,41 +75,14 @@ function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: n
 }
 
 function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; latestTemplateSha?: string | null }) {
-  const syncData = row.sync_data as {
-    pr_url?: string;
-    pr_number?: number;
-    pr_state?: string;
-    last_sync_attempt?: string;
-    last_sync_error?: string;
-    merge_sha?: string;
-  } | null;
-  const desiredSha = row.desired_handout_sha?.substring(0, 7);
-  const syncedSha = row.synced_handout_sha?.substring(0, 7);
-  const latestSha = latestTemplateSha?.substring(0, 7);
+  const syncData = row.sync_data as SyncData;
+  const status = computeSyncStatus(row, latestTemplateSha);
 
-  if (!desiredSha) {
+  if (status === "No Sync Requested") {
     return <Badge colorPalette="gray">No Sync Requested</Badge>;
   }
 
-  if (desiredSha === syncedSha) {
-    // Check if synced SHA matches latest template SHA
-    if (latestSha && syncedSha !== latestSha) {
-      // Synced to desired SHA but template has moved forward
-      return (
-        <HStack gap={2}>
-          <Badge colorPalette="red">Not Up-to-date</Badge>
-          {syncData?.pr_number && syncData?.pr_url && (
-            <Link href={syncData.pr_url} target="_blank">
-              <HStack gap={1} fontSize="sm" color="blue.600">
-                <Icon as={GitPullRequest} boxSize={3} />
-                <Text>PR#{syncData.pr_number}</Text>
-              </HStack>
-            </Link>
-          )}
-        </HStack>
-      );
-    }
-
+  if (status === "Synced") {
     // Synced and up-to-date with PR info if available
     if (syncData?.pr_number && syncData?.pr_url) {
       return (
@@ -135,11 +100,28 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
     return <Badge colorPalette="green">Synced</Badge>;
   }
 
-  if (syncData?.pr_state === "open") {
+  if (status === "Not Up-to-date") {
+    // Synced to desired SHA but template has moved forward
+    return (
+      <HStack gap={2}>
+        <Badge colorPalette="red">Not Up-to-date</Badge>
+        {syncData?.pr_number && syncData?.pr_url && (
+          <Link href={syncData.pr_url} target="_blank">
+            <HStack gap={1} fontSize="sm" color="blue.600">
+              <Icon as={GitPullRequest} boxSize={3} />
+              <Text>PR#{syncData.pr_number}</Text>
+            </HStack>
+          </Link>
+        )}
+      </HStack>
+    );
+  }
+
+  if (status === "PR Open") {
     return (
       <HStack gap={2}>
         <Badge colorPalette="blue">PR Open</Badge>
-        {syncData.pr_url && syncData.pr_number && (
+        {syncData?.pr_url && syncData?.pr_number && (
           <Link href={syncData.pr_url} target="_blank">
             <HStack gap={1} fontSize="sm" color="blue.600">
               <Icon as={GitPullRequest} boxSize={3} />
@@ -151,11 +133,11 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
     );
   }
 
-  if (syncData?.pr_state === "merged") {
+  if (status === "Sync Finalizing") {
     return (
       <HStack gap={2}>
         <Badge colorPalette="orange">Sync Finalizing</Badge>
-        {syncData.pr_url && syncData.pr_number && (
+        {syncData?.pr_url && syncData?.pr_number && (
           <Link href={syncData.pr_url} target="_blank">
             <HStack gap={1} fontSize="sm" color="blue.600">
               <Icon as={GitPullRequest} boxSize={3} />
@@ -167,7 +149,7 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
     );
   }
 
-  if (syncData?.last_sync_error) {
+  if (status === "Sync Error") {
     return (
       <VStack gap={2} alignItems="flex-start" width="full">
         <Badge colorPalette="red">Sync Error</Badge>
@@ -182,7 +164,7 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
           width="full"
         >
           <Text fontSize="sm" color="red.700" _dark={{ color: "red.300" }} wordBreak="break-word">
-            {syncData.last_sync_error}
+            {syncData?.last_sync_error}
           </Text>
         </Box>
       </VStack>
@@ -506,36 +488,7 @@ export default function RepositoriesPage() {
         filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const desiredSha = (row.original as RepositoryRow).desired_handout_sha;
-          const syncedSha = (row.original as RepositoryRow).synced_handout_sha;
-          const syncData = (row.original as RepositoryRow).sync_data as {
-            pr_state?: string;
-            last_sync_error?: string;
-          } | null;
-          const latestSha = assignment?.data?.latest_template_sha;
-
-          // Match the exact logic from SyncStatusBadge
-          let status = "No Sync Requested";
-
-          if (!desiredSha) {
-            status = "No Sync Requested";
-          } else if (desiredSha === syncedSha) {
-            // Check if synced SHA matches latest template SHA
-            if (latestSha && syncedSha !== latestSha) {
-              status = "Not Up-to-date";
-            } else {
-              status = "Synced";
-            }
-          } else if (syncData?.pr_state === "open") {
-            status = "PR Open";
-          } else if (syncData?.pr_state === "merged") {
-            status = "Sync Finalizing";
-          } else if (syncData?.last_sync_error) {
-            status = "Sync Error";
-          } else {
-            status = "Sync in Progress";
-          }
-
+          const status = computeSyncStatus(row.original as RepositoryRow, assignment?.data?.latest_template_sha);
           return values.includes(status);
         }
       },

@@ -302,23 +302,30 @@ export async function getChangedFiles(
       const isBinary = !file.patch || isBinaryPath(file.filename);
 
       if (isBinary) {
-        // For binary files, fetch the complete content
-        const { data: fileContent } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+        // For binary files or large files, fetch the complete content using Git blobs API
+        // This avoids the 1MB truncation limit of the contents endpoint and preserves binary data
+        if (!file.sha) {
+          throw new Error(`No SHA available for file ${file.filename}`);
+        }
+
+        const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
           owner,
           repo,
-          path: file.filename,
-          ref: toSha
+          file_sha: file.sha
         });
 
-        if ("content" in fileContent && fileContent.sha) {
-          fileChanges.push({
-            path: file.filename,
-            sha: fileContent.sha,
-            content: fileContent.content,
-            isBinary: true,
-            status: file.status
-          });
+        // Verify the blob is base64-encoded as expected
+        if (blob.encoding !== "base64") {
+          throw new Error(`Unexpected encoding for file ${file.filename}: ${blob.encoding}`);
         }
+
+        fileChanges.push({
+          path: file.filename,
+          sha: file.sha,
+          content: blob.content,
+          isBinary: true,
+          status: file.status
+        });
       } else {
         // For text files, use the patch from GitHub
         fileChanges.push({

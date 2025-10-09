@@ -826,6 +826,8 @@
     "https://esm.sh/debug@4.4.1?target=deno": "f259a5b506bc69a46377055135426647d25a142313bfd63ea0e09bf3b977cd37",
     "https://esm.sh/denque@2.1.0/deno/denque.mjs": "0d30fd61364e8c7d2f4e583cf7dc58476c813ad9b0cef883e683ca94e176f517",
     "https://esm.sh/denque@2.1.0?target=deno": "affc99e5cf49a86132a731472c46983ea75858f223467fd20230404be82775cb",
+    "https://esm.sh/diff@5.1.0": "4325379c38687229dabe6b6ec803b33a937f00dbf214cebf86e8ae17ddf33c16",
+    "https://esm.sh/diff@5.1.0/denonext/diff.mjs": "64ac9fe29b3823abc6c6be59abe63b2dafb108cf629b45a16474baf7d49d0bc1",
     "https://esm.sh/fast-content-type-parse@2.0.1/denonext/fast-content-type-parse.mjs": "436d0ff6ce4508efcb9023892d25cc9d7eb321e9321a0d3aaf870300dc2e8578",
     "https://esm.sh/fast-content-type-parse@2.0.1?target=denonext": "7170ebd0186887d73afc67050a28e5350171e5e842e82a10309e829eabdf138a",
     "https://esm.sh/ioredis@5.7.0/deno/ioredis.mjs": "9acbe7eed2e8a46afda28780625a9cf5081b7d16013444042bc744226281e425",

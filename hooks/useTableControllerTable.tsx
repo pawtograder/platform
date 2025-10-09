@@ -7,7 +7,8 @@ import {
   useReactTable,
   TableOptions
 } from "@tanstack/react-table";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as Sentry from "@sentry/react";
 import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 
@@ -122,22 +123,36 @@ export function useTableControllerTable<
     };
   }, [tableController]);
 
+  // Track subscriptions by ID to prevent cascade re-subscriptions
+  const subscriptionsRef = useRef<Map<IDType, () => void>>(new Map());
+
   // Subscribe to item-level updates for each row in the table
   useEffect(() => {
-    if (!tableController || data.length === 0) return;
+    if (!tableController) return;
 
-    const unsubscribers: (() => void)[] = [];
+    const subscriptions = subscriptionsRef.current;
+    const currentIds = new Set<IDType>();
 
-    // Subscribe to each individual item for granular updates
+    // Collect current IDs from data
     for (const row of data) {
       const rowWithId = row as TData & { id: IDType };
       if (rowWithId.id !== undefined && rowWithId.id !== null) {
+        currentIds.add(rowWithId.id);
+      }
+    }
+
+    // Subscribe to new IDs that aren't already subscribed
+    for (const id of currentIds) {
+      if (!subscriptions.has(id)) {
         try {
-          const { unsubscribe } = tableController.getById(rowWithId.id, (updatedRow) => {
+          if (typeof id === "number" && id < 0) {
+            continue;
+          }
+          const { unsubscribe } = tableController.getById(id, (updatedRow) => {
             if (updatedRow) {
               // Update only this specific row in the data array
               setData((currentData) => {
-                const index = currentData.findIndex((item) => (item as TData & { id: IDType }).id === rowWithId.id);
+                const index = currentData.findIndex((item) => (item as TData & { id: IDType }).id === id);
                 if (index !== -1) {
                   const newData = [...currentData];
                   newData[index] = updatedRow as PossiblyTentativeResult<TData>;
@@ -147,17 +162,27 @@ export function useTableControllerTable<
               });
             }
           });
-          unsubscribers.push(unsubscribe);
-        } catch {
-          // Skip invalid IDs (e.g., temporary negative IDs from optimistic updates)
-          // These will be handled when the real data arrives
+          subscriptions.set(id, unsubscribe);
+        } catch (error) {
+          Sentry.captureException(error);
         }
       }
     }
 
-    // Cleanup all item subscriptions when data changes or component unmounts
+    // Unsubscribe from IDs that are no longer in the data
+    for (const [id, unsubscribe] of subscriptions) {
+      if (!currentIds.has(id)) {
+        unsubscribe();
+        subscriptions.delete(id);
+      }
+    }
+
+    // Cleanup on unmount
     return () => {
-      unsubscribers.forEach((unsub) => unsub());
+      for (const [, unsubscribe] of subscriptions) {
+        unsubscribe();
+      }
+      subscriptions.clear();
     };
   }, [tableController, data]);
 

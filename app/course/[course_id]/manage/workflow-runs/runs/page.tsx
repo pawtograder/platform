@@ -530,9 +530,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const runId = row.original.workflow_run_id;
+                                  data
+                                    .reduce((map, row) => {
+                                      const runId = row.workflow_run_id;
                                       if (runId && !map.has(runId)) {
                                         map.set(runId, runId);
                                       }
@@ -573,9 +573,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const profileId = row.original.profile_id;
+                                  data
+                                    .reduce((map, row) => {
+                                      const profileId = row.profile_id;
                                       if (profileId && !map.has(profileId)) {
                                         const profileName = profiles.get(profileId) || profileId;
                                         map.set(profileId, profileName);
@@ -619,9 +619,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const assignmentId = row.original.assignment_id;
+                                  data
+                                    .reduce((map, row) => {
+                                      const assignmentId = row.assignment_id;
                                       if (assignmentId && !map.has(assignmentId)) {
                                         const assignmentName =
                                           assignments.get(assignmentId) || `Assignment #${assignmentId}`;
@@ -663,9 +663,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const actor = row.original.actor_login || "Unknown";
+                                  data
+                                    .reduce((map, row) => {
+                                      const actor = row.actor_login || "Unknown";
                                       if (!map.has(actor)) {
                                         map.set(actor, actor);
                                       }
@@ -705,9 +705,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const sha = row.original.head_sha;
+                                  data
+                                    .reduce((map, row) => {
+                                      const sha = row.head_sha;
                                       if (sha && !map.has(sha)) {
                                         map.set(sha, sha);
                                       }
@@ -750,9 +750,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const { requested_at, in_progress_at, completed_at } = row.original;
+                                  data
+                                    .reduce((map, row) => {
+                                      const { requested_at, in_progress_at, completed_at } = row;
                                       let status = "unknown";
                                       if (completed_at) status = "completed";
                                       else if (in_progress_at) status = "in progress";
@@ -800,9 +800,9 @@ function WorkflowRunTable() {
                                 isMulti
                                 name={header.id}
                                 options={Array.from(
-                                  getRowModel()
-                                    .rows.reduce((map, row) => {
-                                      const runNumber = row.original.run_number;
+                                  data
+                                    .reduce((map, row) => {
+                                      const runNumber = row.run_number;
                                       if (runNumber && !map.has(runNumber)) {
                                         map.set(runNumber, runNumber);
                                       }
