@@ -342,6 +342,16 @@ function WorkflowErrorsTable() {
     [course_id]
   );
 
+  const serverOrderBys = useMemo(
+    () => [
+      {
+        field: "created_at",
+        direction: "desc"
+      }
+    ],
+    []
+  );
+
   const {
     getHeaderGroups,
     getRowModel,
@@ -389,6 +399,7 @@ function WorkflowErrorsTable() {
         )
       )
     `,
+    serverOrderBys,
     initialState
   });
 
