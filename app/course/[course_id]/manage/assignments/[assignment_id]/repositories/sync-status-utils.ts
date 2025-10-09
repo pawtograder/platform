@@ -1,5 +1,5 @@
-import { Database } from "@/types/supabase";
-import { GetResult } from "supabase";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 export type RepositoryRow = GetResult<
   Database["public"],
