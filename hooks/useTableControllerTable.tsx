@@ -7,7 +7,8 @@ import {
   useReactTable,
   TableOptions
 } from "@tanstack/react-table";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as Sentry from "@sentry/react";
 import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 
@@ -26,6 +27,7 @@ export interface UseTableControllerTableProps<
   columns: ColumnDef<TData>[];
   tableController?: TableController<RelationName, Query, IDType, TData>;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
+  enableRowSelection?: boolean;
 }
 
 /**
@@ -72,12 +74,17 @@ export function useTableControllerTable<
   IDType = DatabaseTableTypes[RelationName]["Row"]["id"],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TData = any
->({ columns, tableController, initialState = {} }: UseTableControllerTableProps<RelationName, Query, IDType, TData>) {
+>({
+  columns,
+  tableController,
+  initialState = {},
+  enableRowSelection = false
+}: UseTableControllerTableProps<RelationName, Query, IDType, TData>) {
   const [data, setData] = useState<PossiblyTentativeResult<TData>[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  // Subscribe to TableController data changes
+  // Subscribe to TableController list changes (for items entering/leaving)
   useEffect(() => {
     if (!tableController) return;
     let unsubscribe: (() => void) | undefined;
@@ -90,7 +97,7 @@ export function useTableControllerTable<
         // Wait for TableController to be ready
         await tableController.readyPromise;
 
-        // Subscribe to data changes
+        // Subscribe to list changes (when items are added or removed)
         const subscription = tableController.list((newData) => {
           setData(newData as PossiblyTentativeResult<TData>[]);
         });
@@ -116,20 +123,80 @@ export function useTableControllerTable<
     };
   }, [tableController]);
 
-  // Manual refetch function - since TableController manages its own state,
-  // we just need to invalidate and let the subscription handle the update
+  // Track subscriptions by ID to prevent cascade re-subscriptions
+  const subscriptionsRef = useRef<Map<IDType, () => void>>(new Map());
+
+  // Subscribe to item-level updates for each row in the table
+  useEffect(() => {
+    if (!tableController) return;
+
+    const subscriptions = subscriptionsRef.current;
+    const currentIds = new Set<IDType>();
+
+    // Collect current IDs from data
+    for (const row of data) {
+      const rowWithId = row as TData & { id: IDType };
+      if (rowWithId.id !== undefined && rowWithId.id !== null) {
+        currentIds.add(rowWithId.id);
+      }
+    }
+
+    // Subscribe to new IDs that aren't already subscribed
+    for (const id of currentIds) {
+      if (!subscriptions.has(id)) {
+        try {
+          if (typeof id === "number" && id < 0) {
+            continue;
+          }
+          const { unsubscribe } = tableController.getById(id, (updatedRow) => {
+            if (updatedRow) {
+              // Update only this specific row in the data array
+              setData((currentData) => {
+                const index = currentData.findIndex((item) => (item as TData & { id: IDType }).id === id);
+                if (index !== -1) {
+                  const newData = [...currentData];
+                  newData[index] = updatedRow as PossiblyTentativeResult<TData>;
+                  return newData;
+                }
+                return currentData;
+              });
+            }
+          });
+          subscriptions.set(id, unsubscribe);
+        } catch (error) {
+          Sentry.captureException(error);
+        }
+      }
+    }
+
+    // Unsubscribe from IDs that are no longer in the data
+    for (const [id, unsubscribe] of subscriptions) {
+      if (!currentIds.has(id)) {
+        unsubscribe();
+        subscriptions.delete(id);
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      for (const [, unsubscribe] of subscriptions) {
+        unsubscribe();
+      }
+      subscriptions.clear();
+    };
+  }, [tableController, data]);
+
+  // Manual refetch function - triggers a full refetch from the database
   const refetch = useCallback(async () => {
     if (!tableController) return;
     try {
       setError(null);
-      // TableController doesn't have a global refetch, but we can trigger
-      // a re-subscription which will get the latest data
       setIsLoading(true);
-      await tableController.readyPromise;
 
-      // Get current data from the controller
-      const currentData = tableController.list();
-      setData(currentData.data as PossiblyTentativeResult<TData>[]);
+      // Call refetchAll to fetch the latest data from the database
+      // The list subscription will automatically update our data state
+      await tableController.refetchAll();
+
       setIsLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err : new Error("Failed to refetch data"));
@@ -148,6 +215,7 @@ export function useTableControllerTable<
     manualFiltering: false,
     manualSorting: false,
     filterFromLeafRows: true,
+    enableRowSelection,
     initialState: {
       pagination: {
         pageIndex: 0,

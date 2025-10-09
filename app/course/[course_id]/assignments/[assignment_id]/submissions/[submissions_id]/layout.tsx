@@ -10,11 +10,13 @@ import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from 
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
+import { Alert } from "@/components/ui/alert";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
@@ -63,8 +65,6 @@ import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { linkToSubPage } from "./utils";
-import { Alert } from "@/components/ui/alert";
-import StudentSummaryTrigger from "@/components/ui/student-summary";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {

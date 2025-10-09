@@ -11,14 +11,14 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController from "@/lib/TableController";
+import TableController, { useFindTableControllerValue } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
 import { useCourseController } from "./useCourseController";
 
@@ -172,6 +172,16 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
     return () => unsubscribe();
   }, [controller, review_assignment_id]);
   return reviewAssignment;
+}
+export function useReviewAssignmentForReview(review_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const findReviewAssignmentPredicate = useCallback(
+    (reviewAssignment: ReviewAssignments) => {
+      return (review_id && reviewAssignment.submission_review_id === review_id) || false;
+    },
+    [review_id]
+  );
+  return useFindTableControllerValue(controller.reviewAssignments, findReviewAssignmentPredicate);
 }
 
 export function useMyReviewAssignments(submission_id?: number) {
