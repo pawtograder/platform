@@ -14,7 +14,6 @@ import {
   SubmissionReview
 } from "@/utils/supabase/DatabaseTypes";
 import {
-  Badge,
   Box,
   Field,
   Fieldset,
@@ -34,6 +33,7 @@ import {
 } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
@@ -43,14 +43,13 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useAssignmentController,
   useReviewAssignment,
-  useReviewAssignmentForReview,
   useReviewAssignmentRubricParts,
   useRubricById,
   useRubricCheck,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
+import { useIsGraderOrInstructor, useIsInstructor, useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -63,23 +62,21 @@ import {
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { formatDueDateInTimezone } from "@/lib/utils";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
-import { format, formatDistance, formatRelative, isAfter } from "date-fns";
+import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BsClockFill, BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
+import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
+import { Tooltip } from "./tooltip";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
-import { Tooltip } from "./tooltip";
 
 interface CheckOptionType extends OptionBase {
   value: number;
@@ -482,8 +479,6 @@ export function RubricCheckComment({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const boxRef = useRef<HTMLDivElement>(null);
-  const { time_zone } = useCourse();
-  const reviewAssignment = useReviewAssignmentForReview(comment?.submission_review_id);
 
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const pathname = usePathname();
@@ -550,7 +545,6 @@ export function RubricCheckComment({
   // Check if student can create a regrade request
   const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
 
-  const isLate = reviewAssignment && isAfter(comment.created_at, reviewAssignment.due_date);
   return (
     <Box
       ref={boxRef}
@@ -575,16 +569,6 @@ export function RubricCheckComment({
               </Text>
               <CommentActions comment={comment} setIsEditing={setIsEditing} />
             </HStack>
-            {isLate && (
-              <Tooltip
-                content={`Review assignment due date: ${formatDueDateInTimezone(reviewAssignment?.due_date, time_zone)}. Comment date: ${formatDueDateInTimezone(comment.created_at, time_zone)}`}
-              >
-                <Badge colorPalette="red" variant="outline">
-                  <Icon as={BsClockFill} color="fg.error" />
-                  {formatDistance(reviewAssignment?.due_date, comment.created_at)} late
-                </Badge>
-              </Tooltip>
-            )}
           </Box>
           <Box pl={1} pr={1} color="fg.muted">
             <HStack gap={1}>
