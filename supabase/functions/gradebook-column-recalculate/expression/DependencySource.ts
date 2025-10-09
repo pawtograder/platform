@@ -496,6 +496,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const students = new Set<string>(keys.map((key) => key.student_id));
     const gradebookColumnIds = new Set(keys.map((key) => Number(key.key)));
     const uniqueGradebookColumnIds = Array.from(gradebookColumnIds);
+    const studentIds = Array.from(students);
 
     // Fetch all gradebook column students with pagination
     const allGradebookColumnStudents: GradebookColumnStudent[] = [];
@@ -504,10 +505,17 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
 
     while (true) {
       const to = from + pageSize - 1;
-      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await supabase
+      let query = supabase
         .from("gradebook_column_students")
         .select("*")
-        .in("gradebook_column_id", uniqueGradebookColumnIds)
+        .in("gradebook_column_id", uniqueGradebookColumnIds);
+      
+      // If 20 or fewer students, filter by student_id for better performance
+      if (studentIds.length <= 20) {
+        query = query.in("student_id", studentIds);
+      }
+      
+      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await query
         .range(from, to);
 
       if (gradebookColumnsFetchError) {
@@ -559,6 +567,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
+    console.log(`Retrieved ${allGradebookColumnStudents.length} gradebook column students for ${students.size} students and ${gradebookColumnIds.size} gradebook columns`);
     const ret = allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
