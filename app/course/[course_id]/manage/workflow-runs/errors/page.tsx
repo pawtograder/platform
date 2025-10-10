@@ -8,7 +8,7 @@ import PersonName from "@/components/ui/person-name";
 import { Table } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { flexRender, ColumnDef, CellContext } from "@tanstack/react-table";
-import { useCustomTable } from "@/hooks/useCustomTable";
+import { ServerOrderBy, useCustomTable } from "@/hooks/useCustomTable";
 import { Select, CreatableSelect } from "chakra-react-select";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -350,7 +350,7 @@ function WorkflowErrorsTable() {
       }
     ],
     []
-  );
+  ) as ServerOrderBy[];
 
   const {
     getHeaderGroups,
