@@ -1,22 +1,23 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 import { Redis } from "../_shared/Redis.ts";
 import type {
+  ArchiveRepoAndLockArgs,
+  CreateRepoArgs,
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
-  SyncTeamArgs,
-  CreateRepoArgs,
+  RerunAutograderArgs,
   SyncRepoPermissionsArgs,
-  ArchiveRepoAndLockArgs,
-  RerunAutograderArgs
+  SyncRepoToHandoutArgs,
+  SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
-import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
-
+import * as github from "../_shared/GitHubWrapper.ts";
+import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -33,10 +34,15 @@ type QueueMessage<T> = {
   message: T;
 };
 
-const createRepoLimiters = new Map<string, Bottleneck>();
-function getCreateRepoLimiter(org: string): Bottleneck {
+const createContentLimiters = new Map<string, Bottleneck>();
+/**
+ * GitHub limits the number of content-creating requests per organization per-minute and per-hour
+ * @param org GitHub organization
+ * @returns
+ */
+export function getCreateContentLimiter(org: string): Bottleneck {
   const key = org || "unknown";
-  const existing = createRepoLimiters.get(key);
+  const existing = createContentLimiters.get(key);
   if (existing) return existing;
   let limiter: Bottleneck;
   const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
@@ -45,18 +51,17 @@ function getCreateRepoLimiter(org: string): Bottleneck {
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
-      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 50,
       reservoirRefreshAmount: 50,
       reservoirRefreshInterval: 60_000,
+      maxConcurrent: 50,
       datastore: "ioredis",
       clearDatastore: false,
       clientOptions: {
         host,
         password,
-        username: "default",
-        tls: {},
-        port: 6379
+        username: "default"
       },
       Redis
     });
@@ -67,11 +72,12 @@ function getCreateRepoLimiter(org: string): Bottleneck {
     limiter = new Bottleneck({
       id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 10,
+      maxConcurrent: 10,
       reservoirRefreshAmount: 10,
       reservoirRefreshInterval: 60_000
     });
   }
-  createRepoLimiters.set(key, limiter);
+  createContentLimiters.set(key, limiter);
   return limiter;
 }
 
@@ -274,6 +280,7 @@ async function recordGitHubAsyncError(
 async function checkAndTripErrorCircuitBreaker(
   adminSupabase: SupabaseClient<Database>,
   org: string,
+  method: GitHubAsyncMethod,
   scope: Sentry.Scope
 ): Promise<boolean> {
   try {
@@ -290,27 +297,30 @@ async function checkAndTripErrorCircuitBreaker(
 
     const errorCount = result.data as number;
     if (errorCount >= 20) {
-      // Trip the circuit breaker for 8 hours
+      // Trip the circuit breaker for 8 hours - scoped to this method
+      const circuitKey = `${org}:${method}`;
       const tripResult = await adminSupabase.schema("public").rpc("open_github_circuit", {
-        p_scope: "org",
-        p_key: org,
+        p_scope: "org_method",
+        p_key: circuitKey,
         p_event: "error_threshold",
         p_retry_after_seconds: 28800, // 8 hours
-        p_reason: `Error threshold exceeded: ${errorCount} errors in 5 minutes`
+        p_reason: `Error threshold exceeded for ${method}: ${errorCount} errors in 5 minutes`
       });
+      Sentry.captureMessage(`Opened BIG circuit breaker for ${method}`);
 
       if (!tripResult.error) {
         // Log special error to Sentry
         scope.setTag("circuit_breaker_reason", "error_threshold");
         scope.setContext("error_threshold_breach", {
           org,
+          method,
           error_count: errorCount,
           window_minutes: 5,
           circuit_duration_hours: 8
         });
 
         Sentry.captureMessage(
-          `GitHub async worker circuit breaker tripped for org ${org}: error threshold exceeded. Circuit open for 8 hours.`,
+          `GitHub async worker circuit breaker tripped for org ${org} method ${method}: error threshold exceeded. Circuit open for 8 hours.`,
           {
             level: "error"
           }
@@ -324,6 +334,7 @@ async function checkAndTripErrorCircuitBreaker(
   } catch (e) {
     scope.setContext("circuit_check_error", {
       org,
+      method,
       error_message: e instanceof Error ? e.message : String(e)
     });
     Sentry.captureException(e, scope);
@@ -343,7 +354,7 @@ export async function processEnvelope(
   scope.setTag("async_method", envelope.method);
   if (envelope.class_id) scope.setTag("class_id", String(envelope.class_id));
   if (envelope.debug_id) scope.setTag("debug_id", envelope.debug_id);
-  // Circuit breaker: if org-level circuit is open, requeue immediately with a minimum delay
+  // Circuit breaker: check both org-level and method-specific circuits
   try {
     const org = ((): string | undefined => {
       if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
@@ -355,15 +366,43 @@ export async function processEnvelope(
         const repo = (envelope.args as RerunAutograderArgs).repository;
         return repo.split("/")[0];
       }
-      return undefined;
+      if (envelope.method === "sync_repo_to_handout") {
+        const repo = (envelope.args as SyncRepoToHandoutArgs).repository_full_name;
+        return repo.split("/")[0];
+      }
+      throw new Error(`Unknown method, ignoring circuit breaker, seems dangerous. ${envelope.method}`);
     })();
     if (org) {
-      const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
-      if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
-        const row = circ.data[0] as { state?: string; open_until?: string };
+      // Check org-level circuit breaker first (highest priority - blocks everything)
+      const orgCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+        p_scope: "org",
+        p_key: org
+      });
+      if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
+        const row = orgCirc.data[0] as { state?: string; open_until?: string };
         if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
+          scope.setTag("circuit_scope", "org");
+          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          return false;
+        }
+      }
+
+      // Check method-specific circuit breaker (only blocks this specific method)
+      const circuitKey = `${org}:${envelope.method}`;
+      const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+        p_scope: "org_method",
+        p_key: circuitKey
+      });
+      if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
+        const row = methodCirc.data[0] as { state?: string; open_until?: string };
+        if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          const delaySeconds = 180; // minimum enforced delay while circuit open
+          scope.setTag("circuit_state", "open");
+          scope.setTag("circuit_scope", "org_method");
+          scope.setTag("circuit_method", envelope.method);
           await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
           await archiveMessage(adminSupabase, meta.msg_id, scope);
           return false;
@@ -565,7 +604,7 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
-        const limiter = getCreateRepoLimiter(org);
+        const limiter = getCreateContentLimiter(org);
         const headSha = await limiter.schedule(() =>
           github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
@@ -574,26 +613,36 @@ export async function processEnvelope(
 
         // Update repository record using the repo_id if provided (preferred method)
         try {
+          const { data: latestHandoutCommit, error: latestHandoutCommitError } = await adminSupabase
+            .from("assignments")
+            .select("latest_template_sha")
+            .eq("template_repo", templateRepo)
+            .maybeSingle();
+          if (latestHandoutCommitError) throw latestHandoutCommitError;
           if (envelope.repo_id) {
             // Direct update using repo_id (more efficient and reliable)
-            await adminSupabase
+            const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 is_github_ready: true,
-                synced_repo_sha: headSha
+                synced_repo_sha: headSha,
+                synced_handout_sha: latestHandoutCommit?.latest_template_sha
               })
               .eq("id", envelope.repo_id);
+            if (updateError) throw updateError;
           } else if (envelope.class_id) {
             // Fallback to old method for backward compatibility
             const fullName = `${org}/${repoName}`;
-            await adminSupabase
+            const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 is_github_ready: true,
-                synced_repo_sha: headSha
+                synced_repo_sha: headSha,
+                synced_handout_sha: latestHandoutCommit?.latest_template_sha
               })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);
+            if (updateError) throw updateError;
           }
         } catch (e) {
           scope.setContext("repo_ready_update_error", {
@@ -721,6 +770,133 @@ export async function processEnvelope(
         );
         return true;
       }
+      case "sync_repo_to_handout": {
+        const { repository_id, repository_full_name, template_repo, from_sha, to_sha } =
+          envelope.args as SyncRepoToHandoutArgs;
+
+        scope.setTag("repository_id", String(repository_id));
+        scope.setTag("repository", repository_full_name);
+        scope.setTag("template_repo", template_repo);
+        scope.setTag("to_sha", to_sha);
+
+        Sentry.addBreadcrumb({
+          message: `Syncing ${repository_full_name} to handout SHA ${to_sha}`,
+          level: "info"
+        });
+
+        try {
+          // Check to see if the repo is already up to date, using first 6 chars of SHA
+          const { data: currentRepo } = await adminSupabase
+            .from("repositories")
+            .select("synced_handout_sha, synced_repo_sha")
+            .eq("id", repository_id)
+            .maybeSingle();
+          if (currentRepo?.synced_handout_sha?.substring(0, 6) === to_sha.substring(0, 6)) {
+            Sentry.addBreadcrumb({
+              message: `Repository ${repository_full_name} is already up to date`,
+              level: "info"
+            });
+            return true;
+          }
+
+          // Get syncedRepoSha - either from DB or fetch first commit if not set
+          let syncedRepoSha = currentRepo?.synced_repo_sha;
+          if (!syncedRepoSha) {
+            Sentry.addBreadcrumb({
+              message: `No synced_repo_sha found for ${repository_full_name}, fetching first commit`,
+              level: "info"
+            });
+            syncedRepoSha = await getFirstCommit(repository_full_name, "main", scope);
+            Sentry.addBreadcrumb({
+              message: `Using first commit as base: ${syncedRepoSha}`,
+              level: "info"
+            });
+          }
+
+          // Use the shared sync helper
+          const result = await syncRepositoryToHandout({
+            repositoryFullName: repository_full_name,
+            templateRepo: template_repo,
+            fromSha: from_sha,
+            toSha: to_sha,
+            syncedRepoSha,
+            autoMerge: true,
+            waitBeforeMerge: 2000,
+            adminSupabase,
+            scope
+          });
+
+          if (!result.success) {
+            throw new Error(result.error || "Sync failed");
+          }
+
+          // Update repository with sync status
+          if (result.no_changes) {
+            const { error: updateError } = await adminSupabase
+              .from("repositories")
+              .update({
+                synced_handout_sha: to_sha,
+                desired_handout_sha: to_sha,
+                sync_data: {
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "no_changes_needed"
+                }
+              })
+              .eq("id", repository_id);
+            if (updateError) throw updateError;
+          } else {
+            const { error: updateError } = await adminSupabase
+              .from("repositories")
+              .update({
+                synced_handout_sha: result.merged ? to_sha : from_sha,
+                synced_repo_sha: result.merged ? result.merge_sha : undefined,
+                desired_handout_sha: to_sha,
+                sync_data: {
+                  pr_number: result.pr_number,
+                  pr_url: result.pr_url,
+                  pr_state: result.merged ? "merged" : "open",
+                  branch_name: `sync-to-${to_sha.substring(0, 7)}`,
+                  last_sync_attempt: new Date().toISOString(),
+                  merge_sha: result.merge_sha
+                }
+              })
+              .eq("id", repository_id);
+            if (updateError) throw updateError;
+          }
+
+          recordMetric(
+            adminSupabase,
+            {
+              method: envelope.method,
+              status_code: 200,
+              class_id: envelope.class_id,
+              debug_id: envelope.debug_id,
+              enqueued_at: meta.enqueued_at,
+              log_id: envelope.log_id
+            },
+            scope
+          );
+          return true;
+        } catch (error) {
+          console.trace(error);
+          // Update repository with error status
+          const { error: updateError } = await adminSupabase
+            .from("repositories")
+            .update({
+              sync_data: {
+                last_sync_attempt: new Date().toISOString(),
+                last_sync_error: error instanceof Error ? error.message : String(error),
+                status: "error"
+              }
+            })
+            .eq("id", repository_id);
+          if (updateError) {
+            console.error("Failed to update repository with error status:", updateError);
+            Sentry.captureException(updateError, scope);
+          }
+          throw error;
+        }
+      }
       default:
         throw new Error(`Unknown async method: ${(envelope as GitHubAsyncEnvelope).method}`);
     }
@@ -739,6 +915,10 @@ export async function processEnvelope(
         return (envelope.args as SyncTeamArgs).org;
       if (envelope.method === "sync_repo_permissions" || envelope.method === "archive_repo_and_lock")
         return (envelope.args as SyncRepoPermissionsArgs | ArchiveRepoAndLockArgs).org;
+      if (envelope.method === "sync_repo_to_handout") {
+        const repo = (envelope.args as SyncRepoToHandoutArgs).repository_full_name;
+        return repo.split("/")[0];
+      }
       if (envelope.method === "rerun_autograder") {
         const repo = (envelope.args as RerunAutograderArgs).repository;
         return repo.split("/")[0];
@@ -808,7 +988,9 @@ export async function processEnvelope(
           Sentry.captureException(e, scope);
         }
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
-        const circuitTripped = org ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope) : false;
+        const circuitTripped = org
+          ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope)
+          : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
           await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
@@ -827,17 +1009,20 @@ export async function processEnvelope(
         // Record the error for tracking
         await recordGitHubAsyncError(adminSupabase, org, envelope.method, error, scope);
 
-        // Immediately open circuit breaker for 30 seconds on any error
+        // Immediately open circuit breaker for 30 seconds on any error - scoped to this method
+        const circuitKey = `${org}:${envelope.method}`;
         try {
           await adminSupabase.schema("public").rpc("open_github_circuit", {
-            p_scope: "org",
-            p_key: org,
+            p_scope: "org_method",
+            p_key: circuitKey,
             p_event: "immediate_error",
             p_retry_after_seconds: 30,
             p_reason: `Immediate circuit breaker: ${envelope.method} error - ${error instanceof Error ? error.message : String(error)}`
           });
+          Sentry.captureMessage(`Opened immediate circuit breaker for ${envelope.method}`);
 
           scope.setTag("immediate_circuit_breaker", "30s");
+          scope.setTag("circuit_method", envelope.method);
           scope.setContext("immediate_circuit_detail", {
             org,
             method: envelope.method,
@@ -850,7 +1035,7 @@ export async function processEnvelope(
         }
 
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
-        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, scope);
+        const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
           await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours

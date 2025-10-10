@@ -1,40 +1,39 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
+  Badge,
   Box,
   Button,
+  Code,
+  Heading,
   HStack,
   Icon,
   Input,
   NativeSelect,
   NativeSelectField,
+  Skeleton,
   Table,
   Text,
   VStack
 } from "@chakra-ui/react";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, RefreshCw, GitPullRequest } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaExternalLinkAlt, FaTimes } from "react-icons/fa";
-
-type RepositoryRow = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["repositories"]["Row"],
-  "repositories",
-  Database["public"]["Tables"]["repositories"]["Relationships"],
-  "*, assignment_groups(*), profiles(*), user_roles(*)"
->;
+import { useList, useOne } from "@refinedev/core";
+import { formatRelative } from "date-fns";
+import { TZDate } from "@date-fns/tz";
+import { computeSyncStatus, type RepositoryRow, type SyncData } from "./sync-status-utils";
 
 function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: number }) {
   const [isResending, setIsResending] = useState(false);
@@ -75,10 +74,252 @@ function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: n
   );
 }
 
+function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; latestTemplateSha?: string | null }) {
+  const syncData = row.sync_data as SyncData;
+  const status = computeSyncStatus(row, latestTemplateSha);
+
+  if (status === "No Sync Requested") {
+    return <Badge colorPalette="gray">No Sync Requested</Badge>;
+  }
+
+  if (status === "Synced") {
+    // Synced and up-to-date with PR info if available
+    if (syncData?.pr_number && syncData?.pr_url) {
+      return (
+        <HStack gap={2}>
+          <Badge colorPalette="green">Synced</Badge>
+          <Link href={syncData.pr_url} target="_blank">
+            <HStack gap={1} fontSize="sm" color="blue.600">
+              <Icon as={GitPullRequest} boxSize={3} />
+              <Text>PR#{syncData.pr_number}</Text>
+            </HStack>
+          </Link>
+        </HStack>
+      );
+    }
+    return <Badge colorPalette="green">Synced</Badge>;
+  }
+
+  if (status === "Not Up-to-date") {
+    // Synced to desired SHA but template has moved forward
+    return (
+      <HStack gap={2}>
+        <Badge colorPalette="red">Not Up-to-date</Badge>
+        {syncData?.pr_number && syncData?.pr_url && (
+          <Link href={syncData.pr_url} target="_blank">
+            <HStack gap={1} fontSize="sm" color="blue.600">
+              <Icon as={GitPullRequest} boxSize={3} />
+              <Text>PR#{syncData.pr_number}</Text>
+            </HStack>
+          </Link>
+        )}
+      </HStack>
+    );
+  }
+
+  if (status === "PR Open") {
+    return (
+      <HStack gap={2}>
+        <Badge colorPalette="blue">PR Open</Badge>
+        {syncData?.pr_url && syncData?.pr_number && (
+          <Link href={syncData.pr_url} target="_blank">
+            <HStack gap={1} fontSize="sm" color="blue.600">
+              <Icon as={GitPullRequest} boxSize={3} />
+              <Text>PR#{syncData.pr_number}</Text>
+            </HStack>
+          </Link>
+        )}
+      </HStack>
+    );
+  }
+
+  if (status === "Sync Finalizing") {
+    return (
+      <HStack gap={2}>
+        <Badge colorPalette="orange">Sync Finalizing</Badge>
+        {syncData?.pr_url && syncData?.pr_number && (
+          <Link href={syncData.pr_url} target="_blank">
+            <HStack gap={1} fontSize="sm" color="blue.600">
+              <Icon as={GitPullRequest} boxSize={3} />
+              <Text>PR#{syncData.pr_number}</Text>
+            </HStack>
+          </Link>
+        )}
+      </HStack>
+    );
+  }
+
+  if (status === "Sync Error") {
+    return (
+      <VStack gap={2} alignItems="flex-start" width="full">
+        <Badge colorPalette="red">Sync Error</Badge>
+        <Box
+          borderWidth="1px"
+          borderColor="red.500"
+          bg="red.50"
+          _dark={{ bg: "red.950", borderColor: "red.800" }}
+          px={3}
+          py={2}
+          borderRadius="md"
+          width="full"
+        >
+          <Text fontSize="sm" color="red.700" _dark={{ color: "red.300" }} wordBreak="break-word">
+            {syncData?.last_sync_error}
+          </Text>
+        </Box>
+      </VStack>
+    );
+  }
+
+  return <Badge colorPalette="yellow">Sync in Progress</Badge>;
+}
+
+function SyncButton({
+  repoId,
+  tableController
+}: {
+  repoId: number;
+  tableController: TableController<"repositories", typeof joinedSelect, number>;
+}) {
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleSync = async () => {
+    const supabase = createClient();
+    setIsSyncing(true);
+
+    try {
+      const { data, error } = await supabase.rpc("queue_repository_syncs", {
+        p_repository_ids: [repoId]
+      });
+
+      if (error) throw error;
+
+      const result = data as { queued_count: number; skipped_count: number; error_count: number };
+
+      if (result.queued_count > 0) {
+        toaster.success({
+          title: "Sync Queued",
+          description: "Repository sync has been queued. This page will automatically update."
+        });
+        // Invalidate the row to refetch its updated state
+        await tableController.invalidate(repoId);
+      } else if (result.skipped_count > 0) {
+        toaster.info({
+          title: "Already Up to Date",
+          description: "Repository is already synced to the latest version."
+        });
+      } else {
+        toaster.error({
+          title: "Sync Failed",
+          description: "Could not queue sync. Please try again."
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to queue sync"
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  return (
+    <Button size="xs" variant="ghost" onClick={handleSync} loading={isSyncing} disabled={isSyncing}>
+      <Icon as={RefreshCw} />
+      Sync
+    </Button>
+  );
+}
+
+function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
+  const { time_zone } = useCourse();
+  const { data: assignment } = useOne<Database["public"]["Tables"]["assignments"]["Row"]>({
+    resource: "assignments",
+    id: assignmentId
+  });
+
+  const { data: commits, isLoading } = useList<Database["public"]["Tables"]["assignment_handout_commits"]["Row"]>({
+    resource: "assignment_handout_commits",
+    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
+    sorters: [{ field: "created_at", order: "desc" }],
+    pagination: { pageSize: 10 }
+  });
+
+  if (!assignment?.data?.template_repo) {
+    return null;
+  }
+
+  return (
+    <VStack w="100%" alignItems="flex-start" gap={2} mb={4}>
+      <Heading size="sm">Handout Commit History</Heading>
+      <Text fontSize="sm" color="fg.muted">
+        Template Repository: {assignment.data.template_repo}
+        {assignment.data.latest_template_sha && (
+          <>
+            {" "}
+            (Latest: <Code fontSize="xs">{assignment.data.latest_template_sha.substring(0, 7)}</Code>)
+          </>
+        )}
+      </Text>
+      <Box w="100%" bg="bg.muted" p={3} borderRadius="md">
+        {isLoading && <Skeleton height="100px" />}
+        {commits?.data && commits.data.length > 0 ? (
+          <Table.Root size="sm">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeader>SHA</Table.ColumnHeader>
+                <Table.ColumnHeader>Date</Table.ColumnHeader>
+                <Table.ColumnHeader>Author</Table.ColumnHeader>
+                <Table.ColumnHeader>Message</Table.ColumnHeader>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {commits.data.map((commit) => {
+                const commitDate = new TZDate(commit.created_at, time_zone || "America/New_York");
+                return (
+                  <Table.Row key={commit.id}>
+                    <Table.Cell>
+                      <Link
+                        href={`https://github.com/${assignment.data.template_repo}/commit/${commit.sha}`}
+                        target="_blank"
+                      >
+                        <Code fontSize="xs">{commit.sha.slice(0, 7)}</Code>
+                      </Link>
+                    </Table.Cell>
+                    <Table.Cell fontSize="sm">
+                      {formatRelative(commitDate, TZDate.tz(time_zone || "America/New_York"))}
+                    </Table.Cell>
+                    <Table.Cell fontSize="sm">{commit.author || "Unknown"}</Table.Cell>
+                    <Table.Cell fontSize="sm">{commit.message}</Table.Cell>
+                  </Table.Row>
+                );
+              })}
+            </Table.Body>
+          </Table.Root>
+        ) : (
+          <Text fontSize="sm" color="fg.muted">
+            No commits found for this handout.
+          </Text>
+        )}
+      </Box>
+    </VStack>
+  );
+}
+
+const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
+
 export default function RepositoriesPage() {
   const { assignment_id } = useParams();
   const courseController = useCourseController();
-  const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
+
+  // Get assignment data for latest template SHA
+  const { data: assignment } = useOne<Database["public"]["Tables"]["assignments"]["Row"]>({
+    resource: "assignments",
+    id: Number(assignment_id)
+  });
+
   const repositories: TableController<"repositories", typeof joinedSelect, number> = useMemo(() => {
     const client = createClient();
     const query = client
@@ -91,12 +332,40 @@ export default function RepositoriesPage() {
       client: client,
       table: "repositories",
       selectForSingleRow: joinedSelect,
-      classRealTimeController: courseController.classRealTimeController
+      classRealTimeController: courseController.classRealTimeController,
+      realtimeFilter: {
+        assignment_id: Number(assignment_id)
+      },
+      debounceInterval: 500 // Debounce rapid updates during bulk syncs
     });
     return controller;
   }, [assignment_id, courseController]);
+
+  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
+
   const columns = useMemo<ColumnDef<RepositoryRow>[]>(
     () => [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <input
+            type="checkbox"
+            checked={table.getIsAllRowsSelected()}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+            aria-label="Select all repositories"
+          />
+        ),
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            checked={row.getIsSelected()}
+            onChange={row.getToggleSelectedHandler()}
+            aria-label={`Select repository ${row.original.repository}`}
+          />
+        ),
+        enableSorting: false,
+        enableColumnFilter: false
+      },
       {
         id: "group_name",
         header: "Group",
@@ -175,9 +444,61 @@ export default function RepositoriesPage() {
           const val = (row.original as RepositoryRow).is_github_ready ? "Yes" : "No";
           return values.includes(val);
         }
+      },
+      {
+        id: "synced_sha",
+        header: "Synced SHA",
+        accessorKey: "synced_handout_sha",
+        cell: ({ row }) => {
+          if (row.original.synced_handout_sha && assignment?.data?.template_repo) {
+            const sha = row.original.synced_handout_sha;
+            const commitUrl = `https://github.com/${assignment.data.template_repo}/commit/${sha}`;
+            return (
+              <Link href={commitUrl} target="_blank">
+                <Code fontSize="xs" color="blue.600">
+                  {sha.substring(0, 7)}
+                </Code>
+              </Link>
+            );
+          }
+          if (row.original.synced_handout_sha) {
+            // Fallback if template_repo not available
+            return <Code fontSize="xs">{row.original.synced_handout_sha.substring(0, 7)}</Code>;
+          }
+          return (
+            <Text fontSize="sm" color="fg.muted">
+              —
+            </Text>
+          );
+        },
+        filterFn: (row, _id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const sha = (row.original as RepositoryRow).synced_handout_sha;
+          const displayValue = sha ? sha.substring(0, 7) : "(Not Synced)";
+          return values.includes(displayValue);
+        }
+      },
+      {
+        id: "sync_status",
+        header: "Sync Status",
+        cell: ({ row }) => (
+          <SyncStatusBadge row={row.original} latestTemplateSha={assignment?.data?.latest_template_sha} />
+        ),
+        filterFn: (row, _id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const status = computeSyncStatus(row.original as RepositoryRow, assignment?.data?.latest_template_sha);
+          return values.includes(status);
+        }
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => <SyncButton repoId={row.original.id} tableController={repositories} />
       }
     ],
-    []
+    [repositories, assignment]
   );
 
   const {
@@ -190,10 +511,13 @@ export default function RepositoriesPage() {
     nextPage,
     previousPage,
     setPageSize,
-    data
+    data,
+    getSelectedRowModel,
+    toggleAllRowsSelected
   } = useTableControllerTable({
     columns,
     tableController: repositories,
+    enableRowSelection: true,
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -201,6 +525,49 @@ export default function RepositoriesPage() {
       }
     }
   });
+
+  const handleBulkSync = useCallback(async () => {
+    const selectedRows = getSelectedRowModel().rows;
+    const selectedIds = selectedRows.map((row) => row.original.id).filter((id): id is number => id !== undefined);
+
+    if (selectedIds.length === 0) {
+      toaster.error({
+        title: "No Selection",
+        description: "Please select repositories to sync."
+      });
+      return;
+    }
+
+    const supabase = createClient();
+    setIsBulkSyncing(true);
+
+    try {
+      const { data: result, error } = await supabase.rpc("queue_repository_syncs", {
+        p_repository_ids: selectedIds
+      });
+
+      if (error) throw error;
+
+      const syncResult = result as { queued_count: number; skipped_count: number; error_count: number };
+
+      toaster.success({
+        title: "Sync Queued",
+        description: `${syncResult.queued_count} repositories queued for sync. ${syncResult.skipped_count} skipped (already up to date).`
+      });
+
+      toggleAllRowsSelected(false);
+      // Invalidate all synced rows to refetch their updated state
+      await repositories.refetchByIds(selectedIds);
+    } catch (error) {
+      console.error(error);
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to queue bulk sync"
+      });
+    } finally {
+      setIsBulkSyncing(false);
+    }
+  }, [getSelectedRowModel, toggleAllRowsSelected, repositories]);
 
   const [pageCount, setPageCount] = useState(0);
   const nRows = getRowModel().rows.length;
@@ -214,22 +581,65 @@ export default function RepositoriesPage() {
     const groupSet = new Set<string>();
     const studentSet = new Set<string>();
     const repoSet = new Set<string>();
+    const syncedShaSet = new Set<string>();
     for (const r of rows) {
       groupSet.add(r.assignment_groups?.name ?? "—");
       studentSet.add(r.profiles?.name ?? "—");
       repoSet.add(r.repository);
+      if (r.synced_handout_sha) {
+        syncedShaSet.add(r.synced_handout_sha.substring(0, 7));
+      } else {
+        syncedShaSet.add("(Not Synced)");
+      }
     }
     return {
       groups: Array.from(groupSet.values()),
       students: Array.from(studentSet.values()),
-      repos: Array.from(repoSet.values())
+      repos: Array.from(repoSet.values()),
+      syncedShas: Array.from(syncedShaSet.values()).sort()
     };
   }, [data]);
+
+  const selectedCount = getSelectedRowModel().rows.length;
 
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%">
+        <Box>
+          <Heading size="sm">Repository Status</Heading>
+          <Text fontSize="sm" color="fg.muted">
+            Student repositories are generated from the template repository at the time of assignment release (usually
+            created at a rate of about 50 per-minute, as rate-limited by GitHub). The &quot;GitHub Ready&quot; column
+            shows the status of the student repository, confirming that the repository has been correctly provisioned or
+            show a loading/error state. Student repositories are created as a snapshot of the template repository at the
+            time of release, showing students ONLY a single &quot;Initial Commit&quot; of the template repository. If
+            you need to make changes to the template repository after release, you can use the &quot;Sync&quot; feature,
+            which will create a pull request to the student repository, auto-merging if there are no conflicts, which
+            will create a new submission. This procedure is also heavily rate-limited by GitHub, working at a rate of no
+            more than 50 pull requests per-minute per-class. The &quot;Sync&quot; feature is currently in beta, and may
+            not support all use cases; please do not rely heavily on it, and report any issues{" "}
+            <Link
+              href="https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md"
+              target="_blank"
+            >
+              on GitHub
+            </Link>
+            .
+          </Text>
+        </Box>
+        <HandoutCommitHistory assignmentId={Number(assignment_id)} />
+
+        {selectedCount > 0 && (
+          <HStack w="100%" justifyContent="space-between" p={4} bg="bg.subtle" borderRadius="md">
+            <Text fontWeight="medium">{selectedCount} repository(ies) selected</Text>
+            <Button colorPalette="blue" onClick={handleBulkSync} loading={isBulkSyncing} disabled={isBulkSyncing}>
+              <Icon as={RefreshCw} />
+              Sync Selected
+            </Button>
+          </HStack>
+        )}
         <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
+          <Heading size="sm">Repository Status</Heading>
           <Table.Root minW="0" w="100%">
             <Table.Header>
               {getHeaderGroups().map((headerGroup) => (
@@ -294,6 +704,38 @@ export default function RepositoriesPage() {
                                 { label: "No", value: "No" }
                               ]}
                               placeholder="Filter by readiness..."
+                            />
+                          )}
+                          {header.id === "synced_sha" && (
+                            <Select
+                              isMulti={true}
+                              id={header.id}
+                              onChange={(e) => {
+                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                header.column.setFilterValue(values.length > 0 ? values : undefined);
+                              }}
+                              options={dataForOptions.syncedShas.map((sha) => ({ label: sha, value: sha }))}
+                              placeholder="Filter by synced SHA..."
+                            />
+                          )}
+                          {header.id === "sync_status" && (
+                            <Select
+                              isMulti={true}
+                              id={header.id}
+                              onChange={(e) => {
+                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                header.column.setFilterValue(values.length > 0 ? values : undefined);
+                              }}
+                              options={[
+                                { label: "No Sync Requested", value: "No Sync Requested" },
+                                { label: "Synced", value: "Synced" },
+                                { label: "Not Up-to-date", value: "Not Up-to-date" },
+                                { label: "PR Open", value: "PR Open" },
+                                { label: "Sync Finalizing", value: "Sync Finalizing" },
+                                { label: "Sync in Progress", value: "Sync in Progress" },
+                                { label: "Sync Error", value: "Sync Error" }
+                              ]}
+                              placeholder="Filter by sync status..."
                             />
                           )}
                         </>

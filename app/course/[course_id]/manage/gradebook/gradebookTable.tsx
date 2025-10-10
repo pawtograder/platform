@@ -739,7 +739,7 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
                       onClick={async () => {
                         setIsDeleting(true);
                         await supabase.from("gradebook_column_students").delete().eq("gradebook_column_id", columnId);
-                        await gradebookController.gradebook_columns.delete(columnId);
+                        await gradebookController.gradebook_columns.hardDelete(columnId);
                         onClose();
                       }}
                     >

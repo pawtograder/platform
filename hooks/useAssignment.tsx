@@ -245,6 +245,16 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
   }, [controller, review_assignment_id]);
   return reviewAssignment;
 }
+export function useReviewAssignmentForReview(review_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const findReviewAssignmentPredicate = useCallback(
+    (reviewAssignment: ReviewAssignments) => {
+      return (review_id && reviewAssignment.submission_review_id === review_id) || false;
+    },
+    [review_id]
+  );
+  return useFindTableControllerValue(controller.reviewAssignments, findReviewAssignmentPredicate);
+}
 
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();

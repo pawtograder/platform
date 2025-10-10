@@ -4,7 +4,8 @@ import type {
   CheckRunEvent,
   MembershipEvent,
   OrganizationEvent,
-  WorkflowRunEvent
+  WorkflowRunEvent,
+  PullRequestEvent
 } from "https://esm.sh/@octokit/webhooks-types";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -471,7 +472,13 @@ async function handlePushToTemplateRepo(
   }
 }
 
-type KnownEventPayload = PushEvent | CheckRunEvent | MembershipEvent | OrganizationEvent | WorkflowRunEvent;
+type KnownEventPayload =
+  | PushEvent
+  | CheckRunEvent
+  | MembershipEvent
+  | OrganizationEvent
+  | WorkflowRunEvent
+  | PullRequestEvent;
 function tagScopeWithGenericPayload(scope: Sentry.Scope, name: string, payload: KnownEventPayload) {
   scope.setTag("webhook_handler", name);
   if ("action" in payload) {
@@ -1162,6 +1169,101 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
   } catch (error) {
     Sentry.captureException(error, scope);
     // Don't throw here to avoid breaking the webhook processing
+  }
+});
+
+// Handle pull_request events (to track when sync PRs are merged)
+eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent }) => {
+  const scope = new Sentry.Scope();
+  tagScopeWithGenericPayload(scope, "pull_request", payload);
+
+  // Only handle "closed" events where the PR was merged
+  if (payload.action !== "closed" || !payload.pull_request.merged) {
+    return;
+  }
+
+  const branchName = payload.pull_request.head.ref;
+
+  // Check if this is a sync PR (branch starts with "sync-to-")
+  if (!branchName.startsWith("sync-to-")) {
+    return;
+  }
+
+  scope.setTag("sync_pr_merged", "true");
+  scope.setTag("branch", branchName);
+  scope.setTag("pr_number", payload.pull_request.number.toString());
+
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
+  try {
+    const repoFullName = payload.repository.full_name;
+
+    // Find the repository in our database
+    const { data: repo, error: repoError } = await adminSupabase
+      .from("repositories")
+      .select("id, synced_handout_sha, desired_handout_sha")
+      .eq("repository", repoFullName)
+      .maybeSingle();
+
+    if (repoError) {
+      Sentry.captureException(repoError, scope);
+      return;
+    }
+
+    if (!repo) {
+      // Not one of our tracked repositories
+      return;
+    }
+
+    scope.setTag("repository_id", repo.id.toString());
+
+    // Extract the SHA from the branch name (sync-to-abc1234 -> abc1234)
+    const syncedSha = branchName.replace("sync-to-", "");
+    // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
+    const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
+
+    scope.setTag("synced_sha", syncedSha);
+    scope.setTag("merge_sha", effectiveMergeSha);
+
+    // Update the repository sync status
+    const { error: updateError } = await adminSupabase
+      .from("repositories")
+      .update({
+        synced_handout_sha: syncedSha,
+        synced_repo_sha: effectiveMergeSha,
+        sync_data: {
+          pr_number: payload.pull_request.number,
+          pr_url: payload.pull_request.html_url,
+          pr_state: "merged",
+          branch_name: branchName,
+          last_sync_attempt: new Date().toISOString(),
+          merge_sha: effectiveMergeSha,
+          merged_by: payload.pull_request.merged_by?.login,
+          merged_at: payload.pull_request.merged_at
+        }
+      })
+      .eq("id", repo.id);
+
+    if (updateError) {
+      scope.setTag("error_source", "repository_update_failed");
+      Sentry.captureException(updateError, scope);
+      throw updateError;
+    }
+
+    Sentry.addBreadcrumb({
+      message: `Updated repository ${repoFullName} after sync PR #${payload.pull_request.number} was merged`,
+      level: "info"
+    });
+
+    console.log(
+      `[PULL_REQUEST] Sync PR merged: ${repoFullName} PR#${payload.pull_request.number}, synced to ${syncedSha}`
+    );
+  } catch (error) {
+    Sentry.captureException(error, scope);
+    // Don't throw - allow webhook to complete
   }
 });
 
