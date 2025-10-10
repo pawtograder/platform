@@ -306,6 +306,14 @@ export type ThreadWithChildren = DiscussionThread & {
   children: ThreadWithChildren[];
 };
 
+export type Rubric = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["rubrics"]["Row"],
+  "rubrics",
+  Database["public"]["Tables"]["rubrics"]["Relationships"],
+  "*"
+>;
+
 export type RubricWithCriteriaAndChecks = GetResult<
   Database["public"],
   Database["public"]["Tables"]["rubrics"]["Row"],
@@ -723,7 +731,7 @@ export type YmlRubricType = Omit<
 };
 export type YmlRubricPartType = Omit<
   HydratedRubricPart,
-  "id" | "rubric_criteria" | "description" | "ordinal" | "class_id" | "created_at" | "rubric_id"
+  "id" | "rubric_criteria" | "description" | "ordinal" | "class_id" | "created_at" | "rubric_id" | "assignment_id"
 > & {
   criteria: YmlRubricCriteriaType[];
   id?: number;
@@ -733,6 +741,7 @@ export type YmlRubricCriteriaType = Omit<
   HydratedRubricCriteria,
   | "id"
   | "class_id"
+  | "assignment_id"
   | "rubric_checks"
   | "ordinal"
   | "created_at"
@@ -757,6 +766,8 @@ export type YmlRubricChecksType = Omit<
   | "id"
   | "class_id"
   | "ordinal"
+  | "assignment_id"
+  | "rubric_id"
   | "created_at"
   | "group"
   | "rubric_criteria_id"

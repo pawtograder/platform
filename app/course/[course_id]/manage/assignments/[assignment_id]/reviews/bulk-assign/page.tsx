@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
-import { useActiveSubmissions, useAssignmentController, useRubrics } from "@/hooks/useAssignment";
+import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useActiveUserRolesWithProfiles,
@@ -22,7 +22,7 @@ import TableController, {
   useTableControllerTableValues
 } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, ClassSection, LabSection, Rubric, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -94,7 +94,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const rubrics = useRubrics();
   const labSections = useLabSections();
   const { course_id, assignment_id } = useParams();
-  const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
+  const [selectedRubric, setSelectedRubric] = useState<Rubric>();
+  const rubricParts = useRubricParts(selectedRubric?.id);
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
   const [role, setRole] = useState<string>("Graders");
   const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
@@ -382,12 +383,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   useEffect(() => {
     setSelectedRubricPartsForFilter(
-      selectedRubric?.rubric_parts.map((part) => ({
+      rubricParts.map((part) => ({
         label: part.name,
         value: part
       })) || []
     );
-  }, [selectedRubric]);
+  }, [selectedRubric, rubricParts]);
 
   /**
    * If any of the prior fields are changed, draft reviews should be cleared.
@@ -420,7 +421,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     // Normalize empty selection to mean "all parts selected"
     const selectedPartIds =
       selectedRubricPartsForFilter.length === 0
-        ? selectedRubric.rubric_parts.map((p) => p.id)
+        ? rubricParts.map((p) => p.id)
         : selectedRubricPartsForFilter.map((p) => p.value.id);
     const selectedClassSectionIds = new Set(selectedClassSections.map((s) => s.value.id));
     const selectedLabSectionIds = new Set(selectedLabSections.map((s) => s.value.id));
@@ -520,6 +521,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     groupMembersByGroupId,
     allActiveSubmissions,
     currentReviewAssignments,
+    rubricParts,
     reviewAssignmentPartsById,
     assignment_id
   ]);
@@ -790,8 +792,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
           // Treat empty selection as selecting all parts
           const isAllPartsSelected =
-            selectedRubricPartsForFilter.length === 0 ||
-            selectedRubricPartsForFilter.length === selectedRubric?.rubric_parts.length;
+            selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === rubricParts.length;
 
           if (isAllPartsSelected) {
             // All rubric parts - create one assignment
@@ -866,8 +867,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
     // Treat empty selection as selecting all parts
     const isAllPartsSelected =
-      selectedRubricPartsForFilter.length === 0 ||
-      selectedRubricPartsForFilter.length === selectedRubric?.rubric_parts.length;
+      selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === rubricParts.length;
 
     if (isAllPartsSelected) {
       return toReview(result);
@@ -882,7 +882,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     historicalWorkload: Map<string, number>,
     graderPreferences?: Map<string, string>
   ) => {
-    if (!selectedRubric?.rubric_parts.length || selectedRubric?.rubric_parts.length === 0) {
+    if (!rubricParts.length || rubricParts.length === 0) {
       toaster.error({
         title: "Error drafting reviews",
         description: "Unable to create assignments by part because rubric has no parts"
@@ -893,7 +893,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     // Treat empty selection as selecting all parts
     const selectedParts =
       selectedRubricPartsForFilter.length === 0
-        ? selectedRubric.rubric_parts
+        ? rubricParts
         : selectedRubricPartsForFilter.map((option) => option.value);
     if (selectedParts.length > users.length) {
       toaster.error({
@@ -1255,7 +1255,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 }}
                 value={selectedRubricPartsForFilter}
                 options={
-                  selectedRubric?.rubric_parts.map((part) => ({
+                  rubricParts.map((part) => ({
                     label: part.name,
                     value: part
                   })) || []

@@ -160,7 +160,7 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, getValues, router, mutateAsync, timezone]);
+  }, [course_id, getValues, router, mutateAsync, timezone, trackEvent]);
   return (
     <Box p={4}>
       <Heading size="lg">Create New Assignment</Heading>

@@ -1,13 +1,12 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import {
-  HydratedRubric,
   HydratedRubricCheck,
-  HydratedRubricCriteria,
-  HydratedRubricPart,
-  RubricCheckReference,
   RubricChecks,
+  RubricCheck as RubricCheckType,
+  RubricCriteria as RubricCriteriaType,
   RubricCriteriaWithRubricChecks,
+  RubricPart as RubricPartType,
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFileComment,
@@ -41,15 +40,20 @@ import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import {
+  useAllRubricChecks,
   useAssignmentController,
+  useReferenceCheckRecordsFromCheck,
+  useReferencedRubricChecks,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
   useRubricCheck,
+  useRubricChecksByCriteria,
+  useRubricCriteriaByPart,
+  useRubricParts,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
-import { useIsGraderOrInstructor, useIsInstructor, useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -62,9 +66,9 @@ import {
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useDelete, useList } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -74,9 +78,9 @@ import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "reac
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
-import { Tooltip } from "./tooltip";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
+import { Tooltip } from "./tooltip";
 
 interface CheckOptionType extends OptionBase {
   value: number;
@@ -90,12 +94,10 @@ interface CheckOptionType extends OptionBase {
  */
 const InlineReferenceManager = memo(function InlineReferenceManager({
   check,
-  assignmentId,
   classId,
   currentRubricId
 }: {
   check: HydratedRubricCheck;
-  assignmentId: number;
   classId: number;
   currentRubricId: number;
 }) {
@@ -103,65 +105,44 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
   const [selectedCheckOption, setSelectedCheckOption] = useState<CheckOptionType | undefined>(undefined);
 
   // Get existing references for this check
-  const { data: existingReferencesData, refetch: refetchReferences } = useList<RubricCheckReference>({
-    resource: "rubric_check_references",
-    filters: [
-      { field: "referencing_rubric_check_id", operator: "eq", value: check.id },
-      { field: "class_id", operator: "eq", value: classId }
-    ],
-    queryOptions: {
-      enabled: !!assignmentId && !!classId && check.id > 0
-    }
-  });
+  const referencingChecks = useReferenceCheckRecordsFromCheck(check.id);
 
-  // Use cached rubrics data instead of making new API request
+  // Get rubrics and all checks directly from controllers
   const allRubrics = useRubrics();
+  const allChecks = useAllRubricChecks();
   const otherRubrics = allRubrics.filter((rubric) => rubric.id !== currentRubricId);
-
-  // Get details of referenced checks using cached data from assignment controller
-  const referencedCheckIds = existingReferencesData?.data?.map((ref) => ref.referenced_rubric_check_id) || [];
-
-  // Create a map of all rubric checks for fast lookup
-  const rubricCheckById = useMemo(() => {
-    const checkById = new Map<number, HydratedRubricCheck>();
-
-    allRubrics.forEach((rubric) => {
-      rubric.rubric_parts.forEach((part) => {
-        part.rubric_criteria.forEach((criteria) => {
-          criteria.rubric_checks.forEach((check) => {
-            checkById.set(check.id, check);
-          });
-        });
-      });
-    });
-
-    return checkById;
-  }, [allRubrics]);
-
-  const referencedChecks = referencedCheckIds
-    .map((id) => rubricCheckById.get(id))
-    .filter(Boolean) as HydratedRubricCheck[];
-
-  const { mutate: createReference } = useCreate();
-  const { mutate: deleteReference } = useDelete();
+  const { rubricCheckReferencesController } = useAssignmentController();
+  const referencedChecks = useReferencedRubricChecks(check.id);
 
   // Build check options from other rubrics only
-  const checkOptions: CheckOptionType[] = otherRubrics.flatMap((rubric) =>
-    rubric.rubric_parts.flatMap((part) =>
-      part.rubric_criteria.flatMap((criteria) =>
-        criteria.rubric_checks
-          .filter((c) => !referencedCheckIds.includes(c.id)) // Don't show already referenced checks
-          .map((c) => ({
-            value: c.id,
-            label: `${c.name} (${c.points} pts)`,
-            rubricName: rubric.name,
-            reviewRound: rubric.review_round || "General"
-          }))
-      )
-    )
-  );
+  const checkOptions: CheckOptionType[] = useMemo(() => {
+    // Get checks for other rubrics
+    const otherRubricIds = otherRubrics.map((r) => r.id);
 
-  const handleAddReference = () => {
+    // Filter out negative/zero IDs (preview mode with unsaved rubric)
+    const validRubricIds = otherRubricIds.filter((id) => id > 0);
+
+    if (validRubricIds.length === 0) {
+      // In preview mode with unsaved rubric, no references available
+      return [];
+    }
+
+    const checksForOtherRubrics = allChecks.filter(
+      (check) => validRubricIds.includes(check.rubric_id) && !referencingChecks.find((c) => c.id === check.id)
+    );
+
+    return checksForOtherRubrics.map((c) => {
+      const rubric = allRubrics.find((r) => r.id === c.rubric_id);
+      return {
+        value: c.id,
+        label: `${c.name} (${c.points} pts)`,
+        rubricName: rubric?.name || "Unknown",
+        reviewRound: rubric?.review_round || "General"
+      };
+    });
+  }, [allChecks, otherRubrics, allRubrics, referencingChecks]);
+
+  const handleAddReference = useCallback(async () => {
     if (!selectedCheckOption) {
       toaster.error({
         title: "Error",
@@ -170,57 +151,57 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
       return;
     }
 
-    createReference(
-      {
-        resource: "rubric_check_references",
-        values: {
-          referencing_rubric_check_id: check.id,
-          referenced_rubric_check_id: selectedCheckOption.value,
-          class_id: classId
-        }
-      },
-      {
-        onSuccess: () => {
-          toaster.success({
-            title: "Reference Added",
-            description: "The rubric check reference has been added successfully."
-          });
-          setIsAddingReference(false);
-          setSelectedCheckOption(undefined);
-          refetchReferences();
-        },
-        onError: (error) => {
-          toaster.error({
-            title: "Error Adding Reference",
-            description: error.message
-          });
-        }
-      }
-    );
-  };
+    try {
+      await rubricCheckReferencesController.create({
+        assignment_id: check.assignment_id,
+        rubric_id: check.rubric_id,
+        referencing_rubric_check_id: check.id,
+        referenced_rubric_check_id: selectedCheckOption.value,
+        class_id: classId
+      });
+      toaster.success({
+        title: "Reference Added",
+        description: "The rubric check reference has been added successfully."
+      });
+      setIsAddingReference(false);
+      setSelectedCheckOption(undefined);
+    } catch (error) {
+      toaster.error({
+        title: "Error Adding Reference",
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    }
+  }, [rubricCheckReferencesController, classId, selectedCheckOption, check]);
 
-  const handleDeleteReference = (referenceId: number) => {
-    deleteReference(
-      { resource: "rubric_check_references", id: referenceId },
-      {
-        onSuccess: () => {
-          toaster.success({
-            title: "Reference Removed",
-            description: "The reference has been removed successfully."
-          });
-          refetchReferences();
-        },
-        onError: (error) => {
-          toaster.error({
-            title: "Error Removing Reference",
-            description: error.message
-          });
-        }
+  const handleDeleteReference = useCallback(
+    async (referenceId: number) => {
+      try {
+        await rubricCheckReferencesController.delete(referenceId);
+        toaster.success({
+          title: "Reference Removed",
+          description: "The reference has been removed successfully."
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Error Removing Reference",
+          description: error instanceof Error ? error.message : "Unknown error occurred"
+        });
       }
-    );
-  };
+    },
+    [rubricCheckReferencesController]
+  );
 
-  const existingReferences = existingReferencesData?.data || [];
+  const existingReferences = referencedChecks || [];
+  // If no options available and we're in preview mode, show a message
+  if (checkOptions.length === 0 && currentRubricId <= 0) {
+    return (
+      <Box mt={2}>
+        <Text fontSize="xs" color="fg.muted">
+          Reference management will be available after saving this rubric.
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box mt={2}>
@@ -228,14 +209,13 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
       {existingReferences.length > 0 && (
         <VStack gap={1} alignItems="stretch" mb={2}>
           {existingReferences.map((reference) => {
-            const referencedCheck = referencedChecks.find((c) => c.id === reference.referenced_rubric_check_id);
-            if (!referencedCheck) return null;
+            if (!reference) return null;
 
             return (
               <HStack key={reference.id} fontSize="xs" gap={1} p={1} bg="bg.muted" borderRadius="sm">
                 <Icon as={FaLink} color="blue.500" />
                 <Text flex={1} truncate>
-                  {referencedCheck.name} ({referencedCheck.points} pts)
+                  {reference.name} ({reference.points} pts)
                 </Text>
                 <Button
                   size="2xs"
@@ -469,8 +449,8 @@ export function RubricCheckComment({
 }: {
   comment_type: "file" | "artifact" | "submission";
   comment_id: number;
-  criteria?: HydratedRubricCriteria;
-  check?: HydratedRubricCheck;
+  criteria?: RubricCriteriaType;
+  check?: RubricCheckType;
 }) {
   const comment = useSubmissionCommentByType(comment_id, comment_type);
   const submissionController = useSubmissionController();
@@ -760,8 +740,8 @@ export function RubricCheckAnnotation({
   classId,
   currentRubricId
 }: {
-  check: HydratedRubricCheck;
-  criteria: HydratedRubricCriteria;
+  check: RubricCheckType;
+  criteria: RubricCriteriaType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -838,12 +818,7 @@ export function RubricCheckAnnotation({
 
       {/* Inline reference management for preview mode */}
       {isPreviewMode && assignmentId && classId && currentRubricId ? (
-        <InlineReferenceManager
-          check={check}
-          assignmentId={assignmentId}
-          classId={classId}
-          currentRubricId={currentRubricId}
-        />
+        <InlineReferenceManager check={check} classId={classId} currentRubricId={currentRubricId} />
       ) : (
         <></>
       )}
@@ -862,8 +837,8 @@ export function RubricCheckGlobal({
   classId,
   currentRubricId
 }: {
-  check: HydratedRubricCheck;
-  criteria: HydratedRubricCriteria;
+  check: RubricCheckType;
+  criteria: RubricCriteriaType;
   isSelected: boolean;
   assignmentId?: number;
   classId?: number;
@@ -1168,12 +1143,7 @@ export function RubricCheckGlobal({
 
       {/* Inline reference management for preview mode */}
       {isPreviewMode && assignmentId && classId && currentRubricId && (
-        <InlineReferenceManager
-          check={check}
-          assignmentId={assignmentId}
-          classId={classId}
-          currentRubricId={currentRubricId}
-        />
+        <InlineReferenceManager check={check} classId={classId} currentRubricId={currentRubricId} />
       )}
 
       {/* Show referenced feedback for grading mode */}
@@ -1301,8 +1271,8 @@ function RubricCheck({
   classId,
   currentRubricId
 }: {
-  criteria: HydratedRubricCriteria;
-  check: HydratedRubricCheck;
+  criteria: RubricCriteriaType;
+  check: RubricCheckType;
   isSelected: boolean;
   assignmentId?: number;
   classId?: number;
@@ -1338,7 +1308,7 @@ export function RubricCriteria({
   classId,
   currentRubricId
 }: {
-  criteria: HydratedRubricCriteria;
+  criteria: RubricCriteriaType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -1380,7 +1350,8 @@ export function RubricCriteria({
     criteria.max_checks_per_submission === 1 && comments.length === 1
       ? comments[0].rubric_check_id?.toString()
       : undefined;
-  criteria.rubric_checks.sort((a, b) => a.ordinal - b.ordinal);
+  const rubricChecks = useRubricChecksByCriteria(criteria.id);
+  rubricChecks.sort((a, b) => a.ordinal - b.ordinal);
   return (
     <Box
       border="1px solid"
@@ -1415,10 +1386,10 @@ export function RubricCriteria({
               w="100%"
               value={singleCheck}
               onValueChange={(value) => {
-                setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
+                setSelectedCheck(rubricChecks.find((check) => check.id.toString() === value.value));
               }}
             >
-              {criteria.rubric_checks.map((check, index) => (
+              {rubricChecks.map((check, index) => (
                 <RubricCheck
                   key={`check-${check.id}-${index}`}
                   criteria={criteria}
@@ -1443,17 +1414,18 @@ export function RubricPart({
   classId,
   currentRubricId
 }: {
-  part: HydratedRubricPart;
+  part: RubricPartType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
 }) {
+  const criteria = useRubricCriteriaByPart(part.id);
   return (
     <Box w="100%" role="region" aria-label={`Rubric Part: ${part.name}`}>
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
       <VStack align="start" w="100%" gap={2}>
-        {part.rubric_criteria
+        {criteria
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((criteria, index) => (
             <RubricCriteria
@@ -1650,17 +1622,12 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 }
 
-export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: HydratedRubric; rubricId?: number }) {
-  if (!rubricId && !initialRubric) {
-    throw new Error("RubricSidebar must be given either a rubricId or an initialRubric");
-  }
+export function RubricSidebar({ rubricId }: { rubricId: number }) {
   /*
   What this sidebar should show:
-    - If there is an initialRubric passed, show that. Always
-    - If not:
-      - If we are an instructor, show all rubrics, with a focus on the grading rubric
-      - If we are a grader, show the grading rubric, and if we have an assigned rubric, focus on that.
-      - If we are a student and have an active (unsubmitted) assigned review, show that. If we have a graded review, show that ALSO
+    - If we are an instructor, show all rubrics, with a focus on the grading rubric
+    - If we are a grader, show the grading rubric, and if we have an assigned rubric, focus on that.
+    - If we are a student and have an active (unsubmitted) assigned review, show that. If we have a graded review, show that ALSO
   */
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
@@ -1671,25 +1638,9 @@ export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: Hyd
   const isGrader = useIsGraderOrInstructor();
   const reviewForThisRubric = useSubmissionReviewForRubric(rubricId);
   const viewOnly = !isGrader && !reviewForThisRubric;
+  const rubricParts = useRubricParts(rubricId);
 
-  const displayRubric = !rubricId && initialRubric ? initialRubric : rubric;
-
-  let partsToDisplay: HydratedRubricPart[] = [];
-  if (displayRubric) {
-    if (
-      activeAssignmentReview &&
-      activeAssignmentReview.rubric_id === rubricId &&
-      reviewAssignmentRubricParts?.length > 0
-    ) {
-      partsToDisplay = displayRubric.rubric_parts
-        .filter((part) => reviewAssignmentRubricParts.some((linkedPart) => linkedPart.rubric_part_id === part.id))
-        .sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
-    } else if (displayRubric.rubric_parts) {
-      partsToDisplay = [...displayRubric.rubric_parts].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
-    }
-  }
-
-  if (!displayRubric) {
+  if (!rubric) {
     return (
       <Box p={2} maxW="lg" key="no-rubric-sidebar">
         <Text>No rubric information available.</Text>
@@ -1697,15 +1648,30 @@ export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: Hyd
     );
   }
 
+  // Determine which parts to display
+  let partsToDisplay: RubricPartType[] = [];
+  if (
+    activeAssignmentReview &&
+    activeAssignmentReview.rubric_id === rubricId &&
+    reviewAssignmentRubricParts?.length > 0
+  ) {
+    partsToDisplay = rubricParts
+      .filter((part) => reviewAssignmentRubricParts.some((linkedPart) => linkedPart.rubric_part_id === part.id))
+      .sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
+  } else {
+    partsToDisplay = [...rubricParts].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
+  }
+  console.log(rubricParts);
+
   if (partsToDisplay.length === 0) {
     return (
       <Box borderLeftWidth="1px" borderColor="border.emphasized" p={2} ml={0} key="empty-parts-sidebar">
         <VStack align="start" w="100%">
           <Heading size="xl">Grading Rubric</Heading>
           <Text fontSize="lg" fontWeight="semibold">
-            {displayRubric.name}
+            {rubric.name}
           </Text>
-          {displayRubric.description && <Markdown>{displayRubric.description}</Markdown>}
+          {rubric.description && <Markdown>{rubric.description}</Markdown>}
           <Text mt={2}>This rubric is empty.</Text>
         </VStack>
       </Box>
@@ -1716,7 +1682,7 @@ export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: Hyd
     <Box p={0} ml={0}>
       <VStack align="start" w="100%">
         <Text fontSize="lg" fontWeight="semibold">
-          {displayRubric.name}
+          {rubric.name}
         </Text>
         {viewOnly && (
           <Text fontSize="sm" color="text.muted" mb={2}>
@@ -1742,7 +1708,7 @@ export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: Hyd
             part={part}
             assignmentId={assignmentController.assignment.id}
             classId={assignmentController.assignment.class_id}
-            currentRubricId={displayRubric?.id}
+            currentRubricId={rubric?.id}
           />
         ))}
       </VStack>

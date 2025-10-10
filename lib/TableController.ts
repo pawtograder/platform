@@ -371,6 +371,8 @@ export function useTableControllerValueById<
       return;
     }
     const { unsubscribe, data } = controller.getById(id as IDType, (data) => {
+      console.log(`Updating value for id ${id} to ${data}`);
+      console.trace();
       setValue(data);
     });
     // Guards against race!

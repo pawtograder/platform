@@ -5056,27 +5056,68 @@ export type Database = {
       };
       rubric_check_references: {
         Row: {
+          assignment_id: number;
           class_id: number;
           created_at: string;
           id: number;
           referenced_rubric_check_id: number;
           referencing_rubric_check_id: number;
+          rubric_id: number;
         };
         Insert: {
+          assignment_id: number;
           class_id: number;
           created_at?: string;
           id?: number;
           referenced_rubric_check_id: number;
           referencing_rubric_check_id: number;
+          rubric_id: number;
         };
         Update: {
+          assignment_id?: number;
           class_id?: number;
           created_at?: string;
           id?: number;
           referenced_rubric_check_id?: number;
           referencing_rubric_check_id?: number;
+          rubric_id?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "rubric_check_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_check_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_check_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_check_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_check_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "rubric_check_references_class_id_fkey";
             columns: ["class_id"];
@@ -5097,6 +5138,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "rubric_checks";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_check_references_rubric_id_fkey";
+            columns: ["rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -5104,6 +5152,7 @@ export type Database = {
         Row: {
           annotation_target: string | null;
           artifact: string | null;
+          assignment_id: number;
           class_id: number;
           created_at: string;
           data: Json | null;
@@ -5119,11 +5168,13 @@ export type Database = {
           ordinal: number;
           points: number;
           rubric_criteria_id: number;
+          rubric_id: number;
           student_visibility: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Insert: {
           annotation_target?: string | null;
           artifact?: string | null;
+          assignment_id: number;
           class_id: number;
           created_at?: string;
           data?: Json | null;
@@ -5139,11 +5190,13 @@ export type Database = {
           ordinal: number;
           points: number;
           rubric_criteria_id: number;
+          rubric_id: number;
           student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Update: {
           annotation_target?: string | null;
           artifact?: string | null;
+          assignment_id?: number;
           class_id?: number;
           created_at?: string;
           data?: Json | null;
@@ -5159,9 +5212,45 @@ export type Database = {
           ordinal?: number;
           points?: number;
           rubric_criteria_id?: number;
+          rubric_id?: number;
           student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Relationships: [
+          {
+            foreignKeyName: "rubric_checks_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_checks_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_checks_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_checks_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_checks_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "rubric_checks_class_id_fkey";
             columns: ["class_id"];
@@ -5175,11 +5264,19 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "rubric_criteria";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_checks_rubric_id_fkey";
+            columns: ["rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
           }
         ];
       };
       rubric_criteria: {
         Row: {
+          assignment_id: number;
           class_id: number;
           created_at: string;
           data: Json | null;
@@ -5195,6 +5292,7 @@ export type Database = {
           total_points: number;
         };
         Insert: {
+          assignment_id: number;
           class_id: number;
           created_at?: string;
           data?: Json | null;
@@ -5210,6 +5308,7 @@ export type Database = {
           total_points: number;
         };
         Update: {
+          assignment_id?: number;
           class_id?: number;
           created_at?: string;
           data?: Json | null;
@@ -5225,6 +5324,41 @@ export type Database = {
           total_points?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "rubric_criteria_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_criteria_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_criteria_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_criteria_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_criteria_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "rubric_criteria_class_id_fkey";
             columns: ["class_id"];
@@ -5250,6 +5384,7 @@ export type Database = {
       };
       rubric_parts: {
         Row: {
+          assignment_id: number;
           class_id: number;
           created_at: string;
           data: Json | null;
@@ -5260,6 +5395,7 @@ export type Database = {
           rubric_id: number;
         };
         Insert: {
+          assignment_id: number;
           class_id: number;
           created_at?: string;
           data?: Json | null;
@@ -5270,6 +5406,7 @@ export type Database = {
           rubric_id: number;
         };
         Update: {
+          assignment_id?: number;
           class_id?: number;
           created_at?: string;
           data?: Json | null;
@@ -5280,6 +5417,41 @@ export type Database = {
           rubric_id?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "rubric_parts_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "rubric_parts_class_id_fkey";
             columns: ["class_id"];
@@ -7726,6 +7898,7 @@ export type Database = {
           in_progress_at: string | null;
           profile_id: string | null;
           queue_time_seconds: number | null;
+          repository_name: string | null;
           requested_at: string | null;
           run_attempt: number;
           run_number: number | null;
@@ -7749,6 +7922,7 @@ export type Database = {
           in_progress_at?: string | null;
           profile_id?: string | null;
           queue_time_seconds?: number | null;
+          repository_name?: string | null;
           requested_at?: string | null;
           run_attempt: number;
           run_number?: number | null;
@@ -7772,6 +7946,7 @@ export type Database = {
           in_progress_at?: string | null;
           profile_id?: string | null;
           queue_time_seconds?: number | null;
+          repository_name?: string | null;
           requested_at?: string | null;
           run_attempt?: number;
           run_number?: number | null;
@@ -9387,6 +9562,7 @@ export type Database = {
           in_progress_at: string | null;
           profile_id: string | null;
           queue_time_seconds: number | null;
+          repository_name: string | null;
           requested_at: string | null;
           run_attempt: number;
           run_number: number | null;

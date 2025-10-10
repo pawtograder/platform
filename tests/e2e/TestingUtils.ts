@@ -1009,21 +1009,24 @@ export async function insertAssignment({
           name: "Self Review",
           description: "Self review rubric",
           ordinal: 0,
-          rubric_id: assignmentData.self_review_rubric_id || 0
+          rubric_id: assignmentData.self_review_rubric_id || 0,
+          assignment_id: assignmentData.id
         },
         {
           class_id: class_id,
           name: "Grading Review Part 1",
           description: "Grading review rubric, part 1",
           ordinal: 1,
-          rubric_id: assignmentData.grading_rubric_id || 0
+          rubric_id: assignmentData.grading_rubric_id || 0,
+          assignment_id: assignmentData.id
         },
         {
           class_id: class_id,
           name: "Grading Review Part 2",
           description: "Grading review rubric, part 2",
           ordinal: 2,
-          rubric_id: assignmentData.grading_rubric_id || 0
+          rubric_id: assignmentData.grading_rubric_id || 0,
+          assignment_id: assignmentData.id
         }
       ])
       .select("*")
@@ -1060,7 +1063,8 @@ export async function insertAssignment({
           total_points: 10,
           is_additive: true,
           rubric_part_id: self_review_part_id || 0,
-          rubric_id: assignmentData.self_review_rubric_id || 0
+          rubric_id: assignmentData.self_review_rubric_id || 0,
+          assignment_id: assignmentData.id
         },
         {
           class_id: class_id,
@@ -1070,7 +1074,8 @@ export async function insertAssignment({
           total_points: 20,
           is_additive: true,
           rubric_part_id: grading_review_part_id || 0,
-          rubric_id: assignmentData.grading_rubric_id || 0
+          rubric_id: assignmentData.grading_rubric_id || 0,
+          assignment_id: assignmentData.id
         },
         {
           class_id: class_id,
@@ -1080,7 +1085,8 @@ export async function insertAssignment({
           total_points: 20,
           is_additive: true,
           rubric_part_id: grading_review_part_2_id || 0,
-          rubric_id: assignmentData.grading_rubric_id || 0
+          rubric_id: assignmentData.grading_rubric_id || 0,
+          assignment_id: assignmentData.id
         }
       ])
       .select("id, name")
@@ -1127,7 +1133,9 @@ export async function insertAssignment({
           is_annotation: true,
           is_comment_required: false,
           class_id: class_id,
-          is_required: true
+          is_required: true,
+          assignment_id: assignmentData.id,
+          rubric_id: assignmentData.self_review_rubric_id || 0
         },
         {
           rubric_criteria_id: selfReviewCriteriaId || 0,
@@ -1138,7 +1146,9 @@ export async function insertAssignment({
           is_annotation: false,
           is_comment_required: false,
           class_id: class_id,
-          is_required: true
+          is_required: true,
+          assignment_id: assignmentData.id,
+          rubric_id: assignmentData.self_review_rubric_id || 0
         },
         {
           rubric_criteria_id: gradingReviewCriteriaId || 0,
@@ -1149,7 +1159,9 @@ export async function insertAssignment({
           is_annotation: true,
           is_comment_required: false,
           class_id: class_id,
-          is_required: true
+          is_required: true,
+          assignment_id: assignmentData.id,
+          rubric_id: assignmentData.grading_rubric_id || 0
         },
         {
           rubric_criteria_id: gradingReviewCriteriaId || 0,
@@ -1160,7 +1172,9 @@ export async function insertAssignment({
           is_annotation: false,
           is_comment_required: false,
           class_id: class_id,
-          is_required: true
+          is_required: true,
+          assignment_id: assignmentData.id,
+          rubric_id: assignmentData.grading_rubric_id || 0
         },
         {
           rubric_criteria_id: gradingReviewCriteriaId2 || 0,
@@ -1171,7 +1185,9 @@ export async function insertAssignment({
           is_annotation: false,
           is_comment_required: false,
           class_id: class_id,
-          is_required: true
+          is_required: true,
+          assignment_id: assignmentData.id,
+          rubric_id: assignmentData.grading_rubric_id || 0
         }
       ])
       .select("*")
@@ -2082,7 +2098,8 @@ export async function createAssignmentsAndGradebookColumns({
             name: partTemplate.name,
             description: partTemplate.description,
             ordinal: partTemplate.ordinal,
-            rubric_id: rubricId || 0
+            rubric_id: rubricId || 0,
+            assignment_id: assignmentData.id
           })
           .select("id")
       );
@@ -2109,7 +2126,8 @@ export async function createAssignmentsAndGradebookColumns({
               total_points: criteriaTemplate.total_points,
               is_additive: true,
               rubric_part_id: partData.id,
-              rubric_id: rubricId || 0
+              rubric_id: rubricId || 0,
+              assignment_id: assignmentData.id
             })
             .select("id")
         );
@@ -2135,7 +2153,9 @@ export async function createAssignmentsAndGradebookColumns({
                 is_annotation: checkTemplate.is_annotation,
                 is_comment_required: checkTemplate.is_comment_required,
                 class_id: class_id,
-                is_required: checkTemplate.is_required
+                is_required: checkTemplate.is_required,
+                assignment_id: assignmentData.id,
+                rubric_id: rubricId || 0
               })
               .select("*")
           );
