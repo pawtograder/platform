@@ -17,10 +17,15 @@ export interface ServerFilter {
   value: string | number | boolean | string[] | number[];
 }
 
+export interface ServerOrderBy {
+  field: string;
+  direction: "asc" | "desc";
+}
 export interface UseCustomTableProps<TData> {
   columns: ColumnDef<TData>[];
   resource: keyof Database["public"]["Tables"];
   serverFilters?: ServerFilter[];
+  serverOrderBys?: ServerOrderBy[];
   select?: string;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
 }
@@ -82,6 +87,7 @@ export function useCustomTable<TData>({
   columns,
   resource,
   serverFilters = [],
+  serverOrderBys = [],
   select = "*",
   initialState = {}
 }: UseCustomTableProps<TData>) {
@@ -130,7 +136,12 @@ export function useCustomTable<TData>({
         }
       });
 
-      const { data: result, error: queryError } = await query;
+      // Apply server order bys
+      serverOrderBys.forEach((orderBy) => {
+        query = query.order(orderBy.field, orderBy.direction === "asc" ? { ascending: true } : { ascending: false });
+      });
+
+      const { data: result, error: queryError } = await query.limit(1000);
 
       if (queryError) {
         throw queryError;
@@ -142,7 +153,7 @@ export function useCustomTable<TData>({
     } finally {
       setIsLoading(false);
     }
-  }, [resource, serverFilters, select]);
+  }, [resource, serverFilters, select, serverOrderBys]);
 
   // Re-fetch data when server filters, resource, or select clause changes
   // The useCallback dependencies ensure fetchData is recreated only when necessary
