@@ -89,6 +89,7 @@ export function useTableControllerTable<
     if (!tableController) return;
     let unsubscribe: (() => void) | undefined;
 
+    let cleanedUp = false;
     const initializeData = async () => {
       try {
         setIsLoading(true);
@@ -96,6 +97,7 @@ export function useTableControllerTable<
 
         // Wait for TableController to be ready
         await tableController.readyPromise;
+        if (cleanedUp) return;
 
         // Subscribe to list changes (when items are added or removed)
         const subscription = tableController.list((newData) => {
@@ -117,6 +119,7 @@ export function useTableControllerTable<
 
     // Cleanup subscription on unmount or when tableController changes
     return () => {
+      cleanedUp = true;
       if (unsubscribe) {
         unsubscribe();
       }

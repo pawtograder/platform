@@ -1,36 +1,30 @@
-import { getPrivateProfileId } from "@/lib/ssrUtils";
-import { createClient } from "@/utils/supabase/server";
+"use client";
+
+import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
-export default async function AssignmentHome({
-  params
-}: {
-  params: Promise<{ course_id: string; assignment_id: string }>;
-}) {
-  const { assignment_id, course_id } = await params;
-  const client = await createClient();
-  const { data: assignment } = await client
-    .from("assignments")
-    .select("*, classes(time_zone), autograder(grader_repo)")
-    .eq("id", Number.parseInt(assignment_id))
-    .single();
-  const private_profile_id = await getPrivateProfileId(Number.parseInt(course_id));
-  const hasReviewAssignments =
-    (
-      await client
-        .from("review_assignments")
-        .select("*")
-        .eq("assignment_id", Number.parseInt(assignment_id))
-        .eq("assignee_profile_id", private_profile_id ?? "")
-        .limit(1)
-    )?.data?.length ?? 0 > 0;
+import { useCourseController } from "@/hooks/useCourseController";
+
+export default function AssignmentHome() {
+  const controller = useAssignmentController();
+  const assignment = controller.assignment;
+  const myReviewAssignments = useMyReviewAssignments();
+  const hasReviewAssignments = myReviewAssignments.length > 0;
+  const { course } = useCourseController();
 
   if (!assignment) {
     return <div>Assignment not found</div>;
   }
+
+  // Get the time zone - need to safely access the classes property
+  const timeZone = course.time_zone;
+
+  // Get the grader repo - need to safely access the autograder property
+  const graderRepo = undefined; //assignment.autograder?.grader_repo;
+
   return (
     <Box>
       <Box>
@@ -41,11 +35,7 @@ export default async function AssignmentHome({
                 <DataList.ItemLabel>Released</DataList.ItemLabel>
                 <DataList.ItemValue>
                   {assignment.release_date
-                    ? formatInTimeZone(
-                        new TZDate(assignment.release_date),
-                        assignment.classes.time_zone || "America/New_York",
-                        "Pp"
-                      )
+                    ? formatInTimeZone(new TZDate(assignment.release_date), timeZone || "America/New_York", "Pp")
                     : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
@@ -53,11 +43,7 @@ export default async function AssignmentHome({
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
                 <DataList.ItemValue>
                   {assignment.due_date
-                    ? formatInTimeZone(
-                        new TZDate(assignment.due_date),
-                        assignment.classes.time_zone || "America/New_York",
-                        "Pp"
-                      )
+                    ? formatInTimeZone(new TZDate(assignment.due_date), timeZone || "America/New_York", "Pp")
                     : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
@@ -72,8 +58,11 @@ export default async function AssignmentHome({
               <DataList.Item>
                 <DataList.ItemLabel>Grader repo</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  <Link href={`https://github.com/${assignment.autograder?.grader_repo}`} target="_blank">
-                    {assignment.autograder?.grader_repo}
+                  <Link
+                    href={`https://github.com/${course.github_org}/${course.slug}-solution-${assignment.slug}`}
+                    target="_blank"
+                  >
+                    {course.github_org}/{course.slug}-solution-{assignment.slug}
                   </Link>
                 </DataList.ItemValue>
               </DataList.Item>

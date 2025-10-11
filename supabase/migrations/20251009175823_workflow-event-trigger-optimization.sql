@@ -114,3 +114,7 @@ BEGIN
     end loop;
 END;
 $$;
+
+CREATE INDEX idx_rubric_check_refs_class_referencing_covering
+ON public.rubric_check_references (class_id, referencing_rubric_check_id)
+INCLUDE (referenced_rubric_check_id, id);

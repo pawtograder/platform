@@ -470,6 +470,17 @@ export default class TableController<
     Query
   >
 > {
+  // Static bookkeeping: track number of active controllers by table type
+  private static _controllerCounts: Map<string, number> = new Map();
+
+  /**
+   * Get the current count of active TableControllers for each table type.
+   * Useful for debugging memory leaks.
+   */
+  static getControllerCounts(): Record<string, number> {
+    return Object.fromEntries(TableController._controllerCounts);
+  }
+
   private _rows: PossiblyTentativeResult<ResultOne>[] = [];
   private _client: SupabaseClient;
   private _query: PostgrestFilterBuilder<
@@ -1197,6 +1208,35 @@ export default class TableController<
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
     this._debounceInterval = debounceInterval || 500;
+
+    // Track controller creation
+    const tableName = table as string;
+    const currentCount = TableController._controllerCounts.get(tableName) || 0;
+    const newCount = currentCount + 1;
+    TableController._controllerCounts.set(tableName, newCount);
+
+    // Only log creation if there are more than 4 live controllers for this table
+    if (newCount > 4) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `⚠️ TableController created for "${tableName}" (count: ${newCount} - potential leak!)`,
+        Object.fromEntries(TableController._controllerCounts)
+      );
+      Sentry.addBreadcrumb({
+        category: "tableController",
+        message: `TableController created for "${tableName}" - count exceeds threshold`,
+        level: "warning",
+        data: {
+          table: tableName,
+          count: newCount,
+          debugId: this._debugID,
+          allCounts: Object.fromEntries(TableController._controllerCounts)
+        }
+      });
+      Sentry.captureMessage(`TableController created for "${tableName}" - count exceeds threshold`, {
+        level: "warning"
+      });
+    }
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
@@ -1306,7 +1346,23 @@ export default class TableController<
   }
 
   close() {
+    if (this._closed) {
+      // Already closed, don't double-count
+      return;
+    }
     this._closed = true;
+
+    // Track controller closure
+    const tableName = this._table as string;
+    const currentCount = TableController._controllerCounts.get(tableName) || 0;
+    const newCount = Math.max(0, currentCount - 1);
+
+    if (newCount === 0) {
+      TableController._controllerCounts.delete(tableName);
+    } else {
+      TableController._controllerCounts.set(tableName, newCount);
+    }
+
     if (this._classRealtimeUnsubscribe) {
       this._classRealtimeUnsubscribe();
       this._classRealtimeUnsubscribe = null;

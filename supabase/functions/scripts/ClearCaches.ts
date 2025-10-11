@@ -19,7 +19,7 @@ interface CachesResponse {
 }
 
 /**
- * Lists all caches for a repository
+ * Lists all caches for a repository (fetches all pages)
  */
 async function listCachesForRepo(org: string, repo: string, scope?: Sentry.Scope): Promise<Cache[]> {
   const octokit = await getOctoKit(org, scope);
@@ -28,14 +28,19 @@ async function listCachesForRepo(org: string, repo: string, scope?: Sentry.Scope
   }
 
   try {
-    const response = await octokit.request("GET /repos/{owner}/{repo}/actions/caches", {
-      owner: org,
-      repo,
-      per_page: 100
-    });
+    // Use octokit.paginate to automatically fetch all pages
+    // The map function extracts actions_caches from each page's response
+    const allCaches = await octokit.paginate(
+      "GET /repos/{owner}/{repo}/actions/caches",
+      {
+        owner: org,
+        repo,
+        per_page: 100
+      },
+      (response) => (response.data as CachesResponse).actions_caches
+    );
 
-    const data = response.data as CachesResponse;
-    return data.actions_caches || [];
+    return allCaches as Cache[];
   } catch (error: unknown) {
     if (error && typeof error === "object" && "status" in error && error.status === 404) {
       // eslint-disable-next-line no-console
@@ -174,9 +179,7 @@ async function clearCachesForRepos(repoPrefix: string) {
 
   // Process repositories in parallel with concurrency limit
   const results = await Promise.all(
-    repos.map((repo) =>
-      limiter.schedule(() => processRepository(repo.repository, scope))
-    )
+    repos.map((repo) => limiter.schedule(() => processRepository(repo.repository, scope)))
   );
 
   // Sum up the results
@@ -224,4 +227,3 @@ if (import.meta.main) {
     Deno.exit(1);
   }
 }
-
