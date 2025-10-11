@@ -779,6 +779,7 @@ export default function EnrollmentsTable() {
     ],
     [
       currentUser,
+      course_id,
       openEditProfileModal,
       openEditUserRoleModal,
       openRemoveStudentModal,
@@ -864,8 +865,8 @@ export default function EnrollmentsTable() {
 
   // CSV Export function
   const exportToCSV = useCallback(() => {
-    // Use getFilteredRowModel to get ALL filtered data, not just what's displayed
-    const filteredRows = table.getFilteredRowModel().rows;
+    // Use getPreFilteredRowModel to get ALL filtered data, not just what's displayed
+    const filteredRows = table.getPreFilteredRowModel().rows;
 
     // Define CSV headers
     const headers = [
@@ -892,6 +893,9 @@ export default function EnrollmentsTable() {
         const invitation = original;
         const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
         status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
+      }
+      if ("disabled" in original && original.disabled) {
+        status = "Dropped";
       }
 
       // Get name
