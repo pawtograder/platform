@@ -345,14 +345,6 @@ export type RubricChecks = GetResult<
 
 export type RubricReviewRound = Database["public"]["Enums"]["review_round"];
 
-export type Rubric = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["rubrics"]["Row"],
-  "rubrics",
-  Database["public"]["Tables"]["rubrics"]["Relationships"],
-  "*"
->;
-
 export type DiscussionTopic = GetResult<
   Database["public"],
   Database["public"]["Tables"]["discussion_topics"]["Row"],

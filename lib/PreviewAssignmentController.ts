@@ -127,6 +127,9 @@ function createPreviewTableController<TTableName extends TablesThatHaveAnIDField
  * This factory function wraps a base AssignmentController with preview data
  * for rubric-related queries while maintaining access to other assignment data
  * (submissions, review assignments, etc).
+ * 
+ * IMPORTANT: Merges preview rubric with existing rubrics from database so that
+ * all rubrics are available (needed for references, multi-rubric displays, etc.)
  */
 export function createPreviewAssignmentController(
   baseController: AssignmentController,
@@ -134,13 +137,46 @@ export function createPreviewAssignmentController(
 ): AssignmentController {
   const flattened = flattenHydratedRubric(previewRubricData);
 
+  // Get existing data from base controller
+  const existingRubrics = baseController.rubricsController.rows;
+  const existingParts = baseController.rubricPartsController.rows;
+  const existingCriteria = baseController.rubricCriteriaController.rows;
+  const existingChecks = baseController.rubricChecksController.rows;
+  const existingReferences = baseController.rubricCheckReferencesController.rows;
+
+  // Merge preview data with existing data
+  // Replace existing rubric with same ID, or add new preview rubric
+  const mergedRubrics = [
+    ...existingRubrics.filter(r => r.id !== flattened.rubric.id),
+    flattened.rubric
+  ];
+
+  // Replace parts/criteria/checks that belong to preview rubric
+  const mergedParts = [
+    ...existingParts.filter(p => p.rubric_id !== flattened.rubric.id),
+    ...flattened.parts
+  ];
+
+  const mergedCriteria = [
+    ...existingCriteria.filter(c => c.rubric_id !== flattened.rubric.id),
+    ...flattened.criteria
+  ];
+
+  const mergedChecks = [
+    ...existingChecks.filter(ch => ch.rubric_id !== flattened.rubric.id),
+    ...flattened.checks
+  ];
+
+  // Keep existing references (preview rubrics don't have references)
+  const mergedReferences = [...existingReferences];
+
   // Cache wrapped controllers to maintain stable references
   const wrappedControllers = {
-    rubricsController: createPreviewTableController(baseController.rubricsController, [flattened.rubric]),
-    rubricPartsController: createPreviewTableController(baseController.rubricPartsController, flattened.parts),
-    rubricCriteriaController: createPreviewTableController(baseController.rubricCriteriaController, flattened.criteria),
-    rubricChecksController: createPreviewTableController(baseController.rubricChecksController, flattened.checks),
-    rubricCheckReferencesController: createPreviewTableController(baseController.rubricCheckReferencesController, [])
+    rubricsController: createPreviewTableController(baseController.rubricsController, mergedRubrics),
+    rubricPartsController: createPreviewTableController(baseController.rubricPartsController, mergedParts),
+    rubricCriteriaController: createPreviewTableController(baseController.rubricCriteriaController, mergedCriteria),
+    rubricChecksController: createPreviewTableController(baseController.rubricChecksController, mergedChecks),
+    rubricCheckReferencesController: createPreviewTableController(baseController.rubricCheckReferencesController, mergedReferences)
   };
 
   // Create wrapped controller that returns preview data for rubric queries

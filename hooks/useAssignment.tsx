@@ -368,7 +368,7 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
     (regrade_request: RegradeRequest) => regrade_request.submission_id === submission_id,
     [submission_id]
   );
-  return useFindTableControllerValue(controller.regradeRequests, findRegradeRequestsPredicate);
+  return useListTableControllerValues(controller.regradeRequests, findRegradeRequestsPredicate);
 }
 
 export class AssignmentController {

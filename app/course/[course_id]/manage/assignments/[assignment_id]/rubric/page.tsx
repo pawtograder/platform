@@ -1229,7 +1229,6 @@ function InnerRubricPage() {
   if (!assignmentDetails) {
     return <Alert status="error">Assignment not found.</Alert>;
   }
-  console.log(rubricForSidebar);
 
   return (
     <Flex w="100%" minW="0" direction="column">

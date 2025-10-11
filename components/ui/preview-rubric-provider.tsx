@@ -30,13 +30,18 @@ export function PreviewRubricProvider({ rubricData, children }: PreviewRubricPro
   // Serialize rubricData for stable comparison
   const rubricDataString = useMemo(() => JSON.stringify(rubricData), [rubricData]);
 
-  // Keep a ref to avoid recreating controller unnecessarily
+  // Keep refs to avoid recreating controller unnecessarily
   const controllerRef = useRef<ReturnType<typeof createPreviewAssignmentController>>();
   const lastRubricDataString = useRef<string>();
+  const lastBaseController = useRef<typeof baseController>();
 
   const previewController = useMemo(() => {
-    // Only recreate if the serialized data actually changed
-    if (lastRubricDataString.current !== rubricDataString) {
+    // Recreate if either the baseController identity or rubric data changed
+    const baseControllerChanged = lastBaseController.current !== baseController;
+    const rubricDataChanged = lastRubricDataString.current !== rubricDataString;
+    
+    if (baseControllerChanged || rubricDataChanged) {
+      lastBaseController.current = baseController;
       lastRubricDataString.current = rubricDataString;
       controllerRef.current = createPreviewAssignmentController(baseController, rubricData);
     }

@@ -150,8 +150,24 @@ export function useListTableControllerValues<
   controller: TableController<T, Query, IDType, ResultType>,
   predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
 ) {
-  const [matchingIds, setMatchingIds] = useState<Set<ExtractIdType<T>>>(new Set());
-  const [values, setValues] = useState<Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>>(new Map());
+  const [matchingIds, setMatchingIds] = useState<Set<ExtractIdType<T>>>(() => {
+    const ret = new Set<ExtractIdType<T>>();
+    for (const row of controller.list().data) {
+      if (predicate(row as PossiblyTentativeResult<ResultType>)) {
+        ret.add((row as unknown as { id: ExtractIdType<T> }).id);
+      }
+    }
+    return ret;
+  });
+  const [values, setValues] = useState<Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>>(() => {
+    const ret = new Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>();
+    for (const row of controller.list().data) {
+      if (predicate(row as PossiblyTentativeResult<ResultType>)) {
+        ret.set((row as unknown as { id: ExtractIdType<T> }).id, row as PossiblyTentativeResult<ResultType>);
+      }
+    }
+    return ret;
+  });
 
   // Keep track of individual ID subscriptions
   const subscriptionsRef = useRef<Map<ExtractIdType<T>, () => void>>(new Map());
@@ -371,8 +387,6 @@ export function useTableControllerValueById<
       return;
     }
     const { unsubscribe, data } = controller.getById(id as IDType, (data) => {
-      console.log(`Updating value for id ${id} to ${data}`);
-      console.trace();
       setValue(data);
     });
     // Guards against race!

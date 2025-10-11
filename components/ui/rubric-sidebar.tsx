@@ -43,7 +43,6 @@ import {
   useAllRubricChecks,
   useAssignmentController,
   useReferenceCheckRecordsFromCheck,
-  useReferencedRubricChecks,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
@@ -109,10 +108,11 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
 
   // Get rubrics and all checks directly from controllers
   const allRubrics = useRubrics();
+  console.log(allRubrics);
   const allChecks = useAllRubricChecks();
-  const otherRubrics = allRubrics.filter((rubric) => rubric.id !== currentRubricId);
+  const otherRubrics = useMemo(() => allRubrics.filter((rubric) => rubric.id !== currentRubricId), [allRubrics, currentRubricId]);
+  console.log(otherRubrics);
   const { rubricCheckReferencesController } = useAssignmentController();
-  const referencedChecks = useReferencedRubricChecks(check.id);
 
   // Build check options from other rubrics only
   const checkOptions: CheckOptionType[] = useMemo(() => {
@@ -128,7 +128,7 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
     }
 
     const checksForOtherRubrics = allChecks.filter(
-      (check) => validRubricIds.includes(check.rubric_id) && !referencingChecks.find((c) => c.id === check.id)
+      (check) => validRubricIds.includes(check.rubric_id) && !referencingChecks.find((c) => c.referenced_rubric_check_id === check.id)
     );
 
     return checksForOtherRubrics.map((c) => {
@@ -191,7 +191,7 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
     [rubricCheckReferencesController]
   );
 
-  const existingReferences = referencedChecks || [];
+  const existingReferences = referencingChecks || [];
   // If no options available and we're in preview mode, show a message
   if (checkOptions.length === 0 && currentRubricId <= 0) {
     return (
@@ -211,11 +211,15 @@ const InlineReferenceManager = memo(function InlineReferenceManager({
           {existingReferences.map((reference) => {
             if (!reference) return null;
 
+            // Find the referenced check to get its name and points
+            const referencedCheck = allChecks.find((check) => check.id === reference.referenced_rubric_check_id);
+            if (!referencedCheck) return null;
+
             return (
               <HStack key={reference.id} fontSize="xs" gap={1} p={1} bg="bg.muted" borderRadius="sm">
                 <Icon as={FaLink} color="blue.500" />
                 <Text flex={1} truncate>
-                  {reference.name} ({reference.points} pts)
+                  {referencedCheck.name} ({referencedCheck.points} pts)
                 </Text>
                 <Button
                   size="2xs"
@@ -1661,7 +1665,6 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   } else {
     partsToDisplay = [...rubricParts].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
   }
-  console.log(rubricParts);
 
   if (partsToDisplay.length === 0) {
     return (
