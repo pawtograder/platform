@@ -1057,7 +1057,7 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
   const { data: notifications } = useList<Notification>({
     resource: "notifications",
     filters: [{ field: "user_id", operator: "eq", value: user?.id }],
-    liveMode: "manual",
+    // liveMode: "manual",
     queryOptions: {
       staleTime: Infinity,
       cacheTime: Infinity,
@@ -1098,7 +1098,7 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    // liveMode: "manual",
     onLiveEvent: (event) => {
       controller.handleGenericDataEvent("discussion_thread_watchers", event);
     }
@@ -1131,7 +1131,7 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    // liveMode: "manual",
     onLiveEvent: (event) => {
       controller.handleGenericDataEvent("help_request_watchers", event);
     }

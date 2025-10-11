@@ -566,7 +566,7 @@ export default function RerunAutograderPage() {
     meta: {
       select: "*"
     },
-    liveMode: "auto",
+    // liveMode: "auto",
     filters: [
       {
         field: "autograder_id",

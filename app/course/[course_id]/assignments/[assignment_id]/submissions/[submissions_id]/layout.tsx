@@ -2,7 +2,6 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  Submission,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
@@ -420,35 +419,36 @@ function SubmissionHistoryContents({
   );
 }
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
-  const invalidate = useInvalidate();
-  const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+  // const invalidate = useInvalidate();
+  // const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
 
-  useList<Submission>({
-    resource: "submissions",
-    meta: {
-      select: "id, assignment_group_id, profile_id, is_active"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: submission.assignments.id
-      }
-    ],
-    liveMode: "manual",
-    onLiveEvent: (event) => {
-      const newSubmission = event.payload as Submission;
-      if (
-        newSubmission.assignment_group_id === submission.assignment_group_id &&
-        newSubmission.profile_id === submission.profile_id &&
-        newSubmission.id !== submission.id &&
-        newSubmission.is_active
-      ) {
-        setHasNewSubmission(true);
-      }
-      invalidate({ resource: "submissions", invalidates: ["list"] });
-    }
-  });
+  // useList<Submission>({
+  //   resource: "submissions",
+  //   meta: {
+  //     select: "id, assignment_group_id, profile_id, is_active"
+  //   },
+  //   filters: [
+  //     {
+  //       field: "assignment_id",
+  //       operator: "eq",
+  //       value: submission.assignments.id
+  //     }
+  //   ],
+  //   liveMode: "manual",
+  //   onLiveEvent: (event) => {
+  //     const newSubmission = event.payload as Submission;
+  //     if (
+  //       newSubmission.assignment_group_id === submission.assignment_group_id &&
+  //       newSubmission.profile_id === submission.profile_id &&
+  //       newSubmission.id !== submission.id &&
+  //       newSubmission.is_active
+  //     ) {
+  //       setHasNewSubmission(true);
+  //     }
+  //     invalidate({ resource: "submissions", invalidates: ["list"] });
+  //   }
+  // });
+  const hasNewSubmission = false;
 
   if (!submission.assignments) {
     return <Skeleton height="20px" />;

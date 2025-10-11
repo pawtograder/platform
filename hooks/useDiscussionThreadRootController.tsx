@@ -133,7 +133,7 @@ function DiscussionThreadChildrenProvider({ controller }: { controller: Discussi
     pagination: {
       pageSize: 10000
     },
-    liveMode: "manual",
+    // liveMode: "manual",
     onLiveEvent: (event) => {
       controller.handleEvent(event);
     },
