@@ -1,5 +1,11 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricById, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import {
+  useRubricCheck,
+  useRubricChecksByRubric,
+  useRubricCriteria,
+  useRubricCriteriaByRubric,
+  useRubricWithParts
+} from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
@@ -11,10 +17,9 @@ import {
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
-  HydratedRubricCheck,
-  HydratedRubricCriteria,
-  HydratedRubricPart,
   Json,
+  RubricCheck,
+  RubricCriteria,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
@@ -595,14 +600,14 @@ export type RubricCriteriaSelectGroupOption = {
   readonly label: string;
   readonly value: string;
   readonly options: readonly RubricCheckSelectOption[];
-  readonly criteria?: HydratedRubricCriteria;
+  readonly criteria?: RubricCriteria;
 };
 
 export type RubricCheckSelectOption = {
   readonly label: string;
   readonly value: string;
-  readonly check?: HydratedRubricCheck;
-  readonly criteria?: HydratedRubricCriteria;
+  readonly check?: RubricCheck;
+  readonly criteria?: RubricCriteria;
   options?: RubricCheckSubOptions[];
   isDisabled?: boolean;
 };
@@ -617,11 +622,7 @@ export type RubricCheckSubOptions = {
   isDisabled?: boolean;
 };
 
-export function formatPoints(option: {
-  check?: HydratedRubricCheck;
-  criteria?: HydratedRubricCriteria;
-  points: number;
-}) {
+export function formatPoints(option: { check?: RubricCheck; criteria?: RubricCriteria; points: number }) {
   if (option.check && option.criteria) {
     return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.points}`;
   }
@@ -637,7 +638,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const submissionController = useSubmissionController();
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
-  const rubric = useRubricById(review?.rubric_id);
+  const rubric = useRubricWithParts(review?.rubric_id);
   const [selectOpen, setSelectOpen] = useState(true);
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
@@ -655,21 +656,24 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
 
   // Get existing comments for this file to check max_annotations
   const existingComments = useSubmissionFileComments({ file_id: file.id });
+  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
+  const rubricChecks = useRubricChecksByRubric(rubric?.id);
 
   const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
     // Only show criteria that have annotation checks
-    let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
+    let criteriaWithAnnotationChecks: RubricCriteria[] = [];
 
-    if (rubric?.rubric_parts) {
+    if (rubricCriteria) {
+      const annotationChecks = rubricChecks
+        .filter(
+          (check: RubricCheck) =>
+            check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+        )
+        .map((check: RubricCheck) => check.rubric_criteria_id);
       // Using the effective rubric (either manually selected or default)
-      criteriaWithAnnotationChecks = rubric.rubric_parts
-        .flatMap((part: HydratedRubricPart) => part.rubric_criteria || [])
-        .filter((criteria: HydratedRubricCriteria) =>
-          criteria.rubric_checks.some(
-            (check: HydratedRubricCheck) =>
-              check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-          )
-        );
+      criteriaWithAnnotationChecks = rubricCriteria.filter((criteria: RubricCriteria) =>
+        annotationChecks.includes(criteria.id)
+      );
     }
 
     const criteriaOptions: RubricCriteriaSelectGroupOption[] =
@@ -677,9 +681,15 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
         return {
           label: criteria.name,
           value: criteria.id.toString(),
-          criteria: criteria as HydratedRubricCriteria,
-          options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map(
-            (check) => {
+          criteria: criteria as RubricCriteria,
+          options: rubricChecks
+            .filter(
+              (check) =>
+                check.is_annotation &&
+                (check.annotation_target === "file" || check.annotation_target === null) &&
+                check.rubric_criteria_id === criteria.id
+            )
+            .map((check) => {
               // Count existing annotations for this specific check
               const existingAnnotationsForCheck = existingComments.filter(
                 (comment) => comment.rubric_check_id === check.id
@@ -692,7 +702,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 label: check.name,
                 value: check.id.toString(),
                 check,
-                criteria: criteria as HydratedRubricCriteria,
+                criteria: criteria as RubricCriteria,
                 options: [],
                 isDisabled
               };
@@ -708,8 +718,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 }));
               }
               return option;
-            }
-          )
+            })
         };
       }) as RubricCriteriaSelectGroupOption[]) || [];
 
@@ -725,7 +734,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
     });
 
     return criteriaOptions;
-  }, [rubric, existingComments]);
+  }, [existingComments, rubricCriteria, rubricChecks]);
 
   useEffect(() => {
     if (!visible) {

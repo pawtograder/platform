@@ -3612,7 +3612,8 @@ final;`,
               name: partTemplate.name,
               description: partTemplate.description,
               ordinal: partTemplate.ordinal,
-              rubric_id: rubricId
+              rubric_id: rubricId,
+              assignment_id: assignment.id
             })
             .select("id")
         );
@@ -3638,7 +3639,8 @@ final;`,
                   total_points: criteriaTemplate.total_points,
                   is_additive: true,
                   rubric_part_id: partId,
-                  rubric_id: rubricId
+                  rubric_id: rubricId,
+                  assignment_id: assignment.id
                 })
                 .select("id")
           );
@@ -3663,7 +3665,9 @@ final;`,
                   points: checkTemplate.points,
                   is_annotation: checkTemplate.is_annotation,
                   is_comment_required: checkTemplate.is_comment_required,
-                  is_required: checkTemplate.is_required
+                  is_required: checkTemplate.is_required,
+                  assignment_id: assignment.id,
+                  rubric_id: rubricId
                 })
                 .select("*")
             );

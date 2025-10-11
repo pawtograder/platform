@@ -1,6 +1,13 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { useAssignmentController, useMyReviewAssignments, useReviewAssignment, useRubricById } from "./useAssignment";
+import {
+  useAssignmentController,
+  useMyReviewAssignments,
+  useReviewAssignment,
+  useRubricById,
+  useRubricChecksByRubric,
+  useRubricCriteriaByRubric
+} from "./useAssignment";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -306,28 +313,33 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
 export function useMissingRubricChecksForActiveReview() {
   const activeSubmissionReview = useActiveSubmissionReview();
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
-  const rubric = useRubricById(activeSubmissionReview?.rubric_id);
 
-  const rubricChecks = useMemo(() => {
-    if (!activeSubmissionReview || !rubric) return [];
-    return rubric.rubric_parts.flatMap((part) => part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks));
-  }, [rubric, activeSubmissionReview]);
+  // Get rubric data using hooks filtered by rubric_id
+  const rubricChecks = useRubricChecksByRubric(activeSubmissionReview?.rubric_id);
+  const allCriteria = useRubricCriteriaByRubric(activeSubmissionReview?.rubric_id);
 
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
-    if (!activeSubmissionReview || !rubricChecks.length || !rubric) {
+    if (!activeSubmissionReview || !rubricChecks.length) {
       return { missing_required_checks: [], missing_optional_checks: [] };
     }
-    const allCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
-    const criteriaEvaluation = allCriteria.map((criteria) => ({
-      criteria,
-      check_count_applied: criteria.rubric_checks.filter((check) =>
+
+    // Calculate criteria evaluation for saturation check
+    const criteriaEvaluation = allCriteria.map((criteria) => {
+      const checksForCriteria = rubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
+      const check_count_applied = checksForCriteria.filter((check) =>
         comments.some((comment) => comment.rubric_check_id === check.id)
-      ).length
-    }));
+      ).length;
+
+      return {
+        criteria,
+        check_count_applied
+      };
+    });
 
     const saturatedCriteria = criteriaEvaluation.filter(
       (item) => item.criteria.max_checks_per_submission === item.check_count_applied
     );
+
     return {
       missing_required_checks: rubricChecks.filter(
         (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
@@ -339,19 +351,25 @@ export function useMissingRubricChecksForActiveReview() {
           !saturatedCriteria.some((item) => item.criteria.id === check.rubric_criteria_id)
       )
     };
-  }, [rubricChecks, comments, activeSubmissionReview, rubric]);
+  }, [rubricChecks, comments, activeSubmissionReview, allCriteria]);
 
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    if (!activeSubmissionReview || !rubric) {
+    if (!activeSubmissionReview || !allCriteria.length) {
       return { missing_required_criteria: [], missing_optional_criteria: [] };
     }
-    const allCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
-    const criteriaEvaluation = allCriteria.map((criteria) => ({
-      criteria,
-      check_count_applied: criteria.rubric_checks.filter((check) =>
+
+    const criteriaEvaluation = allCriteria.map((criteria) => {
+      const checksForCriteria = rubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
+      const check_count_applied = checksForCriteria.filter((check) =>
         comments.some((comment) => comment.rubric_check_id === check.id)
-      ).length
-    }));
+      ).length;
+
+      return {
+        criteria,
+        check_count_applied
+      };
+    });
+
     return {
       missing_required_criteria: criteriaEvaluation.filter(
         (item) =>
@@ -362,7 +380,7 @@ export function useMissingRubricChecksForActiveReview() {
         (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
       )
     };
-  }, [comments, rubric, activeSubmissionReview]);
+  }, [comments, allCriteria, rubricChecks, activeSubmissionReview]);
 
   return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
 }

@@ -5,6 +5,7 @@ import {
   useMyReviewAssignments,
   useRubricCheck as useNewRubricCheck,
   useReferencingRubricChecks,
+  useRubricCriteria,
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -18,6 +19,7 @@ import {
   HydratedRubricCriteria,
   HydratedRubricPart,
   RegradeRequestComment,
+  Rubric,
   RubricChecks,
   RubricCriteriaWithRubricChecks,
   SubmissionArtifact,
@@ -999,10 +1001,10 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
   const submissionComments = useSubmissionComments({});
   const artifactComments = useSubmissionArtifactComments({});
 
-  const referencingCheck = useNewRubricCheck(referencing_check_id);
+  const referencingCheckReferences = useReferencingRubricChecks(referencing_check_id);
 
   const allRelevantComments = useMemo(() => {
-    const referencedCheckIds = referencingCheck?.rubric_check_references.map((ref) => ref.referenced_rubric_check_id);
+    const referencedCheckIds = referencingCheckReferences?.map((ref) => ref.id);
     const relevantFileComments = fileComments.filter(
       (comment) =>
         comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
@@ -1016,7 +1018,7 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
         comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
     );
     return [...relevantFileComments, ...relevantSubmissionComments, ...relevantArtifactComments];
-  }, [fileComments, submissionComments, artifactComments, referencingCheck]);
+  }, [fileComments, submissionComments, artifactComments, referencingCheckReferences]);
 
   return allRelevantComments;
 }
@@ -1049,18 +1051,15 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
   return submissionReview;
 }
 export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
-  const assignmentController = useAssignmentController();
-  const referencingChecks = useReferencingRubricChecks(rubric_check_id)?.map((eachCheck) => {
-    const reviewCriteria = assignmentController.rubricCriteriaById.get(eachCheck.rubric_criteria_id);
-    return {
-      criteria: reviewCriteria,
-      check: eachCheck
-    };
-  });
+  const referencingChecks = useReferencingRubricChecks(rubric_check_id);
+
   const writableSubmissionReviews = useWritableSubmissionReviews();
-  return referencingChecks?.filter((rc) =>
-    writableSubmissionReviews?.some((sr) => sr.rubric_id === rc.criteria!.rubric_id)
-  );
+  return useMemo(() => {
+    if (!referencingChecks || !writableSubmissionReviews) {
+      return undefined;
+    }
+    return referencingChecks.filter((rc) => writableSubmissionReviews?.some((sr) => sr.rubric_id === rc.rubric_id));
+  }, [referencingChecks, writableSubmissionReviews]);
 }
 
 export function useWritableSubmissionReviews(rubric_id?: number) {
@@ -1071,7 +1070,7 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
 
   const { role } = useClassProfiles();
   const memoizedReviews = useMemo(() => {
-    const writableRubrics: HydratedRubric[] = [];
+    const writableRubrics: Rubric[] = [];
     if (role.role === "instructor") {
       writableRubrics.push(...rubrics);
     }

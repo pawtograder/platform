@@ -53,19 +53,22 @@ INSERT INTO public.rubric_parts (
   name,
   description,
   ordinal,
-  rubric_id
+  rubric_id,
+  assignment_id
 ) VALUES (
   1,
   'Self Review',
   'Self review rubric',
   0,
-  new_self_review_rubric_id
+  new_self_review_rubric_id,
+  assignment_id
 ), (
   1,
   'Grading Review',
   'Grading review rubric',
   1,
-  new_grading_review_rubric_id
+  new_grading_review_rubric_id,
+  assignment_id
 ) ;
 
 -- Insert 1 new rubric criteria for self review rubric
@@ -77,7 +80,8 @@ INSERT INTO public.rubric_criteria (
   is_additive,
   class_id,
   ordinal,
-  rubric_part_id
+  rubric_part_id,
+  assignment_id
 ) VALUES (
   new_self_review_rubric_id,
   'Self Review Criteria',
@@ -86,7 +90,8 @@ INSERT INTO public.rubric_criteria (
   true,
   1,
   0,
-  (SELECT id FROM public.rubric_parts WHERE rubric_id = new_self_review_rubric_id LIMIT 1)
+  (SELECT id FROM public.rubric_parts WHERE rubric_id = new_self_review_rubric_id LIMIT 1),
+  assignment_id
 ) RETURNING id INTO self_review_criteria_id;
 
 -- Insert 1 new rubric criteria for grading review rubric
@@ -98,7 +103,8 @@ INSERT INTO public.rubric_criteria (
   is_additive,
   class_id,
   ordinal,
-  rubric_part_id
+  rubric_part_id,
+  assignment_id
 ) VALUES (
   new_grading_review_rubric_id,
   'Grading Review Criteria',
@@ -107,7 +113,8 @@ INSERT INTO public.rubric_criteria (
   true,
   1,
   0,
-  (SELECT id FROM public.rubric_parts WHERE rubric_id = new_grading_review_rubric_id LIMIT 1)
+  (SELECT id FROM public.rubric_parts WHERE rubric_id = new_grading_review_rubric_id LIMIT 1),
+  assignment_id
 ) RETURNING id INTO grading_review_criteria_id;
 
 -- Insert 2 new rubric checks for self review criteria
@@ -120,9 +127,11 @@ INSERT INTO public.rubric_checks (
   is_annotation,
   is_comment_required,
   class_id,
-  is_required
+  is_required,
+  assignment_id,
+  rubric_id
 ) VALUES 
-  (self_review_criteria_id, 'Self Review Check 1', 'First check for self review', 0, 5, true, false, 1, true) RETURNING id INTO self_review_check_reference_id;
+  (self_review_criteria_id, 'Self Review Check 1', 'First check for self review', 0, 5, true, false, 1, true, assignment_id, new_self_review_rubric_id) RETURNING id INTO self_review_check_reference_id;
 INSERT INTO public.rubric_checks (
   rubric_criteria_id,
   name,
@@ -132,10 +141,12 @@ INSERT INTO public.rubric_checks (
   is_annotation,
   is_comment_required,
   class_id,
-  is_required
+  is_required,
+  assignment_id,
+  rubric_id
 ) VALUES 
 
-  (self_review_criteria_id, 'Self Review Check 2', 'Second check for self review', 1, 5, false, false, 1, true); 
+  (self_review_criteria_id, 'Self Review Check 2', 'Second check for self review', 1, 5, false, false, 1, true, assignment_id, new_self_review_rubric_id); 
 
 -- Insert 2 new rubric checks for grading review criteria
 INSERT INTO public.rubric_checks (
@@ -147,9 +158,11 @@ INSERT INTO public.rubric_checks (
   is_annotation,
   is_comment_required,
   class_id,
-  is_required
+  is_required,
+  assignment_id,
+  rubric_id
 ) VALUES 
-  (grading_review_criteria_id, 'Grading Review Check 1', 'First check for grading review', 0, 10, true, false, 1, true)
+  (grading_review_criteria_id, 'Grading Review Check 1', 'First check for grading review', 0, 10, true, false, 1, true, assignment_id, new_grading_review_rubric_id)
 RETURNING id INTO grading_review_check_reference_id;
 
 INSERT INTO public.rubric_checks (
@@ -161,12 +174,14 @@ INSERT INTO public.rubric_checks (
   is_annotation,
   is_comment_required,
   class_id,
-  is_required
+  is_required,
+  assignment_id,
+  rubric_id
 ) VALUES 
-  (grading_review_criteria_id, 'Grading Review Check 2', 'Second check for grading review', 1, 10, false, false, 1, true);
+  (grading_review_criteria_id, 'Grading Review Check 2', 'Second check for grading review', 1, 10, false, false, 1, true, assignment_id, new_grading_review_rubric_id);
 
-insert into rubric_check_references(referencing_rubric_check_id, referenced_rubric_check_id, class_id) values
-(grading_review_check_reference_id, self_review_check_reference_id, 1);
+insert into rubric_check_references(referencing_rubric_check_id, referenced_rubric_check_id, class_id, assignment_id, rubric_id) values
+(grading_review_check_reference_id, self_review_check_reference_id, 1, assignment_id, new_grading_review_rubric_id);
 END $$;
 
 insert into help_queues (name, description, class_id, available, depth)

@@ -165,7 +165,8 @@ async function test() {
       name: "Code Walk",
       description: "Code Walk",
       ordinal: 0,
-      rubric_id: codeWalkRubric.data!.id
+      rubric_id: codeWalkRubric.data!.id,
+      assignment_id: assignments[0].id
     })
     .select("id")
     .single();
@@ -183,7 +184,8 @@ async function test() {
       total_points: 90,
       is_additive: true,
       rubric_part_id: codeWalkPart.data!.id,
-      rubric_id: codeWalkRubric.data!.id
+      rubric_id: codeWalkRubric.data!.id,
+      assignment_id: assignments[0].id
     })
     .select("id")
     .single();
@@ -202,7 +204,9 @@ async function test() {
       is_annotation: false,
       is_comment_required: false,
       is_required: true,
-      rubric_criteria_id: codeWalkCriteria.data!.id
+      rubric_criteria_id: codeWalkCriteria.data!.id,
+      assignment_id: assignments[0].id,
+      rubric_id: codeWalkRubric.data!.id
     })
     .select("id")
     .single();

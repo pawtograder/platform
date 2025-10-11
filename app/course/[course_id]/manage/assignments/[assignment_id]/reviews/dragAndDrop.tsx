@@ -31,7 +31,8 @@ import {
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import React, { Dispatch, SetStateAction, useMemo, useState } from "react";
-import { DraftReviewAssignment, RubricWithParts, UserRoleWithConflictsAndName } from "./page";
+import { DraftReviewAssignment, UserRoleWithConflictsAndName } from "./page";
+import { Rubric } from "@/utils/supabase/DatabaseTypes";
 
 function getDraggableId(item: DraftReviewAssignment): string {
   return item.part ? `submission-${item.submission.id}-part-${item.part.id}` : `submission-${item.submission.id}`;
@@ -224,7 +225,7 @@ export default function DragAndDropExample({
     assignee_profile_id: string;
     completed_at?: string | null;
   }[];
-  selectedRubric?: RubricWithParts;
+  selectedRubric?: Rubric;
   allActiveSubmissions: { id: number; profile_id?: string | null; assignment_group_id?: number | null }[];
   groupMembersByGroupId: Map<number, string[]>;
 }) {

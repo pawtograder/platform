@@ -5,6 +5,10 @@ import {
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
+  useRubricWithParts,
+  useRubricCriteriaByRubric,
+  useRubricChecksByRubric,
+  useRubricParts,
   useRubrics,
   useSelfReviewSettings
 } from "@/hooks/useAssignment";
@@ -89,20 +93,25 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   const reviewAssignmentRubricParts = useReviewAssignmentRubricParts(reviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
-  const rubric = useRubricById(reviewAssignment?.rubric_id);
+
+  // Get all rubric data for this rubric using hooks filtered by rubric_id
+  const rubricParts = useRubricParts(reviewAssignment?.rubric_id);
+  const allCriteriaForRubric = useRubricCriteriaByRubric(reviewAssignment?.rubric_id);
+  const allChecksForRubric = useRubricChecksByRubric(reviewAssignment?.rubric_id);
 
   const assignedRubricPartIds = reviewAssignmentRubricParts.map((part) => part.rubric_part_id);
 
-  const rubricChecksForAssignedParts = useMemo(() => {
-    if (!rubric) return [];
+  // Filter criteria by assigned parts (or all parts if none assigned)
+  const assignedCriteria = useMemo(() => {
+    const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricParts.map((p) => p.id);
+    return allCriteriaForRubric.filter((c) => partIds.includes(c.rubric_part_id));
+  }, [allCriteriaForRubric, assignedRubricPartIds, rubricParts]);
 
-    return rubric.rubric_parts
-      .filter(
-        (part) =>
-          !assignedRubricPartIds || assignedRubricPartIds.length === 0 || assignedRubricPartIds.includes(part.id)
-      )
-      .flatMap((part) => part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks));
-  }, [rubric, assignedRubricPartIds]);
+  // Get checks for assigned criteria
+  const rubricChecksForAssignedParts = useMemo(() => {
+    const criteriaIds = assignedCriteria.map((c) => c.id);
+    return allChecksForRubric.filter((check) => criteriaIds.includes(check.rubric_criteria_id));
+  }, [allChecksForRubric, assignedCriteria]);
 
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
     return {
@@ -116,20 +125,19 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   }, [rubricChecksForAssignedParts, comments]);
 
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    if (!rubric) {
-      return { missing_required_criteria: [], missing_optional_criteria: [] };
-    }
-
-    const assignedCriteria = rubric.rubric_parts
-      .filter((part) => assignedRubricPartIds.includes(part.id) || assignedRubricPartIds.length === 0)
-      .flatMap((part) => part.rubric_criteria);
-
-    const criteriaEvaluation = assignedCriteria?.map((criteria) => ({
-      criteria,
-      check_count_applied: criteria.rubric_checks.filter((check) =>
+    // Get checks for each criteria
+    const criteriaEvaluation = assignedCriteria?.map((criteria) => {
+      const checksForCriteria = allChecksForRubric.filter((check) => check.rubric_criteria_id === criteria.id);
+      const check_count_applied = checksForCriteria.filter((check) =>
         comments.some((comment) => comment.rubric_check_id === check.id)
-      ).length
-    }));
+      ).length;
+
+      return {
+        criteria,
+        check_count_applied
+      };
+    });
+
     return {
       missing_required_criteria: criteriaEvaluation?.filter(
         (item) =>
@@ -140,7 +148,7 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
         (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
       )
     };
-  }, [comments, rubric, assignedRubricPartIds]);
+  }, [comments, assignedCriteria, allChecksForRubric]);
 
   return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
 }
@@ -516,7 +524,7 @@ function ReviewAssignmentActions() {
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const setIgnoreAssignedReview = useSetIgnoreAssignedReview();
 
-  const rubric = useRubricById(activeReviewAssignment?.rubric_id);
+  const rubric = useRubricWithParts(activeReviewAssignment?.rubric_id);
   const { time_zone } = useCourse();
   const rubricPartsAdvice = useMemo(() => {
     return assignedRubricParts

@@ -9,7 +9,6 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
-  useHelpRequest,
   useHelpRequestMessages,
   useOfficeHoursController,
   useRealtimeChat,
@@ -112,7 +111,6 @@ export const RealtimeChat = ({
   readOnly = false
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
-  const helpRequest = useHelpRequest(request_id);
   const { course_id } = useParams();
   const moderationStatus = useModerationStatus(Number(course_id));
   const messages = useHelpRequestMessages(request_id);
@@ -277,8 +275,9 @@ export const RealtimeChat = ({
       moderationStatus.isBanned,
       replyToMessage,
       private_profile_id,
-      helpRequest,
-      createStudentActivity
+      createStudentActivity,
+      course_id,
+      request_id
     ]
   );
 

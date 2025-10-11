@@ -42,8 +42,8 @@ import {
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
 import {
-  HydratedRubricCheck,
   HydratedRubricCriteria,
+  RubricCheck,
   RubricChecksDataType,
   SubmissionArtifact,
   SubmissionArtifactComment,
@@ -545,13 +545,13 @@ function ArtifactCheckPopover({
       options: (
         criteria.rubric_checks.filter(
           (check) => check.is_annotation && check.annotation_target === "artifact"
-        ) as HydratedRubricCheck[]
+        ) as RubricCheck[]
       ).map((check) => {
         const option: RubricCheckSelectOption = {
           label: check.name,
           value: check.id.toString(),
-          check,
-          criteria: criteria as HydratedRubricCriteria,
+          check: check as RubricCheck,
+          criteria,
           options: []
         };
         if (
