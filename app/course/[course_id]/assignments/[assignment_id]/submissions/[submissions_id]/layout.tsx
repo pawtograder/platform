@@ -445,13 +445,13 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
           message.data.assignment_id === submission.assignment_id
         ) {
           // Check if it's for the same student (individual) or group
-          const isSameStudent = 
-            "profile_id" in message.data && 
+          const isSameStudent =
+            "profile_id" in message.data &&
             message.data.profile_id === submission.profile_id &&
             !message.data.assignment_group_id &&
             !submission.assignment_group_id;
-          
-          const isSameGroup = 
+
+          const isSameGroup =
             "assignment_group_id" in message.data &&
             message.data.assignment_group_id === submission.assignment_group_id &&
             message.data.assignment_group_id !== null;
@@ -469,7 +469,14 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     return () => {
       unsubscribe();
     };
-  }, [courseController, submission.id, submission.assignment_id, submission.profile_id, submission.assignment_group_id, invalidate]);
+  }, [
+    courseController,
+    submission.id,
+    submission.assignment_id,
+    submission.profile_id,
+    submission.assignment_group_id,
+    invalidate
+  ]);
 
   if (!submission.assignments) {
     return <Skeleton height="20px" />;

@@ -10,14 +10,14 @@ import {
   useDiscussionThreadTeaser,
   useUpdateThreadTeaser
 } from "@/hooks/useCourseController";
-import useDiscussionThreadChildren from "@/hooks/useDiscussionThreadRootController";
+import useDiscussionThreadChildren, { useDiscussionThreadsController } from "@/hooks/useDiscussionThreadRootController";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
-import { useCreate, useUpdate } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -32,7 +32,6 @@ export function DiscussionThreadReply({
   setVisible: (visible: boolean) => void;
 }) {
   // const invalidate = useInvalidate();
-  const { mutateAsync: mutate } = useCreate({ resource: "discussion_threads" });
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const trackEvent = useTrackEvent();
   const { public_profile_id } = useClassProfiles();
@@ -46,32 +45,30 @@ export function DiscussionThreadReply({
       }, 100);
     }
   }, [visible]);
+  const { tableController } = useDiscussionThreadsController();
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
       if (!thread) {
         return;
       }
-      const result = await mutate({
-        resource: "discussion_threads",
-        values: {
-          subject: `Re: ${thread.subject}`,
-          parent: thread.id,
-          root: thread.root || thread.id,
-          topic_id: thread.topic_id,
-          instructors_only: thread.instructors_only,
-          class_id: thread.class_id,
-          author: profile_id,
-          body: message
-        }
+      const result = await tableController.create({
+        subject: `Re: ${thread.subject}`,
+        parent: thread.id,
+        root: thread.root || thread.id,
+        topic_id: thread.topic_id,
+        instructors_only: thread.instructors_only,
+        class_id: thread.class_id,
+        author: profile_id,
+        body: message
       });
 
       // Track discussion reply
-      if (result?.data) {
+      if (result) {
         const rootId = thread.root || thread.id;
 
         trackEvent("discussion_reply_posted", {
-          thread_id: Number(result.data.id),
+          thread_id: result.id,
           root_thread_id: rootId,
           course_id: thread.class_id,
           is_anonymous: profile_id === public_profile_id
@@ -87,7 +84,7 @@ export function DiscussionThreadReply({
         setVisible(false);
       }
     },
-    [mutate, setVisible, thread, trackEvent, public_profile_id]
+    [tableController, setVisible, thread, trackEvent, public_profile_id]
   );
   if (!visible) {
     return <></>;

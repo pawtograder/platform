@@ -1,170 +1,84 @@
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import { LiveEvent, useList } from "@refinedev/core";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import useAuthState from "./useAuthState";
+import TableController, { useTableControllerValueById, useTableControllerTableValues } from "@/lib/TableController";
+import { createContext, useContext, useEffect, useRef, useMemo } from "react";
+import { useCourseController } from "./useCourseController";
+
 export type DiscussionThreadWithChildren = DiscussionThread & {
   children: DiscussionThread[];
 };
-type UpdateCallback<T> = (data: T) => void;
-type Unsubscribe = () => void;
 
-export function useDiscussionThreadRoot() {
-  const controller = useDiscussionThreadsController();
-  const [thread, setThread] = useState<DiscussionThreadWithChildren>();
-  useEffect(() => {
-    const { unsubscribe, data } = controller.getDiscussionThreadWithChildren(controller.root_id, (data) => {
-      setThread(data);
-    });
-    if (data) {
-      setThread(data);
-    }
-    return unsubscribe;
-  }, [controller]);
-  return thread;
-}
-export default function useDiscussionThreadChildren(threadId: number) {
-  const controller = useDiscussionThreadsController();
-  const [thread, setThread] = useState<DiscussionThreadWithChildren>();
-
-  useEffect(() => {
-    const { unsubscribe, data } = controller.getDiscussionThreadWithChildren(threadId, (data) => {
-      setThread({ ...data });
-    });
-    if (data) {
-      setThread({ ...data });
-    }
-    return unsubscribe;
-  }, [controller, threadId]);
-  return thread;
-}
 export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus & {
   numReadDescendants: number;
   current_children_count: number;
 };
-export class DiscussionThreadsController {
-  private discussionThreadWithChildrenSubscribers: Map<number, UpdateCallback<DiscussionThreadWithChildren>[]> =
-    new Map();
-  private discussionThreadWithChildren: Map<number, DiscussionThreadWithChildren> = new Map();
 
-  constructor(public root_id: number) {}
-  handleEvent(event: LiveEvent) {
-    if (event.type === "created") {
-      const body = event.payload as DiscussionThread;
-      //Create the thread in the map
-      this.discussionThreadWithChildren.set(body.id, {
-        ...body,
-        children: []
-      });
-      //Notify subscribers
-      this.notifyDiscussionThreadWithChildrenSubscribers(body.id, {
-        ...body,
-        children: []
-      });
-      const parent = body.parent;
-      if (parent) {
-        const parentThread = this.discussionThreadWithChildren.get(parent);
-        if (parentThread) {
-          parentThread.children = [...parentThread.children, body];
-          this.notifyDiscussionThreadWithChildrenSubscribers(parent, parentThread);
-        }
-      }
-    } else if (event.type === "updated") {
-      const body = event.payload as DiscussionThread;
-      const thread = this.discussionThreadWithChildren.get(body.id);
-      if (thread && (thread.body !== body.body || thread.answer !== body.answer || thread.draft !== body.draft)) {
-        //Only notify if the body has changed
-        this.discussionThreadWithChildren.set(body.id, { children: thread.children, ...body });
-        this.notifyDiscussionThreadWithChildrenSubscribers(body.id, { children: thread.children, ...body });
-      }
-    }
-  }
+/**
+ * Hook to get the root discussion thread with its immediate children
+ */
+export function useDiscussionThreadRoot() {
+  const controller = useDiscussionThreadsController();
+  const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
+  const allThreads = useTableControllerTableValues(controller.tableController);
 
-  getDiscussionThreadWithChildren(
-    threadId: number,
-    callback?: UpdateCallback<DiscussionThreadWithChildren>
-  ): { unsubscribe: Unsubscribe; data: DiscussionThreadWithChildren | undefined } {
-    const subscribers = this.discussionThreadWithChildrenSubscribers.get(threadId) || [];
-    if (callback) {
-      this.discussionThreadWithChildrenSubscribers.set(threadId, [...subscribers, callback]);
-    }
+  return useMemo(() => {
+    if (!rootThread) return undefined;
+
+    const children = allThreads.filter((t) => t.parent === rootThread.id);
+
     return {
-      unsubscribe: () => {
-        if (callback) {
-          this.discussionThreadWithChildrenSubscribers.set(
-            threadId,
-            subscribers.filter((cb) => cb !== callback)
-          );
-        }
-      },
-      data: this.discussionThreadWithChildren.get(threadId)
-    };
+      ...rootThread,
+      children
+    } as DiscussionThreadWithChildren;
+  }, [rootThread, allThreads]);
+}
+
+/**
+ * Hook to get a discussion thread with its immediate children
+ */
+export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
+  const controller = useDiscussionThreadsController();
+  const thread = useTableControllerValueById(controller.tableController, threadId);
+  const allThreads = useTableControllerTableValues(controller.tableController);
+
+  return useMemo(() => {
+    if (!thread) return undefined;
+
+    const children = allThreads.filter((t) => t.parent === thread.id);
+
+    return {
+      ...thread,
+      children
+    } as DiscussionThreadWithChildren;
+  }, [thread, allThreads]);
+}
+
+/**
+ * Hook to get all discussion threads for the current root (flat list)
+ */
+export function useAllDiscussionThreads(): DiscussionThread[] {
+  const controller = useDiscussionThreadsController();
+  return useTableControllerTableValues(controller.tableController);
+}
+/**
+ * Simple controller that holds a reference to the TableController for discussion threads.
+ * The hierarchy building is now done in the hooks themselves using TableController hooks.
+ */
+export class DiscussionThreadsController {
+  public readonly tableController: TableController<"discussion_threads">;
+  public readonly root_id: number;
+
+  constructor(root_id: number, tableController: TableController<"discussion_threads">) {
+    this.root_id = root_id;
+    this.tableController = tableController;
   }
 
-  setDiscussionThreads(data: DiscussionThread[]) {
-    if (this.discussionThreadWithChildren.size > 0) {
-      //TODO: Why does this happen? liveMode=manual should prevent this from getting called after first load
-      return;
-    }
-    for (const thread of data) {
-      const children = data.filter((t) => t.parent === thread.id);
-      this.discussionThreadWithChildren.set(thread.id, {
-        ...thread,
-        children
-      });
-      this.notifyDiscussionThreadWithChildrenSubscribers(thread.id, {
-        ...thread,
-        children
-      });
-    }
-  }
-  private notifyDiscussionThreadWithChildrenSubscribers(threadId: number, data: DiscussionThreadWithChildren) {
-    const subscribers = this.discussionThreadWithChildrenSubscribers.get(threadId);
-    if (subscribers) {
-      subscribers.filter((cb) => cb !== undefined).forEach((cb) => cb(data));
-    }
+  close() {
+    // TableController is closed in the provider's useEffect cleanup
   }
 }
-function DiscussionThreadChildrenProvider({ controller }: { controller: DiscussionThreadsController }) {
-  const { data } = useList<DiscussionThread>({
-    resource: "discussion_threads",
-    meta: {
-      select: "*"
-    },
-    pagination: {
-      pageSize: 10000
-    },
-    // liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleEvent(event);
-    },
-    queryOptions: {
-      cacheTime: Infinity,
-      enabled: !!controller.root_id,
-      staleTime: Infinity // Realtime data
-    },
-    sorters: [
-      {
-        field: "created_at",
-        order: "asc"
-      }
-    ],
-    filters: [
-      {
-        field: "root",
-        operator: "eq",
-        value: controller.root_id
-      }
-    ]
-  });
 
-  useEffect(() => {
-    if (data) {
-      controller.setDiscussionThreads(data.data);
-    }
-  }, [controller, data]);
-  return <></>;
-}
 const DiscussionThreadsControllerContext = createContext<DiscussionThreadsController | null>(null);
+
 export function DiscussionThreadsControllerProvider({
   root_id,
   children
@@ -172,14 +86,51 @@ export function DiscussionThreadsControllerProvider({
   children: React.ReactNode;
   root_id: number;
 }) {
-  const controller = useRef<DiscussionThreadsController>(new DiscussionThreadsController(root_id));
+  const courseController = useCourseController();
+  const controllerRef = useRef<DiscussionThreadsController | null>(null);
+
+  // Create both TableController and DiscussionThreadsController in useEffect for proper cleanup
+  useEffect(() => {
+    if (!courseController?.client || !courseController?.classRealTimeController) {
+      return;
+    }
+
+    // Create TableController with realtime filter for this root
+    const tableController = new TableController({
+      client: courseController.client,
+      table: "discussion_threads",
+      query: courseController.client
+        .from("discussion_threads")
+        .select("*")
+        .eq("root", root_id)
+        .order("created_at", { ascending: true }),
+      classRealTimeController: courseController.classRealTimeController,
+      realtimeFilter: { root: root_id },
+      loadEntireTable: true
+    });
+
+    // Create DiscussionThreadsController
+    const controller = new DiscussionThreadsController(root_id, tableController);
+    controllerRef.current = controller;
+
+    return () => {
+      controller.close();
+      tableController.close();
+      controllerRef.current = null;
+    };
+  }, [courseController, root_id]);
+
+  if (!controllerRef.current) {
+    return null;
+  }
+
   return (
-    <DiscussionThreadsControllerContext.Provider value={controller.current}>
-      <DiscussionThreadChildrenProvider controller={controller.current} />
+    <DiscussionThreadsControllerContext.Provider value={controllerRef.current}>
       {children}
     </DiscussionThreadsControllerContext.Provider>
   );
 }
+
 export function useDiscussionThreadsController() {
   const controller = useContext(DiscussionThreadsControllerContext);
   if (!controller) {
