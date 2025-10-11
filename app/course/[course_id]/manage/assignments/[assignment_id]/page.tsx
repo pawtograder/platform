@@ -22,9 +22,6 @@ export default function AssignmentHome() {
   // Get the time zone - need to safely access the classes property
   const timeZone = course.time_zone;
 
-  // Get the grader repo - need to safely access the autograder property
-  const graderRepo = undefined; //assignment.autograder?.grader_repo;
-
   return (
     <Box>
       <Box>

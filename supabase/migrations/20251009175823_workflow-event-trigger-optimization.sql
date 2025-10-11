@@ -34,7 +34,7 @@ DROP INDEX IF EXISTS idx_submission_files_assignment_group_id;
 CREATE OR REPLACE FUNCTION public.invoke_github_async_worker_background_task()
 RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $$
 declare
@@ -58,7 +58,8 @@ $$;
 CREATE OR REPLACE FUNCTION public.invoke_email_batch_processor_background_task()
 RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
+SET search_path = public
 AS $$
 BEGIN
     -- FIXED: Spawn exactly 2 workers instead of 3 for better resource management
@@ -92,7 +93,8 @@ $$;
 CREATE OR REPLACE FUNCTION public.invoke_gradebook_recalculation_background_task()
 RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
+SET search_path = public
 AS $$
 declare
     i integer;
