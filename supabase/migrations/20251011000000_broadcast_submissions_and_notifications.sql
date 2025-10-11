@@ -79,6 +79,19 @@ BEGIN
                 true
             );
         END LOOP;
+
+        -- Broadcast to staff channel (instructors/graders)
+        DECLARE
+            payload_for_staff JSONB;
+        BEGIN
+            payload_for_staff := payload || jsonb_build_object('target_audience', 'staff');
+            PERFORM public.safe_broadcast(
+                payload_for_staff,
+                'broadcast',
+                'class:' || submission_class_id || ':staff',
+                true
+            );
+        END;
     END IF;
 
     -- Return the appropriate record
