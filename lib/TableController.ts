@@ -444,7 +444,7 @@ export type PossiblyTentativeResult<T> = T & {
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
 export type BroadcastMessage =
   | {
-      type: "table_change" | "channel_created" | "system";
+      type: "table_change" | "channel_created" | "system" | "staff_data_change";
       operation?: "INSERT" | "UPDATE" | "DELETE";
       table?: TablesThatHaveAnIDField;
       row_id?: number | string;

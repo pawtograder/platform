@@ -12,7 +12,7 @@ type TablesThatHaveAnIDField = {
 // Extend known broadcast tables to include row-level recalculation state
 type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
 
-type BroadcastMessage = {
+export type BroadcastMessage = {
   type: "table_change" | "channel_created" | "system" | "staff_data_change";
   operation?: "INSERT" | "UPDATE" | "DELETE";
   table?: KnownBroadcastTables;
