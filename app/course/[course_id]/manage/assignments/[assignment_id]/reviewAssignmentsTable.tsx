@@ -1,6 +1,6 @@
 "use client";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Table, Spinner, Text } from "@chakra-ui/react";
@@ -50,7 +50,16 @@ export default function ReviewAssignmentsTable() {
   };
 
   // Create a TableController with the necessary joins for populated data
-  const tableController = useMemo(() => {
+  const [tableController, setTableController] = useState<
+    | TableController<
+        "review_assignments",
+        "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))",
+        number
+      >
+    | undefined
+  >(undefined);
+
+  useEffect(() => {
     const supabase = createClient();
     const query = supabase
       .from("review_assignments")
@@ -69,7 +78,7 @@ export default function ReviewAssignmentsTable() {
       .eq("assignment_id", Number(assignment_id))
       .eq("assignee_profile_id", private_profile_id);
 
-    return new TableController<
+    const tc = new TableController<
       "review_assignments",
       "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))",
       number
@@ -79,6 +88,12 @@ export default function ReviewAssignmentsTable() {
       table: "review_assignments",
       classRealTimeController
     });
+
+    setTableController(tc);
+
+    return () => {
+      tc.close();
+    };
   }, [assignment_id, classRealTimeController, private_profile_id]);
 
   const columns = useMemo<ColumnDef<ReviewAssignmentRow>[]>(

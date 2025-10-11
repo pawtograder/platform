@@ -32,7 +32,7 @@ import { useList, useOne } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { Select as ReactSelect } from "chakra-react-select";
 
@@ -250,25 +250,36 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
 
   const supabase = useMemo(() => createClient(), []);
   const { classRealTimeController } = useCourseController();
-  const tableController = useMemo(() => {
+  const [tableController, setTableController] = useState<
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    TableController<any, any, any, ActiveSubmissionsWithRegressionTestResults> | undefined
+  >(undefined);
+
+  useEffect(() => {
     Sentry.addBreadcrumb({
       category: "tableController",
-      message: "Fetching submissions_with_grades_for_assignment_and_regression_test",
+      message: "Creating TableController for submissions_with_grades_for_assignment_and_regression_test",
       level: "info"
     });
+
     const query = supabase
       .from("submissions_with_grades_for_assignment_and_regression_test")
       .select("*")
       .eq("assignment_id", Number(assignment_id));
 
-    return new TableController({
+    const tc = new TableController({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       query: query as any,
       client: supabase,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "submissions_with_grades_for_assignment_and_regression_test" as any,
-      classRealTimeController
+      table: "submissions_with_grades_for_assignment_and_regression_test" as any
     });
+
+    setTableController(tc);
+
+    return () => {
+      tc.close();
+    };
   }, [supabase, assignment_id, classRealTimeController]);
   const { getHeaderGroups, getRowModel, getRowCount, getCoreRowModel, data } = useTableControllerTable({
     columns,
@@ -528,7 +539,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   },
                   supabase
                 );
-                await tableController.refetchAll();
+                await tableController?.refetchAll();
                 toaster.success({
                   title: "Regrading started",
                   description: "This may take a while... Use the Workflow Runs page to view the complete status."
@@ -565,7 +576,7 @@ export default function RerunAutograderPage() {
     meta: {
       select: "*"
     },
-    liveMode: "auto",
+    // liveMode: "auto",
     filters: [
       {
         field: "autograder_id",

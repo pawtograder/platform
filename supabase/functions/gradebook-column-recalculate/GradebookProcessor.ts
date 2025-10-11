@@ -655,6 +655,9 @@ export async function processGradebookRowsCalculation(
       }
       return node;
     });
+    if (DEBUG_LOG) {
+      console.log(`Compiled expression for column ${c.id} ${c.slug} ${c.score_expression}: ${instrumented.toString()}`);
+    }
     compiledById.set(c.id, instrumented.compile());
   }
 
@@ -757,6 +760,9 @@ export async function processGradebookRowsCalculation(
             nextReleased = (column.released ?? false) as boolean;
           }
         } catch (e) {
+          if (DEBUG_LOG) {
+            console.log(`Error evaluating column ${column.slug} ${column.id} ${column.score_expression}: ${e}`);
+          }
           Sentry.captureException(e, scope);
           nextScore = null;
           isMissing = true;

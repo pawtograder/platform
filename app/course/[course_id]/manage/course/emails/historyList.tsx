@@ -16,7 +16,7 @@ export default function HistoryPage({ course, userRoles }: { course?: Course; us
     },
     filters: [{ field: "class_id", operator: "eq", value: course?.id }],
     sorters: [{ field: "created_at", order: "desc" }],
-    liveMode: "auto",
+    // liveMode: "auto",
     pagination: {
       pageSize: 1000
     },

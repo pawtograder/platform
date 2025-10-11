@@ -2,7 +2,6 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  Submission,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
@@ -21,7 +20,8 @@ import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/s
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse, useIsDroppedStudent } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse, useIsDroppedStudent, useCourseController } from "@/hooks/useCourseController";
+import { BroadcastMessage } from "@/lib/TableController";
 import {
   SubmissionProvider,
   useReviewAssignment,
@@ -422,33 +422,61 @@ function SubmissionHistoryContents({
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
   const invalidate = useInvalidate();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+  const courseController = useCourseController();
 
-  useList<Submission>({
-    resource: "submissions",
-    meta: {
-      select: "id, assignment_group_id, profile_id, is_active"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: submission.assignments.id
+  // TODO: Remove this once we migrate to TableController for submissions tracking
+  // Listen for submission broadcasts to detect when a new active submission appears
+  useEffect(() => {
+    if (!courseController?.classRealTimeController) return;
+
+    const unsubscribe = courseController.classRealTimeController.subscribe(
+      { table: "submissions" },
+      (message: BroadcastMessage) => {
+        // Check if this is a new/updated submission for the same student/group
+        if (
+          (message.operation === "INSERT" || message.operation === "UPDATE") &&
+          message.data &&
+          typeof message.data === "object" &&
+          "is_active" in message.data &&
+          message.data.is_active === true &&
+          "id" in message.data &&
+          message.data.id !== submission.id &&
+          "assignment_id" in message.data &&
+          message.data.assignment_id === submission.assignment_id
+        ) {
+          // Check if it's for the same student (individual) or group
+          const isSameStudent =
+            "profile_id" in message.data &&
+            message.data.profile_id === submission.profile_id &&
+            !message.data.assignment_group_id &&
+            !submission.assignment_group_id;
+
+          const isSameGroup =
+            "assignment_group_id" in message.data &&
+            message.data.assignment_group_id === submission.assignment_group_id &&
+            message.data.assignment_group_id !== null;
+
+          if (isSameStudent || isSameGroup) {
+            // A new active submission appeared for this student/group
+            setHasNewSubmission(true);
+            // Invalidate to refetch the submission list
+            invalidate({ resource: "submissions", invalidates: ["list"] });
+          }
+        }
       }
-    ],
-    liveMode: "manual",
-    onLiveEvent: (event) => {
-      const newSubmission = event.payload as Submission;
-      if (
-        newSubmission.assignment_group_id === submission.assignment_group_id &&
-        newSubmission.profile_id === submission.profile_id &&
-        newSubmission.id !== submission.id &&
-        newSubmission.is_active
-      ) {
-        setHasNewSubmission(true);
-      }
-      invalidate({ resource: "submissions", invalidates: ["list"] });
-    }
-  });
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [
+    courseController,
+    submission.id,
+    submission.assignment_id,
+    submission.profile_id,
+    submission.assignment_group_id,
+    invalidate
+  ]);
 
   if (!submission.assignments) {
     return <Skeleton height="20px" />;

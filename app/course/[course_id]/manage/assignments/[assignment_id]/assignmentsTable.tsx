@@ -1,9 +1,9 @@
 "use client";
 import { Checkbox } from "@/components/ui/checkbox";
+import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
-import Link from "@/components/ui/link";
-import * as Sentry from "@sentry/nextjs";
+import { useAssignmentController, useAssignmentGroups } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
@@ -17,7 +17,6 @@ import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
-  Assignment,
   GraderResultTest,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
@@ -37,14 +36,15 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
+import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { Select } from "chakra-react-select";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
-import { Select } from "chakra-react-select";
 
 function StudentNameCell({
   course_id,
@@ -108,6 +108,8 @@ export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
   const { role: classRole } = useClassProfiles();
+  const { assignment } = useAssignmentController();
+  const assignmentGroups = useAssignmentGroups();
   const course = classRole.classes;
   const { classRealTimeController } = useCourseController();
   const timeZone = course.time_zone || "America/New_York";
@@ -117,31 +119,7 @@ export default function AssignmentsTable() {
 
   // Get sections and assignment data for default visibility logic
   const classSections = useClassSections();
-
-  // Fetch assignment data to check minutes_due_after_lab and group config
-  const [assignment, setAssignment] = useState<Assignment | null>(null);
-  const [hasGroups, setHasGroups] = useState(false);
-
-  useEffect(() => {
-    const fetchAssignment = async () => {
-      const { data } = await supabase.from("assignments").select("*").eq("id", Number(assignment_id)).single();
-      setAssignment(data);
-    };
-    fetchAssignment();
-  }, [assignment_id, supabase]);
-
-  // Check if there are any groups for this assignment
-  useEffect(() => {
-    const checkForGroups = async () => {
-      const { count } = await supabase
-        .from("assignment_groups")
-        .select("id", { count: "exact" })
-        .eq("assignment_id", Number(assignment_id))
-        .limit(1);
-      setHasGroups((count || 0) > 0);
-    };
-    checkForGroups();
-  }, [assignment_id, supabase]);
+  const hasGroups = useMemo(() => assignmentGroups.length > 0, [assignmentGroups]);
 
   // Column visibility state with dynamic defaults
   const [columnVisibility, setColumnVisibility] = useState(() => {
@@ -405,25 +383,33 @@ export default function AssignmentsTable() {
     [timeZone, course_id, assignment_id, assignment]
   );
 
-  const tableController = useMemo(() => {
+  const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
+
+  useEffect(() => {
     Sentry.addBreadcrumb({
       category: "tableController",
-      message: "Fetching submissions_with_grades_for_assignment_nice",
+      message: "Creating TableController for submissions_with_grades_for_assignment_nice",
       level: "info"
     });
+
     const query = supabase
       .from("submissions_with_grades_for_assignment_nice")
       .select("*")
       .eq("assignment_id", Number(assignment_id));
 
-    return new TableController({
+    const tc = new TableController({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       query: query as any,
       client: supabase,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "submissions_with_grades_for_assignment_nice" as any,
-      classRealTimeController
+      table: "submissions_with_grades_for_assignment_nice" as any
     });
+
+    setTableController(tc);
+
+    return () => {
+      tc.close();
+    };
   }, [supabase, assignment_id, classRealTimeController]);
 
   const {
@@ -483,10 +469,11 @@ export default function AssignmentsTable() {
                     throw new Error(`Failed to release reviews: ${error.message}`);
                   }
 
-                  await tableController.refetchAll();
+                  await tableController?.refetchAll();
 
                   toaster.success({ title: "Success", description: "All submission reviews released" });
                 } catch (error) {
+                  // eslint-disable-next-line no-console
                   console.error("Error releasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
@@ -516,9 +503,10 @@ export default function AssignmentsTable() {
                     throw new Error(`Failed to unrelease reviews: ${error.message}`);
                   }
 
-                  await tableController.refetchAll();
+                  await tableController?.refetchAll();
                   toaster.success({ title: "Success", description: "All submission reviews unreleased" });
                 } catch (error) {
+                  // eslint-disable-next-line no-console
                   console.error("Error unreleasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",

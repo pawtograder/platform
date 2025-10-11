@@ -13,7 +13,7 @@ import {
   NativeSelect,
   Spinner
 } from "@chakra-ui/react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
 import PersonName from "@/components/ui/person-name";
@@ -416,7 +416,9 @@ function WorkflowRunTable() {
     [assignments, profiles]
   );
 
-  const tableController = useMemo(() => {
+  const [tableController, setTableController] = useState<TableController<"workflow_runs"> | undefined>(undefined);
+
+  useEffect(() => {
     const query = supabase
       .from("workflow_runs")
       .select("*")
@@ -424,13 +426,19 @@ function WorkflowRunTable() {
       .order("requested_at", { ascending: false })
       .limit(1000);
 
-    return new TableController({
+    const tc = new TableController({
       query: query,
       client: supabase,
       table: "workflow_runs",
       classRealTimeController,
       loadEntireTable: false
     });
+
+    setTableController(tc);
+
+    return () => {
+      tc.close();
+    };
   }, [supabase, course_id, classRealTimeController]);
 
   const {

@@ -1123,33 +1123,30 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
 
     // Upsert workflow event into database (dedupe by workflow_run_id, event_type, run_attempt)
     maybeCrash("workflow_run.before_upsert");
-    const { error: insertError } = await adminSupabase.from("workflow_events").upsert(
-      {
-        workflow_run_id: workflowRun.id,
-        repository_name: repository.full_name,
-        github_repository_id: repository.id,
-        repository_id: repositoryId,
-        class_id: classId,
-        workflow_name: workflowRun.name,
-        workflow_path: workflowRun.path,
-        event_type: eventType,
-        status: workflowRun.status,
-        conclusion: workflowRun.conclusion,
-        head_sha: workflowRun.head_sha,
-        head_branch: workflowRun.head_branch,
-        run_number: workflowRun.run_number,
-        run_attempt: workflowRun.run_attempt,
-        actor_login: workflowRun.actor?.login,
-        triggering_actor_login: workflowRun.triggering_actor?.login,
-        started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
-        updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
-        run_started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
-        run_updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
-        pull_requests: pullRequests.length > 0 ? pullRequests : null,
-        payload: payload as unknown as Json
-      },
-      { onConflict: "workflow_run_id,event_type,run_attempt" }
-    );
+    const { error: insertError } = await adminSupabase.from("workflow_events").insert({
+      workflow_run_id: workflowRun.id,
+      repository_name: repository.full_name,
+      github_repository_id: repository.id,
+      repository_id: repositoryId,
+      class_id: classId,
+      workflow_name: workflowRun.name,
+      workflow_path: workflowRun.path,
+      event_type: eventType,
+      status: workflowRun.status,
+      conclusion: workflowRun.conclusion,
+      head_sha: workflowRun.head_sha,
+      head_branch: workflowRun.head_branch,
+      run_number: workflowRun.run_number,
+      run_attempt: workflowRun.run_attempt,
+      actor_login: workflowRun.actor?.login,
+      triggering_actor_login: workflowRun.triggering_actor?.login,
+      started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
+      updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
+      run_started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
+      run_updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
+      pull_requests: pullRequests.length > 0 ? pullRequests : null,
+      payload: payload as unknown as Json
+    });
 
     if (insertError) {
       scope.setTag("error_source", "workflow_events_insert_failed");
