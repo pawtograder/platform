@@ -504,6 +504,7 @@ export default function ImportGradebookColumns() {
 
                       // Build normalized identifier sets for O(1) membership checks
                       const rosterIdentifiers = new Set<string>();
+                      const nonDroppedIdentifiers = new Set<string>();
                       const rosterEmailToId = new Map<string, string>();
                       const rosterSidToId = new Map<string, string>();
 
@@ -514,16 +515,24 @@ export default function ImportGradebookColumns() {
                         if (previewData.idType === "email" && rosterEntry.users.email) {
                           const normalizedEmail = normalizeIdentifier(String(rosterEntry.users.email), true);
                           rosterIdentifiers.add(normalizedEmail);
+                          if (!rosterEntry.disabled) {
+                            nonDroppedIdentifiers.add(normalizedEmail);
+                          }
                           rosterEmailToId.set(normalizedEmail, s.id);
                         } else if (previewData.idType === "sid" && rosterEntry.users.sis_user_id != null) {
                           const normalizedSid = normalizeIdentifier(String(rosterEntry.users.sis_user_id), false);
                           rosterIdentifiers.add(normalizedSid);
+                          if (!rosterEntry.disabled) {
+                            nonDroppedIdentifiers.add(normalizedSid);
+                          }
                           rosterSidToId.set(normalizedSid, s.id);
                         }
                       });
 
                       const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers.has(id));
-                      const notInImport = Array.from(rosterIdentifiers).filter((id) => !importIdentifiers.includes(id));
+                      const notInImport = Array.from(nonDroppedIdentifiers).filter(
+                        (id) => !importIdentifiers.includes(id)
+                      );
 
                       return (
                         <VStack mb={2} align="stretch">
