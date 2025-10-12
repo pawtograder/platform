@@ -15,6 +15,7 @@ DECLARE
     updated_submission_comments_count integer;
     updated_file_comments_count integer;
     updated_artifact_comments_count integer;
+    rows_moved integer;
 BEGIN
     -- Only proceed if is_active changed from true to false AND the SHA hasn't changed
     -- (meaning this is the same submission content being regraded, not a new submission replacing it)
@@ -93,7 +94,8 @@ BEGIN
             WHERE submission_id = OLD.id
               AND submission_review_id IS NULL;
 
-            GET DIAGNOSTICS updated_submission_comments_count = ROW_COUNT + updated_submission_comments_count;
+            GET DIAGNOSTICS rows_moved = ROW_COUNT;
+            updated_submission_comments_count := updated_submission_comments_count + rows_moved;
 
             -- Move submission_file_comments that have a submission_review_id
             UPDATE public.submission_file_comments sfc
@@ -115,7 +117,8 @@ BEGIN
             WHERE submission_id = OLD.id
               AND submission_review_id IS NULL;
 
-            GET DIAGNOSTICS updated_file_comments_count = ROW_COUNT + updated_file_comments_count;
+            GET DIAGNOSTICS rows_moved = ROW_COUNT;
+            updated_file_comments_count := updated_file_comments_count + rows_moved;
 
             -- Move submission_artifact_comments that have a submission_review_id
             UPDATE public.submission_artifact_comments sac
@@ -137,7 +140,8 @@ BEGIN
             WHERE submission_id = OLD.id
               AND submission_review_id IS NULL;
 
-            GET DIAGNOSTICS updated_artifact_comments_count = ROW_COUNT + updated_artifact_comments_count;
+            GET DIAGNOSTICS rows_moved = ROW_COUNT;
+            updated_artifact_comments_count := updated_artifact_comments_count + rows_moved;
 
             -- Log the updates for observability
             RAISE NOTICE 'Updated % review_assignments, % submission_review links, % submission_comments, % file_comments, % artifact_comments from submission_id % to %',
