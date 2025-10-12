@@ -1437,16 +1437,15 @@ export function RubricPart({
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
       <VStack align="start" w="100%" gap={2}>
-        {criteria
-          .map((criteria, index) => (
-            <RubricCriteria
-              key={`criteria-${criteria.id}-${index}`}
-              criteria={criteria}
-              assignmentId={assignmentId}
-              classId={classId}
-              currentRubricId={currentRubricId}
-            />
-          ))}
+        {criteria.map((criteria, index) => (
+          <RubricCriteria
+            key={`criteria-${criteria.id}-${index}`}
+            criteria={criteria}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+          />
+        ))}
       </VStack>
     </Box>
   );
