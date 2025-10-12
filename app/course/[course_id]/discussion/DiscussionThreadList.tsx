@@ -56,7 +56,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
   const { readStatus } = useDiscussionThreadReadStatus(props.thread_id);
   const childrenReadStatuses = useRootDiscussionThreadReadStatuses(props.thread_id);
   const numReadDescendants = useMemo(() => {
-    return childrenReadStatuses.filter((status) => status.read_at != null).length;
+    return childrenReadStatuses?.filter((status) => status.read_at != null).length ?? 0;
   }, [childrenReadStatuses]);
   const userProfile = useUserProfile(thread?.author);
   const isUnread = readStatus === null || readStatus?.read_at === null;

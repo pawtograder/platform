@@ -34,7 +34,6 @@ on sequences
 to anon, authenticated, service_role;
 
 grant all on function pgmq.pop(text) to "service_role";
-grant all on function pgmq.read(text, integer, integer) to "service_role";
 grant all on function pgmq.send(text, jsonb, integer) to "service_role";
 grant all on function pgmq.send_batch(text, jsonb[], integer) to "service_role";
 
@@ -45,7 +44,6 @@ grant all on function pgmq_public.send(text, jsonb, integer) to "service_role";
 grant all on function pgmq_public.send_batch(text, jsonb[], integer) to "service_role";
 
 grant all on function pgmq.pop(text) to "service_role";
-grant all on function pgmq.read(text, integer, integer) to "service_role";
 grant all on function pgmq.send(text, jsonb, integer) to "service_role";
 grant all on function pgmq.send_batch(text, jsonb[], integer) to "service_role";
 

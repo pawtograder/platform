@@ -43,6 +43,7 @@ export default function AssignmentExceptionsTable({
   const assignmentGroups = useAssignmentGroupsWithMembers(assignment.id);
   const groupIdToMemberIds = useMemo(() => {
     const map = new Map<number, string[]>();
+    if (!assignmentGroups) return map;
     for (const group of assignmentGroups) {
       const memberIds = group.assignment_groups_members.map((member) => member.profile_id);
       map.set(group.id, memberIds);
@@ -51,6 +52,7 @@ export default function AssignmentExceptionsTable({
   }, [assignmentGroups]);
   const groupIdToName = useMemo(() => {
     const map = new Map<number, string>();
+    if (!assignmentGroups) return map;
     for (const group of assignmentGroups) {
       map.set(group.id, group.name);
     }
@@ -58,6 +60,7 @@ export default function AssignmentExceptionsTable({
   }, [assignmentGroups]);
   const profileIdToGroupId = useMemo(() => {
     const map = new Map<string, number>();
+    if (!assignmentGroups) return map;
     for (const group of assignmentGroups) {
       for (const member of group.assignment_groups_members) {
         map.set(member.profile_id, group.id);
@@ -106,7 +109,7 @@ export default function AssignmentExceptionsTable({
         <VStack align="flex-start">
           <Heading size="sm">{assignment.title || `Assignment #${assignment.id}`}</Heading>
           <Text fontSize="sm" color="fg.muted">
-            {exceptions.length} exceptions, normal due date:{" "}
+            {exceptions?.length || 0} exceptions, normal due date:{" "}
             {formatInTimeZone(assignment.due_date, course.time_zone || "America/New_York", "MMM d h:mm aaa")}
             {assignment.minutes_due_after_lab !== null &&
               ` (auto-calculated for students as ${assignment.minutes_due_after_lab} minutes after lab)`}

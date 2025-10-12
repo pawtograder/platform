@@ -1,7 +1,7 @@
 "use client";
 
 import PersonName from "@/components/ui/person-name";
-import { useAssignmentController, useRubricCheck } from "@/hooks/useAssignment";
+import { useAllRubricChecks, useRubricCheck } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import { useTableControllerTableValues } from "@/lib/TableController";
@@ -173,15 +173,11 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
  */
 export default function RegradeRequestsTable() {
   const { assignment_id } = useParams();
-  const assignmentController = useAssignmentController();
   const courseController = useCourseController();
   const profiles = useTableControllerTableValues(courseController.profiles);
 
   // Get all rubric checks for the assignment
-  const allRubricChecks = useMemo(() => {
-    if (!assignmentController.isReady) return [];
-    return Array.from(assignmentController.rubricCheckById.values());
-  }, [assignmentController]);
+  const allRubricChecks = useAllRubricChecks();
 
   // Create options for status filter
   const statusOptions = useMemo(
@@ -242,7 +238,7 @@ export default function RegradeRequestsTable() {
             row.submission_file_comments?.[0]?.rubric_check_id ||
             row.submission_artifact_comments?.[0]?.rubric_check_id ||
             row.submission_comments?.[0]?.rubric_check_id;
-          const rubricCheck = assignmentController.rubricCheckById.get(rubricCheckId || 0);
+          const rubricCheck = allRubricChecks.find((c) => c.id === rubricCheckId);
           return rubricCheck?.name || "";
         },
         cell: ({ row }) => <RubricCheckCell row={row.original} />,
@@ -375,7 +371,7 @@ export default function RegradeRequestsTable() {
         }
       }
     ],
-    [assignmentController.rubricCheckById]
+    [allRubricChecks]
   );
 
   const {
