@@ -745,7 +745,7 @@ export function useRubricCriteriaInstances({
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
           allChecks.find(
-            (eachCheck) => eachCheck.id === eachComment.rubric_check_id && eachCheck.rubric_criteria_id === rubric_id
+            (eachCheck) => eachCheck.id === eachComment.rubric_check_id && eachCheck.rubric_id === rubric_id
           )
       );
     }

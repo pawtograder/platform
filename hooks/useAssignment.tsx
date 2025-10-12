@@ -632,7 +632,9 @@ function AssignmentControllerCreator({
       controller.rubricPartsController.readyPromise,
       controller.rubricCriteriaController.readyPromise,
       controller.rubricChecksController.readyPromise,
-      controller.rubricCheckReferencesController.readyPromise
+      controller.rubricCheckReferencesController.readyPromise,
+      controller.submissions.readyPromise,
+      controller.assignmentGroups.readyPromise
     ];
     Promise.all(promises).then(() => {
       setTableControllersReady(true);

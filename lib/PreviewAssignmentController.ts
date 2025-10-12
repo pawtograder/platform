@@ -147,7 +147,6 @@ export function createPreviewAssignmentController(
   // Merge preview data with existing data
   // Replace existing rubric with same ID, or add new preview rubric
   const mergedRubrics = [...existingRubrics.filter((r) => r.id !== flattened.rubric.id), flattened.rubric];
-  console.log(mergedRubrics);
 
   // Replace parts/criteria/checks that belong to preview rubric
   const mergedParts = [...existingParts.filter((p) => p.rubric_id !== flattened.rubric.id), ...flattened.parts];

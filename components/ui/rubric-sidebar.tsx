@@ -1359,8 +1359,10 @@ export function RubricCriteria({
     criteria.max_checks_per_submission === 1 && comments.length === 1
       ? comments[0].rubric_check_id?.toString()
       : undefined;
-  const rubricChecks = useRubricChecksByCriteria(criteria.id);
-  rubricChecks?.sort((a, b) => a.ordinal - b.ordinal);
+  const unsortedRubricChecks = useRubricChecksByCriteria(criteria.id);
+  const rubricChecks = useMemo(() => {
+    return [...unsortedRubricChecks].sort((a, b) => a.ordinal - b.ordinal);
+  }, [unsortedRubricChecks]);
   return (
     <Box
       border="1px solid"
@@ -1428,14 +1430,14 @@ export function RubricPart({
   classId?: number;
   currentRubricId?: number;
 }) {
-  const criteria = useRubricCriteriaByPart(part?.id);
+  const unsortedCriteria = useRubricCriteriaByPart(part?.id);
+  const criteria = [...unsortedCriteria].sort((a, b) => a.ordinal - b.ordinal);
   return (
     <Box w="100%" role="region" aria-label={`Rubric Part: ${part.name}`}>
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
       <VStack align="start" w="100%" gap={2}>
         {criteria
-          ?.sort((a, b) => a.ordinal - b.ordinal)
           .map((criteria, index) => (
             <RubricCriteria
               key={`criteria-${criteria.id}-${index}`}

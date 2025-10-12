@@ -453,14 +453,11 @@ export function useTableControllerTableValues<
     return controller.list().data.map((row) => row as PossiblyTentativeResult<ResultType>);
   });
   useEffect(() => {
-    const { unsubscribe, data } = controller.list((data, params) => {
-      const { entered, left } = params;
-      // Only trigger re-render if items were added or removed (membership changed)
-      // Individual item updates don't need to create a new array
-      if (entered.length > 0 || left.length > 0) {
-        setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
-      }
+    const { unsubscribe, data } = controller.list((data) => {
+      // Update for any list change (membership or item updates)
+      setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     });
+
     // Set initial data (all items are considered "entered" on first load)
     setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     return unsubscribe;
@@ -475,19 +472,19 @@ export type PossiblyTentativeResult<T> = T & {
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
 export type BroadcastMessage =
   | {
-      type: "table_change" | "channel_created" | "system";
-      operation?: "INSERT" | "UPDATE" | "DELETE";
-      table?: TablesThatHaveAnIDField;
-      row_id?: number | string;
-      data?: Record<string, unknown>;
-      submission_id?: number;
-      help_request_id?: number;
-      help_queue_id?: number;
-      class_id: number;
-      student_profile_id?: number;
-      target_audience?: "user" | "staff";
-      timestamp: string;
-    }
+    type: "table_change" | "channel_created" | "system";
+    operation?: "INSERT" | "UPDATE" | "DELETE";
+    table?: TablesThatHaveAnIDField;
+    row_id?: number | string;
+    data?: Record<string, unknown>;
+    submission_id?: number;
+    help_request_id?: number;
+    help_queue_id?: number;
+    class_id: number;
+    student_profile_id?: number;
+    target_audience?: "user" | "staff";
+    timestamp: string;
+  }
   | OfficeHoursBroadcastMessage;
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
@@ -789,7 +786,7 @@ export default class TableController<
 
       // Fetch in pages ordered by updated_at to advance watermark monotonically
       // This still drastically reduces transferred data compared to a full refetch.
-      for (;;) {
+      for (; ;) {
         const rangeStart = page * pageSize;
         const rangeEnd = (page + 1) * pageSize - 1;
 
@@ -2004,7 +2001,7 @@ export default class TableController<
     if (!listener) {
       return {
         data,
-        unsubscribe: () => {}
+        unsubscribe: () => { }
       };
     }
     this._itemDataListeners.set(id, [...(this._itemDataListeners.get(id) || []), listener]);
@@ -2031,7 +2028,7 @@ export default class TableController<
     if (!listener) {
       return {
         data: this._rows,
-        unsubscribe: () => {}
+        unsubscribe: () => { }
       };
     }
     this._listDataListeners.push(listener);
