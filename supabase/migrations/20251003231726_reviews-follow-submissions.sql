@@ -1,4 +1,6 @@
 -- Migration: Enhanced trigger to move review assignments AND comments when submissions become inactive
+-- Only moves comments when the SHA hasn't changed (same submission content being deactivated)
+-- Moves ALL comments (with or without submission_review_id)
 -- Also includes backfill for existing orphaned comments
 
 -- Step 1: Update the trigger function to also move comments
@@ -14,8 +16,9 @@ DECLARE
     updated_file_comments_count integer;
     updated_artifact_comments_count integer;
 BEGIN
-    -- Only proceed if is_active changed from true to false
-    IF OLD.is_active = true AND NEW.is_active = false THEN
+    -- Only proceed if is_active changed from true to false AND the SHA hasn't changed
+    -- (meaning this is the same submission content being regraded, not a new submission replacing it)
+    IF OLD.is_active = true AND NEW.is_active = false AND OLD.sha = NEW.sha THEN
         -- Find the new active submission for the same assignment and student/group
         IF OLD.assignment_group_id IS NOT NULL THEN
             -- Group submission: find active submission for the same assignment_group_id
@@ -80,10 +83,17 @@ BEGIN
                 ON sr_new.submission_id = new_active_submission_id 
                 AND sr_new.rubric_id = sr_old.rubric_id
             WHERE sc.submission_id = OLD.id
-              AND sc.submission_review_id = sr_old.id
-              AND sc.submission_review_id IS NOT NULL;
+              AND sc.submission_review_id = sr_old.id;
 
             GET DIAGNOSTICS updated_submission_comments_count = ROW_COUNT;
+
+            -- Move submission_comments that do NOT have a submission_review_id
+            UPDATE public.submission_comments
+            SET submission_id = new_active_submission_id
+            WHERE submission_id = OLD.id
+              AND submission_review_id IS NULL;
+
+            GET DIAGNOSTICS updated_submission_comments_count = ROW_COUNT + updated_submission_comments_count;
 
             -- Move submission_file_comments that have a submission_review_id
             UPDATE public.submission_file_comments sfc
@@ -95,10 +105,17 @@ BEGIN
                 ON sr_new.submission_id = new_active_submission_id 
                 AND sr_new.rubric_id = sr_old.rubric_id
             WHERE sfc.submission_id = OLD.id
-              AND sfc.submission_review_id = sr_old.id
-              AND sfc.submission_review_id IS NOT NULL;
+              AND sfc.submission_review_id = sr_old.id;
 
             GET DIAGNOSTICS updated_file_comments_count = ROW_COUNT;
+
+            -- Move submission_file_comments that do NOT have a submission_review_id
+            UPDATE public.submission_file_comments
+            SET submission_id = new_active_submission_id
+            WHERE submission_id = OLD.id
+              AND submission_review_id IS NULL;
+
+            GET DIAGNOSTICS updated_file_comments_count = ROW_COUNT + updated_file_comments_count;
 
             -- Move submission_artifact_comments that have a submission_review_id
             UPDATE public.submission_artifact_comments sac
@@ -110,10 +127,17 @@ BEGIN
                 ON sr_new.submission_id = new_active_submission_id 
                 AND sr_new.rubric_id = sr_old.rubric_id
             WHERE sac.submission_id = OLD.id
-              AND sac.submission_review_id = sr_old.id
-              AND sac.submission_review_id IS NOT NULL;
+              AND sac.submission_review_id = sr_old.id;
 
             GET DIAGNOSTICS updated_artifact_comments_count = ROW_COUNT;
+
+            -- Move submission_artifact_comments that do NOT have a submission_review_id
+            UPDATE public.submission_artifact_comments
+            SET submission_id = new_active_submission_id
+            WHERE submission_id = OLD.id
+              AND submission_review_id IS NULL;
+
+            GET DIAGNOSTICS updated_artifact_comments_count = ROW_COUNT + updated_artifact_comments_count;
 
             -- Log the updates for observability
             RAISE NOTICE 'Updated % review_assignments, % submission_review links, % submission_comments, % file_comments, % artifact_comments from submission_id % to %',
@@ -129,7 +153,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION "public"."update_review_assignments_on_submission_deactivation"() IS 'Updates review_assignments and all submission comments (submission_comments, submission_file_comments, submission_artifact_comments) to point to the new active submission when a submission is deactivated (is_active changes from true to false). Resets completion status on review assignments and updates submission_review_id to the corresponding submission_reviews row for the new submission and rubric.';
+COMMENT ON FUNCTION "public"."update_review_assignments_on_submission_deactivation"() IS 'Updates review_assignments and all submission comments (submission_comments, submission_file_comments, submission_artifact_comments) to point to the new active submission when a submission is deactivated (is_active changes from true to false) AND the SHA has not changed (OLD.sha = NEW.sha). This ensures that comments follow submissions only when the same submission content is being deactivated, not when it is being replaced by a new submission. Resets completion status on review assignments and updates submission_review_id to the corresponding submission_reviews row for the new submission and rubric where applicable.';
 
 -- For manual ops as needed: Backfill existing orphaned comments
 -- Find comments that are attached to non-active submissions and move them to active submissions
