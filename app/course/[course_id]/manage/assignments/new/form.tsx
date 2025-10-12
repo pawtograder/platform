@@ -533,6 +533,7 @@ export default function AssignmentForm({
     handleSubmit,
     register,
     control,
+    watch,
     // refineCore: {
     //     onFinish
     // },
@@ -542,8 +543,21 @@ export default function AssignmentForm({
   const { role: classRole } = useClassProfiles();
   const course = classRole.classes;
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [allowNotGradedSubmissions, setAllowNotGradedSubmissions] = useState<boolean>(
+    form.getValues("allow_not_graded_submissions") == true
+  );
   const timezone = course.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
+
+  // Keep checkbox state synced with form value
+  useEffect(() => {
+    const subscription = watch((value, { name }) => {
+      if (name === "allow_not_graded_submissions" || !name) {
+        setAllowNotGradedSubmissions(value.allow_not_graded_submissions);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
   // Enforce that release date must be strictly in the future
   const nowPlusOneMinute = addMinutes(TZDate.tz(timezone), 1);
   const minReleaseLocal = new TZDate(nowPlusOneMinute, timezone).toISOString().slice(0, -13);
@@ -718,7 +732,7 @@ export default function AssignmentForm({
           </Fieldset.Content>
           <Fieldset.Content>
             <Field helperText="Allow students to submit after the deadline by including #NOT-GRADED in their commit message. These submissions will not be graded and cannot become active, but students can still see autograder feedback.">
-              <Checkbox.Root {...register("allow_not_graded_submissions")} defaultChecked={true}>
+              <Checkbox.Root {...register("allow_not_graded_submissions")} checked={allowNotGradedSubmissions}>
                 <Checkbox.HiddenInput />
                 <Checkbox.Control>
                   <LuCheck />

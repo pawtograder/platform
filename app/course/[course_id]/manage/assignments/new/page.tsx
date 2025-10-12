@@ -19,7 +19,12 @@ import { Box, Heading, Text } from "@chakra-ui/react";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
-  const form = useForm<Assignment>({ refineCoreProps: { resource: "assignments", action: "create" } });
+  const form = useForm<Assignment>({
+    refineCoreProps: { resource: "assignments", action: "create" },
+    defaultValues: {
+      allow_not_graded_submissions: true
+    }
+  });
   const router = useRouter();
   const { getValues } = form;
   const { time_zone } = useCourse();
@@ -84,6 +89,7 @@ export default function NewAssignmentPage() {
             allow_late: getValues("allow_late"),
             description: getValues("description"),
             max_late_tokens: getValues("max_late_tokens") || null,
+            allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
             total_points: getValues("total_points"),
             template_repo: getValues("template_repo"),
             submission_files: getValues("submission_files"),
@@ -160,7 +166,7 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, getValues, router, mutateAsync, timezone]);
+  }, [course_id, getValues, router, mutateAsync, timezone, trackEvent]);
   return (
     <Box p={4}>
       <Heading size="lg">Create New Assignment</Heading>

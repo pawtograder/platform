@@ -1,9 +1,16 @@
 "use client";
 import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
+import { PreviewRubricProvider } from "@/components/ui/preview-rubric-provider";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useAssignmentController, useRubric } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useRubric,
+  useRubricChecksByRubric,
+  useRubricCriteriaByRubric,
+  useRubricParts
+} from "@/hooks/useAssignment";
 import {
   HydratedRubric,
   HydratedRubricCheck,
@@ -34,7 +41,7 @@ import {
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheck } from "react-icons/fa6";
 import * as YAML from "yaml";
 
@@ -44,6 +51,48 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
   "meta-grading-review",
   "code-walk"
 ];
+
+/**
+ * Custom hook to get a fully hydrated rubric by review round
+ */
+function useHydratedRubricByReviewRound(
+  review_round: NonNullable<HydratedRubric["review_round"]>
+): HydratedRubric | undefined {
+  const rubric = useRubric(review_round);
+  const parts = useRubricParts(rubric?.id);
+  const allCriteria = useRubricCriteriaByRubric(rubric?.id);
+  const allChecks = useRubricChecksByRubric(rubric?.id);
+
+  return useMemo(() => {
+    if (!rubric || !parts || !allCriteria || !allChecks) return undefined;
+
+    // Build the hydrated structure
+    const hydratedParts: HydratedRubricPart[] = parts.map((part) => {
+      const partCriteria = allCriteria.filter((c) => c.rubric_part_id === part.id);
+      const hydratedCriteria: HydratedRubricCriteria[] = partCriteria.map((criteria) => {
+        const criteriaChecks = allChecks.filter((ch) => ch.rubric_criteria_id === criteria.id);
+        const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => ({
+          ...check
+        }));
+
+        return {
+          ...criteria,
+          rubric_checks: hydratedChecks
+        };
+      });
+
+      return {
+        ...part,
+        rubric_criteria: hydratedCriteria
+      };
+    });
+
+    return {
+      ...rubric,
+      rubric_parts: hydratedParts
+    };
+  }, [rubric, parts, allCriteria, allChecks]);
+}
 
 function findChanges<T extends { id: number | undefined | null }>(
   newItems: T[],
@@ -194,6 +243,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
     description: valOrNull(check.description),
     ordinal: index,
     rubric_id: 0,
+    assignment_id: 0,
     class_id: 0,
     created_at: "",
     data: rubricCheckDataOrThrow(check) ?? null,
@@ -218,6 +268,7 @@ function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCrit
     description: valOrNull(criteria.description),
     ordinal: index,
     rubric_id: 0,
+    assignment_id: 0,
     class_id: 0,
     created_at: "",
     data: criteria.data,
@@ -263,6 +314,7 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
     class_id: 0,
     created_at: "",
     data: part.data,
+    assignment_id: 0,
     rubric_criteria: YamlCriteriaToHydratedCriteria(part.id || -1, part.criteria)
   }));
 }
@@ -362,27 +414,53 @@ function InnerRubricPage() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   // Points summary state
   const gradingRubricFromDb = useRubric("grading-review");
-  const gradingRubricForSummary =
-    activeReviewRound === "grading-review" && rubricForSidebar ? rubricForSidebar : gradingRubricFromDb;
+
+  // Get rubric data for points calculation from database (when not in preview mode)
+  const gradingRubricCriteria = useRubricCriteriaByRubric(gradingRubricFromDb?.id);
+  const gradingRubricChecks = useRubricChecksByRubric(gradingRubricFromDb?.id);
+
   const assignmentMaxPoints = assignmentDetails?.total_points ?? 0;
   const autograderPoints = assignmentDetails?.autograder_points ?? 0;
-  const gradingRubricPoints = (() => {
-    if (!gradingRubricForSummary) return 0;
-    let total = 0;
-    for (const part of gradingRubricForSummary.rubric_parts ?? []) {
-      for (const criteria of part.rubric_criteria ?? []) {
-        const criteriaTotal = criteria.total_points ?? 0;
-        const sumCheckPoints = (criteria.rubric_checks ?? []).reduce((acc, check) => acc + (check.points ?? 0), 0);
-        if (criteria.is_additive) {
-          total += Math.min(sumCheckPoints, criteriaTotal);
-        } else {
-          total += criteriaTotal;
+  const gradingRubricPoints = useMemo(() => {
+    // If we're previewing the grading-review, calculate from preview data
+    if (activeReviewRound === "grading-review" && rubricForSidebar) {
+      let total = 0;
+      for (const part of rubricForSidebar.rubric_parts) {
+        for (const criteria of part.rubric_criteria) {
+          const criteriaTotal = criteria.total_points ?? 0;
+          const sumCheckPoints = criteria.rubric_checks.reduce((acc: number, check) => acc + (check.points ?? 0), 0);
+
+          if (criteria.is_additive) {
+            total += Math.min(sumCheckPoints, criteriaTotal);
+          } else {
+            total += criteriaTotal;
+          }
         }
       }
+      return total;
     }
+
+    // Otherwise calculate from database data
+    if (!gradingRubricFromDb) return 0;
+    let total = 0;
+
+    if (!gradingRubricCriteria || !gradingRubricChecks) return undefined;
+    for (const criteria of gradingRubricCriteria) {
+      const criteriaTotal = criteria.total_points ?? 0;
+      const checksForCriteria = gradingRubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
+      const sumCheckPoints = checksForCriteria.reduce((acc: number, check) => acc + (check.points ?? 0), 0);
+
+      if (criteria.is_additive) {
+        total += Math.min(sumCheckPoints, criteriaTotal);
+      } else {
+        total += criteriaTotal;
+      }
+    }
+
     return total;
-  })();
-  const addsUp = assignmentMaxPoints === autograderPoints + gradingRubricPoints;
+  }, [activeReviewRound, rubricForSidebar, gradingRubricFromDb, gradingRubricCriteria, gradingRubricChecks]);
+
+  const addsUp = gradingRubricPoints !== undefined && assignmentMaxPoints === autograderPoints + gradingRubricPoints;
 
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
@@ -403,7 +481,7 @@ function InnerRubricPage() {
       }
     >
   >({});
-  const rubric = useRubric(activeReviewRound);
+  const rubric = useHydratedRubricByReviewRound(activeReviewRound);
   useEffect(() => {
     setActiveRubric(rubric);
     setInitialActiveRubricSnapshot(rubric ? JSON.parse(JSON.stringify(rubric)) : undefined);
@@ -968,7 +1046,8 @@ function InnerRubricPage() {
           ordinal: partData.ordinal,
           data: partData.data,
           class_id: assignmentDetails.class_id,
-          rubric_id: currentEffectiveRubricId
+          rubric_id: currentEffectiveRubricId,
+          assignment_id: assignmentDetails.id
         };
         const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
         if (!createdPart.data.id) throw new Error("Failed to create part");
@@ -1023,7 +1102,8 @@ function InnerRubricPage() {
           min_checks_per_submission: criteriaData.min_checks_per_submission,
           class_id: assignmentDetails.class_id,
           rubric_id: currentEffectiveRubricId,
-          rubric_part_id: criteriaData.rubric_part_id
+          rubric_part_id: criteriaData.rubric_part_id,
+          assignment_id: assignmentDetails.id
         };
         const createdCriteria = await createResource({ resource: "rubric_criteria", values: criteriaCopy });
         if (!createdCriteria.data.id) throw new Error("Failed to create criteria");
@@ -1091,7 +1171,9 @@ function InnerRubricPage() {
           annotation_target: checkData.annotation_target,
           class_id: assignmentDetails.class_id,
           rubric_criteria_id: checkData.rubric_criteria_id,
-          student_visibility: checkData.student_visibility || "always"
+          student_visibility: checkData.student_visibility || "always",
+          assignment_id: assignmentDetails.id,
+          rubric_id: currentEffectiveRubricId
         };
         const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) throw new Error("Failed to create check");
@@ -1394,7 +1476,7 @@ function InnerRubricPage() {
                   configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
                   {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
-                {!addsUp && (
+                {!addsUp && gradingRubricPoints !== undefined && (
                   <Text fontSize="sm" mt={1}>
                     These do not add up to the assignment max points.{" "}
                     {gradingRubricPoints < assignmentMaxPoints - autograderPoints
@@ -1416,15 +1498,17 @@ function InnerRubricPage() {
               <Center h="100%">
                 <VStack>
                   <Text>No rubric configured for {activeReviewRound}.</Text>
-                  <Text fontSize="sm">You can load a demo or start typing.</Text>
+                  <Text fontSize="sm">Load a demo template or start typing in the editor to see a preview.</Text>
                 </VStack>
               </Center>
             )}
 
             {!error && rubricForSidebar && (
-              <VStack gap={4} align="stretch">
-                <MemoizedRubricSidebar initialRubric={rubricForSidebar} />
-              </VStack>
+              <PreviewRubricProvider rubricData={rubricForSidebar}>
+                <VStack gap={4} align="stretch">
+                  <MemoizedRubricSidebar rubricId={rubricForSidebar.id} />
+                </VStack>
+              </PreviewRubricProvider>
             )}
             {error && (
               <Box

@@ -115,7 +115,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
           if (row.original.autograder_score === null || row.original.autograder_score === undefined) return false;
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          if (
+            filterValue === undefined ||
+            filterValue === null ||
+            (Array.isArray(filterValue) && filterValue.length === 0)
+          )
+            return true;
           const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
           return filterArray.some((filter: string) => String(row.original.autograder_score) === filter);
         },
@@ -205,7 +210,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
           if (row.original.rt_autograder_score === null || row.original.rt_autograder_score === undefined) return false;
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          if (
+            filterValue === undefined ||
+            filterValue === null ||
+            (Array.isArray(filterValue) && filterValue.length === 0)
+          )
+            return true;
           const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
           return filterArray.some((filter: string) => String(row.original.rt_autograder_score) === filter);
         }
