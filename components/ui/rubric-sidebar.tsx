@@ -5,7 +5,6 @@ import {
   RubricChecks,
   RubricCheck as RubricCheckType,
   RubricCriteria as RubricCriteriaType,
-  RubricCriteriaWithRubricChecks,
   RubricPart as RubricPartType,
   SubmissionArtifactComment,
   SubmissionComments,

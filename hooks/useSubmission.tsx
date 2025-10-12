@@ -735,16 +735,18 @@ export function useRubricCriteriaInstances({
       return comments.filter(
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
-          allChecks.find((eachCheck) => 
-            eachCheck.rubric_criteria_id === criteria?.id &&
-            eachCheck.id === eachComment.rubric_check_id)
+          allChecks.find(
+            (eachCheck) => eachCheck.rubric_criteria_id === criteria?.id && eachCheck.id === eachComment.rubric_check_id
+          )
       );
     }
     if (rubric_id) {
       return comments.filter(
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
-          allChecks.find((eachCheck) => eachCheck.id === eachComment.rubric_check_id && eachCheck.rubric_criteria_id === rubric_id)
+          allChecks.find(
+            (eachCheck) => eachCheck.id === eachComment.rubric_check_id && eachCheck.rubric_criteria_id === rubric_id
+          )
       );
     }
     throw new Error("Either criteria or rubric_id must be provided");

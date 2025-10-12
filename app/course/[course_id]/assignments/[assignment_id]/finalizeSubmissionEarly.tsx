@@ -33,7 +33,7 @@ export default function FinalizeSubmissionEarly({
   loading: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
-  const {reviewAssignments} = useAssignmentController();
+  const { reviewAssignments } = useAssignmentController();
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
