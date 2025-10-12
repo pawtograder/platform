@@ -29,6 +29,8 @@ BEGIN
               AND assignment_group_id = OLD.assignment_group_id
               AND is_active = true
               AND id != OLD.id
+              AND sha = OLD.sha
+              order by id desc
             LIMIT 1;
         ELSE
             -- Individual submission: find active submission for the same profile_id
@@ -39,6 +41,8 @@ BEGIN
               AND assignment_group_id IS NULL
               AND is_active = true
               AND id != OLD.id
+              AND sha = OLD.sha
+              order by id desc
             LIMIT 1;
         END IF;
 
