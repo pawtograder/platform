@@ -223,18 +223,25 @@ export function useListTableControllerValues<
             // Only update if the row still matches the predicate
             if (predicate(data)) {
               setValues((prevValues) => {
-                const newValues = new Map(prevValues);
+                // Don't create new Map if data hasn't changed (prevents unnecessary re-renders)
+                const existing = prevValues?.get(id);
+                if (existing === data) {
+                  return prevValues;
+                }
+                const newValues = new Map(prevValues || []);
                 newValues.set(id, data);
                 return newValues;
               });
             } else {
               // Row no longer matches, remove it
               setValues((prevValues) => {
+                if (!prevValues) return prevValues;
                 const newValues = new Map(prevValues);
                 newValues.delete(id);
                 return newValues;
               });
               setMatchingIds((prevIds) => {
+                if (!prevIds) return prevIds;
                 const newIds = new Set(prevIds);
                 newIds.delete(id);
                 return newIds;
@@ -243,11 +250,13 @@ export function useListTableControllerValues<
           } else {
             // Row was deleted, remove it
             setValues((prevValues) => {
+              if (!prevValues) return prevValues;
               const newValues = new Map(prevValues);
               newValues.delete(id);
               return newValues;
             });
             setMatchingIds((prevIds) => {
+              if (!prevIds) return prevIds;
               const newIds = new Set(prevIds);
               newIds.delete(id);
               return newIds;
@@ -444,9 +453,15 @@ export function useTableControllerTableValues<
     return controller.list().data.map((row) => row as PossiblyTentativeResult<ResultType>);
   });
   useEffect(() => {
-    const { unsubscribe, data } = controller.list((data) => {
-      setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
+    const { unsubscribe, data } = controller.list((data, params) => {
+      const { entered, left } = params;
+      // Only trigger re-render if items were added or removed (membership changed)
+      // Individual item updates don't need to create a new array
+      if (entered.length > 0 || left.length > 0) {
+        setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
+      }
     });
+    // Set initial data (all items are considered "entered" on first load)
     setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
     return unsubscribe;
   }, [controller]);
@@ -1171,7 +1186,7 @@ export default class TableController<
     }
   }
 
-  private _debugID: string = Math.random().toString(36).substring(2, 15);
+  readonly _debugID: string = Math.random().toString(36).substring(2, 15);
   constructor({
     query,
     client,
@@ -2070,7 +2085,6 @@ export default class TableController<
     }
 
     this._rows = [...this._rows, row];
-
     this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [row], left: [] }));
     if ("id" in row) {
       //Should always be true, fix up types later...

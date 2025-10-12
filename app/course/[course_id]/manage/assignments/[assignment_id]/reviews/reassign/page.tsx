@@ -138,6 +138,10 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       setReviewAssignmentPartsById(new Map());
       return;
     }
+    if (!reviewAssignmentParts) {
+      setReviewAssignmentPartsById(new Map());
+      return;
+    }
     const map = new Map<number, number[]>();
     reviewAssignmentParts.forEach((part) => {
       const list = map.get(part.review_assignment_id) ?? [];

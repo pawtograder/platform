@@ -220,7 +220,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   );
   useEffect(() => {
     const ids = currentReviewAssignments.map((r) => r.id);
-    if (ids.length === 0) {
+    if (ids.length === 0 || !reviewAssignmentParts) {
       setReviewAssignmentPartsById(new Map());
       return;
     }
@@ -383,7 +383,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   useEffect(() => {
     setSelectedRubricPartsForFilter(
-      rubricParts.map((part) => ({
+      rubricParts?.map((part) => ({
         label: part.name,
         value: part
       })) || []
@@ -421,7 +421,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     // Normalize empty selection to mean "all parts selected"
     const selectedPartIds =
       selectedRubricPartsForFilter.length === 0
-        ? rubricParts.map((p) => p.id)
+        ? rubricParts?.map((p) => p.id) || []
         : selectedRubricPartsForFilter.map((p) => p.value.id);
     const selectedClassSectionIds = new Set(selectedClassSections.map((s) => s.value.id));
     const selectedLabSectionIds = new Set(selectedLabSections.map((s) => s.value.id));
@@ -792,7 +792,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
           // Treat empty selection as selecting all parts
           const isAllPartsSelected =
-            selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === rubricParts.length;
+            selectedRubricPartsForFilter.length === 0 ||
+            selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
 
           if (isAllPartsSelected) {
             // All rubric parts - create one assignment
@@ -867,7 +868,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
     // Treat empty selection as selecting all parts
     const isAllPartsSelected =
-      selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === rubricParts.length;
+      selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
 
     if (isAllPartsSelected) {
       return toReview(result);
@@ -882,7 +883,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     historicalWorkload: Map<string, number>,
     graderPreferences?: Map<string, string>
   ) => {
-    if (!rubricParts.length || rubricParts.length === 0) {
+    if (!rubricParts || !rubricParts.length || rubricParts.length === 0) {
       toaster.error({
         title: "Error drafting reviews",
         description: "Unable to create assignments by part because rubric has no parts"
@@ -893,9 +894,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     // Treat empty selection as selecting all parts
     const selectedParts =
       selectedRubricPartsForFilter.length === 0
-        ? rubricParts
+        ? rubricParts || []
         : selectedRubricPartsForFilter.map((option) => option.value);
-    if (selectedParts.length > users.length) {
+    if (!selectedParts || selectedParts.length > users.length) {
       toaster.error({
         title: "Error drafting reviews",
         description:
@@ -1255,7 +1256,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 }}
                 value={selectedRubricPartsForFilter}
                 options={
-                  rubricParts.map((part) => ({
+                  rubricParts?.map((part) => ({
                     label: part.name,
                     value: part
                   })) || []

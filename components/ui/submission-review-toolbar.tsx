@@ -103,14 +103,14 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
 
   // Filter criteria by assigned parts (or all parts if none assigned)
   const assignedCriteria = useMemo(() => {
-    const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricParts.map((p) => p.id);
-    return allCriteriaForRubric.filter((c) => partIds.includes(c.rubric_part_id));
+    const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricParts?.map((p) => p.id) || [];
+    return allCriteriaForRubric?.filter((c) => partIds.includes(c.rubric_part_id)) || [];
   }, [allCriteriaForRubric, assignedRubricPartIds, rubricParts]);
 
   // Get checks for assigned criteria
   const rubricChecksForAssignedParts = useMemo(() => {
     const criteriaIds = assignedCriteria.map((c) => c.id);
-    return allChecksForRubric.filter((check) => criteriaIds.includes(check.rubric_criteria_id));
+    return allChecksForRubric?.filter((check) => criteriaIds.includes(check.rubric_criteria_id)) || [];
   }, [allChecksForRubric, assignedCriteria]);
 
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
@@ -127,7 +127,7 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
     // Get checks for each criteria
     const criteriaEvaluation = assignedCriteria?.map((criteria) => {
-      const checksForCriteria = allChecksForRubric.filter((check) => check.rubric_criteria_id === criteria.id);
+      const checksForCriteria = allChecksForRubric?.filter((check) => check.rubric_criteria_id === criteria.id) || [];
       const check_count_applied = checksForCriteria.filter((check) =>
         comments.some((comment) => comment.rubric_check_id === check.id)
       ).length;
@@ -528,9 +528,9 @@ function ReviewAssignmentActions() {
   const { time_zone } = useCourse();
   const rubricPartsAdvice = useMemo(() => {
     return assignedRubricParts
-      .map((part) => rubric?.rubric_parts.find((p) => p.id === part.rubric_part_id)?.name)
+      .map((part) => rubric?.rubric_parts?.find((p) => p.id === part.rubric_part_id)?.name)
       .join(", ");
-  }, [assignedRubricParts, rubric]); // rubric is not needed, but it's a dependency to force a re-render when the rubric changes
+  }, [assignedRubricParts, rubric?.rubric_parts]); // rubric is not needed, but it's a dependency to force a re-render when the rubric changes
 
   const leaveReviewAssignment = useCallback(() => {
     setIgnoreAssignedReview(true);

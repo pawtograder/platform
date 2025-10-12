@@ -101,8 +101,9 @@ function createPreviewTableController<TTableName extends TablesThatHaveAnIDField
       if (callback) callback(data);
       return { data, unsubscribe: () => {} };
     },
-    list: (callback?: (data: TData[]) => void) => {
-      if (callback) callback(previewData);
+    list: (callback?: (data: TData[], params: { entered: TData[]; left: TData[] }) => void) => {
+      // In preview mode, data is static - no items entering or leaving
+      if (callback) callback(previewData, { entered: [], left: [] });
       return { data: previewData, unsubscribe: () => {} };
     }
   };
@@ -127,7 +128,7 @@ function createPreviewTableController<TTableName extends TablesThatHaveAnIDField
  * This factory function wraps a base AssignmentController with preview data
  * for rubric-related queries while maintaining access to other assignment data
  * (submissions, review assignments, etc).
- * 
+ *
  * IMPORTANT: Merges preview rubric with existing rubrics from database so that
  * all rubrics are available (needed for references, multi-rubric displays, etc.)
  */
@@ -142,41 +143,31 @@ export function createPreviewAssignmentController(
   const existingParts = baseController.rubricPartsController.rows;
   const existingCriteria = baseController.rubricCriteriaController.rows;
   const existingChecks = baseController.rubricChecksController.rows;
-  const existingReferences = baseController.rubricCheckReferencesController.rows;
 
   // Merge preview data with existing data
   // Replace existing rubric with same ID, or add new preview rubric
-  const mergedRubrics = [
-    ...existingRubrics.filter(r => r.id !== flattened.rubric.id),
-    flattened.rubric
-  ];
+  const mergedRubrics = [...existingRubrics.filter((r) => r.id !== flattened.rubric.id), flattened.rubric];
+  console.log(mergedRubrics);
 
   // Replace parts/criteria/checks that belong to preview rubric
-  const mergedParts = [
-    ...existingParts.filter(p => p.rubric_id !== flattened.rubric.id),
-    ...flattened.parts
-  ];
+  const mergedParts = [...existingParts.filter((p) => p.rubric_id !== flattened.rubric.id), ...flattened.parts];
 
   const mergedCriteria = [
-    ...existingCriteria.filter(c => c.rubric_id !== flattened.rubric.id),
+    ...existingCriteria.filter((c) => c.rubric_id !== flattened.rubric.id),
     ...flattened.criteria
   ];
 
-  const mergedChecks = [
-    ...existingChecks.filter(ch => ch.rubric_id !== flattened.rubric.id),
-    ...flattened.checks
-  ];
-
-  // Keep existing references (preview rubrics don't have references)
-  const mergedReferences = [...existingReferences];
+  const mergedChecks = [...existingChecks.filter((ch) => ch.rubric_id !== flattened.rubric.id), ...flattened.checks];
 
   // Cache wrapped controllers to maintain stable references
+  // Note: rubricCheckReferencesController uses live data (no preview references)
   const wrappedControllers = {
     rubricsController: createPreviewTableController(baseController.rubricsController, mergedRubrics),
     rubricPartsController: createPreviewTableController(baseController.rubricPartsController, mergedParts),
     rubricCriteriaController: createPreviewTableController(baseController.rubricCriteriaController, mergedCriteria),
     rubricChecksController: createPreviewTableController(baseController.rubricChecksController, mergedChecks),
-    rubricCheckReferencesController: createPreviewTableController(baseController.rubricCheckReferencesController, mergedReferences)
+    // Use live controller for references - they don't have preview data anyway
+    rubricCheckReferencesController: baseController.rubricCheckReferencesController
   };
 
   // Create wrapped controller that returns preview data for rubric queries

@@ -64,7 +64,7 @@ function useHydratedRubricByReviewRound(
   const allChecks = useRubricChecksByRubric(rubric?.id);
 
   return useMemo(() => {
-    if (!rubric) return undefined;
+    if (!rubric || !parts || !allCriteria || !allChecks) return undefined;
 
     // Build the hydrated structure
     const hydratedParts: HydratedRubricPart[] = parts.map((part) => {
@@ -444,6 +444,7 @@ function InnerRubricPage() {
     if (!gradingRubricFromDb) return 0;
     let total = 0;
 
+    if (!gradingRubricCriteria || !gradingRubricChecks) return undefined;
     for (const criteria of gradingRubricCriteria) {
       const criteriaTotal = criteria.total_points ?? 0;
       const checksForCriteria = gradingRubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
@@ -459,7 +460,7 @@ function InnerRubricPage() {
     return total;
   }, [activeReviewRound, rubricForSidebar, gradingRubricFromDb, gradingRubricCriteria, gradingRubricChecks]);
 
-  const addsUp = assignmentMaxPoints === autograderPoints + gradingRubricPoints;
+  const addsUp = gradingRubricPoints !== undefined && assignmentMaxPoints === autograderPoints + gradingRubricPoints;
 
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
@@ -1475,7 +1476,7 @@ function InnerRubricPage() {
                   configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
                   {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
-                {!addsUp && (
+                {!addsUp && gradingRubricPoints !== undefined && (
                   <Text fontSize="sm" mt={1}>
                     These do not add up to the assignment max points.{" "}
                     {gradingRubricPoints < assignmentMaxPoints - autograderPoints

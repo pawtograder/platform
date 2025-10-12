@@ -290,19 +290,14 @@ export function useReferencingRubricChecks(rubric_check_id: number | null | unde
   const controller = useAssignmentController();
   const findReferencingRubricChecksPredicate = useCallback(
     (rubric_check_reference: RubricCheckReference) =>
-      rubric_check_reference.referenced_rubric_check_id === rubric_check_id,
+      rubric_check_reference.referencing_rubric_check_id === rubric_check_id,
     [rubric_check_id]
   );
   const referencingCheckVals = useListTableControllerValues(
     controller.rubricCheckReferencesController,
     findReferencingRubricChecksPredicate
   );
-  const findChecksPredicate = useCallback(
-    (rubric_check: RubricCheck) =>
-      referencingCheckVals.find((ref) => ref.referencing_rubric_check_id === rubric_check.id) !== undefined,
-    [referencingCheckVals]
-  );
-  return useListTableControllerValues(controller.rubricChecksController, findChecksPredicate);
+  return referencingCheckVals;
 }
 
 export function useReferenceCheckRecordsFromCheck(rubric_check_id: number | null | undefined) {
@@ -328,7 +323,7 @@ export function useReferencedRubricChecks(rubric_check_id: number | null | undef
   );
   const findChecksPredicate = useCallback(
     (rubric_check: RubricCheck) =>
-      referencedCheckVals.find((ref) => ref.referenced_rubric_check_id === rubric_check.id) !== undefined,
+      referencedCheckVals?.find((ref) => ref.referenced_rubric_check_id === rubric_check.id) !== undefined,
     [referencedCheckVals]
   );
   return useListTableControllerValues(controller.rubricChecksController, findChecksPredicate);

@@ -1,5 +1,6 @@
 INSERT INTO storage.buckets (id, name, public, avif_autodetection)
-VALUES ('avatars', 'avatars', true, false);
+VALUES ('avatars', 'avatars', true, false)
+ON CONFLICT (id) DO NOTHING;
 
 CREATE POLICY "Allow authenticated users to upload avatars"
 ON storage.objects

@@ -663,7 +663,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
     // Only show criteria that have annotation checks
     let criteriaWithAnnotationChecks: RubricCriteria[] = [];
 
-    if (rubricCriteria) {
+    if (rubricCriteria && rubricChecks) {
       const annotationChecks = rubricChecks
         .filter(
           (check: RubricCheck) =>
@@ -683,7 +683,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
           value: criteria.id.toString(),
           criteria: criteria as RubricCriteria,
           options: rubricChecks
-            .filter(
+            ?.filter(
               (check) =>
                 check.is_annotation &&
                 (check.annotation_target === "file" || check.annotation_target === null) &&

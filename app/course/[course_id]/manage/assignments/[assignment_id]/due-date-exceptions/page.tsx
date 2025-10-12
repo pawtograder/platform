@@ -340,7 +340,7 @@ function AdjustDueDateDialogContent({
           </Fieldset.Root>
         </form>
         <Heading size="md">Extension History</Heading>
-        {extensions.length > 0 ? (
+        {extensions && extensions.length > 0 ? (
           <Box maxH="400px" overflowY="auto">
             <Table.Root maxW="2xl">
               <Table.Header>
@@ -354,7 +354,7 @@ function AdjustDueDateDialogContent({
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {extensions.map((extension) => (
+                {extensions?.map((extension) => (
                   <Table.Row key={extension.id}>
                     <Table.Cell>{formatInTimeZone(extension.created_at, time_zone, "MMM d h:mm aaa")}</Table.Cell>
                     <Table.Cell>
@@ -482,7 +482,7 @@ export default function DueDateExceptions() {
       const group = groups?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === student.id)) || null;
 
       // Find extensions for this student or their group
-      const extensions = allExtensions.filter((ext) => {
+      const extensions = allExtensions?.filter((ext) => {
         if (group && ext.assignment_group_id === group.id) return true;
         if (!group && ext.student_id === student.id) return true;
         return false;
@@ -503,8 +503,8 @@ export default function DueDateExceptions() {
       }
 
       // Calculate total extensions
-      const hoursExtended = extensions.reduce((acc, ext) => acc + ext.hours, 0);
-      const minutesExtended = extensions.reduce((acc, ext) => acc + (ext.minutes || 0), 0);
+      const hoursExtended = extensions?.reduce((acc, ext) => acc + ext.hours, 0) || 0;
+      const minutesExtended = extensions?.reduce((acc, ext) => acc + (ext.minutes || 0), 0) || 0;
 
       // Calculate final due date with extensions
       const finalDueDate = effectiveDueDate
@@ -518,7 +518,7 @@ export default function DueDateExceptions() {
         finalDueDate,
         hoursExtended,
         minutesExtended,
-        extensions
+        extensions: extensions || []
       };
     });
   }, [

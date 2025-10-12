@@ -39,14 +39,15 @@ export function PreviewRubricProvider({ rubricData, children }: PreviewRubricPro
     // Recreate if either the baseController identity or rubric data changed
     const baseControllerChanged = lastBaseController.current !== baseController;
     const rubricDataChanged = lastRubricDataString.current !== rubricDataString;
-    
+
     if (baseControllerChanged || rubricDataChanged) {
       lastBaseController.current = baseController;
       lastRubricDataString.current = rubricDataString;
       controllerRef.current = createPreviewAssignmentController(baseController, rubricData);
     }
     return controllerRef.current!;
-  }, [baseController, rubricData, rubricDataString]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseController, rubricDataString]);
 
   return (
     <AssignmentContext.Provider value={{ assignmentController: previewController }}>

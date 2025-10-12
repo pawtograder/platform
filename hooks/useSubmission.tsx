@@ -1,10 +1,12 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
 import {
+  useAllRubricChecks,
   useAssignmentController,
   useMyReviewAssignments,
   useRubricCheck as useNewRubricCheck,
   useReferencingRubricChecks,
+  useRubricChecksByCriteria,
   useRubricCriteria,
   useRubrics
 } from "@/hooks/useAssignment";
@@ -21,6 +23,7 @@ import {
   RegradeRequestComment,
   Rubric,
   RubricChecks,
+  RubricCriteria,
   RubricCriteriaWithRubricChecks,
   SubmissionArtifact,
   SubmissionArtifactComment,
@@ -713,13 +716,14 @@ export function useRubricCriteriaInstances({
   review_id,
   rubric_id
 }: {
-  criteria?: RubricCriteriaWithRubricChecks;
+  criteria?: RubricCriteria;
   review_id?: number;
   rubric_id?: number;
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
   const rubricData = useSubmissionRubric(review_id); // Pass review_id to useSubmissionRubric
+  const allChecks = useAllRubricChecks();
 
   // Use useMemo to ensure the filtered result updates when comments change
   const filteredComments = useMemo(() => {
@@ -731,23 +735,20 @@ export function useRubricCriteriaInstances({
       return comments.filter(
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
-          criteria.rubric_checks.find((eachCheck: RubricChecks) => eachCheck.id === eachComment.rubric_check_id)
+          allChecks.find((eachCheck) => 
+            eachCheck.rubric_criteria_id === criteria?.id &&
+            eachCheck.id === eachComment.rubric_check_id)
       );
     }
     if (rubric_id) {
-      const allCriteria: HydratedRubricCriteria[] =
-        rubricData?.rubric?.rubric_parts?.flatMap((part) => part.rubric_criteria || []) || [];
-      const allChecks: HydratedRubricCheck[] = allCriteria.flatMap(
-        (eachCriteria: HydratedRubricCriteria) => eachCriteria.rubric_checks || []
-      );
       return comments.filter(
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
-          allChecks.find((eachCheck: HydratedRubricCheck) => eachCheck.id === eachComment.rubric_check_id)
+          allChecks.find((eachCheck) => eachCheck.id === eachComment.rubric_check_id && eachCheck.rubric_criteria_id === rubric_id)
       );
     }
     throw new Error("Either criteria or rubric_id must be provided");
-  }, [fileComments, submissionComments, review_id, criteria, rubric_id, rubricData]);
+  }, [fileComments, submissionComments, review_id, criteria, rubric_id, allChecks]);
 
   return filteredComments;
 }
@@ -1004,7 +1005,7 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
   const referencingCheckReferences = useReferencingRubricChecks(referencing_check_id);
 
   const allRelevantComments = useMemo(() => {
-    const referencedCheckIds = referencingCheckReferences?.map((ref) => ref.id);
+    const referencedCheckIds = referencingCheckReferences?.map((ref) => ref.referenced_rubric_check_id);
     const relevantFileComments = fileComments.filter(
       (comment) =>
         comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
