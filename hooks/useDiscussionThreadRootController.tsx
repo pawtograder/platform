@@ -26,6 +26,7 @@ export function useDiscussionThreadRoot() {
   const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === rootThread?.id, [rootThread]);
   const children = useListTableControllerValues(controller.tableController, childrenPredicate);
   const ret = useMemo(() => {
+    if (!rootThread) return undefined;
     return {
       ...rootThread,
       children
