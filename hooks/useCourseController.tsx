@@ -197,7 +197,6 @@ export function useDiscussionThreadReadStatus(threadId: number) {
 
   const setUnread = useCallback(
     async (root_threadId: number, threadId: number, isUnread: boolean) => {
-      console.log("setUnread", root_threadId, threadId, isUnread);
       if (readStatus === undefined) {
         return;
       }
@@ -214,9 +213,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
         }
       } else {
         // There is a Postgres trigger that creates a read status for every user for every thread. So, if we don't have one, we just haven't fetched it yet!
-        console.log("creating read status");
         if (!user?.id) {
-          console.log("no user id");
           return;
         }
         const readStatus = await controller.discussionThreadReadStatus.getOneByFilters([
@@ -231,9 +228,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
             value: user.id
           }
         ]);
-        console.log("readStatus", readStatus);
         if (readStatus) {
-          console.log("updating read status");
           controller.discussionThreadReadStatus.update(readStatus.id, {
             read_at: isUnread ? null : new Date().toISOString()
           });
