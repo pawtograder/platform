@@ -1,5 +1,5 @@
 import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
-import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
+import { all, create, FunctionNode, isArray, isDenseMatrix, MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
@@ -7,14 +7,17 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { CourseController, useCourseController } from "./useCourseController";
 import { Spinner } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
 
-const TRACE_WHAT_IF_CALCULATIONS = true;
+const TRACE_WHAT_IF_CALCULATIONS = false;
 
 export type ExpressionContext = {
   student_id: string;
   is_private_calculation: boolean;
   incomplete_values: IncompleteValuesAdvice | null;
   incomplete_values_policy: "assume_max" | "assume_zero" | "report_only";
+  scope: Sentry.Scope;
+  class_id: number;
 };
 //These functions should be called with a context object as the first argument
 export const ContextFunctions = ["mean", "countif", "sum", "drop_lowest", "gradebook_columns"];
@@ -54,7 +57,7 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "is_missing" in value &&
     "max_score" in value &&
     "column_slug" in value;
-  if (typeof value === "number") {
+  if (typeof value === "number" || value === null || value === undefined) {
     return false;
   }
   if (!ret) {
@@ -567,7 +570,33 @@ class GradebookWhatIfController {
         }
         return a_val + b_val;
       };
-      imports["sum"] = (_context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+      imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+        context.scope.setTag("student_id", context.student_id);
+        context.scope.setTag("class_id", context.class_id);
+        context.scope.setTag("is_private", context.is_private_calculation);
+        context.scope.addBreadcrumb({
+          message: `Sum called with value: ${JSON.stringify(value, null, 2)}`,
+          level: "debug"
+        });
+        if (isDenseMatrix(value)) {
+          const values = value.toArray();
+          return values
+            .map((v) => {
+              if (isGradebookColumnStudent(v)) {
+                return v.score ?? 0;
+              }
+              if (typeof v === "number") {
+                return v;
+              } else if (v === undefined || v === null) {
+                return undefined;
+              }
+              throw new Error(
+                `Unsupported type in matrix for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
+              );
+            })
+            .filter((v) => v !== undefined)
+            .reduce((a, b) => a + b, 0);
+        }
         if (Array.isArray(value)) {
           const values = value
             .map((v) => {
@@ -577,8 +606,11 @@ class GradebookWhatIfController {
               if (typeof v === "number") {
                 return v;
               }
+              if (v === undefined || v === null) {
+                return undefined;
+              }
               throw new Error(
-                `Unsupported value type for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
+                `Unsupported value type in array for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
               );
             })
             .filter((v) => v !== undefined);
@@ -671,7 +703,6 @@ class GradebookWhatIfController {
         if (Array.isArray(value)) {
           const valuesToAverage = value.map((v) => {
             if (isGradebookColumnStudent(v)) {
-              console.log("v", v);
               if (!v.released && !v.is_private) {
                 return undefined;
               } else if (v.is_missing) {
@@ -692,7 +723,6 @@ class GradebookWhatIfController {
           const validValues = valuesToAverage.filter(
             (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
           );
-          console.log("mean of", validValues);
           if (validValues.length === 0) {
             return undefined;
           }
@@ -774,7 +804,9 @@ class GradebookWhatIfController {
             student_id: this.private_profile_id,
             is_private_calculation: false,
             incomplete_values: {},
-            incomplete_values_policy: policy as "assume_max" | "assume_zero" | "report_only"
+            incomplete_values_policy: policy as "assume_max" | "assume_zero" | "report_only",
+            scope: new Sentry.Scope(),
+            class_id: this.gradebookController.class_id
           };
           const result = instrumented.evaluate({
             context: context
