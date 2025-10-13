@@ -534,6 +534,7 @@ export default class TableController<
   private _additionalStatusUnsubscribes: (() => void)[] = [];
   private _submissionId: number | null = null;
   private _lastChannelStates: Map<string, string> = new Map(); // Track individual channel states
+  private _channelsCompletedInitialConnection: Set<string> = new Set(); // Track which channels have completed their first connection
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
   private _lastFetchTimestamp: number = 0;
   private _closed: boolean = false;
@@ -880,6 +881,7 @@ export default class TableController<
    * Fetch initial data with pagination
    */
   private async _fetchInitialData(loadEntireTable: boolean): Promise<ResultOne[]> {
+    console.log(`TableController ${this._debugID} for ${this._table} fetching initial data`);
     const rows: ResultOne[] = [];
     let page = 0;
     const pageSize = 1000;
@@ -929,6 +931,7 @@ export default class TableController<
    * Refetch all data and notify subscribers of changes (full refresh)
    */
   private async _refetchAllDataFull(): Promise<void> {
+    console.trace();
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -1149,6 +1152,7 @@ export default class TableController<
   /**
    * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
    * Only refetches when channels relevant to this table's data reconnect
+   * Does NOT refetch on initial connection, only on subsequent reconnections
    */
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     // Track which relevant channels have reconnected
@@ -1160,18 +1164,30 @@ export default class TableController<
       }
 
       const previousState = this._lastChannelStates.get(channel.name);
-      const wasChannelDisconnected = !previousState || previousState !== "joined";
       const isChannelNowConnected = channel.state === "joined";
+      const hadCompletedInitialConnection = this._channelsCompletedInitialConnection.has(channel.name);
 
-      if (wasChannelDisconnected && isChannelNowConnected) {
+      // Only treat as reconnection if:
+      // 1. Channel had previously completed an initial connection (not the first time)
+      // 2. Channel was disconnected in the previous state
+      // 3. Channel is now connected
+      const wasChannelDisconnected = previousState !== undefined && previousState !== "joined";
+      const isReconnection = hadCompletedInitialConnection && wasChannelDisconnected && isChannelNowConnected;
+
+      if (isReconnection) {
         relevantReconnections.push(channel.name);
+      }
+
+      // Mark channel as having completed initial connection once it reaches "joined" state for the first time
+      if (isChannelNowConnected && !hadCompletedInitialConnection) {
+        this._channelsCompletedInitialConnection.add(channel.name);
       }
 
       // Update tracked state
       this._lastChannelStates.set(channel.name, channel.state);
     }
 
-    // Only refetch if a relevant channel has reconnected
+    // Only refetch if a relevant channel has reconnected (not initial connection)
     if (relevantReconnections.length > 0 && this._ready) {
       // Clear any pending refetch
       if (this._connectionStatusDebounceTimer) {
@@ -1205,7 +1221,8 @@ export default class TableController<
     additionalRealTimeControllers,
     realtimeFilter,
     debounceInterval,
-    loadEntireTable = true
+    loadEntireTable = true,
+    initialData
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1226,6 +1243,8 @@ export default class TableController<
     realtimeFilter?: RealtimeFilter<RelationName>;
     debounceInterval?: number;
     loadEntireTable?: boolean;
+    /** Optional pre-loaded initial data to hydrate the controller without fetching. Query is still required for refetches. */
+    initialData?: ResultOne[];
   }) {
     this._rows = [];
     this._client = client;
@@ -1275,17 +1294,29 @@ export default class TableController<
           }
         };
 
-        // Fetch initial data first, respecting cancellation
+        // Use provided initial data or fetch it
         if (this._closed) {
           resolve();
           return;
         }
-        const initialData = await this._fetchInitialData(loadEntireTable);
+
+        let dataToLoad: ResultOne[];
+        if (initialData) {
+          console.log(`TableController ${this._debugID} for ${this._table} using pre-loaded data`);
+          // Use pre-loaded data from server (skip initial fetch)
+          dataToLoad = initialData;
+        } else {
+          console.log(`TableController ${this._debugID} for ${this._table} fetching initial data`);
+          // Fetch data from database
+          dataToLoad = await this._fetchInitialData(loadEntireTable);
+        }
+
         if (this._closed) {
           resolve();
           return;
         }
-        this._rows = initialData.map((row) => ({
+
+        this._rows = dataToLoad.map((row) => ({
           ...row,
           __db_pending: false
         }));
@@ -1424,6 +1455,7 @@ export default class TableController<
     this._itemDataListeners.clear();
     // Clear tracked channel states
     this._lastChannelStates.clear();
+    this._channelsCompletedInitialConnection.clear();
     this._pendingOperations = [];
     this._isProcessingBatch = false;
   }

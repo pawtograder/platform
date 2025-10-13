@@ -23,7 +23,7 @@ function CommitHistory({
   const { time_zone } = useCourse();
   const { data } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
-    meta: { select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
+    meta: { select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
     filters: [{ field: "repository", operator: "eq", value: repository_full_name }],
     sorters: [{ field: "created_at", order: "desc" }]
   });

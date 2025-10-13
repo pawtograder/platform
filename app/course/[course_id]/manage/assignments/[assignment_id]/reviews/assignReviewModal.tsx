@@ -235,6 +235,7 @@ export default function AssignReviewModal({
     [rubricsData]
   );
 
+  console.log("selectedRubricId", selectedRubricId);
   const { data: rubricPartsData, isLoading: isLoadingRubricParts } = useList<
     Database["public"]["Tables"]["rubric_parts"]["Row"]
   >({

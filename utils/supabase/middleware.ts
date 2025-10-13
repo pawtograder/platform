@@ -1,11 +1,9 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import { type NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 export const updateSession = async (request: NextRequest) => {
-  // This `try/catch` block is only here for the interactive tutorial.
-  // Feel free to remove once you have Supabase connected.
   try {
-    // Create an unmodified response
     let response = NextResponse.next({
       request: {
         headers: request.headers
@@ -31,40 +29,28 @@ export const updateSession = async (request: NextRequest) => {
       }
     );
 
-    // This will refresh session if expired - required for Server Components
-    // https://supabase.com/docs/guides/auth/server-side/nextjs
-    /*
-      We use the getSession API instead of getUser for performance:
-      - getUser fetches from auth server
-      - getSession fetches the JWT from the browser
-
-      The JWT might have been revoked, so it is best for security to use getUser when
-      relying upon the user object for security checks.
-
-      However, we don't rely on the user object for security checks: we use Postgres RLS!
-    */
-    const session = await supabase.auth.getSession();
-    if (session && session.data.session) {
+    const claims = await supabase.auth.getClaims();
+    if (claims && claims.data && claims.data.claims) {
+      response.headers.set("X-User-ID", claims.data.claims.sub); // Set a custom header
       Sentry.setUser({
-        id: session.data.session.user.id,
-        email: session.data.session.user.email
+        id: claims.data.claims.sub,
+        email: claims.data.claims.email
       });
     } else {
       Sentry.setUser(null);
     }
 
     // protected routes
-    if (request.nextUrl.pathname.startsWith("/course") && session.error) {
-      const signInUrl = new URL("/sign-in", request.url);
-      const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
-      signInUrl.searchParams.set("redirect", originalPathWithSearch);
-      return NextResponse.redirect(signInUrl);
+    if (request.nextUrl.pathname.startsWith("/course")) {
+      if (claims.error || !claims.data || !claims.data.claims) {
+        const signInUrl = new URL("/sign-in", request.url);
+        const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+        signInUrl.searchParams.set("redirect", originalPathWithSearch);
+        return NextResponse.redirect(signInUrl);
+      }
     }
-    // const urlError = request.nextUrl.searchParams.get("error");
-    // if (urlError && request.nextUrl.pathname !== "/error" && request.nextUrl.pathname !== "/sign-in") {
-    // return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
-    // }
-    if (request.nextUrl.pathname === "/" && !session.error) {
+
+    if (request.nextUrl.pathname === "/" && !claims.error) {
       return NextResponse.redirect(new URL("/course", request.url));
     }
 

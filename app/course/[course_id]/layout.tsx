@@ -1,5 +1,3 @@
-// 'use client'
-
 import { Box } from "@chakra-ui/react";
 
 import React from "react";
@@ -8,7 +6,8 @@ import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
-import { getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { getCourse, getUserRolesForCourse, fetchCourseControllerData } from "@/lib/ssrUtils";
+import { headers } from "next/headers";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -26,17 +25,26 @@ const ProtectedLayout = async ({
   params: Promise<{ course_id: string }>;
 }>) => {
   const { course_id } = await params;
-  const user_role = await getUserRolesForCourse(Number.parseInt(course_id));
+  const headersList = await headers();
+  const user_id = headersList.get("X-User-ID");
+  if (!user_id) {
+    redirect("/");
+  }
+  const user_role = await getUserRolesForCourse(Number.parseInt(course_id), user_id);
   if (!user_role) {
     redirect("/");
   }
-  // const {open, onOpen, onClose} = useDisclosure()
+
+  // Pre-fetch all course controller data on the server with caching
+  const initialData = await fetchCourseControllerData(Number.parseInt(course_id), user_id);
+
   return (
     <Box minH="100vh">
       <CourseControllerProvider
         course_id={Number.parseInt(course_id)}
         profile_id={user_role.private_profile_id}
         role={user_role.role}
+        initialData={initialData}
       >
         <OfficeHoursControllerProvider
           classId={Number.parseInt(course_id)}

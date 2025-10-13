@@ -22,7 +22,7 @@ import {
   RubricCriteria,
   SubmissionFile,
   SubmissionFileComment,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
@@ -77,7 +77,7 @@ export function isRubricCheckDataWithOptions(data: Json | null | undefined): dat
 }
 
 type CodeLineCommentContextType = {
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  submission: SubmissionWithGraderResultsAndFiles;
   comments: SubmissionFileComment[];
   file: SubmissionFile;
   expanded: number[];

@@ -222,33 +222,19 @@ export type SubmissionReview = GetResult<
   Database["public"]["Tables"]["submission_reviews"]["Relationships"],
   "*"
 >;
-export type SubmissionReviewWithRubric = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["submission_reviews"]["Row"],
-  "submission_reviews",
-  Database["public"]["Tables"]["submission_reviews"]["Relationships"],
-  "*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
->;
-export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["submissions"]["Row"],
-  "submissions",
-  Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
->;
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_reviews(*)"
+  "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
 >;
-export type SubmissionWithGraderResults = GetResult<
+export type SubmissionWithGraderResultsAndFiles = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*))"
+  "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
 export type SubmissionWithGraderResultsAndErrors = GetResult<
   Database["public"],

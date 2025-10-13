@@ -2,7 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
+  SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
@@ -20,7 +20,13 @@ import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/s
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse, useIsDroppedStudent, useCourseController } from "@/hooks/useCourseController";
+import {
+  useAssignmentDueDate,
+  useCourse,
+  useIsDroppedStudent,
+  useCourseController,
+  useAssignmentGroupWithMembers
+} from "@/hooks/useCourseController";
 import { BroadcastMessage } from "@/lib/TableController";
 import {
   SubmissionProvider,
@@ -241,11 +247,7 @@ function SubmissionReviewScoreTweak() {
     </Box>
   );
 }
-function SubmissionHistoryContents({
-  submission
-}: {
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
-}) {
+function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -261,7 +263,7 @@ function SubmissionHistoryContents({
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
-      select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
     },
     filters: [
       {
@@ -419,7 +421,7 @@ function SubmissionHistoryContents({
     </>
   );
 }
-function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
+function SubmissionHistory({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const invalidate = useInvalidate();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const courseController = useCourseController();
@@ -550,7 +552,7 @@ function ReviewStats() {
   const { checked_by, completed_by, checked_at, completed_at } = review || {};
   const allRubricInstances = useRubricCriteriaInstances({
     review_id: review?.id,
-    rubric_id: submission.assignments.rubrics?.id
+    rubric_id: review?.rubric_id
   });
   const allGraders = new Set<string>();
   for (const instance of allRubricInstances) {
@@ -874,6 +876,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id
+  });
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const assignment = useAssignmentController();
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment || submission.assignments, {
@@ -912,12 +917,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           <VStack align="flex-start">
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
-              {submission.assignment_groups ? (
+              {assignmentGroupWithMembers ? (
                 <Text>
-                  Group {submission.assignment_groups.name} (
-                  {submission.assignment_groups.assignment_groups_members
-                    .map((member) => member.profiles!.name)
-                    .join(", ")}
+                  Group {assignmentGroupWithMembers.name} (
+                  {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
+                    <PersonName key={member.profile_id} uid={member.profile_id} />
+                  ))}
                   )
                 </Text>
               ) : (
