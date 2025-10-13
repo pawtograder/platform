@@ -17,6 +17,7 @@ import {
   DiscussionThread,
   DiscussionThreadReadStatus,
   DiscussionThreadWatcher,
+  DiscussionTopic,
   HelpRequestWatcher,
   LabSection,
   LabSectionMeeting,
@@ -31,7 +32,7 @@ import {
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useList, useUpdate } from "@refinedev/core";
+import { LiveEvent, useList } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
@@ -148,18 +149,16 @@ export function useProfiles() {
   }, [controller]);
   return profiles;
 }
+/**
+ * Hook to update a discussion thread using TableController
+ * @returns A function to update a thread by ID
+ */
 export function useUpdateThreadTeaser() {
-  const { mutateAsync: updateThread } = useUpdate<DiscussionThread>({
-    resource: "discussion_threads",
-    mutationMode: "optimistic"
-  });
+  const controller = useCourseController();
   return useCallback(
     async ({ id, values }: { id: number; old: DiscussionThreadTeaser; values: Partial<DiscussionThreadTeaser> }) => {
       try {
-        await updateThread({
-          id,
-          values
-        });
+        await controller.discussionThreadTeasers.update(id, values);
       } catch {
         toaster.error({
           title: "Error updating thread",
@@ -167,8 +166,7 @@ export function useUpdateThreadTeaser() {
         });
       }
     },
-    // TODO: remove refine.dev, it is so annoying that mutate is not stable!
-    [] // eslint-disable-line react-hooks/exhaustive-deps
+    [controller]
   );
 }
 export function useRootDiscussionThreadReadStatuses(threadId: number) {
@@ -370,6 +368,8 @@ export class CourseController {
   private _repositories?: TableController<"repositories">;
   private _notifications?: TableController<"notifications">;
   private _gradebookColumns?: TableController<"gradebook_columns">;
+  private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
+  private _discussionTopics?: TableController<"discussion_topics">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -620,6 +620,32 @@ export class CourseController {
       });
     }
     return this._gradebookColumns;
+  }
+
+  get discussionThreadLikes(): TableController<"discussion_thread_likes"> {
+    if (!this._discussionThreadLikes) {
+      this._discussionThreadLikes = new TableController({
+        client: this.client,
+        table: "discussion_thread_likes",
+        query: this.client.from("discussion_thread_likes").select("*").eq("creator", this._userId),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { creator: this._userId }
+      });
+    }
+    return this._discussionThreadLikes;
+  }
+
+  get discussionTopics(): TableController<"discussion_topics"> {
+    if (!this._discussionTopics) {
+      this._discussionTopics = new TableController({
+        client: this.client,
+        table: "discussion_topics",
+        query: this.client.from("discussion_topics").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._discussionTopics;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1031,6 +1057,8 @@ export class CourseController {
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
     this._discussionThreadWatchers?.close();
+    this._discussionThreadLikes?.close();
+    this._discussionTopics?.close();
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
@@ -1596,4 +1624,22 @@ export function useAssignments() {
   }, [controller]);
 
   return assignments;
+}
+
+/**
+ * Hook to get discussion topics for the course
+ */
+export function useDiscussionTopics() {
+  const controller = useCourseController();
+  const [topics, setTopics] = useState<DiscussionTopic[]>(controller.discussionTopics.rows);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.discussionTopics.list((updatedTopics) => {
+      setTopics(updatedTopics);
+    });
+    setTopics(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return topics;
 }

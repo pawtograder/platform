@@ -1,13 +1,11 @@
 "use client";
 
-import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 
 import Markdown from "@/components/ui/markdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
   Badge,
@@ -36,7 +34,8 @@ import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
   useDiscussionThreadTeasers,
-  useRootDiscussionThreadReadStatuses
+  useRootDiscussionThreadReadStatuses,
+  useDiscussionTopics
 } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
@@ -159,10 +158,7 @@ export default function DiscussionThreadList() {
   const { course_id } = useParams();
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const list = useDiscussionThreadTeasers();
-  const { data: topics } = useList<DiscussionTopic>({
-    resource: "discussion_topics",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
+  const topics = useDiscussionTopics();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOption, setFilterOption] = useState("all");
@@ -249,10 +245,10 @@ export default function DiscussionThreadList() {
       { value: "unanswered", label: "Unanswered Questions" },
       { value: "answered", label: "Answered Questions" },
       { value: "my_posts", label: "My Posts" },
-      ...(topics?.data?.map((topic) => ({ value: `topic-${topic.id}`, label: topic.topic })) || [])
+      ...(topics?.map((topic) => ({ value: `topic-${topic.id}`, label: topic.topic })) || [])
     ];
     return createListCollection({ items });
-  }, [topics?.data]);
+  }, [topics]);
 
   const sortCollection = useMemo(() => {
     const items = [

@@ -4,105 +4,103 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
-import { Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
-import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import { useDiscussionTopics, useCourseController } from "@/hooks/useCourseController";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
-import { useForm } from "@refinedev/react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback } from "react";
-import { Controller } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
+
+type FormData = {
+  topic_id: string;
+  is_question: string;
+  is_instructors_only: string;
+  is_anonymous: string;
+  subject: string;
+  body: string;
+};
 
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();
   const trackEvent = useTrackEvent();
   const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
+  const { discussionThreadTeasers } = useCourseController();
 
   const {
     handleSubmit,
-    setValue,
     register,
     control,
-    getValues,
-    formState: { errors, isSubmitting },
-    refineCore
-  } = useForm({
-    refineCoreProps: {
-      resource: "discussion_threads",
-      action: "create",
-      onMutationSuccess: (data) => {
-        // Track discussion thread creation
-        // Derive anonymity from the created thread's author field
-        const isAnonymous = data.data.author === public_profile_id;
-
-        trackEvent("discussion_thread_created", {
-          course_id: Number.parseInt(course_id as string),
-          thread_id: Number(data.data.id),
-          topic_id: data.data.topic_id,
-          is_question: data.data.is_question,
-          is_private: data.data.instructors_only,
-          is_anonymous: isAnonymous
-        });
-
-        router.push(`/course/${course_id}/discussion/${data.data.id}`);
-      }
+    watch,
+    formState: { errors, isSubmitting }
+  } = useForm<FormData>({
+    defaultValues: {
+      is_question: "false",
+      is_instructors_only: "false",
+      is_anonymous: "false"
     }
   });
-  const { data: topics } = useList<DiscussionTopic>({
-    resource: "discussion_topics",
-    sorters: [{ field: "ordinal", order: "asc" }],
 
-    filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }]
+  const topics = useDiscussionTopics();
+  const topicId = watch("topic_id");
+
+  const onSubmit = handleSubmit(async (data) => {
+    try {
+      // Prepare the thread data for creation
+      const threadData = {
+        subject: data.subject,
+        body: data.body,
+        topic_id: Number(data.topic_id),
+        is_question: data.is_question === "true",
+        instructors_only: data.is_instructors_only === "true",
+        author: data.is_anonymous === "true" ? public_profile_id! : private_profile_id!,
+        class_id: Number.parseInt(course_id as string),
+        root_class_id: Number.parseInt(course_id as string)
+      };
+
+      // Create the thread using TableController
+      const createdThread = await discussionThreadTeasers.create(threadData);
+
+      // Track discussion thread creation
+      const isAnonymous = createdThread.author === public_profile_id;
+      trackEvent("discussion_thread_created", {
+        course_id: Number.parseInt(course_id as string),
+        thread_id: createdThread.id,
+        topic_id: createdThread.topic_id,
+        is_question: createdThread.is_question,
+        is_private: createdThread.instructors_only,
+        is_anonymous: isAnonymous
+      });
+
+      // Navigate to the new thread
+      router.push(`/course/${course_id}/discussion/${createdThread.id}`);
+    } catch {
+      toaster.error({
+        title: "Error creating discussion thread",
+        description: "Please try again later."
+      });
+    }
   });
-  const onSubmit = useCallback(
-    (e: React.FormEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      async function populate() {
-        if (getValues("is_anonymous") === "true") {
-          setValue("author", public_profile_id!);
-        } else {
-          setValue("author", private_profile_id!);
-        }
-        if (getValues("is_instructors_only") === "true") {
-          setValue("instructors_only", true);
-        } else {
-          setValue("instructors_only", false);
-        }
-        setValue("is_instructors_only", undefined);
-        setValue("is_anonymous", undefined);
-        setValue("class_id", Number.parseInt(course_id as string));
-        setValue("root_class_id", Number.parseInt(course_id as string));
-        handleSubmit(refineCore.onFinish)();
-      }
-      populate();
-    },
-    [handleSubmit, refineCore.onFinish, private_profile_id, public_profile_id, course_id, getValues, setValue]
-  );
   return (
     <Box p={{ base: "4", md: "0" }}>
       <Heading as="h1">New Discussion Thread</Heading>
-      <Toaster />
       <Box maxW="4xl" w="100%">
         <form onSubmit={onSubmit}>
           <Fieldset.Root bg="surface">
             <Fieldset.Content w="100%">
               <Field
                 label="Topic"
-                helperText={
-                  getValues("topic_id") &&
-                  topics?.data?.find((topic: DiscussionTopic) => topic.id === getValues("topic_id"))?.description
-                }
+                helperText={topicId && topics?.find((topic) => topic.id === Number(topicId))?.description}
                 errorText={errors.topic_id?.message?.toString()}
-                invalid={errors.topic_id ? true : false}
+                invalid={!!errors.topic_id}
               >
                 <Controller
                   control={control}
                   name="topic_id"
+                  rules={{ required: "Please select a topic" }}
                   render={({ field }) => {
                     return (
                       <RadioCardRoot
@@ -115,7 +113,7 @@ export default function NewDiscussionThread() {
                         onChange={field.onChange}
                       >
                         <Flex flexWrap="wrap" gap="2" w="100%">
-                          {topics?.data?.map((topic: DiscussionTopic) => (
+                          {topics?.map((topic) => (
                             <Box key={topic.id} flex="1" minW={{ base: "100%", lg: "40%" }}>
                               <RadioCardItem
                                 w="100%"
@@ -296,22 +294,23 @@ export default function NewDiscussionThread() {
                 maxWidth={"100%"}
                 label="Subject"
                 helperText="A short, descriptive subject for your post. Be specific."
-                errorText={errors.title?.message?.toString()}
-                invalid={errors.title ? true : false}
+                errorText={errors.subject?.message?.toString()}
+                invalid={!!errors.subject}
               >
-                <Input variant="outline" type="text" {...register("subject", { required: "This is required" })} />
+                <Input variant="outline" type="text" {...register("subject", { required: "Subject is required" })} />
               </Field>
             </Fieldset.Content>
             <Fieldset.Content>
               <Field
                 label="Description"
                 helperText="A detailed description of your post. Be specific."
-                errorText={errors.description?.message?.toString()}
-                invalid={errors.description ? true : false}
+                errorText={errors.body?.message?.toString()}
+                invalid={!!errors.body}
               >
                 <Controller
                   name="body"
                   control={control}
+                  rules={{ required: "Description is required" }}
                   render={({ field }) => {
                     return (
                       <MessageInput

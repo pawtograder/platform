@@ -1,7 +1,12 @@
+import TableController, {
+  useListTableControllerValues,
+  useTableControllerTableValues,
+  useTableControllerValueById
+} from "@/lib/TableController";
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import TableController, { useTableControllerValueById, useTableControllerTableValues } from "@/lib/TableController";
-import { createContext, useContext, useEffect, useRef, useMemo } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
+import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
 
 export type DiscussionThreadWithChildren = DiscussionThread & {
   children: DiscussionThread[];
@@ -18,18 +23,15 @@ export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus 
 export function useDiscussionThreadRoot() {
   const controller = useDiscussionThreadsController();
   const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
-  const allThreads = useTableControllerTableValues(controller.tableController);
-
-  return useMemo(() => {
-    if (!rootThread) return undefined;
-
-    const children = allThreads.filter((t) => t.parent === rootThread.id);
-
+  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === rootThread?.id, [rootThread]);
+  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  const ret = useMemo(() => {
     return {
       ...rootThread,
       children
     } as DiscussionThreadWithChildren;
-  }, [rootThread, allThreads]);
+  }, [rootThread, children]);
+  return ret;
 }
 
 /**
@@ -38,18 +40,17 @@ export function useDiscussionThreadRoot() {
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
   const controller = useDiscussionThreadsController();
   const thread = useTableControllerValueById(controller.tableController, threadId);
-  const allThreads = useTableControllerTableValues(controller.tableController);
+  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === thread?.id, [thread]);
+  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
 
   return useMemo(() => {
     if (!thread) return undefined;
-
-    const children = allThreads.filter((t) => t.parent === thread.id);
 
     return {
       ...thread,
       children
     } as DiscussionThreadWithChildren;
-  }, [thread, allThreads]);
+  }, [thread, children]);
 }
 
 /**
@@ -60,20 +61,27 @@ export function useAllDiscussionThreads(): DiscussionThread[] {
   return useTableControllerTableValues(controller.tableController);
 }
 /**
- * Simple controller that holds a reference to the TableController for discussion threads.
- * The hierarchy building is now done in the hooks themselves using TableController hooks.
+ * Controller for managing a specific discussion thread and its realtime subscriptions.
+ * Subscribes to the thread-specific channel (discussion_thread:$root_id) for targeted updates.
  */
 export class DiscussionThreadsController {
   public readonly tableController: TableController<"discussion_threads">;
+  public readonly threadRealTimeController: DiscussionThreadRealTimeController;
   public readonly root_id: number;
 
-  constructor(root_id: number, tableController: TableController<"discussion_threads">) {
+  constructor(
+    root_id: number,
+    tableController: TableController<"discussion_threads">,
+    threadRealTimeController: DiscussionThreadRealTimeController
+  ) {
     this.root_id = root_id;
     this.tableController = tableController;
+    this.threadRealTimeController = threadRealTimeController;
   }
 
   close() {
-    // TableController is closed in the provider's useEffect cleanup
+    // Controllers are closed in the provider's useEffect cleanup
+    this.threadRealTimeController.close();
   }
 }
 
@@ -87,45 +95,88 @@ export function DiscussionThreadsControllerProvider({
   root_id: number;
 }) {
   const courseController = useCourseController();
-  const controllerRef = useRef<DiscussionThreadsController | null>(null);
+  const [controller, setController] = useState<DiscussionThreadsController | null>(null);
+  const controllersRef = useRef<{
+    threadController: DiscussionThreadsController;
+    tableController: TableController<"discussion_threads">;
+    threadRealTimeController: DiscussionThreadRealTimeController;
+  } | null>(null);
 
-  // Create both TableController and DiscussionThreadsController in useEffect for proper cleanup
+  // Create all controllers with async initialization
   useEffect(() => {
-    if (!courseController?.client || !courseController?.classRealTimeController) {
-      return;
-    }
+    let cancelled = false;
 
-    // Create TableController with realtime filter for this root
-    const tableController = new TableController({
-      client: courseController.client,
-      table: "discussion_threads",
-      query: courseController.client
-        .from("discussion_threads")
-        .select("*")
-        .eq("root", root_id)
-        .order("created_at", { ascending: true }),
-      classRealTimeController: courseController.classRealTimeController,
-      realtimeFilter: { root: root_id },
-      loadEntireTable: true
-    });
+    const initializeControllers = async () => {
+      if (!courseController?.client) {
+        return;
+      }
 
-    // Create DiscussionThreadsController
-    const controller = new DiscussionThreadsController(root_id, tableController);
-    controllerRef.current = controller;
+      // Create DiscussionThreadRealTimeController for per-thread channel
+      const threadRealTimeController = new DiscussionThreadRealTimeController({
+        client: courseController.client,
+        threadRootId: root_id
+      });
+
+      // Start the realtime controller
+      await threadRealTimeController.start();
+
+      if (cancelled) {
+        await threadRealTimeController.close();
+        return;
+      }
+
+      // Create TableController with BOTH class and thread-specific realtime controllers
+      const tableController = new TableController({
+        client: courseController.client,
+        table: "discussion_threads",
+        query: courseController.client
+          .from("discussion_threads")
+          .select("*")
+          .eq("root", root_id)
+          .order("created_at", { ascending: true }),
+        classRealTimeController: courseController.classRealTimeController,
+        additionalRealTimeControllers: [threadRealTimeController],
+        realtimeFilter: { root: root_id },
+        loadEntireTable: true
+      });
+
+      if (cancelled) {
+        await threadRealTimeController.close();
+        tableController.close();
+        return;
+      }
+
+      // Create DiscussionThreadsController
+      const discussionController = new DiscussionThreadsController(root_id, tableController, threadRealTimeController);
+
+      controllersRef.current = {
+        threadController: discussionController,
+        tableController,
+        threadRealTimeController
+      };
+
+      setController(discussionController);
+    };
+
+    initializeControllers();
 
     return () => {
-      controller.close();
-      tableController.close();
-      controllerRef.current = null;
+      cancelled = true;
+      if (controllersRef.current) {
+        controllersRef.current.threadController.close();
+        controllersRef.current.tableController.close();
+        controllersRef.current.threadRealTimeController.close();
+        controllersRef.current = null;
+      }
     };
   }, [courseController, root_id]);
 
-  if (!controllerRef.current) {
+  if (!controller) {
     return null;
   }
 
   return (
-    <DiscussionThreadsControllerContext.Provider value={controllerRef.current}>
+    <DiscussionThreadsControllerContext.Provider value={controller}>
       {children}
     </DiscussionThreadsControllerContext.Provider>
   );

@@ -3,8 +3,8 @@ import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClassRealTimeController, ConnectionStatus, ChannelStatus } from "./ClassRealTimeController";
-import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
+import { ClassRealTimeController } from "./ClassRealTimeController";
+import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
@@ -24,6 +24,7 @@ type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["R
  * - submission_user: submission:$submission_id:profile_id:$profile_id (student for a specific submission)
  * - help_queue: help_queue:$help_queue_id (specific help queue)
  * - help_request: help_request:$help_request_id (specific help request)
+ * - discussion_thread_root: discussion_thread:$root_id (specific discussion thread root)
  */
 type ChannelType =
   | "staff"
@@ -35,7 +36,8 @@ type ChannelType =
   | "help_request"
   | "help_request_staff"
   | "help_queues"
-  | "class_staff";
+  | "class_staff"
+  | "discussion_thread_root";
 
 /**
  * Map of tables to the channel types that broadcast their changes.
@@ -69,7 +71,8 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   student_deadline_extensions: ["staff"],
   tags: ["staff"],
   user_roles: ["staff"],
-  discussion_threads: ["staff", "students"],
+  discussion_threads: ["staff", "students", "discussion_thread_root"],
+  discussion_topics: ["staff", "students"],
   gradebook_columns: ["staff", "students"],
   gradebook_column_students: ["staff", "user"], // Also to individual users when not private
   help_queue_assignments: ["help_queue"],
@@ -86,6 +89,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   // Tables broadcast only to individual users
   discussion_thread_read_status: ["user"],
   discussion_thread_watchers: ["user"],
+  discussion_thread_likes: ["user"],
 
   // Tables broadcast via submission-specific channels
   submission_artifact_comments: ["submission_graders", "submission_user"],
@@ -523,11 +527,11 @@ export default class TableController<
   private _table: RelationName;
   private _temporaryIdCounter: number = -1;
   private _classRealTimeController: ClassRealTimeController | null = null;
-  private _officeHoursRealTimeController: OfficeHoursRealTimeController | null = null;
+  private _additionalRealTimeControllers: PawtograderRealTimeController[] = [];
   private _classRealtimeUnsubscribe: (() => void) | null = null;
-  private _officeHoursRealtimeUnsubscribe: (() => void) | null = null;
+  private _additionalRealtimeUnsubscribes: (() => void)[] = [];
   private _classStatusUnsubscribe: (() => void) | null = null;
-  private _officeHoursStatusUnsubscribe: (() => void) | null = null;
+  private _additionalStatusUnsubscribes: (() => void)[] = [];
   private _submissionId: number | null = null;
   private _lastChannelStates: Map<string, string> = new Map(); // Track individual channel states
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
@@ -1101,9 +1105,7 @@ export default class TableController<
   /**
    * Check if a channel status is relevant for this table
    */
-  private _isChannelRelevantForTable(
-    channelStatus: ChannelStatus | import("./OfficeHoursRealTimeController").ChannelStatus
-  ): boolean {
+  private _isChannelRelevantForTable(channelStatus: ChannelStatus): boolean {
     const relevantTypes = this._getRelevantChannelTypes();
 
     // If table explicitly has no broadcasts (empty array in map), no channels are relevant
@@ -1148,9 +1150,7 @@ export default class TableController<
    * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
    * Only refetches when channels relevant to this table's data reconnect
    */
-  private _handleConnectionStatusChange(
-    status: ConnectionStatus | import("./OfficeHoursRealTimeController").ConnectionStatus
-  ): void {
+  private _handleConnectionStatusChange(status: ConnectionStatus): void {
     // Track which relevant channels have reconnected
     const relevantReconnections: string[] = [];
 
@@ -1202,7 +1202,7 @@ export default class TableController<
     classRealTimeController,
     selectForSingleRow,
     submissionId,
-    officeHoursRealTimeController,
+    additionalRealTimeControllers,
     realtimeFilter,
     debounceInterval,
     loadEntireTable = true
@@ -1217,7 +1217,8 @@ export default class TableController<
     client: SupabaseClient<Database>;
     table: RelationName;
     classRealTimeController?: ClassRealTimeController;
-    officeHoursRealTimeController?: OfficeHoursRealTimeController;
+    /** Additional realtime controllers (e.g., DiscussionThreadRealTimeController, OfficeHoursRealTimeController) */
+    additionalRealTimeControllers?: PawtograderRealTimeController[];
     /** Select clause to use for single-row refetches (preserves joins) */
     selectForSingleRow?: Query;
     submissionId?: number;
@@ -1231,7 +1232,7 @@ export default class TableController<
     this._query = query;
     this._table = table;
     this._classRealTimeController = classRealTimeController || null;
-    this._officeHoursRealTimeController = officeHoursRealTimeController || null;
+    this._additionalRealTimeControllers = additionalRealTimeControllers || [];
     this._submissionId = submissionId || null;
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
@@ -1321,27 +1322,28 @@ export default class TableController<
           }
         }
 
-        if (!this._closed && this._officeHoursRealTimeController) {
-          this._officeHoursRealtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(
-            table,
-            messageHandler
-          );
+        // Subscribe to additional realtime controllers (e.g., per-thread, office hours)
+        if (!this._closed && this._additionalRealTimeControllers.length > 0) {
+          for (const controller of this._additionalRealTimeControllers) {
+            // Subscribe to table changes
+            const unsubscribe = controller.subscribeToTable(table, messageHandler);
+            this._additionalRealtimeUnsubscribes.push(unsubscribe);
 
-          // Subscribe to connection status changes for office hours controller
-          this._officeHoursStatusUnsubscribe = this._officeHoursRealTimeController.subscribeToStatus((status) => {
-            if (this._closed) return;
-            this._handleConnectionStatusChange(
-              status as ConnectionStatus | import("./OfficeHoursRealTimeController").ConnectionStatus
-            );
-          });
+            // Subscribe to connection status changes
+            const statusUnsubscribe = controller.subscribeToStatus((status) => {
+              if (this._closed) return;
+              this._handleConnectionStatusChange(status);
+            });
+            this._additionalStatusUnsubscribes.push(statusUnsubscribe);
 
-          // Merge initial channel states from office hours controller (deduplicate by channel.name)
-          const initialStatus = this._officeHoursRealTimeController.getConnectionStatus();
-          for (const channel of initialStatus.channels) {
-            if (this._isChannelRelevantForTable(channel)) {
-              // Only set if not already set by class controller to avoid overwriting
-              if (!this._lastChannelStates.has(channel.name)) {
-                this._lastChannelStates.set(channel.name, channel.state);
+            // Merge initial channel states (deduplicate by channel.name)
+            const initialStatus = controller.getConnectionStatus();
+            for (const channel of initialStatus.channels) {
+              if (this._isChannelRelevantForTable(channel)) {
+                // Only set if not already set by previous controllers
+                if (!this._lastChannelStates.has(channel.name)) {
+                  this._lastChannelStates.set(channel.name, channel.state);
+                }
               }
             }
           }
@@ -1395,18 +1397,19 @@ export default class TableController<
       this._classRealtimeUnsubscribe();
       this._classRealtimeUnsubscribe = null;
     }
-    if (this._officeHoursRealtimeUnsubscribe) {
-      this._officeHoursRealtimeUnsubscribe();
-      this._officeHoursRealtimeUnsubscribe = null;
-    }
     if (this._classStatusUnsubscribe) {
       this._classStatusUnsubscribe();
       this._classStatusUnsubscribe = null;
     }
-    if (this._officeHoursStatusUnsubscribe) {
-      this._officeHoursStatusUnsubscribe();
-      this._officeHoursStatusUnsubscribe = null;
+    // Unsubscribe from all additional controllers
+    for (const unsubscribe of this._additionalRealtimeUnsubscribes) {
+      unsubscribe();
     }
+    this._additionalRealtimeUnsubscribes = [];
+    for (const unsubscribe of this._additionalStatusUnsubscribes) {
+      unsubscribe();
+    }
+    this._additionalStatusUnsubscribes = [];
     if (this._debounceTimeout) {
       clearTimeout(this._debounceTimeout);
       this._debounceTimeout = null;

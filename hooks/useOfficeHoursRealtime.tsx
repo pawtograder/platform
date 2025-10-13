@@ -93,7 +93,7 @@ export class OfficeHoursController {
       client,
       table: "help_queues",
       query: client.from("help_queues").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      additionalRealTimeControllers: [officeHoursRealTimeController],
       realtimeFilter: {
         class_id: classId
       }
@@ -103,7 +103,7 @@ export class OfficeHoursController {
       client,
       table: "help_request_students",
       query: client.from("help_request_students").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      additionalRealTimeControllers: [officeHoursRealTimeController],
       realtimeFilter: {
         class_id: classId
       }
@@ -113,7 +113,7 @@ export class OfficeHoursController {
       client,
       table: "help_queue_assignments",
       query: client.from("help_queue_assignments").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      additionalRealTimeControllers: [officeHoursRealTimeController],
       realtimeFilter: {
         class_id: classId
       }
@@ -123,14 +123,14 @@ export class OfficeHoursController {
       client,
       table: "student_karma_notes",
       query: client.from("student_karma_notes").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      additionalRealTimeControllers: [officeHoursRealTimeController]
     });
 
     this.helpRequestTemplates = new TableController({
       client,
       table: "help_request_templates",
       query: client.from("help_request_templates").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      additionalRealTimeControllers: [officeHoursRealTimeController],
       realtimeFilter: {
         class_id: classId
       }
@@ -140,28 +140,28 @@ export class OfficeHoursController {
       client,
       table: "help_request_moderation",
       query: client.from("help_request_moderation").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      additionalRealTimeControllers: [officeHoursRealTimeController]
     });
 
     this.studentHelpActivity = new TableController({
       client,
       table: "student_help_activity",
       query: client.from("student_help_activity").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      additionalRealTimeControllers: [officeHoursRealTimeController]
     });
 
     this.helpRequestFeedback = new TableController({
       client,
       table: "help_request_feedback",
       query: client.from("help_request_feedback").select("*").eq("class_id", classId),
-      officeHoursRealTimeController
+      additionalRealTimeControllers: [officeHoursRealTimeController]
     });
 
     this.helpRequestFileReferences = new TableController({
       client,
       table: "help_request_file_references",
       query: client.from("help_request_file_references").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      additionalRealTimeControllers: [officeHoursRealTimeController],
       realtimeFilter: {
         class_id: classId
       }
@@ -171,7 +171,7 @@ export class OfficeHoursController {
       client,
       table: "video_meeting_sessions",
       query: client.from("video_meeting_sessions").select("*").eq("class_id", classId),
-      officeHoursRealTimeController,
+      additionalRealTimeControllers: [officeHoursRealTimeController],
       realtimeFilter: {
         class_id: classId
       }
@@ -270,7 +270,7 @@ export class OfficeHoursController {
         .select("*")
         .eq("class_id", this.classId)
         .eq("help_request_id", helpRequestId),
-      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined,
+      additionalRealTimeControllers: this._officeHoursRealTimeController ? [this._officeHoursRealTimeController] : [],
       realtimeFilter: {
         class_id: this.classId,
         help_request_id: helpRequestId
@@ -299,7 +299,7 @@ export class OfficeHoursController {
         .select("*")
         .eq("class_id", this.classId)
         .eq("help_request_id", helpRequestId),
-      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined
+      additionalRealTimeControllers: this._officeHoursRealTimeController ? [this._officeHoursRealTimeController] : []
     });
 
     this._helpRequestReadReceiptControllers.set(helpRequestId, controller);

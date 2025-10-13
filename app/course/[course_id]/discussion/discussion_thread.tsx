@@ -17,7 +17,6 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
-import { useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -182,10 +181,7 @@ const DiscussionThreadContent = memo(
     // We know thread.root is a number here
     const root_thread = useDiscussionThreadTeaser(thread.root!);
     const is_answer = root_thread?.answer === thread.id;
-    const { mutateAsync } = useUpdate<DiscussionThreadType>({
-      resource: "discussion_threads",
-      mutationMode: "optimistic"
-    });
+    const { tableController } = useDiscussionThreadsController();
 
     const [replyVisible, setReplyVisible] = useState(false);
     const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -239,7 +235,7 @@ const DiscussionThreadContent = memo(
     const toggleAnswered = useCallback(async () => {
       // root_thread might still be loading initially, handle that case
       if (!root_thread || thread.root === undefined || thread.id === undefined) {
-        console.error("Cannot toggle answer status: root_thread not loaded or thread IDs missing.");
+        // Silently return if data not loaded yet
         return;
       }
       if (is_answer) {
@@ -334,9 +330,9 @@ const DiscussionThreadContent = memo(
                   {isEditing ? (
                     <MessageInput
                       sendMessage={async (message) => {
-                        await mutateAsync({
-                          id: thread.id.toString(), // Ensure ID is string if needed
-                          values: { body: message, edited_at: new Date().toISOString() }
+                        await tableController.update(thread.id, {
+                          body: message,
+                          edited_at: new Date().toISOString()
                         });
                         setIsEditing(false);
                       }}

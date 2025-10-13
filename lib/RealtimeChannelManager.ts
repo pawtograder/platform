@@ -406,6 +406,7 @@ export class RealtimeChannelManager {
 
           // Set up broadcast message handler
           channel.on("broadcast", { event: "broadcast" }, (message) => {
+            console.log("broadcast received", message);
             if (Math.random() < 0.1) {
               this._breadcrumb(
                 "channel",
