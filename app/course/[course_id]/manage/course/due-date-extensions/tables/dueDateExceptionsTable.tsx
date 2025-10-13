@@ -46,8 +46,6 @@ export default function DueDateExceptionsTable() {
     [students]
   );
 
-  console.log("assignments", assignments);
-
   return (
     <VStack align="stretch" gap={4} w="100%">
       <HStack gap={3} justifyContent="space-between" alignItems="center">

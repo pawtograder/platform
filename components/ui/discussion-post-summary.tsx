@@ -1,46 +1,77 @@
 "use client";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Button, Flex, HStack, Icon, Spacer, Stack, Status, Text, VStack } from "@chakra-ui/react";
-import excerpt from "@stefanprobst/remark-excerpt";
-
 import Markdown from "@/components/ui/markdown";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
-import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
-import { createClient } from "@/utils/supabase/client";
-import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import {
+  DiscussionThread as DiscussionThreadType,
+  DiscussionTopic,
+  ThreadWithChildren
+} from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Badge, Box, Button, Flex, HStack, Icon, Spacer, Stack, Status, Text, VStack } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
+import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative } from "date-fns";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { BsChat } from "react-icons/bs";
-import { FaCheckCircle, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
+import { FaCheckCircle, FaRegStickyNote, FaRegThumbsUp, FaThumbsUp } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { Skeleton } from "./skeleton";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThreadType | ThreadWithChildren }) {
-  const supabase = createClient();
   const { private_profile_id } = useClassProfiles();
   const likeStatus = useDiscussionThreadLikes(thread.id);
+  const { discussionThreadTeasers } = useCourseController();
   const trackEvent = useTrackEvent();
+  const [loading, setLoading] = useState(false);
+  const { discussionThreadLikes } = useCourseController();
 
   const toggleLike = useCallback(async () => {
-    if (likeStatus) {
-      await supabase.from("discussion_thread_likes").delete().eq("id", likeStatus.id);
-    } else {
-      await supabase
-        .from("discussion_thread_likes")
-        .insert({ discussion_thread: thread.id, creator: private_profile_id!, emoji: "👍" });
-
-      // Track discussion thread like
-      trackEvent("discussion_thread_liked", {
-        thread_id: thread.id,
-        course_id: thread.class_id
+    setLoading(true);
+    try {
+      if (likeStatus) {
+        // Unlike - use TableController hardDelete
+        await discussionThreadLikes.hardDelete(likeStatus.id);
+      } else {
+        // Like - use TableController create
+        await discussionThreadLikes.create({
+          discussion_thread: thread.id,
+          creator: private_profile_id!,
+          emoji: "👍"
+        });
+        // Track discussion thread like
+        trackEvent("discussion_thread_liked", {
+          thread_id: thread.id,
+          course_id: thread.class_id
+        });
+      }
+      await discussionThreadTeasers.refetchByIds([thread.id]);
+    } catch (error) {
+      Sentry.captureException(error);
+      toaster.error({
+        title: "Error",
+        description: "Error in toggleLike",
+        type: "error"
       });
+      await discussionThreadTeasers.refetchByIds([thread.id]);
+    } finally {
+      setLoading(false);
     }
-  }, [thread.id, likeStatus, private_profile_id, supabase, thread.class_id, trackEvent]);
+  }, [
+    thread.id,
+    likeStatus,
+    private_profile_id,
+    discussionThreadLikes,
+    thread.class_id,
+    trackEvent,
+    discussionThreadTeasers
+  ]);
 
   return (
-    <Button variant="ghost" size="sm" onClick={toggleLike}>
-      {likeStatus ? <Icon as={FaRegHeart} /> : <Icon as={FaRegHeart} />}
+    <Button variant="ghost" size="sm" onClick={toggleLike} loading={loading}>
+      {thread.likes_count} {likeStatus ? <Icon as={FaThumbsUp} /> : <Icon as={FaRegThumbsUp} />}
     </Button>
   );
 }
@@ -126,10 +157,7 @@ export function DiscussionPostSummary({
         </Stack>
         <VStack px="4" justify="center" flexShrink="0">
           {/* <Button variant="ghost" size="sm" ><BsChevronUp /></Button> */}
-          <DiscussionThreadLikeButton thread={thread} />
-          <Text textStyle="sm" fontWeight="semibold">
-            {thread.likes_count}
-          </Text>
+          {thread.likes_count} <Icon as={thread.likes_count > 0 ? FaThumbsUp : FaRegThumbsUp} />
         </VStack>
       </Flex>
     </Box>

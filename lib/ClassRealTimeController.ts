@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
+import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -12,7 +13,7 @@ type TablesThatHaveAnIDField = {
 // Extend known broadcast tables to include row-level recalculation state
 type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
 
-type BroadcastMessage = {
+export type BroadcastMessage = {
   type: "table_change" | "channel_created" | "system" | "staff_data_change";
   operation?: "INSERT" | "UPDATE" | "DELETE";
   table?: KnownBroadcastTables;
@@ -38,19 +39,6 @@ interface MessageSubscription {
   callback: MessageCallback;
 }
 
-export type ChannelStatus = {
-  name: string;
-  state: string;
-  type: "staff" | "user" | "submission_graders" | "submission_user";
-  submissionId?: number;
-};
-
-export type ConnectionStatus = {
-  overall: "connected" | "partial" | "disconnected" | "connecting";
-  channels: ChannelStatus[];
-  lastUpdate: Date;
-};
-
 export type ClassRealTimeControllerConfig = {
   /** The number of milliseconds to wait before disconnecting from realtime when the document is not visible.
    * Default is 10 minutes.
@@ -58,7 +46,7 @@ export type ClassRealTimeControllerConfig = {
   inactiveTabTimeoutSeconds?: number;
 };
 
-export class ClassRealTimeController {
+export class ClassRealTimeController implements PawtograderRealTimeController {
   private _client: SupabaseClient<Database>;
   private _classId: number;
   private _profileId: string;

@@ -52,8 +52,8 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     resource: "assignment_groups",
     meta: { select: "*, assignment_groups_members(*)" },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
-    pagination: { pageSize: 1000 },
-    liveMode: "auto"
+    pagination: { pageSize: 1000 }
+    // liveMode: "auto"
   });
   const { data: profiles } = useList<RolesWithProfilesAndGroupMemberships>({
     resource: "user_roles",
@@ -65,8 +65,8 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       { field: "role", operator: "eq", value: "student" },
       { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
     ],
-    pagination: { pageSize: 1000 },
-    liveMode: "auto"
+    pagination: { pageSize: 1000 }
+    // liveMode: "auto"
   });
   const groupsData = groups?.data;
   const [loading, setLoading] = useState<boolean>(false);

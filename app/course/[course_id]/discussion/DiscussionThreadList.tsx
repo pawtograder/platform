@@ -1,44 +1,43 @@
 "use client";
 
-import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 
 import Markdown from "@/components/ui/markdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import {
+  useDiscussionThreadReadStatus,
+  useDiscussionThreadTeaser,
+  useDiscussionThreadTeasers,
+  useDiscussionTopics,
+  useRootDiscussionThreadReadStatuses
+} from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
   Badge,
   Box,
   Button,
+  createListCollection,
   Flex,
   Heading,
   HStack,
   Icon,
   Input,
+  Portal,
   Select,
   Separator,
   Spacer,
   Stack,
   Text,
-  VStack,
-  Portal,
-  createListCollection
+  VStack
 } from "@chakra-ui/react";
 import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
-import { Fragment, useId, useState, useMemo } from "react";
-import { FaPlus, FaHeart, FaThumbtack } from "react-icons/fa";
-import {
-  useDiscussionThreadReadStatus,
-  useDiscussionThreadTeaser,
-  useDiscussionThreadTeasers,
-  useRootDiscussionThreadReadStatuses
-} from "@/hooks/useCourseController";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Fragment, useId, useMemo, useState } from "react";
+import { FaPlus, FaThumbsUp, FaThumbtack } from "react-icons/fa";
 
 interface Props {
   thread_id: number;
@@ -131,7 +130,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
                 </Text>
                 {thread?.likes_count != null && thread.likes_count > 0 && (
                   <HStack alignItems="center">
-                    <Icon as={FaHeart} color="fg.subtle" boxSize="3" />
+                    <Icon as={FaThumbsUp} color="fg.subtle" boxSize="3" />
                     <Text fontSize="xs" color="text.muted">
                       {thread.likes_count}
                     </Text>
@@ -159,10 +158,7 @@ export default function DiscussionThreadList() {
   const { course_id } = useParams();
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const list = useDiscussionThreadTeasers();
-  const { data: topics } = useList<DiscussionTopic>({
-    resource: "discussion_topics",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
+  const topics = useDiscussionTopics();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOption, setFilterOption] = useState("all");
@@ -249,10 +245,10 @@ export default function DiscussionThreadList() {
       { value: "unanswered", label: "Unanswered Questions" },
       { value: "answered", label: "Answered Questions" },
       { value: "my_posts", label: "My Posts" },
-      ...(topics?.data?.map((topic) => ({ value: `topic-${topic.id}`, label: topic.topic })) || [])
+      ...(topics?.map((topic) => ({ value: `topic-${topic.id}`, label: topic.topic })) || [])
     ];
     return createListCollection({ items });
-  }, [topics?.data]);
+  }, [topics]);
 
   const sortCollection = useMemo(() => {
     const items = [

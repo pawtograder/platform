@@ -2,6 +2,7 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
 import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 
 type MessageFilter = {
   type?: OfficeHoursBroadcastMessage["type"];
@@ -19,20 +20,6 @@ interface MessageSubscription {
   callback: MessageCallback;
 }
 
-export type ChannelStatus = {
-  name: string;
-  state: "closed" | "errored" | "joined" | "joining" | "leaving";
-  type: "help_request" | "help_request_staff" | "help_queue" | "help_queues" | "class_staff";
-  help_request_id?: number;
-  help_queue_id?: number;
-};
-
-export type ConnectionStatus = {
-  overall: "connected" | "connecting" | "disconnected" | "partial";
-  channels: ChannelStatus[];
-  lastUpdate: Date;
-};
-
 /**
  * Controller for managing office hours realtime channels and subscriptions.
  * Handles the four main channel types from the migration:
@@ -41,7 +28,7 @@ export type ConnectionStatus = {
  * - help_queue:<id> (single queue status)
  * - help_queues (all queues with assignments)
  */
-export class OfficeHoursRealTimeController {
+export class OfficeHoursRealTimeController implements PawtograderRealTimeController {
   private _client: SupabaseClient<Database>;
   private _classId: number;
   private _profileId: string;

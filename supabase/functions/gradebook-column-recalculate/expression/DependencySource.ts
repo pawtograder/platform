@@ -496,6 +496,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const students = new Set<string>(keys.map((key) => key.student_id));
     const gradebookColumnIds = new Set(keys.map((key) => Number(key.key)));
     const uniqueGradebookColumnIds = Array.from(gradebookColumnIds);
+    const studentIds = Array.from(students);
 
     // Fetch all gradebook column students with pagination
     const allGradebookColumnStudents: GradebookColumnStudent[] = [];
@@ -504,11 +505,17 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
 
     while (true) {
       const to = from + pageSize - 1;
-      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await supabase
+      let query = supabase
         .from("gradebook_column_students")
         .select("*")
-        .in("gradebook_column_id", uniqueGradebookColumnIds)
-        .range(from, to);
+        .in("gradebook_column_id", uniqueGradebookColumnIds);
+
+      // If 20 or fewer students, filter by student_id for better performance
+      if (studentIds.length <= 20) {
+        query = query.in("student_id", studentIds);
+      }
+
+      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await query.range(from, to);
 
       if (gradebookColumnsFetchError) {
         throw gradebookColumnsFetchError;
@@ -559,6 +566,9 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
+    console.log(
+      `Retrieved ${allGradebookColumnStudents.length} gradebook column students for ${students.size} students and ${gradebookColumnIds.size} gradebook columns`
+    );
     const ret = allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
@@ -757,7 +767,33 @@ export async function addDependencySourceFunctions({
     }
     return a_val + b_val;
   };
-  imports["sum"] = (_context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+  imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+    context.scope.setTag("student_id", context.student_id);
+    context.scope.setTag("class_id", context.class_id);
+    context.scope.setTag("is_private", context.is_private_calculation);
+    context.scope.addBreadcrumb({
+      message: `Sum called with value: ${JSON.stringify(value, null, 2)}`,
+      level: "debug"
+    });
+    if (isDenseMatrix(value)) {
+      const values = value.toArray();
+      return values
+        .map((v) => {
+          if (isGradebookColumnStudent(v)) {
+            return v.score ?? 0;
+          }
+          if (typeof v === "number") {
+            return v;
+          } else if (v === undefined || v === null) {
+            return undefined;
+          }
+          throw new Error(
+            `Unsupported type in matrix for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
+          );
+        })
+        .filter((v) => v !== undefined)
+        .reduce((a, b) => a + b, 0);
+    }
     if (Array.isArray(value)) {
       const values = value
         .map((v) => {
@@ -767,8 +803,11 @@ export async function addDependencySourceFunctions({
           if (typeof v === "number") {
             return v;
           }
+          if (v === undefined || v === null) {
+            return undefined;
+          }
           throw new Error(
-            `Unsupported value type for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
+            `Unsupported value type in array for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
           );
         })
         .filter((v) => v !== undefined);

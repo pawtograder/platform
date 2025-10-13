@@ -54,7 +54,6 @@ export function useColorMode() {
 
   const toggleColorMode = () => {
     const nextMode: UserColorMode = userColorMode === "light" ? "dark" : userColorMode === "dark" ? "system" : "light";
-    console.log("nextMode", nextMode);
     setColorMode(nextMode);
   };
 

@@ -179,7 +179,7 @@ function SyncButton({
   tableController
 }: {
   repoId: number;
-  tableController: TableController<"repositories", typeof joinedSelect, number>;
+  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
 }) {
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -202,7 +202,7 @@ function SyncButton({
           description: "Repository sync has been queued. This page will automatically update."
         });
         // Invalidate the row to refetch its updated state
-        await tableController.invalidate(repoId);
+        await tableController?.invalidate(repoId);
       } else if (result.skipped_count > 0) {
         toaster.info({
           title: "Already Up to Date",
@@ -320,7 +320,11 @@ export default function RepositoriesPage() {
     id: Number(assignment_id)
   });
 
-  const repositories: TableController<"repositories", typeof joinedSelect, number> = useMemo(() => {
+  const [repositories, setRepositories] = useState<
+    TableController<"repositories", typeof joinedSelect, number> | undefined
+  >(undefined);
+
+  useEffect(() => {
     const client = createClient();
     const query = client
       .from("repositories")
@@ -338,8 +342,13 @@ export default function RepositoriesPage() {
       },
       debounceInterval: 500 // Debounce rapid updates during bulk syncs
     });
-    return controller;
-  }, [assignment_id, courseController]);
+
+    setRepositories(controller);
+
+    return () => {
+      controller.close();
+    };
+  }, [assignment_id, courseController.classRealTimeController]);
 
   const [isBulkSyncing, setIsBulkSyncing] = useState(false);
 
@@ -557,7 +566,7 @@ export default function RepositoriesPage() {
 
       toggleAllRowsSelected(false);
       // Invalidate all synced rows to refetch their updated state
-      await repositories.refetchByIds(selectedIds);
+      await repositories?.refetchByIds(selectedIds);
     } catch (error) {
       console.error(error);
       toaster.error({

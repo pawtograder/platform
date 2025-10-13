@@ -10,14 +10,13 @@ import {
   useDiscussionThreadTeaser,
   useUpdateThreadTeaser
 } from "@/hooks/useCourseController";
-import useDiscussionThreadChildren from "@/hooks/useDiscussionThreadRootController";
+import useDiscussionThreadChildren, { useDiscussionThreadsController } from "@/hooks/useDiscussionThreadRootController";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
-import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -32,7 +31,6 @@ export function DiscussionThreadReply({
   setVisible: (visible: boolean) => void;
 }) {
   // const invalidate = useInvalidate();
-  const { mutateAsync: mutate } = useCreate({ resource: "discussion_threads" });
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const trackEvent = useTrackEvent();
   const { public_profile_id } = useClassProfiles();
@@ -46,32 +44,30 @@ export function DiscussionThreadReply({
       }, 100);
     }
   }, [visible]);
+  const { tableController } = useDiscussionThreadsController();
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
       if (!thread) {
         return;
       }
-      const result = await mutate({
-        resource: "discussion_threads",
-        values: {
-          subject: `Re: ${thread.subject}`,
-          parent: thread.id,
-          root: thread.root || thread.id,
-          topic_id: thread.topic_id,
-          instructors_only: thread.instructors_only,
-          class_id: thread.class_id,
-          author: profile_id,
-          body: message
-        }
+      const result = await tableController.create({
+        subject: `Re: ${thread.subject}`,
+        parent: thread.id,
+        root: thread.root || thread.id,
+        topic_id: thread.topic_id,
+        instructors_only: thread.instructors_only,
+        class_id: thread.class_id,
+        author: profile_id,
+        body: message
       });
 
       // Track discussion reply
-      if (result?.data) {
+      if (result) {
         const rootId = thread.root || thread.id;
 
         trackEvent("discussion_reply_posted", {
-          thread_id: Number(result.data.id),
+          thread_id: result.id,
           root_thread_id: rootId,
           course_id: thread.class_id,
           is_anonymous: profile_id === public_profile_id
@@ -87,7 +83,7 @@ export function DiscussionThreadReply({
         setVisible(false);
       }
     },
-    [mutate, setVisible, thread, trackEvent, public_profile_id]
+    [tableController, setVisible, thread, trackEvent, public_profile_id]
   );
   if (!visible) {
     return <></>;
@@ -185,10 +181,7 @@ const DiscussionThreadContent = memo(
     // We know thread.root is a number here
     const root_thread = useDiscussionThreadTeaser(thread.root!);
     const is_answer = root_thread?.answer === thread.id;
-    const { mutateAsync } = useUpdate<DiscussionThreadType>({
-      resource: "discussion_threads",
-      mutationMode: "optimistic"
-    });
+    const { tableController } = useDiscussionThreadsController();
 
     const [replyVisible, setReplyVisible] = useState(false);
     const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -242,7 +235,7 @@ const DiscussionThreadContent = memo(
     const toggleAnswered = useCallback(async () => {
       // root_thread might still be loading initially, handle that case
       if (!root_thread || thread.root === undefined || thread.id === undefined) {
-        console.error("Cannot toggle answer status: root_thread not loaded or thread IDs missing.");
+        // Silently return if data not loaded yet
         return;
       }
       if (is_answer) {
@@ -337,9 +330,9 @@ const DiscussionThreadContent = memo(
                   {isEditing ? (
                     <MessageInput
                       sendMessage={async (message) => {
-                        await mutateAsync({
-                          id: thread.id.toString(), // Ensure ID is string if needed
-                          values: { body: message, edited_at: new Date().toISOString() }
+                        await tableController.update(thread.id, {
+                          body: message,
+                          edited_at: new Date().toISOString()
                         });
                         setIsEditing(false);
                       }}

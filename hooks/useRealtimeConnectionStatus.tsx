@@ -14,12 +14,9 @@
 import { useState, useEffect } from "react";
 import { usePathname, useParams } from "next/navigation";
 import { useCourseController } from "./useCourseController";
-import { ConnectionStatus } from "@/lib/ClassRealTimeController";
-import {
-  OfficeHoursRealTimeController,
-  ConnectionStatus as OfficeHoursConnectionStatus
-} from "@/lib/OfficeHoursRealTimeController";
+import { ConnectionStatus } from "@/lib/PawtograderRealTimeController";
 import { useConnectionStatus } from "./useOfficeHoursRealtime";
+import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
 
 /**
  * Combined connection status that includes both class and office hours realtime connections
@@ -125,14 +122,14 @@ export function useRealtimeConnectionStatus(
  */
 function combineConnectionStatuses(
   classStatus: ConnectionStatus,
-  officeHoursStatus?: OfficeHoursConnectionStatus
+  officeHoursStatus?: ConnectionStatus
 ): CombinedConnectionStatus {
   // Convert class channels to combined format
   const classChannels: CombinedChannelStatus[] = classStatus.channels.map((channel) => ({
     name: channel.name,
     state: channel.state,
     type: channel.type as CombinedChannelStatus["type"],
-    submissionId: "submissionId" in channel ? channel.submissionId : undefined
+    submissionId: "submissionId" in channel ? (channel.submissionId as number) : undefined
   }));
 
   // Convert office hours channels to combined format (if available)
@@ -141,8 +138,8 @@ function combineConnectionStatuses(
         name: channel.name,
         state: channel.state,
         type: channel.type as CombinedChannelStatus["type"],
-        help_request_id: "help_request_id" in channel ? channel.help_request_id : undefined,
-        help_queue_id: "help_queue_id" in channel ? channel.help_queue_id : undefined
+        help_request_id: "help_request_id" in channel ? (channel.help_request_id as number) : undefined,
+        help_queue_id: "help_queue_id" in channel ? (channel.help_queue_id as number) : undefined
       }))
     : [];
 

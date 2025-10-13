@@ -4,7 +4,7 @@ import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useCourseController, useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
+import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
@@ -13,7 +13,6 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -23,6 +22,7 @@ import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { useTableControllerValueById } from "@/lib/TableController";
 import { Radio } from "@/components/ui/radio";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -121,6 +121,9 @@ function ThreadActions({
       <Tooltip content="Watch">
         <ThreadWatchButton thread={thread} />
       </Tooltip>
+      <Tooltip content="Like">
+        <DiscussionThreadLikeButton thread={thread} />
+      </Tooltip>
       {canEdit && (
         <Tooltip content="Edit">
           <Button aria-label="Edit" onClick={() => setEditing(!editing)} variant="ghost" size="sm">
@@ -172,12 +175,8 @@ function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
   );
 }
 
-function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: number }) {
-  const { data: discussion_topics } = useList<DiscussionTopic>({
-    resource: "discussion_topics",
-    meta: { select: "*" },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
+function DiscussionPost({ root_id }: { root_id: number }) {
+  const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
   const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
   const [editing, setEditing] = useState(false);
@@ -208,12 +207,12 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
     setEditing(false);
   }, [setEditing]);
 
-  if (!discussion_topics?.data || !rootThread) {
+  if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
   }
   return (
     <>
-      <ThreadHeader thread={rootThread} topic={discussion_topics?.data.find((t) => t.id === rootThread.topic_id)} />
+      <ThreadHeader thread={rootThread} topic={discussion_topics.find((t) => t.id === rootThread.topic_id)} />
       <Box>
         {editing ? (
           <>
@@ -266,7 +265,7 @@ function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
   );
 }
 
-function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number; course_id: number }) {
+function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   const thread = useDiscussionThreadChildren(root_id);
   const courseController = useCourseController();
   useEffect(() => {
@@ -274,7 +273,7 @@ function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number; c
   }, [courseController.course.name, thread?.subject]);
   return (
     <>
-      <DiscussionPost root_id={root_id} course_id={course_id} />
+      <DiscussionPost root_id={root_id} />
       {thread &&
         thread.children.map((child, index) => (
           <DiscussionThread
@@ -291,14 +290,11 @@ function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number; c
 }
 
 export default function ThreadView() {
-  const { course_id, root_id } = useParams();
+  const { root_id } = useParams();
   return (
     <Box width="100%">
       <DiscussionThreadsControllerProvider root_id={Number.parseInt(root_id as string)}>
-        <DiscussionPostWithChildren
-          root_id={Number.parseInt(root_id as string)}
-          course_id={Number.parseInt(course_id as string)}
-        />
+        <DiscussionPostWithChildren root_id={Number.parseInt(root_id as string)} />
       </DiscussionThreadsControllerProvider>
     </Box>
   );
