@@ -16,6 +16,7 @@ import { usePathname, useParams } from "next/navigation";
 import { useCourseController } from "./useCourseController";
 import { ConnectionStatus } from "@/lib/PawtograderRealTimeController";
 import { useConnectionStatus } from "./useOfficeHoursRealtime";
+import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
 
 /**
  * Combined connection status that includes both class and office hours realtime connections
