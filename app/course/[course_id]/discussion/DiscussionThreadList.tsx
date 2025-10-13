@@ -5,39 +5,39 @@ import { useParams } from "next/navigation";
 import Markdown from "@/components/ui/markdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import {
+  useDiscussionThreadReadStatus,
+  useDiscussionThreadTeaser,
+  useDiscussionThreadTeasers,
+  useDiscussionTopics,
+  useRootDiscussionThreadReadStatuses
+} from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   Avatar,
   Badge,
   Box,
   Button,
+  createListCollection,
   Flex,
   Heading,
   HStack,
   Icon,
   Input,
+  Portal,
   Select,
   Separator,
   Spacer,
   Stack,
   Text,
-  VStack,
-  Portal,
-  createListCollection
+  VStack
 } from "@chakra-ui/react";
 import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
-import { Fragment, useId, useState, useMemo } from "react";
-import { FaPlus, FaHeart, FaThumbtack } from "react-icons/fa";
-import {
-  useDiscussionThreadReadStatus,
-  useDiscussionThreadTeaser,
-  useDiscussionThreadTeasers,
-  useRootDiscussionThreadReadStatuses,
-  useDiscussionTopics
-} from "@/hooks/useCourseController";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Fragment, useId, useMemo, useState } from "react";
+import { FaPlus, FaThumbsUp, FaThumbtack } from "react-icons/fa";
 
 interface Props {
   thread_id: number;
@@ -130,7 +130,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
                 </Text>
                 {thread?.likes_count != null && thread.likes_count > 0 && (
                   <HStack alignItems="center">
-                    <Icon as={FaHeart} color="fg.subtle" boxSize="3" />
+                    <Icon as={FaThumbsUp} color="fg.subtle" boxSize="3" />
                     <Text fontSize="xs" color="text.muted">
                       {thread.likes_count}
                     </Text>

@@ -1,30 +1,32 @@
 "use client";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Button, Flex, HStack, Icon, Spacer, Stack, Status, Text, VStack } from "@chakra-ui/react";
-import excerpt from "@stefanprobst/remark-excerpt";
-import * as Sentry from "@sentry/nextjs";
-import { toaster } from "@/components/ui/toaster";
 import Markdown from "@/components/ui/markdown";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
-import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
-import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import {
+  DiscussionThread as DiscussionThreadType,
+  DiscussionTopic,
+  ThreadWithChildren
+} from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Badge, Box, Button, Flex, HStack, Icon, Spacer, Stack, Status, Text, VStack } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
+import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative } from "date-fns";
 import { useCallback, useState } from "react";
 import { BsChat } from "react-icons/bs";
-import { FaCheckCircle, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
+import { FaCheckCircle, FaRegStickyNote, FaRegThumbsUp, FaThumbsUp } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { Skeleton } from "./skeleton";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
-import { useDiscussionThreadsController } from "@/hooks/useDiscussionThreadRootController";
 export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThreadType | ThreadWithChildren }) {
   const { private_profile_id } = useClassProfiles();
   const likeStatus = useDiscussionThreadLikes(thread.id);
+  const { discussionThreadTeasers } = useCourseController();
   const trackEvent = useTrackEvent();
   const [loading, setLoading] = useState(false);
   const { discussionThreadLikes } = useCourseController();
-  const threadController = useDiscussionThreadsController();
 
   const toggleLike = useCallback(async () => {
     setLoading(true);
@@ -45,7 +47,7 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
           course_id: thread.class_id
         });
       }
-      await threadController.tableController.refetchByIds([thread.id]);
+      await discussionThreadTeasers.refetchByIds([thread.id]);
     } catch (error) {
       Sentry.captureException(error);
       toaster.error({
@@ -53,15 +55,23 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
         description: "Error in toggleLike",
         type: "error"
       });
-      await threadController.tableController.refetchByIds([thread.id]);
+      await discussionThreadTeasers.refetchByIds([thread.id]);
     } finally {
       setLoading(false);
     }
-  }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, thread.class_id, trackEvent, threadController]);
+  }, [
+    thread.id,
+    likeStatus,
+    private_profile_id,
+    discussionThreadLikes,
+    thread.class_id,
+    trackEvent,
+    discussionThreadTeasers
+  ]);
 
   return (
     <Button variant="ghost" size="sm" onClick={toggleLike} loading={loading}>
-      {thread.likes_count} {likeStatus ? <Icon as={FaRegHeart} /> : <Icon as={FaRegHeart} />}
+      {thread.likes_count} {likeStatus ? <Icon as={FaThumbsUp} /> : <Icon as={FaRegThumbsUp} />}
     </Button>
   );
 }
@@ -147,7 +157,7 @@ export function DiscussionPostSummary({
         </Stack>
         <VStack px="4" justify="center" flexShrink="0">
           {/* <Button variant="ghost" size="sm" ><BsChevronUp /></Button> */}
-          {thread.likes_count} <Icon as={thread.likes_count > 0 ? FaRegHeart : FaRegHeart} />
+          {thread.likes_count} <Icon as={thread.likes_count > 0 ? FaThumbsUp : FaRegThumbsUp} />
         </VStack>
       </Flex>
     </Box>

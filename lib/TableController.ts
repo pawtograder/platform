@@ -1980,6 +1980,19 @@ export default class TableController<
   async getOneByFilters(
     filters: { column: keyof Database["public"]["Tables"][RelationName]["Row"]; operator: string; value: unknown }[]
   ) {
+    //Check to see if we already have this row in our cache
+    const matcher = (r: ResultOne & { id: ExtractIdType<RelationName> }) => {
+      for (const filter of filters) {
+        if (r[filter.column as keyof ResultOne & { id: ExtractIdType<RelationName> }] !== filter.value) {
+          return false;
+        }
+      }
+      return true;
+    };
+    const existingRow = this._rows.find(matcher as (r: PossiblyTentativeResult<ResultOne>) => boolean);
+    if (existingRow) {
+      return existingRow;
+    }
     let query = this._client.from(this._table).select("*");
     for (const filter of filters) {
       query = query.filter(filter.column as string, filter.operator, filter.value);

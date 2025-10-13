@@ -580,7 +580,6 @@ export default function MessageInput(props: MessageInputProps) {
           }
         }}
         onChange={(value) => {
-          console.log("onChange", value);
           setValue(value);
           editorOnChange?.(value);
           // Update cursor position when text changes
