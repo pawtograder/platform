@@ -654,7 +654,7 @@ export default class TableController<
   private _bumpMaxUpdatedAtFrom(rowLike: unknown): void {
     const ts = this._extractUpdatedAtMs(rowLike);
     if (ts != null) {
-      this._maxUpdatedAtMs = this._maxUpdatedAtMs == null ? ts + 1000 : Math.max(this._maxUpdatedAtMs, ts + 1000);
+      this._maxUpdatedAtMs = this._maxUpdatedAtMs == null ? ts + 100 : Math.max(this._maxUpdatedAtMs, ts + 100);
     }
   }
 
