@@ -198,8 +198,8 @@ export async function fetchCourseControllerData(
     // User roles with profiles and users
     isStaff
       ? fetchAllPages<UserRoleWithPrivateProfileAndUser>(
-          client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
-        )
+        client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
+      )
       : Promise.resolve(undefined),
 
     // Discussion thread teasers (only root-level threads, right now only for staff b/c permissions)
@@ -222,15 +222,15 @@ export async function fetchCourseControllerData(
     // Student deadline extensions
     isStaff
       ? fetchAllPages<StudentDeadlineExtension>(
-          client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
-        )
+        client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
+      )
       : Promise.resolve(undefined),
 
     // Assignment due date exceptions
     isStaff
       ? fetchAllPages<AssignmentDueDateException>(
-          client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
-        )
+        client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
+      )
       : Promise.resolve(undefined),
 
     // Assignments (with ordering)
@@ -256,8 +256,8 @@ export async function fetchCourseControllerData(
     // Repositories
     isStaff
       ? fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
-          client.from("repositories").select("*").eq("class_id", course_id)
-        )
+        client.from("repositories").select("*").eq("class_id", course_id)
+      )
       : Promise.resolve(undefined),
 
     // Gradebook columns
@@ -297,6 +297,10 @@ export async function fetchAssignmentControllerData(
   isStaff: boolean
 ): Promise<AssignmentControllerInitialData> {
   const client = await createClientWithCaching({ tags: ["assignment_controller"] });
+  const reviewAssignmentsClient = await createClientWithCaching({
+    tags: ["review_assignments"],
+    revalidate: 10, // review assignments are updated somewhat frequently, a good candidate for using invalidation
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -313,8 +317,8 @@ export async function fetchAssignmentControllerData(
     // Submissions (active only)
     isStaff
       ? fetchAllPages<Submission>(
-          client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true)
-        )
+        client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true)
+      )
       : Promise.resolve(undefined),
 
     // Assignment groups
@@ -323,15 +327,15 @@ export async function fetchAssignmentControllerData(
     // Review assignments
     isStaff
       ? fetchAllPages<Database["public"]["Tables"]["review_assignments"]["Row"]>(
-          client.from("review_assignments").select("*").eq("assignment_id", assignment_id)
-        )
+        reviewAssignmentsClient.from("review_assignments").select("*").eq("assignment_id", assignment_id)
+      )
       : Promise.resolve(undefined),
 
     // Regrade requests
     isStaff
       ? fetchAllPages<RegradeRequest>(
-          client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id)
-        )
+        client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id)
+      )
       : Promise.resolve(undefined),
 
     // Rubrics
