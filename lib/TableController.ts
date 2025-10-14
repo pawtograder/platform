@@ -46,7 +46,7 @@ type ChannelType =
  */
 const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
   "notifications",
-  "discussion_topics", 
+  "discussion_topics",
   "discussion_thread_likes",
   "assignments",
   "assignment_due_date_exceptions",
@@ -606,7 +606,7 @@ export default class TableController<
   private _isProcessingBatch: boolean = false;
   /** Tracks the maximum updated_at timestamp (ms) of rows currently loaded. Used for incremental refetches. */
   private _maxUpdatedAtMs: number | null = null;
-  /** 
+  /**
    * Controls whether this table should auto-refetch on reconnection.
    * If undefined (default), auto-refetch is enabled only if table has updated_at column.
    * If true, always refetch on reconnection.
@@ -1245,7 +1245,7 @@ export default class TableController<
     if (relevantReconnections.length > 0 && this._ready) {
       // Determine if auto-refetch should be enabled for this table
       const shouldAutoRefetch = this._shouldEnableAutoRefetch();
-      
+
       if (!shouldAutoRefetch) {
         // Skip refetch for tables without updated_at (unless explicitly enabled)
         return;
