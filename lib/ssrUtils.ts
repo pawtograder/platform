@@ -164,7 +164,7 @@ async function fetchAllPages<T>(
  */
 export async function fetchCourseControllerData(
   course_id: number,
-  role: 'instructor' | 'student' | 'grader' | 'admin'
+  role: "instructor" | "student" | "grader" | "admin"
 ): Promise<CourseControllerInitialData> {
   const client = await createClientWithCaching({ tags: ["course_controller"] });
   const isStaff = role === "instructor" || role === "grader" || role === "admin";
@@ -210,14 +210,18 @@ export async function fetchCourseControllerData(
     fetchAllPages<ClassSection>(client.from("class_sections").select("*").eq("class_id", course_id)),
 
     // Student deadline extensions
-    isStaff ? fetchAllPages<StudentDeadlineExtension>(
-      client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
-    ) : Promise.resolve(undefined),
+    isStaff
+      ? fetchAllPages<StudentDeadlineExtension>(
+          client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
+        )
+      : Promise.resolve(undefined),
 
     // Assignment due date exceptions
-    isStaff ? fetchAllPages<AssignmentDueDateException>(
-      client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
-    ) : Promise.resolve(undefined),
+    isStaff
+      ? fetchAllPages<AssignmentDueDateException>(
+          client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
+        )
+      : Promise.resolve(undefined),
 
     // Assignments (with ordering)
     fetchAllPages<Assignment>(
@@ -240,9 +244,11 @@ export async function fetchCourseControllerData(
     fetchAllPages<DiscussionTopic>(client.from("discussion_topics").select("*").eq("class_id", course_id)),
 
     // Repositories
-    isStaff ? fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
-      client.from("repositories").select("*").eq("class_id", course_id)
-    ) : Promise.resolve(undefined),
+    isStaff
+      ? fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
+          client.from("repositories").select("*").eq("class_id", course_id)
+        )
+      : Promise.resolve(undefined),
 
     // Gradebook columns
     fetchAllPages<Database["public"]["Tables"]["gradebook_columns"]["Row"]>(
