@@ -198,8 +198,8 @@ export async function fetchCourseControllerData(
     // User roles with profiles and users
     isStaff
       ? fetchAllPages<UserRoleWithPrivateProfileAndUser>(
-        client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
-      )
+          client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
+        )
       : Promise.resolve(undefined),
 
     // Discussion thread teasers (only root-level threads, right now only for staff b/c permissions)
@@ -222,15 +222,15 @@ export async function fetchCourseControllerData(
     // Student deadline extensions
     isStaff
       ? fetchAllPages<StudentDeadlineExtension>(
-        client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
-      )
+          client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
+        )
       : Promise.resolve(undefined),
 
     // Assignment due date exceptions
     isStaff
       ? fetchAllPages<AssignmentDueDateException>(
-        client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
-      )
+          client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
+        )
       : Promise.resolve(undefined),
 
     // Assignments (with ordering)
@@ -256,8 +256,8 @@ export async function fetchCourseControllerData(
     // Repositories
     isStaff
       ? fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
-        client.from("repositories").select("*").eq("class_id", course_id)
-      )
+          client.from("repositories").select("*").eq("class_id", course_id)
+        )
       : Promise.resolve(undefined),
 
     // Gradebook columns
@@ -299,7 +299,19 @@ export async function fetchAssignmentControllerData(
   const client = await createClientWithCaching({ tags: ["assignment_controller"] });
   const reviewAssignmentsClient = await createClientWithCaching({
     tags: ["review_assignments"],
-    revalidate: 10, // review assignments are updated somewhat frequently, a good candidate for using invalidation
+    revalidate: 10 // review assignments are updated somewhat frequently, a good candidate for using invalidation
+  });
+  const regradeRequestsClient = await createClientWithCaching({
+    tags: ["regrade_requests"],
+    revalidate: 10 // regrade requests are updated somewhat frequently, a good candidate for using invalidation
+  });
+  const assignmentGroupsClient = await createClientWithCaching({
+    tags: ["assignment_groups"],
+    revalidate: 10 // assignment groups are updated somewhat frequently, a good candidate for using invalidation
+  });
+  const submissionsClient = await createClientWithCaching({
+    tags: ["submissions"],
+    revalidate: 10 // submissions are updated somewhat frequently, a good candidate for using invalidation
   });
 
   // Fetch all data in parallel for maximum performance
@@ -317,25 +329,27 @@ export async function fetchAssignmentControllerData(
     // Submissions (active only)
     isStaff
       ? fetchAllPages<Submission>(
-        client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true)
-      )
+          submissionsClient.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true)
+        )
       : Promise.resolve(undefined),
 
     // Assignment groups
-    fetchAllPages<AssignmentGroup>(client.from("assignment_groups").select("*").eq("assignment_id", assignment_id)),
+    fetchAllPages<AssignmentGroup>(
+      assignmentGroupsClient.from("assignment_groups").select("*").eq("assignment_id", assignment_id)
+    ),
 
     // Review assignments
     isStaff
       ? fetchAllPages<Database["public"]["Tables"]["review_assignments"]["Row"]>(
-        reviewAssignmentsClient.from("review_assignments").select("*").eq("assignment_id", assignment_id)
-      )
+          reviewAssignmentsClient.from("review_assignments").select("*").eq("assignment_id", assignment_id)
+        )
       : Promise.resolve(undefined),
 
     // Regrade requests
     isStaff
       ? fetchAllPages<RegradeRequest>(
-        client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id)
-      )
+          regradeRequestsClient.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id)
+        )
       : Promise.resolve(undefined),
 
     // Rubrics
