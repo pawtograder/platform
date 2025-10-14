@@ -941,6 +941,13 @@ export default class TableController<
     let page = 0;
     const pageSize = 1000;
     let nRows: number | undefined;
+
+    // Always add ORDER BY id to ensure deterministic pagination
+    // This prevents rows from being skipped or duplicated across page boundaries
+    // when PostgreSQL returns results in non-deterministic order
+    // PostgREST query builders are immutable, so this doesn't affect the original query
+    const orderedQuery = this._query.order("id", { ascending: true });
+
     if (loadEntireTable) {
       // Load initial data, do all of the pages.
       // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
@@ -951,7 +958,7 @@ export default class TableController<
           if (rangeStart >= nRows) break;
           rangeEnd = Math.min(rangeEnd, nRows - 1);
         }
-        const { data, error } = await this._query.range(rangeStart, rangeEnd);
+        const { data, error } = await orderedQuery.range(rangeStart, rangeEnd);
         if (this._closed) {
           return [];
         }
@@ -968,7 +975,7 @@ export default class TableController<
         page++;
       }
     } else {
-      const { data, error } = await this._query;
+      const { data, error } = await orderedQuery;
       if (error) {
         throw error;
       }

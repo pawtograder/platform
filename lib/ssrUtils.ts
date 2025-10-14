@@ -121,17 +121,23 @@ export async function getCourse(course_id: number) {
 async function fetchAllPages<T>(
   queryBuilder: {
     range: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown | null }>;
+    order: (column: string, options?: { ascending?: boolean }) => typeof queryBuilder;
   },
   pageSize: number = 1000
 ): Promise<T[]> {
   const results: T[] = [];
   let page = 0;
 
+  // Always add ORDER BY id to ensure deterministic pagination
+  // This prevents rows from being skipped or duplicated across page boundaries
+  // when the database returns results in non-deterministic order
+  const orderedQuery = queryBuilder.order("id", { ascending: true });
+
   while (true) {
     const rangeStart = page * pageSize;
     const rangeEnd = (page + 1) * pageSize - 1;
 
-    const { data, error } = await queryBuilder.range(rangeStart, rangeEnd);
+    const { data, error } = await orderedQuery.range(rangeStart, rangeEnd);
 
     if (error) {
       throw error;
@@ -190,12 +196,16 @@ export async function fetchCourseControllerData(
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
 
     // User roles with profiles and users
-    fetchAllPages<UserRoleWithPrivateProfileAndUser>(
-      client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
-    ),
+    isStaff
+      ? fetchAllPages<UserRoleWithPrivateProfileAndUser>(
+          client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
+        )
+      : Promise.resolve(undefined),
 
-    // Discussion thread teasers (only root-level threads)
-    fetchAllPages<DiscussionThread>(client.from("discussion_threads").select("*").eq("root_class_id", course_id)),
+    // Discussion thread teasers (only root-level threads, right now only for staff b/c permissions)
+    isStaff
+      ? fetchAllPages<DiscussionThread>(client.from("discussion_threads").select("*").eq("root_class_id", course_id))
+      : Promise.resolve(undefined),
 
     // Tags
     fetchAllPages<Tag>(client.from("tags").select("*").eq("class_id", course_id)),
