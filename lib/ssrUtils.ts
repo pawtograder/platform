@@ -282,7 +282,10 @@ export async function fetchCourseControllerData(
  * @param assignment_id The assignment ID to fetch data for
  * @returns AssignmentControllerInitialData object with all pre-loaded data
  */
-export async function fetchAssignmentControllerData(assignment_id: number): Promise<AssignmentControllerInitialData> {
+export async function fetchAssignmentControllerData(
+  assignment_id: number,
+  isStaff: boolean
+): Promise<AssignmentControllerInitialData> {
   const client = await createClientWithCaching({ tags: ["assignment_controller"] });
 
   // Fetch all data in parallel for maximum performance
@@ -298,22 +301,28 @@ export async function fetchAssignmentControllerData(assignment_id: number): Prom
     rubricCheckReferences
   ] = await Promise.all([
     // Submissions (active only)
-    fetchAllPages<Submission>(
-      client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true)
-    ),
+    isStaff
+      ? fetchAllPages<Submission>(
+          client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true)
+        )
+      : Promise.resolve(undefined),
 
     // Assignment groups
     fetchAllPages<AssignmentGroup>(client.from("assignment_groups").select("*").eq("assignment_id", assignment_id)),
 
     // Review assignments
-    fetchAllPages<Database["public"]["Tables"]["review_assignments"]["Row"]>(
-      client.from("review_assignments").select("*").eq("assignment_id", assignment_id)
-    ),
+    isStaff
+      ? fetchAllPages<Database["public"]["Tables"]["review_assignments"]["Row"]>(
+          client.from("review_assignments").select("*").eq("assignment_id", assignment_id)
+        )
+      : Promise.resolve(undefined),
 
     // Regrade requests
-    fetchAllPages<RegradeRequest>(
-      client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id)
-    ),
+    isStaff
+      ? fetchAllPages<RegradeRequest>(
+          client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id)
+        )
+      : Promise.resolve(undefined),
 
     // Rubrics
     fetchAllPages<Rubric>(client.from("rubrics").select("*").eq("assignment_id", assignment_id)),

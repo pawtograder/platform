@@ -15,9 +15,6 @@ export default async function AssignmentLayout({
   const { course_id, assignment_id } = await params;
   const assignmentId = Number(assignment_id);
 
-  // Pre-fetch all assignment controller data on the server with caching
-  const initialData = await fetchAssignmentControllerData(assignmentId);
-
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
   if (!user_id) {
@@ -28,6 +25,7 @@ export default async function AssignmentLayout({
   if (!role) {
     redirect("/");
   }
+
   if (role.role !== "instructor" && role.role !== "grader") {
     const client = await createClientWithCaching({ tags: ["assignment-release-date"] });
     const { data: assignment } = await client
@@ -50,6 +48,11 @@ export default async function AssignmentLayout({
     }
   }
 
+  // Pre-fetch all assignment controller data on the server with caching
+  const initialData = await fetchAssignmentControllerData(
+    assignmentId,
+    role.role === "instructor" || role.role === "grader"
+  );
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
       {children}

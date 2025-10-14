@@ -47,7 +47,10 @@ export default async function ManageAssignmentLayout({
   }
 
   // Pre-fetch all assignment controller data on the server with caching
-  const initialData = await fetchAssignmentControllerData(assignmentId);
+  const initialData = await fetchAssignmentControllerData(
+    assignmentId,
+    role.role === "instructor" || role.role === "grader"
+  );
 
   // Fetch assignment metadata for the title
   const client = await createClientWithCaching({ tags: ["assignment_metadata"] });
