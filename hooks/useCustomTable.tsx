@@ -30,6 +30,12 @@ export interface UseCustomTableProps<TData> {
   initialState?: Partial<TableOptions<TData>["initialState"]>;
 }
 
+// Stable default values to prevent infinite re-rendering
+// These must be defined outside the hook to maintain referential equality
+const DEFAULT_SERVER_FILTERS: ServerFilter[] = [];
+const DEFAULT_SERVER_ORDER_BYS: ServerOrderBy[] = [];
+const DEFAULT_INITIAL_STATE = {};
+
 /**
  * Custom table hook that combines TanStack Table with Supabase for optimal performance
  *
@@ -86,10 +92,10 @@ export interface UseCustomTableProps<TData> {
 export function useCustomTable<TData>({
   columns,
   resource,
-  serverFilters = [],
-  serverOrderBys = [],
+  serverFilters = DEFAULT_SERVER_FILTERS,
+  serverOrderBys = DEFAULT_SERVER_ORDER_BYS,
   select = "*",
-  initialState = {}
+  initialState = DEFAULT_INITIAL_STATE
 }: UseCustomTableProps<TData>) {
   const [data, setData] = useState<TData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
