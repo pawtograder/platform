@@ -36,7 +36,7 @@ const ProtectedLayout = async ({
   }
 
   // Pre-fetch all course controller data on the server with caching
-  const initialData = await fetchCourseControllerData(Number.parseInt(course_id), user_id);
+  const initialData = await fetchCourseControllerData(Number.parseInt(course_id), user_role.role);
 
   return (
     <Box minH="100vh">

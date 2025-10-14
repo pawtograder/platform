@@ -881,7 +881,6 @@ export default class TableController<
    * Fetch initial data with pagination
    */
   private async _fetchInitialData(loadEntireTable: boolean): Promise<ResultOne[]> {
-    console.log(`TableController ${this._debugID} for ${this._table} fetching initial data`);
     const rows: ResultOne[] = [];
     let page = 0;
     const pageSize = 1000;
@@ -931,7 +930,6 @@ export default class TableController<
    * Refetch all data and notify subscribers of changes (full refresh)
    */
   private async _refetchAllDataFull(): Promise<void> {
-    console.trace();
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -1302,11 +1300,9 @@ export default class TableController<
 
         let dataToLoad: ResultOne[];
         if (initialData) {
-          console.log(`TableController ${this._debugID} for ${this._table} using pre-loaded data`);
           // Use pre-loaded data from server (skip initial fetch)
           dataToLoad = initialData;
         } else {
-          console.log(`TableController ${this._debugID} for ${this._table} fetching initial data`);
           // Fetch data from database
           dataToLoad = await this._fetchInitialData(loadEntireTable);
         }

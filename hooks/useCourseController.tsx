@@ -474,8 +474,7 @@ export class CourseController {
         client: this.client,
         table: "notifications",
         query: this.client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.notifications
+        classRealTimeController: this.classRealTimeController
       });
     }
     return this._notifications;

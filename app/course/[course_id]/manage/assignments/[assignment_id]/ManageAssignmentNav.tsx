@@ -132,7 +132,7 @@ export function ManageAssignmentNav({
           <Select
             onChange={(e) => {
               if (e) {
-                setSelectedPage(e.label);
+                setSelectedPage(e.value);
                 router.replace(e.value);
               }
             }}

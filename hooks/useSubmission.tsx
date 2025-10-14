@@ -2,6 +2,7 @@
 import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
+  useAssignmentController,
   useMyReviewAssignments,
   useReferencingRubricChecks,
   useRubrics
@@ -659,9 +660,8 @@ export function useSubmissionRubric(reviewAssignmentId?: number | null): {
     reviewAssignmentId ?? undefined
   );
 
-  // Get submission details, but only if context is available
-  const submission = context?.submissionController?.submission;
-  const rubricIdFromSubmission = submission?.assignments?.grading_rubric_id;
+  const { assignment } = useAssignmentController();
+  const rubricIdFromSubmission = assignment?.grading_rubric_id;
   const rubricIdFromReviewAssignment = reviewAssignment?.rubric_id;
 
   const finalRubricId = reviewAssignmentId != null ? rubricIdFromReviewAssignment : rubricIdFromSubmission;

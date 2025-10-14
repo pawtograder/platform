@@ -26,7 +26,12 @@ import { CommentActions, StudentVisibilityIndicator } from "@/components/ui/rubr
 import { Skeleton } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricWithParts } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useRubricChecksByRubric,
+  useRubricCriteriaByRubric,
+  useRubricWithParts
+} from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import {
@@ -118,7 +123,7 @@ function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId:
               <Table.Cell>
                 <Link
                   variant={curFile === idx ? "underline" : undefined}
-                  href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?file_id=${file.id}`}
+                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
                   onClick={(e) => {
                     e.preventDefault();
                     onSelect(file.id);
@@ -141,6 +146,7 @@ function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSele
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const comments = useSubmissionArtifactComments({});
+  const { assignment } = useAssignmentController();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
   if (!submission.submission_artifacts || submission.submission_artifacts.length === 0) {
     return <></>;
@@ -182,7 +188,7 @@ function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSele
               <Table.Cell>
                 <Link
                   variant={curArtifact === idx ? "underline" : undefined}
-                  href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?artifact_id=${artifact.id}`}
+                  href={`/course/${assignment.class_id}/assignments/${assignment.id}/submissions/${submission.id}/files/?artifact_id=${artifact.id}`}
                   onClick={(e) => {
                     e.preventDefault();
                     onSelect(artifact.id);
@@ -308,14 +314,15 @@ function ArtifactComment({
   submission: SubmissionWithGraderResultsAndFiles;
 }) {
   const authorProfile = useUserProfile(comment.author);
+  const { assignment } = useAssignmentController();
   const { assignmentGroupsWithMembers: assignmentGroupsWithMembersController } = useCourseController();
-  const assignmenGroupWithMembers = useFindTableControllerValue(
+  const assignmentGroupWithMembers = useFindTableControllerValue(
     assignmentGroupsWithMembersController,
     (group) =>
-      group.assignment_id === submission.assignments.id &&
+      group.assignment_id === assignment.id &&
       group.assignment_groups_members.some((member) => member.profile_id === comment.author)
   );
-  const isAuthor = submission.profile_id === comment.author || assignmenGroupWithMembers !== null;
+  const isAuthor = submission.profile_id === comment.author || !!assignmentGroupWithMembers;
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -464,7 +471,7 @@ function ArtifactCommentsForm({
       await submissionController.submission_artifact_comments.create({
         submission_id: submission.id,
         submission_artifact_id: artifact.id,
-        class_id: submission.assignments.class_id,
+        class_id: submission.class_id,
         author: author_id,
         comment: message,
         submission_review_id: finalSubmissionReviewId ?? null,
@@ -708,7 +715,7 @@ function ArtifactCheckPopover({
                     const values = {
                       comment: commentText,
                       rubric_check_id: selectedCheckOption.check?.id ?? null,
-                      class_id: submission.assignments.class_id,
+                      class_id: submission.class_id,
                       submission_id: submission.id,
                       submission_artifact_id: artifact.id,
                       author: profile_id,

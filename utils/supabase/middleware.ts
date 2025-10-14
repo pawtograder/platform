@@ -50,7 +50,7 @@ export const updateSession = async (request: NextRequest) => {
       }
     }
 
-    if (request.nextUrl.pathname === "/" && !claims.error) {
+    if (request.nextUrl.pathname === "/" && !claims.error && !!claims.data?.claims) {
       return NextResponse.redirect(new URL("/course", request.url));
     }
 

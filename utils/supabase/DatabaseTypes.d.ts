@@ -227,14 +227,14 @@ export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+  "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
 >;
 export type SubmissionWithGraderResultsAndFiles = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
+  "*, grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
 export type SubmissionWithGraderResultsAndErrors = GetResult<
   Database["public"],

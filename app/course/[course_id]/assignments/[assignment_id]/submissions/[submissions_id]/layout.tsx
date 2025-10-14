@@ -260,6 +260,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
         value: submission.profile_id
       };
   const invalidate = useInvalidate();
+  const { assignment } = useAssignmentController();
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -269,7 +270,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
       {
         field: "assignment_id",
         operator: "eq",
-        value: submission.assignments.id
+        value: submission.assignment_id
       },
       groupOrProfileFilter
     ],
@@ -288,7 +289,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
   const [isActivating, setIsActivating] = useState(false);
   const pathname = usePathname();
   const isGraderInterface = pathname.includes("/grade");
-  const { dueDate } = useAssignmentDueDate(submission.assignments, {
+  const { dueDate } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
   });
@@ -370,7 +371,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                       {historical_submission.submission_reviews?.completed_at &&
                         historical_submission.submission_reviews?.total_score +
                           "/" +
-                          historical_submission.assignments.total_points}
+                          (assignment?.total_points ?? <Skeleton height="20px" />)}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -480,9 +481,6 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
     invalidate
   ]);
 
-  if (!submission.assignments) {
-    return <Skeleton height="20px" />;
-  }
   return (
     <PopoverRoot lazyMount unmountOnExit>
       <PopoverTrigger asChild>
@@ -722,8 +720,9 @@ function ReviewActions() {
 }
 function UnGradedGradingSummary() {
   const submission = useSubmission();
+  const { assignment } = useAssignmentController();
   const graderResultsMaxScore = submission.grader_results?.max_score;
-  const totalMaxScore = submission.assignments.total_points;
+  const totalMaxScore = assignment.total_points;
 
   return (
     <Box>
@@ -732,13 +731,12 @@ function UnGradedGradingSummary() {
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
       <List.Root as="ul" fontSize="sm" color="text.muted">
-        {submission.assignments.autograder_points !== null && submission.assignments.total_points !== null && (
+        {assignment.autograder_points !== null && assignment.total_points !== null && (
           <List.Item>
             <Text as="span" fontWeight="bold">
               Hand Grading:
             </Text>{" "}
-            {submission.assignments.total_points - submission.assignments.autograder_points} points. This has not been
-            graded yet.
+            {assignment.total_points - assignment.autograder_points} points. This has not been graded yet.
           </List.Item>
         )}
         <List.Item>
@@ -784,6 +782,7 @@ function RubricView() {
     throw new Error("No grading review ID found");
   }
   const gradingReview = useSubmissionReviewOrGradingReview(reviewId);
+  const { assignment } = useAssignmentController();
 
   return (
     <Box
@@ -834,12 +833,12 @@ function RubricView() {
             )}
           </Box>
         )}
-        {submission.assignments.total_points !== null &&
+        {assignment.total_points !== null &&
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
             <Heading size="xl">
-              Overall Score ({gradingReview.total_score}/{submission.assignments.total_points})
+              Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
         <SubmissionReviewScoreTweak />
@@ -880,8 +879,8 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     assignment_group_id: submission.assignment_group_id
   });
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const assignment = useAssignmentController();
-  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment || submission.assignments, {
+  const { assignment } = useAssignmentController();
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
   });
@@ -891,9 +890,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const isDroppedStudent = useIsDroppedStudent(submission.profile_id);
   useEffect(() => {
     if (isGraderOrInstructor) {
-      document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
+      document.title = `${assignment?.title} - ${submitter?.name} - Pawtograder`;
     } else if (!isGraderOrInstructor) {
-      document.title = `${assignment?.assignment?.title} - Submission #${submission.ordinal} - Pawtograder`;
+      document.title = `${assignment?.title} - Submission #${submission.ordinal} - Pawtograder`;
     }
   }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
@@ -901,7 +900,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
           Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
-          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={submission.assignments} />
+          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={assignment} />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Alert status="warning">

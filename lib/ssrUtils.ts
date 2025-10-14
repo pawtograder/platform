@@ -1,3 +1,5 @@
+import "server-only";
+
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@supabase/supabase-js";
 import type {
@@ -9,7 +11,6 @@ import type {
   DiscussionTopic,
   LabSection,
   LabSectionMeeting,
-  Notification,
   RegradeRequest,
   Rubric,
   RubricCheck,
@@ -51,7 +52,6 @@ export type CourseControllerInitialData = {
   discussionTopics?: DiscussionTopic[];
   repositories?: Database["public"]["Tables"]["repositories"]["Row"][];
   gradebookColumns?: Database["public"]["Tables"]["gradebook_columns"]["Row"][];
-  notifications?: Notification[];
 };
 
 /**
@@ -164,9 +164,10 @@ async function fetchAllPages<T>(
  */
 export async function fetchCourseControllerData(
   course_id: number,
-  user_id?: string
+  role: 'instructor' | 'student' | 'grader' | 'admin'
 ): Promise<CourseControllerInitialData> {
   const client = await createClientWithCaching({ tags: ["course_controller"] });
+  const isStaff = role === "instructor" || role === "grader" || role === "admin";
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -183,8 +184,7 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns,
-    notifications
+    gradebookColumns
   ] = await Promise.all([
     // Profiles
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
@@ -210,14 +210,14 @@ export async function fetchCourseControllerData(
     fetchAllPages<ClassSection>(client.from("class_sections").select("*").eq("class_id", course_id)),
 
     // Student deadline extensions
-    fetchAllPages<StudentDeadlineExtension>(
+    isStaff ? fetchAllPages<StudentDeadlineExtension>(
       client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
-    ),
+    ) : Promise.resolve(undefined),
 
     // Assignment due date exceptions
-    fetchAllPages<AssignmentDueDateException>(
+    isStaff ? fetchAllPages<AssignmentDueDateException>(
       client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
-    ),
+    ) : Promise.resolve(undefined),
 
     // Assignments (with ordering)
     fetchAllPages<Assignment>(
@@ -240,21 +240,14 @@ export async function fetchCourseControllerData(
     fetchAllPages<DiscussionTopic>(client.from("discussion_topics").select("*").eq("class_id", course_id)),
 
     // Repositories
-    fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
+    isStaff ? fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
       client.from("repositories").select("*").eq("class_id", course_id)
-    ),
+    ) : Promise.resolve(undefined),
 
     // Gradebook columns
     fetchAllPages<Database["public"]["Tables"]["gradebook_columns"]["Row"]>(
       client.from("gradebook_columns").select("*").eq("class_id", course_id)
-    ),
-
-    // Notifications (user-specific)
-    user_id
-      ? fetchAllPages<Notification>(
-          client.from("notifications").select("*").eq("class_id", course_id).eq("user_id", user_id)
-        )
-      : Promise.resolve([])
+    )
   ]);
 
   return {
@@ -271,8 +264,7 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns,
-    notifications
+    gradebookColumns
   };
 }
 

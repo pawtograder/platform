@@ -401,7 +401,6 @@ export class AssignmentController {
     classRealTimeController: ClassRealTimeController;
     initialData?: AssignmentControllerInitialData;
   }) {
-    console.log("initialData", initialData);
     this._client = client;
     this._classRealTimeController = classRealTimeController;
     this.submissions = new TableController({
