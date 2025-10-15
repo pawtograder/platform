@@ -160,7 +160,7 @@ export default function AssignmentPage() {
           return sm.is_active;
         })}
       />
-      {submissionsPeriod > 0 ? (
+      {submissionsPeriod && maxSubmissions ? (
         <Box w="925px">
           <Alert.Root status="info" flexDirection="column" size="md">
             <Alert.Title>Submission Limit for this assignment</Alert.Title>
