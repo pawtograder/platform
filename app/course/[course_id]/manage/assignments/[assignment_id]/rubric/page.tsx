@@ -358,7 +358,11 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
   return Object.keys(newItem)
     .filter(
       (key) =>
-        !Array.isArray(newItem[key as keyof T]) && key !== "rubric_id" && key !== "class_id" && key !== "created_at"
+        !Array.isArray(newItem[key as keyof T]) &&
+        key !== "rubric_id" &&
+        key !== "class_id" &&
+        key !== "created_at" &&
+        key !== "assignment_id"
     )
     .filter(
       (key) =>
@@ -1401,6 +1405,8 @@ function InnerRubricPage() {
                   description: "The rubric has been saved successfully."
                 });
               } catch (error) {
+                Sentry.captureException(error);
+                console.error(error);
                 if (error instanceof Error) {
                   toaster.error({
                     title: "Failed to save rubric",
