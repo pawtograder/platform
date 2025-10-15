@@ -95,7 +95,7 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
   return client;
 }
 export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
-  const client = await createClientWithCaching({ revalidate: 60, tags: ["user_roles"] });
+  const client = await createClientWithCaching({ revalidate: 60, tags: [`user_roles:${course_id}:${user_id}`] });
 
   const { data: userRole } = await client
     .from("user_roles")
@@ -109,7 +109,7 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
 }
 
 export async function getCourse(course_id: number) {
-  const client = await createClientWithCaching({ tags: ["courses"] });
+  const client = await createClientWithCaching({ tags: [`course:${course_id}`] });
   const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
   return course.data;
 }
@@ -172,8 +172,10 @@ export async function fetchCourseControllerData(
   course_id: number,
   role: "instructor" | "student" | "grader" | "admin"
 ): Promise<CourseControllerInitialData> {
-  const client = await createClientWithCaching({ tags: ["course_controller"] });
   const isStaff = role === "instructor" || role === "grader" || role === "admin";
+  const client = await createClientWithCaching({
+    tags: [`course_controller:${course_id}:${isStaff ? "staff" : "student"}`]
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -296,21 +298,22 @@ export async function fetchAssignmentControllerData(
   assignment_id: number,
   isStaff: boolean
 ): Promise<AssignmentControllerInitialData> {
-  const client = await createClientWithCaching({ tags: ["assignment_controller"] });
+  const roleKey = isStaff ? "staff" : "student";
+  const client = await createClientWithCaching({ tags: [`assignment_controller:${assignment_id}:${roleKey}`] });
   const reviewAssignmentsClient = await createClientWithCaching({
-    tags: ["review_assignments"],
+    tags: [`review_assignments:${assignment_id}:${roleKey}`],
     revalidate: 10 // review assignments are updated somewhat frequently, a good candidate for using invalidation
   });
   const regradeRequestsClient = await createClientWithCaching({
-    tags: ["regrade_requests"],
+    tags: [`regrade_requests:${assignment_id}:${roleKey}`],
     revalidate: 10 // regrade requests are updated somewhat frequently, a good candidate for using invalidation
   });
   const assignmentGroupsClient = await createClientWithCaching({
-    tags: ["assignment_groups"],
+    tags: [`assignment_groups:${assignment_id}:${roleKey}`],
     revalidate: 10 // assignment groups are updated somewhat frequently, a good candidate for using invalidation
   });
   const submissionsClient = await createClientWithCaching({
-    tags: ["submissions"],
+    tags: [`submissions:${assignment_id}:${roleKey}`],
     revalidate: 10 // submissions are updated somewhat frequently, a good candidate for using invalidation
   });
 

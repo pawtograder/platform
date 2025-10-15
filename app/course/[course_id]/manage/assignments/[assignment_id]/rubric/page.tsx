@@ -390,14 +390,13 @@ export default function RubricPage() {
           assignmentController.rubricCheckReferencesController.refetchAll()
         ]);
       } catch (error) {
-        console.error("Error refreshing rubric data", error);
         Sentry.captureException(error);
         toaster.error({
           title: "Error refreshing rubric data",
           description: "An unexpected error occurred while refreshing the rubric data. Please try again later."
         });
       }
-      if (!cleanedUp) return;
+      if (cleanedUp) return;
       setReady(true);
     }
     refreshRubricData();
