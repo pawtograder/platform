@@ -405,7 +405,13 @@ export default function RubricPage() {
       cleanedUp = true;
     };
   }, [assignmentController]);
-  if (!ready) return <Center height="100%" width="100%">Refreshing rubric data...<Spinner /></Center>;
+  if (!ready)
+    return (
+      <Center height="100%" width="100%">
+        Refreshing rubric data...
+        <Spinner />
+      </Center>
+    );
   return <InnerRubricPage />;
 }
 const MemoizedRubricSidebar = memo(RubricSidebar);
@@ -534,9 +540,9 @@ function InnerRubricPage() {
     ): HydratedRubric => {
       const roundNameProper = reviewRound
         ? reviewRound
-          .split("-")
-          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(" ")
+            .split("-")
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ")
         : "New";
       const name = `${roundNameProper} Rubric for ${assignmentDetails?.title || "Assignment"}`;
 
@@ -1326,9 +1332,9 @@ function InnerRubricPage() {
               {" "}
               {rr
                 ? rr
-                  .split("-")
-                  .map((w) => w[0].toUpperCase() + w.slice(1))
-                  .join(" ")
+                    .split("-")
+                    .map((w) => w[0].toUpperCase() + w.slice(1))
+                    .join(" ")
                 : "Select Round"}
               {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
             </Tabs.Trigger>
