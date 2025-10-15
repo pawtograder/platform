@@ -1,7 +1,6 @@
-import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
-import { type NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
+import { createServerClient } from "@supabase/ssr";
+import { type NextRequest, NextResponse } from "next/server";
 export const updateSession = async (request: NextRequest) => {
   try {
     let response = NextResponse.next({

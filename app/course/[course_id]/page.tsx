@@ -14,7 +14,7 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   }
 
   const role = await getUserRolesForCourse(course_id, user_id);
-  if (role?.role === "instructor") {
+  if (role?.role === "instructor" || role?.role === "grader") {
     return (
       <Box>
         <InstructorDashboard course_id={course_id} />
