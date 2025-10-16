@@ -50,6 +50,8 @@ CREATE TABLE public.class_metrics_totals (
     updated_at timestamptz DEFAULT now() NOT NULL
 );
 
+ALTER TABLE public.class_metrics_totals ENABLE ROW LEVEL SECURITY;
+
 INSERT INTO public.class_metrics_totals (class_id)
 SELECT id FROM public.classes
 ON CONFLICT (class_id) DO NOTHING;

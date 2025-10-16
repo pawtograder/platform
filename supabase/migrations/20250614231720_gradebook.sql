@@ -218,15 +218,27 @@ set check_function_bodies = off;
 
 -- Set up edge function hooks
 -- https://stackoverflow.com/questions/78900191/manage-edge-functions-in-a-multi-environment-development-setup-using-webhooks-on/78900192#78900192
-SELECT vault.create_secret(
+DO $$
+BEGIN
+  PERFORM vault.create_secret(
     'http://host.docker.internal:54321', 
     'supabase_project_url', 
     'URL to be used for calling edge functions, this is set here because we want to develop edge functions with webhohks from database triggers in multiple environments');
+EXCEPTION
+  WHEN unique_violation THEN
+    RAISE WARNING 'Secret "supabase_project_url" already exists, skipping creation';
+END $$;
 
-SELECT vault.create_secret(
+DO $$
+BEGIN
+  PERFORM vault.create_secret(
     'some-secret-value',
     'edge-function-secret', 
     'Secret value for calling edge functions, this is set here because we want to develop edge functions with webhohks from database triggers in multiple environments');
+EXCEPTION
+  WHEN unique_violation THEN
+    RAISE WARNING 'Secret "edge-function-secret" already exists, skipping creation';
+END $$;
 
 CREATE OR REPLACE FUNCTION public.call_edge_function_internal(
   url_path text,
