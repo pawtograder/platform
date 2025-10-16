@@ -40,8 +40,10 @@ export default function AssignmentPage() {
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
   const ourAssignmentGroupPredicate = useMemo(() => {
     return (group: AssignmentGroup) =>
-      group.assignment_groups_members.some((member) => member.profile_id === private_profile_id);
-  }, [private_profile_id]);
+      group.assignment_groups_members.some(
+        (member) => member.profile_id === private_profile_id && member.assignment_id === Number(assignment_id)
+      );
+  }, [private_profile_id, assignment_id]);
   const assignmentGroup = useFindTableControllerValue(assignmentGroupsWithMembers, ourAssignmentGroupPredicate);
   const repositoriesPredicate = useMemo(() => {
     return (repository: Repository) => repository.assignment_id === Number(assignment_id);

@@ -176,6 +176,34 @@ export async function fetchCourseControllerData(
   const client = await createClientWithCaching({
     tags: [`course_controller:${course_id}:${isStaff ? "staff" : "student"}`]
   });
+  const studentDeadlineExtensionsClient = await createClientWithCaching({
+    tags: [`student_deadline_extensions:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
+  const assignmentDueDateExceptionsClient = await createClientWithCaching({
+    tags: [`assignment_due_date_exceptions:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 10 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
+  const assignmentsClient = await createClientWithCaching({
+    tags: [`assignments:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 10 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
+  const assignmentGroupsClient = await createClientWithCaching({
+    tags: [`assignment_groups:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 5 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
+  const discussionTopicsClient = await createClientWithCaching({
+    tags: [`discussion_topics:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
+  const repositoriesClient = await createClientWithCaching({
+    tags: [`repositories:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
+  const gradebookColumnsClient = await createClientWithCaching({
+    tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -224,20 +252,20 @@ export async function fetchCourseControllerData(
     // Student deadline extensions
     isStaff
       ? fetchAllPages<StudentDeadlineExtension>(
-          client.from("student_deadline_extensions").select("*").eq("class_id", course_id)
+          studentDeadlineExtensionsClient.from("student_deadline_extensions").select("*").eq("class_id", course_id)
         )
       : Promise.resolve(undefined),
 
     // Assignment due date exceptions
     isStaff
       ? fetchAllPages<AssignmentDueDateException>(
-          client.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
+          assignmentDueDateExceptionsClient.from("assignment_due_date_exceptions").select("*").eq("class_id", course_id)
         )
       : Promise.resolve(undefined),
 
     // Assignments (with ordering)
     fetchAllPages<Assignment>(
-      client
+      assignmentsClient
         .from("assignments")
         .select("*")
         .eq("class_id", course_id)
@@ -250,21 +278,28 @@ export async function fetchCourseControllerData(
       Database["public"]["Tables"]["assignment_groups"]["Row"] & {
         assignment_groups_members: Database["public"]["Tables"]["assignment_groups_members"]["Row"][];
       }
-    >(client.from("assignment_groups").select("*, assignment_groups_members(*)").eq("class_id", course_id)),
+    >(
+      assignmentGroupsClient
+        .from("assignment_groups")
+        .select("*, assignment_groups_members(*)")
+        .eq("class_id", course_id)
+    ),
 
     // Discussion topics
-    fetchAllPages<DiscussionTopic>(client.from("discussion_topics").select("*").eq("class_id", course_id)),
+    fetchAllPages<DiscussionTopic>(
+      discussionTopicsClient.from("discussion_topics").select("*").eq("class_id", course_id)
+    ),
 
     // Repositories
     isStaff
       ? fetchAllPages<Database["public"]["Tables"]["repositories"]["Row"]>(
-          client.from("repositories").select("*").eq("class_id", course_id)
+          repositoriesClient.from("repositories").select("*").eq("class_id", course_id)
         )
       : Promise.resolve(undefined),
 
     // Gradebook columns
     fetchAllPages<Database["public"]["Tables"]["gradebook_columns"]["Row"]>(
-      client.from("gradebook_columns").select("*").eq("class_id", course_id)
+      gradebookColumnsClient.from("gradebook_columns").select("*").eq("class_id", course_id)
     )
   ]);
 

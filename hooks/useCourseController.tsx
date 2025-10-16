@@ -65,8 +65,7 @@ export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: nu
     },
     [assignment_id, private_profile_id]
   );
-  const assignmentGroup = assignmentGroupsWithMembers.rows.find(assignmentGroupFilter);
-  return assignmentGroup;
+  return useFindTableControllerValue(assignmentGroupsWithMembers, assignmentGroupFilter);
 }
 
 export function useAllProfilesForClass() {
