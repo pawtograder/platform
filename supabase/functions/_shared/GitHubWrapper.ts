@@ -330,50 +330,92 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
     });
     resolved_sha = head.data.object.sha;
   }
-  //Check if the grader exists in supabase storage
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
+
+  // Check cache for existing signed URL (less than 55 minutes old)
+  const { data: cachedLink } = await adminSupabase
+    .from("grader_links_cache")
+    .select("signed_url, created_at")
+    .eq("repo", repo)
+    .eq("sha", resolved_sha)
+    .single();
+
+  if (cachedLink) {
+    const linkAge = Date.now() - new Date(cachedLink.created_at).getTime();
+    const fiftyFiveMinutes = 55 * 60 * 1000;
+
+    if (linkAge < fiftyFiveMinutes) {
+      scope?.setTag("cache_hit", "true");
+      return {
+        download_link: cachedLink.signed_url,
+        sha: resolved_sha
+      };
+    }
+  }
+
+  scope?.setTag("cache_hit", "false");
+
+  // Check if the grader exists in supabase storage
   const { data, error: firstError } = await adminSupabase.storage
     .from("graders")
-    .createSignedUrl(`${repo}/${resolved_sha}/archive.tgz`, 60);
+    .createSignedUrl(`${repo}/${resolved_sha}/archive.tgz`, 3600); // 1 hour
+
+  let signedUrl: string;
+
   if (firstError) {
-    //If the grader doesn't exist, create it
+    // If the grader doesn't exist, create it
     const grader = await octokit.request("GET /repos/{owner}/{repo}/tarball/{ref}", {
       owner: repo.split("/")[0],
       repo: repo.split("/")[1],
       ref: resolved_sha
     });
-    //Upload the grader to supabase storage
-    //TODO do some garbage collection in this bucket, especially for regression tests
+    // Upload the grader to supabase storage
+    // TODO do some garbage collection in this bucket, especially for regression tests
     const { error: saveGraderError } = await adminSupabase.storage
       .from("graders")
       .upload(`${repo}/${resolved_sha}/archive.tgz`, grader.data as ArrayBuffer);
     if (saveGraderError) {
       if (saveGraderError.message === "The resource already exists") {
-        //This is fine, just continue
+        // This is fine, just continue
       } else {
         throw new Error(`Failed to save grader: ${saveGraderError.message}`);
       }
     }
-    //Return the grader
+    // Return the grader
     const { data: secondAttempt, error: secondError } = await adminSupabase.storage
       .from("graders")
-      .createSignedUrl(`${repo}/${resolved_sha}/archive.tgz`, 60);
+      .createSignedUrl(`${repo}/${resolved_sha}/archive.tgz`, 3600); // 1 hour
     if (secondError || !secondAttempt) {
       throw new Error(`Failed to retrieve grader: ${secondError.message}`);
     }
-    return {
-      download_link: secondAttempt.signedUrl,
-      sha: resolved_sha
-    };
+    signedUrl = secondAttempt.signedUrl;
   } else {
-    return {
-      download_link: data.signedUrl,
-      sha: resolved_sha
-    };
+    signedUrl = data.signedUrl;
   }
+
+  // Cache the signed URL (optimistic concurrency control - ignore unique constraint violations)
+  await adminSupabase.from("grader_links_cache").upsert(
+    {
+      repo,
+      sha: resolved_sha,
+      signed_url: signedUrl,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
+    },
+    {
+      onConflict: "repo,sha"
+    }
+  );
+  // Ignore errors from cache update (optimistic concurrency)
+
+  return {
+    download_link: signedUrl,
+    sha: resolved_sha
+  };
 }
 export async function cloneRepository(repoName: string, ref: string, scope?: Sentry.Scope) {
   const octokit = await getOctoKit(repoName, scope);
