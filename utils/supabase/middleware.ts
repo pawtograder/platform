@@ -51,27 +51,19 @@ export const updateSession = async (request: NextRequest) => {
     data: { session },
     error: sessionError
   } = await supabase.auth.getSession();
-  console.log("SESSION:" + (session ? "true" : "false"));
-  console.log("SESSION ERROR:" + (sessionError ? "true" : "false"));
   if (sessionError) {
     console.error(sessionError);
     Sentry.captureException(sessionError);
   }
   if (sessionError || !session) {
-    console.log("No session");
     return NextResponse.next({
       request: {
         headers: requestHeaders
       }
     });
   }
-  console.log("Getting JWKS");
   const jwks = await getCachedJWKS();
-  console.log("JWKS:");
-  console.log(jwks);
   const claims = await supabase.auth.getClaims(session.access_token, jwks);
-  console.log("CLAIMS:");
-  console.log(claims);
   if (claims && claims.data && claims.data.claims) {
     // Inject the validated user ID into request headers for downstream handlers
     requestHeaders.set("X-User-ID", claims.data.claims.sub);
