@@ -917,13 +917,20 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
               {assignmentGroupWithMembers ? (
-                <Text>
+                <HStack gap={1}>
                   Group {assignmentGroupWithMembers.name} (
                   {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                    <PersonName key={member.profile_id} uid={member.profile_id} />
+                    <HStack key={member.profile_id} gap={1}>
+                      <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                      <StudentSummaryTrigger
+                        key={member.profile_id}
+                        student_id={member.profile_id}
+                        course_id={parseInt(course_id as string, 10)}
+                      />
+                    </HStack>
                   ))}
                   )
-                </Text>
+                </HStack>
               ) : (
                 <>
                   <Text>{submitter?.name}</Text>{" "}

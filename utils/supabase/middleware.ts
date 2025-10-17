@@ -3,9 +3,12 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 export const updateSession = async (request: NextRequest) => {
   try {
+    // Create a new Headers object to inject validated user ID
+    const requestHeaders = new Headers(request.headers);
+
     let response = NextResponse.next({
       request: {
-        headers: request.headers
+        headers: requestHeaders
       }
     });
 
@@ -20,7 +23,9 @@ export const updateSession = async (request: NextRequest) => {
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
             response = NextResponse.next({
-              request
+              request: {
+                headers: requestHeaders
+              }
             });
             cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
           }
@@ -30,7 +35,14 @@ export const updateSession = async (request: NextRequest) => {
 
     const claims = await supabase.auth.getClaims();
     if (claims && claims.data && claims.data.claims) {
-      response.headers.set("X-User-ID", claims.data.claims.sub); // Set a custom header
+      // Inject the validated user ID into request headers for downstream handlers
+      requestHeaders.set("X-User-ID", claims.data.claims.sub);
+      // Recreate response with updated request headers
+      response = NextResponse.next({
+        request: {
+          headers: requestHeaders
+        }
+      });
       Sentry.setUser({
         id: claims.data.claims.sub,
         email: claims.data.claims.email
@@ -41,7 +53,7 @@ export const updateSession = async (request: NextRequest) => {
 
     // protected routes
     if (request.nextUrl.pathname.startsWith("/course")) {
-      if (claims.error || !claims.data || !claims.data.claims) {
+      if (!claims || claims.error || !claims.data || !claims.data.claims) {
         const signInUrl = new URL("/sign-in", request.url);
         const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
         signInUrl.searchParams.set("redirect", originalPathWithSearch);

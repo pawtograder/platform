@@ -79,6 +79,9 @@ export const createFetch =
   };
 export async function createClientWithCaching({ revalidate, tags }: { revalidate?: number; tags?: string[] } = {}) {
   if (revalidate === 0) {
+    if (tags) {
+      throw new Error("Cannot create client with no caching and tags");
+    }
     // If revalidate is 0, we do NO caching
     return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
   }
@@ -269,12 +272,7 @@ export async function fetchCourseControllerData(
 
     // Assignments (with ordering)
     fetchAllPages<Assignment>(
-      assignmentsClient
-        .from("assignments")
-        .select("*")
-        .eq("class_id", course_id)
-        .order("due_date", { ascending: true })
-        .order("id", { ascending: true })
+      assignmentsClient.from("assignments").select("*").eq("class_id", course_id).order("due_date", { ascending: true })
     ),
 
     // Assignment groups with members

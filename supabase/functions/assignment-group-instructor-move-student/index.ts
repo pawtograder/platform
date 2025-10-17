@@ -71,7 +71,7 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
       await adminSupabase.from("repositories").delete().eq("id", currentGroup.assignment_groups!.repositories[0].id);
     }
     const repository = currentGroup.assignment_groups!.repositories[0];
-    if (repository) {
+    if (repository && remaining_members.length > 0) {
       await enqueueSyncRepoPermissions({
         class_id,
         course_slug: currentGroup.classes!.slug!,

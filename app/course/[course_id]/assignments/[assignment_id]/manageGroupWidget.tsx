@@ -4,7 +4,7 @@ import Link from "@/components/ui/link";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourse, useProfiles } from "@/hooks/useCourseController";
+import { useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -61,6 +61,7 @@ function CreateGroupButton({
   const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
   const supabase = useMemo(() => createClient(), []);
   const [isLoading, setIsLoading] = useState(false);
+  const { repositories } = useCourseController();
 
   return (
     <Dialog.Root
@@ -125,14 +126,16 @@ function CreateGroupButton({
                     supabase
                   )
                     .then(() => {
-                      toaster.create({ title: "Group created", description: "", type: "success" });
-                      setOpen(false);
-                      setName("");
-                      setSelectedInvitees([]);
-                      setIsLoading(false);
-                      invalidate({ resource: "assignment_groups", invalidates: ["all"] });
-                      invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-                      invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+                      repositories.refetchAll().then(() => {
+                        toaster.create({ title: "Repositories created", description: "", type: "success" });
+                        setOpen(false);
+                        setName("");
+                        setSelectedInvitees([]);
+                        setIsLoading(false);
+                        invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+                        invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+                        invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+                      });
                     })
                     .catch((e) => {
                       setIsLoading(false);

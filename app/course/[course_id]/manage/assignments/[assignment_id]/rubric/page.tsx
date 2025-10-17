@@ -399,6 +399,7 @@ export default function RubricPage() {
           title: "Error refreshing rubric data",
           description: "An unexpected error occurred while refreshing the rubric data. Please try again later."
         });
+        return;
       }
       if (cleanedUp) return;
       setReady(true);
