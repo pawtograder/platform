@@ -1308,7 +1308,7 @@ export function formatWithTimeZone(date: string, timeZone: string) {
 }
 
 export function useAssignmentDueDate(
-  assignment: Assignment,
+  assignment: { id: number; due_date: string; minutes_due_after_lab: number | null },
   options?: { studentPrivateProfileId?: string; labSectionId?: number; assignmentGroupId?: number }
 ) {
   const controller = useCourseController();
