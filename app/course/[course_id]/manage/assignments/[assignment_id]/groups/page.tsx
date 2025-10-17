@@ -88,13 +88,22 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
    */
   const publishChanges = async () => {
     // move students where staged
-    movesToFulfill.forEach(async (move) => {
-      await updateGroupForStudent(move);
-    });
+
+    await Promise.all(
+      movesToFulfill.map(async (move) => {
+        await updateGroupForStudent(move);
+        invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+        invalidate({ resource: "user_roles", invalidates: ["all"] });
+      })
+    );
     // create groups where staged
-    groupsToCreate.forEach(async (group) => {
-      await createGroupWithStudents(group);
-    });
+    await Promise.all(
+      groupsToCreate.map(async (group) => {
+        await createGroupWithStudents(group);
+        invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+        invalidate({ resource: "user_roles", invalidates: ["all"] });
+      })
+    );
     // clear context
     clearGroupsToCreate();
     clearMovesToFulfill();
@@ -116,27 +125,30 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         },
         supabase
       );
-      group.member_ids.map(async (member_id) => {
-        try {
-          await assignmentGroupInstructorMoveStudent(
-            {
-              new_assignment_group_id: id || null,
-              old_assignment_group_id: null,
-              profile_id: member_id,
-              class_id: course_id
-            },
-            supabase
-          );
-          toaster.create({ title: "Student moved", description: "", type: "success" });
-        } catch (e) {
-          console.error(e);
-          toaster.create({
-            title: "Error moving student",
-            description: e instanceof Error ? e.message : "Unknown error",
-            type: "error"
-          });
-        }
-      });
+      await Promise.all(
+        group.member_ids.map(async (member_id) => {
+          try {
+            await assignmentGroupInstructorMoveStudent(
+              {
+                new_assignment_group_id: id || null,
+                old_assignment_group_id: null,
+                profile_id: member_id,
+                class_id: course_id
+              },
+              supabase
+            );
+            toaster.create({ title: "Student moved", description: "", type: "success" });
+          } catch (e) {
+            console.error(e);
+            toaster.create({
+              title: "Error moving student",
+              description: e instanceof Error ? e.message : "Unknown error",
+              type: "error"
+            });
+          }
+        })
+      );
+      //Refresh
       toaster.create({ title: "New group created", description: "", type: "success" });
     } catch (e) {
       console.error(e);
@@ -157,7 +169,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       await assignmentGroupInstructorMoveStudent(
         {
           new_assignment_group_id: move.new_group_id,
-          old_assignment_group_id: move.new_group_id,
+          old_assignment_group_id: move.old_group_id,
           profile_id: move.profile_id,
           class_id: course_id
         },
