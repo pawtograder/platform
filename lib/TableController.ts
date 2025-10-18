@@ -1311,7 +1311,8 @@ export default class TableController<
     debounceInterval,
     loadEntireTable = true,
     initialData,
-    enableAutoRefetch
+    enableAutoRefetch,
+    initialFetchTimestamp
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1341,6 +1342,8 @@ export default class TableController<
      * - false: Never auto-refetch on reconnection
      */
     enableAutoRefetch?: boolean;
+    /** ISO timestamp when initialData was fetched (for watermark initialization and incremental refetches) */
+    initialFetchTimestamp?: string;
   }) {
     this._rows = [];
     this._client = client;
@@ -1353,6 +1356,14 @@ export default class TableController<
     this._realtimeFilter = realtimeFilter || null;
     this._debounceInterval = debounceInterval || 500;
     this._enableAutoRefetch = enableAutoRefetch;
+    
+    // Initialize fetch timestamp from server if provided (for watermarking)
+    if (initialFetchTimestamp) {
+      const ts = new Date(initialFetchTimestamp).getTime();
+      if (!isNaN(ts)) {
+        this._lastFetchTimestamp = ts;
+      }
+    }
 
     // Track controller creation
     const tableName = table as string;
