@@ -1,14 +1,12 @@
--- Drop existing objects
-DROP TRIGGER IF EXISTS update_survey_templates_updated_at ON survey_templates;
-DROP TRIGGER IF EXISTS update_survey_responses_updated_at ON survey_responses;
-DROP TRIGGER IF EXISTS update_surveys_updated_at ON surveys;
-DROP FUNCTION IF EXISTS update_updated_at_survey_column();
-
-DROP INDEX IF EXISTS idx_responses_survey_user;
+-- Drop existing objects (tables CASCADE will drop their triggers automatically)
 DROP TABLE IF EXISTS survey_responses CASCADE;
 DROP TABLE IF EXISTS survey_templates CASCADE;
 DROP TABLE IF EXISTS surveys CASCADE;
-DROP TYPE IF EXISTS survey_status;
+
+-- Drop functions and types
+DROP FUNCTION IF EXISTS update_updated_at_survey_column() CASCADE;
+DROP FUNCTION IF EXISTS set_survey_submitted_at() CASCADE;
+DROP TYPE IF EXISTS survey_status CASCADE;
 
 -- Create ENUM type for survey status
 CREATE TYPE survey_status AS ENUM('draft', 'published', 'archived');
@@ -16,6 +14,7 @@ CREATE TYPE survey_status AS ENUM('draft', 'published', 'archived');
 -- Create surveys table
 CREATE TABLE surveys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  class_id bigint NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
   class_section_id bigint NOT NULL REFERENCES class_sections(id) ON DELETE CASCADE,
   assigned_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
@@ -75,5 +74,22 @@ CREATE TRIGGER update_survey_templates_updated_at
   BEFORE UPDATE ON survey_templates
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_survey_column();
+
+-- Automatically set submitted_at when survey is submitted
+CREATE OR REPLACE FUNCTION set_survey_submitted_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Only set submitted_at when is_submitted changes from false to true
+  IF NEW.is_submitted = TRUE AND (OLD.is_submitted = FALSE OR OLD.is_submitted IS NULL) THEN
+    NEW.submitted_at = NOW();
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_survey_submitted_at_trigger
+  BEFORE UPDATE ON survey_responses
+  FOR EACH ROW
+  EXECUTE FUNCTION set_survey_submitted_at();
 
 --TODO: ENABLE RLS

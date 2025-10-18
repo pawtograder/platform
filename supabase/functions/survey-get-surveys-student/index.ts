@@ -3,11 +3,13 @@ import { assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtil
 import * as Sentry from "npm:@sentry/deno";
 import { Json } from "../_shared/SupabaseTypes.d.ts";
 
+//Get surveys for a student in a class section 
 export type GetSurveysRequest = {
   class_id: number;
   class_section_id: number;
 };
 
+//Survey content with corresponding response id 
 export type SurveyWithResponseId = {
   survey_id: string; //Frontend will use this to submit answer to the survey
   survey_response_id: string; //Frontend will submit answer to this survey response id 
@@ -55,7 +57,7 @@ async function handleRequest(
     throw new Error(`Failed to fetch surveys: ${surveysError.message}`);
   }
 
-  // Format the response for frontend
+  // Format the response
   const surveys: SurveyWithResponseId[] = surveysData?.map((item) => ({
     survey_id: item.surveys.id,
     survey_response_id: item.id,
@@ -73,15 +75,4 @@ async function handleRequest(
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);
 });
-
-/*
-When called, this will return all surveys for a given student in class. 
-frontend will pass class_section_id. supabse.getUser() to get user id. 
-Get public_profile_id from user_roles where user_id = user id.
-Then return all survey_id from survey_responses where profile_id = public_profile_id and is_summitted is false and class_section_id = class_section_id.
-Then from surveys, return all surveys that have survey_id in the list of survey_ids. 
-This will return all surveys that have not been submitted yet.
-
-TODO: Add logic for grader/instructor views. DO NOT IMPLEMENT THIS YET.
- */
 
