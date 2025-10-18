@@ -40,8 +40,10 @@ export default function AssignmentPage() {
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
   const ourAssignmentGroupPredicate = useMemo(() => {
     return (group: AssignmentGroup) =>
-      group.assignment_groups_members.some((member) => member.profile_id === private_profile_id);
-  }, [private_profile_id]);
+      group.assignment_groups_members.some(
+        (member) => member.profile_id === private_profile_id && member.assignment_id === Number(assignment_id)
+      );
+  }, [private_profile_id, assignment_id]);
   const assignmentGroup = useFindTableControllerValue(assignmentGroupsWithMembers, ourAssignmentGroupPredicate);
   const repositoriesPredicate = useMemo(() => {
     return (repository: Repository) => repository.assignment_id === Number(assignment_id);
@@ -160,7 +162,7 @@ export default function AssignmentPage() {
           return sm.is_active;
         })}
       />
-      {submissionsPeriod > 0 ? (
+      {submissionsPeriod && maxSubmissions ? (
         <Box w="925px">
           <Alert.Root status="info" flexDirection="column" size="md">
             <Alert.Title>Submission Limit for this assignment</Alert.Title>

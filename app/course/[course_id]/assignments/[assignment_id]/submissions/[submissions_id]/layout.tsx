@@ -2,7 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
+  SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
@@ -20,7 +20,13 @@ import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/s
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse, useIsDroppedStudent, useCourseController } from "@/hooks/useCourseController";
+import {
+  useAssignmentDueDate,
+  useCourse,
+  useIsDroppedStudent,
+  useCourseController,
+  useAssignmentGroupWithMembers
+} from "@/hooks/useCourseController";
 import { BroadcastMessage } from "@/lib/TableController";
 import {
   SubmissionProvider,
@@ -241,11 +247,7 @@ function SubmissionReviewScoreTweak() {
     </Box>
   );
 }
-function SubmissionHistoryContents({
-  submission
-}: {
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
-}) {
+function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -258,16 +260,17 @@ function SubmissionHistoryContents({
         value: submission.profile_id
       };
   const invalidate = useInvalidate();
+  const { assignment } = useAssignmentController();
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
-      select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
     },
     filters: [
       {
         field: "assignment_id",
         operator: "eq",
-        value: submission.assignments.id
+        value: submission.assignment_id
       },
       groupOrProfileFilter
     ],
@@ -286,7 +289,7 @@ function SubmissionHistoryContents({
   const [isActivating, setIsActivating] = useState(false);
   const pathname = usePathname();
   const isGraderInterface = pathname.includes("/grade");
-  const { dueDate } = useAssignmentDueDate(submission.assignments, {
+  const { dueDate } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
   });
@@ -368,7 +371,7 @@ function SubmissionHistoryContents({
                       {historical_submission.submission_reviews?.completed_at &&
                         historical_submission.submission_reviews?.total_score +
                           "/" +
-                          historical_submission.assignments.total_points}
+                          (assignment?.total_points ?? <Skeleton height="20px" />)}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -419,7 +422,7 @@ function SubmissionHistoryContents({
     </>
   );
 }
-function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
+function SubmissionHistory({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const invalidate = useInvalidate();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const courseController = useCourseController();
@@ -478,9 +481,6 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     invalidate
   ]);
 
-  if (!submission.assignments) {
-    return <Skeleton height="20px" />;
-  }
   return (
     <PopoverRoot lazyMount unmountOnExit>
       <PopoverTrigger asChild>
@@ -550,7 +550,7 @@ function ReviewStats() {
   const { checked_by, completed_by, checked_at, completed_at } = review || {};
   const allRubricInstances = useRubricCriteriaInstances({
     review_id: review?.id,
-    rubric_id: submission.assignments.rubrics?.id
+    rubric_id: review?.rubric_id
   });
   const allGraders = new Set<string>();
   for (const instance of allRubricInstances) {
@@ -720,8 +720,9 @@ function ReviewActions() {
 }
 function UnGradedGradingSummary() {
   const submission = useSubmission();
+  const { assignment } = useAssignmentController();
   const graderResultsMaxScore = submission.grader_results?.max_score;
-  const totalMaxScore = submission.assignments.total_points;
+  const totalMaxScore = assignment.total_points;
 
   return (
     <Box>
@@ -730,13 +731,12 @@ function UnGradedGradingSummary() {
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
       <List.Root as="ul" fontSize="sm" color="text.muted">
-        {submission.assignments.autograder_points !== null && submission.assignments.total_points !== null && (
+        {assignment.autograder_points !== null && assignment.total_points !== null && (
           <List.Item>
             <Text as="span" fontWeight="bold">
               Hand Grading:
             </Text>{" "}
-            {submission.assignments.total_points - submission.assignments.autograder_points} points. This has not been
-            graded yet.
+            {assignment.total_points - assignment.autograder_points} points. This has not been graded yet.
           </List.Item>
         )}
         <List.Item>
@@ -782,6 +782,7 @@ function RubricView() {
     throw new Error("No grading review ID found");
   }
   const gradingReview = useSubmissionReviewOrGradingReview(reviewId);
+  const { assignment } = useAssignmentController();
 
   return (
     <Box
@@ -832,12 +833,12 @@ function RubricView() {
             )}
           </Box>
         )}
-        {submission.assignments.total_points !== null &&
+        {assignment.total_points !== null &&
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
             <Heading size="xl">
-              Overall Score ({gradingReview.total_score}/{submission.assignments.total_points})
+              Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
         <SubmissionReviewScoreTweak />
@@ -874,9 +875,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id
+  });
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const assignment = useAssignmentController();
-  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment?.assignment || submission.assignments, {
+  const { assignment } = useAssignmentController();
+  const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
   });
@@ -886,9 +890,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const isDroppedStudent = useIsDroppedStudent(submission.profile_id);
   useEffect(() => {
     if (isGraderOrInstructor) {
-      document.title = `${assignment?.assignment?.title} - ${submitter?.name} - Pawtograder`;
+      document.title = `${assignment?.title} - ${submitter?.name} - Pawtograder`;
     } else if (!isGraderOrInstructor) {
-      document.title = `${assignment?.assignment?.title} - Submission #${submission.ordinal} - Pawtograder`;
+      document.title = `${assignment?.title} - Submission #${submission.ordinal} - Pawtograder`;
     }
   }, [assignment, isGraderOrInstructor, submitter, submission]);
   return (
@@ -896,7 +900,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
           Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
-          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={submission.assignments} />
+          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={assignment} />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Alert status="warning">
@@ -912,14 +916,21 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           <VStack align="flex-start">
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
-              {submission.assignment_groups ? (
-                <Text>
-                  Group {submission.assignment_groups.name} (
-                  {submission.assignment_groups.assignment_groups_members
-                    .map((member) => member.profiles!.name)
-                    .join(", ")}
+              {assignmentGroupWithMembers ? (
+                <HStack gap={1}>
+                  Group {assignmentGroupWithMembers.name} (
+                  {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
+                    <HStack key={member.profile_id} gap={1}>
+                      <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                      <StudentSummaryTrigger
+                        key={member.profile_id}
+                        student_id={member.profile_id}
+                        course_id={parseInt(course_id as string, 10)}
+                      />
+                    </HStack>
+                  ))}
                   )
-                </Text>
+                </HStack>
               ) : (
                 <>
                   <Text>{submitter?.name}</Text>{" "}

@@ -7,8 +7,8 @@ import CodeFile, {
   RubricCheckSubOptions,
   RubricCriteriaSelectGroupOption
 } from "@/components/ui/code-file";
-import Link from "@/components/ui/link";
 import DownloadLink from "@/components/ui/download-link";
+import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
@@ -26,7 +26,14 @@ import { CommentActions, StudentVisibilityIndicator } from "@/components/ui/rubr
 import { Skeleton } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import {
+  useAssignmentController,
+  useRubricChecksByRubric,
+  useRubricCriteriaByRubric,
+  useRubricWithParts
+} from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import {
   useReviewAssignment,
   useRubricCheck,
@@ -39,7 +46,9 @@ import {
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
+import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useFindTableControllerValue } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricCriteria,
@@ -48,7 +57,7 @@ import {
   SubmissionArtifact,
   SubmissionArtifactComment,
   SubmissionFile,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -72,8 +81,6 @@ import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
-import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
-import { useActiveRubricId } from "@/hooks/useSubmissionReview";
 
 function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
   const submission = useSubmission();
@@ -116,7 +123,7 @@ function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId:
               <Table.Cell>
                 <Link
                   variant={curFile === idx ? "underline" : undefined}
-                  href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?file_id=${file.id}`}
+                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
                   onClick={(e) => {
                     e.preventDefault();
                     onSelect(file.id);
@@ -139,6 +146,7 @@ function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSele
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const comments = useSubmissionArtifactComments({});
+  const { assignment } = useAssignmentController();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
   if (!submission.submission_artifacts || submission.submission_artifacts.length === 0) {
     return <></>;
@@ -180,7 +188,7 @@ function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSele
               <Table.Cell>
                 <Link
                   variant={curArtifact === idx ? "underline" : undefined}
-                  href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?artifact_id=${artifact.id}`}
+                  href={`/course/${assignment.class_id}/assignments/${assignment.id}/submissions/${submission.id}/files/?artifact_id=${artifact.id}`}
                   onClick={(e) => {
                     e.preventDefault();
                     onSelect(artifact.id);
@@ -303,12 +311,18 @@ function ArtifactComment({
   submission
 }: {
   comment: SubmissionArtifactComment;
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  submission: SubmissionWithGraderResultsAndFiles;
 }) {
   const authorProfile = useUserProfile(comment.author);
-  const isAuthor =
-    submission.profile_id === comment.author ||
-    submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
+  const { assignment } = useAssignmentController();
+  const { assignmentGroupsWithMembers: assignmentGroupsWithMembersController } = useCourseController();
+  const assignmentGroupWithMembers = useFindTableControllerValue(
+    assignmentGroupsWithMembersController,
+    (group) =>
+      group.assignment_id === assignment.id &&
+      group.assignment_groups_members.some((member) => member.profile_id === comment.author)
+  );
+  const isAuthor = submission.profile_id === comment.author || !!assignmentGroupWithMembers;
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -437,7 +451,7 @@ function ArtifactCommentsForm({
   defaultValue,
   submissionReviewId
 }: {
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  submission: SubmissionWithGraderResultsAndFiles;
   artifact: SubmissionArtifact;
   defaultValue: string;
   submissionReviewId?: number;
@@ -457,7 +471,7 @@ function ArtifactCommentsForm({
       await submissionController.submission_artifact_comments.create({
         submission_id: submission.id,
         submission_artifact_id: artifact.id,
-        class_id: submission.assignments.class_id,
+        class_id: submission.class_id,
         author: author_id,
         comment: message,
         submission_review_id: finalSubmissionReviewId ?? null,
@@ -511,6 +525,10 @@ function ArtifactCheckPopover({
     throw new Error("No grading review ID found");
   }
   const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
+  const rubric = useRubricWithParts(reviewContext?.rubric_id);
+  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
+  const rubricChecks = useRubricChecksByRubric(rubric?.id);
+
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const submissionController = useSubmissionController();
@@ -533,46 +551,57 @@ function ArtifactCheckPopover({
     }
   }, [isOpen]);
 
-  const criteriaWithArtifactAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
-    criteria.rubric_checks.some((check) => check.is_annotation && check.annotation_target === "artifact")
-  );
+  // Filter criteria that have annotation checks targeting artifacts
+  const criteriaWithArtifactAnnotationChecks = useMemo(() => {
+    if (!rubricCriteria || !rubricChecks) return [];
 
-  const criteriaOptions: RubricCriteriaSelectGroupOption[] =
-    (criteriaWithArtifactAnnotationChecks?.map((criteria) => ({
+    const annotationChecks = rubricChecks
+      .filter((check) => check.is_annotation && check.annotation_target === "artifact")
+      .map((check) => check.rubric_criteria_id);
+
+    return rubricCriteria.filter((criteria) => annotationChecks.includes(criteria.id));
+  }, [rubricCriteria, rubricChecks]);
+
+  const criteriaOptions: RubricCriteriaSelectGroupOption[] = useMemo(() => {
+    if (!criteriaWithArtifactAnnotationChecks || !rubricChecks) return [];
+
+    return criteriaWithArtifactAnnotationChecks.map((criteria) => ({
       label: criteria.name,
       value: criteria.id.toString(),
       criteria: criteria as HydratedRubricCriteria,
-      options: (
-        criteria.rubric_checks.filter(
-          (check) => check.is_annotation && check.annotation_target === "artifact"
-        ) as RubricCheck[]
-      ).map((check) => {
-        const option: RubricCheckSelectOption = {
-          label: check.name,
-          value: check.id.toString(),
-          check: check as RubricCheck,
-          criteria,
-          options: []
-        };
-        if (
-          check.data &&
-          typeof check.data === "object" &&
-          "options" in check.data &&
-          Array.isArray((check.data as RubricChecksDataType).options)
-        ) {
-          const optionsData = check.data as RubricChecksDataType;
-          option.options = optionsData.options.map((subOption, index) => ({
-            label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
-            comment: subOption.label,
-            index: index.toString(),
-            value: index.toString(),
-            points: subOption.points,
-            check: option
-          }));
-        }
-        return option;
-      })
-    })) as RubricCriteriaSelectGroupOption[]) || [];
+      options: rubricChecks
+        .filter(
+          (check) =>
+            check.is_annotation && check.annotation_target === "artifact" && check.rubric_criteria_id === criteria.id
+        )
+        .map((check) => {
+          const option: RubricCheckSelectOption = {
+            label: check.name,
+            value: check.id.toString(),
+            check: check as RubricCheck,
+            criteria,
+            options: []
+          };
+          if (
+            check.data &&
+            typeof check.data === "object" &&
+            "options" in check.data &&
+            Array.isArray((check.data as RubricChecksDataType).options)
+          ) {
+            const optionsData = check.data as RubricChecksDataType;
+            option.options = optionsData.options.map((subOption, index) => ({
+              label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+              comment: subOption.label,
+              index: index.toString(),
+              value: index.toString(),
+              points: subOption.points,
+              check: option
+            }));
+          }
+          return option;
+        })
+    })) as RubricCriteriaSelectGroupOption[];
+  }, [criteriaWithArtifactAnnotationChecks, rubricChecks]);
 
   if (!criteriaOptions || criteriaOptions.length === 0) {
     return (
@@ -686,7 +715,7 @@ function ArtifactCheckPopover({
                     const values = {
                       comment: commentText,
                       rubric_check_id: selectedCheckOption.check?.id ?? null,
-                      class_id: submission.assignments.class_id,
+                      class_id: submission.class_id,
                       submission_id: submission.id,
                       submission_artifact_id: artifact.id,
                       author: profile_id,

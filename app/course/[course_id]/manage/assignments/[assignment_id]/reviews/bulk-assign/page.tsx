@@ -183,6 +183,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     return unsubscribe;
   }, [courseController]);
 
+  useEffect(() => {
+    if (assignmentController.reviewAssignments) {
+      assignmentController.reviewAssignments.refetchAll();
+    }
+  }, [assignmentController.reviewAssignments]);
+
   // Current assignment review assignments rows (live via TableController)
   const currentReviewAssignments = useTableControllerTableValues(assignmentController.reviewAssignments);
 

@@ -323,6 +323,7 @@ export default function AssignmentsTable() {
           if (props.row.original.activesubmissionid) {
             return (
               <Link
+                prefetch={false}
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
               >
                 {new TZDate(props.getValue() as string, timeZone).toLocaleString()}
@@ -928,6 +929,7 @@ export default function AssignmentsTable() {
                     if (row.original.activesubmissionid) {
                       return (
                         <Link
+                          prefetch={false}
                           href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
                         >
                           {linkContent}

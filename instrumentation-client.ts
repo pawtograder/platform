@@ -21,6 +21,9 @@ Sentry.init({
   environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV,
   integrations: [], // bugsink does not support any integrations
   tracesSampleRate: 0,
+  sendClientReports: false,
+  replaysSessionSampleRate: 0,
+  replaysOnErrorSampleRate: 0,
   beforeSend(event, hint) {
     if (event.exception && event.exception.values) {
       for (const exception of event.exception.values) {

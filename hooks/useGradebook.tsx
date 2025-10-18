@@ -247,7 +247,9 @@ export function useAreAllDependenciesReleased(columnId: number): boolean {
     }
 
     const allReleased = allDependencyColumnIds.every((depId) => {
-      return gradebookController.isColumnEffectivelyReleased(depId);
+      const depColumn = gradebookController.getGradebookColumn(depId);
+      if (!depColumn) return false;
+      return depColumn.released;
     });
 
     setDependenciesReleased(allReleased);
@@ -1488,30 +1490,6 @@ export class GradebookController {
   }
   get columns() {
     return this.gradebook_columns.rows;
-  }
-
-  /**
-   * Check if a column is effectively released (either released or all grades are null)
-   */
-  isColumnEffectivelyReleased(columnId: number): boolean {
-    const column = this.getGradebookColumn(columnId);
-    if (!column) return false;
-
-    // If the column is released, it's effectively released
-    if (column.released) return true;
-
-    // If the column is not released, check if all grades are null
-    // If all grades are null, students see the same thing regardless of release status
-    const allGradesNull = this.table.data.every((studentData) => {
-      const entry = studentData.entries.find((e) => e.gc_id === columnId);
-      if (!entry) return true; // No entry means no grade, which is effectively null
-
-      const score = entry.score_override ?? entry.score;
-      const ret = score === null || score === undefined || entry.is_missing || !entry.is_private;
-      return ret;
-    });
-
-    return allGradesNull;
   }
 
   get studentDetailView() {

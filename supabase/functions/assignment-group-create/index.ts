@@ -6,6 +6,7 @@ import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+
 async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   //Get the user
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
