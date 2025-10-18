@@ -81,7 +81,7 @@ async function handleRequest(
       throw new Error(`Failed to get templates: ${templatesError.message}`);
     }
   }
-
+  //TODO:  Implement update and delete templates
   const updateTemplate = async () => {}
   const deleteTemplate = async () => {}
 }

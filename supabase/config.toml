@@ -741,3 +741,14 @@ entrypoint = "./functions/survey-get-surveys/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/survey-get-surveys/*.html" ]
+
+[functions.survey-submit-response]
+enabled = true
+verify_jwt = true
+import_map = "./functions/survey-submit-response/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/survey-submit-response/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/survey-submit-response/*.html" ]

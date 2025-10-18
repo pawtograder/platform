@@ -76,4 +76,21 @@ CREATE TRIGGER update_survey_templates_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_survey_column();
 
+-- Automatically set submitted_at when survey is submitted
+CREATE OR REPLACE FUNCTION set_survey_submitted_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Only set submitted_at when is_submitted changes from false to true
+  IF NEW.is_submitted = TRUE AND (OLD.is_submitted = FALSE OR OLD.is_submitted IS NULL) THEN
+    NEW.submitted_at = NOW();
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_survey_submitted_at_trigger
+  BEFORE UPDATE ON survey_responses
+  FOR EACH ROW
+  EXECUTE FUNCTION set_survey_submitted_at();
+
 --TODO: ENABLE RLS
