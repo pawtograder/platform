@@ -486,7 +486,8 @@ export class CourseController {
         table: "profiles",
         query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.profiles
+        initialData: this._initialData?.profiles,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._profiles;
@@ -500,7 +501,8 @@ export class CourseController {
         query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
         realtimeFilter: { root_class_id: this.courseId },
-        initialData: this._initialData?.discussionThreadTeasers
+        initialData: this._initialData?.discussionThreadTeasers,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._discussionThreadTeasers;
@@ -513,7 +515,8 @@ export class CourseController {
         table: "tags",
         query: this.client.from("tags").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.tags
+        initialData: this._initialData?.tags,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._tags;
@@ -526,7 +529,8 @@ export class CourseController {
         table: "lab_sections",
         query: this.client.from("lab_sections").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.labSections
+        initialData: this._initialData?.labSections,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._labSections;
@@ -539,7 +543,8 @@ export class CourseController {
         table: "lab_section_meetings",
         query: this.client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.labSectionMeetings
+        initialData: this._initialData?.labSectionMeetings,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._labSectionMeetings;
@@ -552,7 +557,8 @@ export class CourseController {
         table: "class_sections",
         query: this.client.from("class_sections").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.classSections
+        initialData: this._initialData?.classSections,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._classSections;
@@ -569,7 +575,8 @@ export class CourseController {
           .eq("class_id", this.courseId),
         selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.userRolesWithProfiles
+        initialData: this._initialData?.userRolesWithProfiles,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._userRolesWithProfiles;
@@ -582,7 +589,8 @@ export class CourseController {
         table: "student_deadline_extensions",
         query: this.client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.studentDeadlineExtensions
+        initialData: this._initialData?.studentDeadlineExtensions,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._studentDeadlineExtensions;
@@ -595,7 +603,8 @@ export class CourseController {
         table: "assignment_due_date_exceptions",
         query: this.client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.assignmentDueDateExceptions
+        initialData: this._initialData?.assignmentDueDateExceptions,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._assignmentDueDateExceptions;
@@ -613,7 +622,8 @@ export class CourseController {
           .order("due_date", { ascending: true })
           .order("id", { ascending: true }),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.assignments
+        initialData: this._initialData?.assignments,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._assignments;
@@ -630,7 +640,8 @@ export class CourseController {
           .eq("class_id", this.courseId),
         selectForSingleRow: "*, assignment_groups_members(*)",
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.assignmentGroupsWithMembers
+        initialData: this._initialData?.assignmentGroupsWithMembers,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._assignmentGroupsWithMembers;
@@ -643,7 +654,8 @@ export class CourseController {
         table: "repositories",
         query: this.client.from("repositories").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.repositories
+        initialData: this._initialData?.repositories,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._repositories;
@@ -656,7 +668,8 @@ export class CourseController {
         table: "gradebook_columns",
         query: this.client.from("gradebook_columns").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.gradebookColumns
+        initialData: this._initialData?.gradebookColumns,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._gradebookColumns;
@@ -686,7 +699,8 @@ export class CourseController {
         query: this.client.from("discussion_topics").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
         realtimeFilter: { class_id: this.courseId },
-        initialData: this._initialData?.discussionTopics
+        initialData: this._initialData?.discussionTopics,
+        initialFetchTimestamp: this._initialData?.metadata?.fetchedAt
       });
     }
     return this._discussionTopics;

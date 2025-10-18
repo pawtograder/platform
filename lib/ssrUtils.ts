@@ -52,6 +52,16 @@ export type CourseControllerInitialData = {
   discussionTopics?: DiscussionTopic[];
   repositories?: Database["public"]["Tables"]["repositories"]["Row"][];
   gradebookColumns?: Database["public"]["Tables"]["gradebook_columns"]["Row"][];
+  
+  /** Metadata for client-side cache management and incremental refetching */
+  metadata: {
+    /** ISO timestamp when this data was fetched on the server */
+    fetchedAt: string;
+    /** Latest cache invalidation timestamp for this cache tag (for watermarking) */
+    lastInvalidatedAt?: string;
+    /** Cache tag used for this data (for debugging) */
+    cacheTag: string;
+  };
 };
 
 /**
@@ -68,6 +78,16 @@ export type AssignmentControllerInitialData = {
   rubricCriteria?: RubricCriteria[];
   rubricChecks?: RubricCheck[];
   rubricCheckReferences?: RubricCheckReference[];
+  
+  /** Metadata for client-side cache management and incremental refetching */
+  metadata: {
+    /** ISO timestamp when this data was fetched on the server */
+    fetchedAt: string;
+    /** Latest cache invalidation timestamp for this cache tag (for watermarking) */
+    lastInvalidatedAt?: string;
+    /** Cache tag used for this data (for debugging) */
+    cacheTag: string;
+  };
 };
 
 export const createFetch =
@@ -180,8 +200,11 @@ export async function fetchCourseControllerData(
   role: "instructor" | "student" | "grader" | "admin"
 ): Promise<CourseControllerInitialData> {
   const isStaff = role === "instructor" || role === "grader" || role === "admin";
+  const roleKey = isStaff ? "staff" : "student";
+  const cacheTag = `course_controller:${course_id}:${roleKey}`;
+  
   const client = await createClientWithCaching({
-    tags: [`course_controller:${course_id}:${isStaff ? "staff" : "student"}`]
+    tags: [cacheTag]
   });
   const studentDeadlineExtensionsClient = await createClientWithCaching({
     tags: [`student_deadline_extensions:${course_id}:${isStaff ? "staff" : "student"}`],
@@ -227,7 +250,8 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns
+    gradebookColumns,
+    invalidationMetadata
   ] = await Promise.all([
     // Profiles
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
@@ -302,8 +326,19 @@ export async function fetchCourseControllerData(
     // Gradebook columns
     fetchAllPages<Database["public"]["Tables"]["gradebook_columns"]["Row"]>(
       gradebookColumnsClient.from("gradebook_columns").select("*").eq("class_id", course_id)
-    )
+    ),
+    
+    // Fetch last invalidation timestamp for watermarking
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (client as any)
+      .from("cache_invalidation_latest")
+      .select("last_invalidated_at")
+      .eq("tag", cacheTag)
+      .maybeSingle()
+      .then(({ data }: { data: { last_invalidated_at: string } | null }) => data)
   ]);
+
+  const fetchedAt = new Date().toISOString();
 
   return {
     profiles,
@@ -319,7 +354,13 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns
+    gradebookColumns,
+    
+    metadata: {
+      fetchedAt,
+      lastInvalidatedAt: invalidationMetadata?.last_invalidated_at || undefined,
+      cacheTag
+    }
   };
 }
 
@@ -336,7 +377,9 @@ export async function fetchAssignmentControllerData(
   isStaff: boolean
 ): Promise<AssignmentControllerInitialData> {
   const roleKey = isStaff ? "staff" : "student";
-  const client = await createClientWithCaching({ tags: [`assignment_controller:${assignment_id}:${roleKey}`] });
+  const cacheTag = `assignment_controller:${assignment_id}:${roleKey}`;
+  
+  const client = await createClientWithCaching({ tags: [cacheTag] });
   const reviewAssignmentsClient = await createClientWithCaching({
     tags: [`review_assignments:${assignment_id}:${roleKey}`],
     revalidate: 10 // review assignments are updated somewhat frequently, a good candidate for using invalidation
@@ -364,7 +407,8 @@ export async function fetchAssignmentControllerData(
     rubricParts,
     rubricCriteria,
     rubricChecks,
-    rubricCheckReferences
+    rubricCheckReferences,
+    invalidationMetadata
   ] = await Promise.all([
     // Submissions (active only)
     isStaff
@@ -407,8 +451,19 @@ export async function fetchAssignmentControllerData(
     // Rubric check references
     fetchAllPages<RubricCheckReference>(
       client.from("rubric_check_references").select("*").eq("assignment_id", assignment_id)
-    )
+    ),
+    
+    // Fetch last invalidation timestamp for watermarking
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (client as any)
+      .from("cache_invalidation_latest")
+      .select("last_invalidated_at")
+      .eq("tag", cacheTag)
+      .maybeSingle()
+      .then(({ data }: { data: { last_invalidated_at: string } | null }) => data)
   ]);
+
+  const fetchedAt = new Date().toISOString();
 
   return {
     submissions,
@@ -419,6 +474,12 @@ export async function fetchAssignmentControllerData(
     rubricParts,
     rubricCriteria,
     rubricChecks,
-    rubricCheckReferences
+    rubricCheckReferences,
+    
+    metadata: {
+      fetchedAt,
+      lastInvalidatedAt: invalidationMetadata?.last_invalidated_at || undefined,
+      cacheTag
+    }
   };
 }
