@@ -5,6 +5,7 @@ export const updateSession = async (request: NextRequest) => {
   try {
     // Create a new Headers object to inject validated user ID
     const requestHeaders = new Headers(request.headers);
+    requestHeaders.delete("X-User-ID");
 
     let response = NextResponse.next({
       request: {
@@ -22,13 +23,20 @@ export const updateSession = async (request: NextRequest) => {
           },
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+            // Reflect updated cookies in forwarded request headers
+            const cookieHeader = request
+              .cookies
+              .getAll()
+              .map(({ name, value }) => `${name}=${value}`)
+              .join("; ");
+            if (cookieHeader) requestHeaders.set("cookie", cookieHeader);
             response = NextResponse.next({
               request: {
                 headers: requestHeaders
               }
             });
             cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
-          }
+          },
         }
       }
     );
@@ -57,12 +65,21 @@ export const updateSession = async (request: NextRequest) => {
         const signInUrl = new URL("/sign-in", request.url);
         const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
         signInUrl.searchParams.set("redirect", originalPathWithSearch);
-        return NextResponse.redirect(signInUrl);
+        const redirect = NextResponse.redirect(signInUrl);
+        // propagate cookies set earlier in this middleware
+        for (const { name, value } of response.cookies.getAll()) {
+          redirect.cookies.set(name, value);
+        }
+        return redirect;
       }
     }
 
-    if (request.nextUrl.pathname === "/" && !claims.error && !!claims.data?.claims) {
-      return NextResponse.redirect(new URL("/course", request.url));
+    if (request.nextUrl.pathname === "/" && !claims?.data?.claims?.sub) {
+      const redirect = NextResponse.redirect(new URL("/course", request.url));
+      for (const { name, value } of response.cookies.getAll()) {
+        redirect.cookies.set(name, value);
+      }
+      return redirect;
     }
 
     return response;
