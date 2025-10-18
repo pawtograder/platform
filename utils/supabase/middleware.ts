@@ -22,9 +22,25 @@ export const updateSession = async (request: NextRequest) => {
           },
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+
+            // Preserve existing Set-Cookie headers from the original response
+            const existingSetCookies: string[] = [];
+            response.headers.forEach((value, key) => {
+              if (key.toLowerCase() === "set-cookie") {
+                existingSetCookies.push(value);
+              }
+            });
+
             response = NextResponse.next({
               request
             });
+
+            // Reapply existing Set-Cookie headers
+            existingSetCookies.forEach((cookie) => {
+              response.headers.append("set-cookie", cookie);
+            });
+
+            // Set new cookies
             cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
           }
         }
