@@ -35,11 +35,6 @@ export const updateSession = async (request: NextRequest) => {
               }
             });
 
-            // Reapply existing Set-Cookie headers
-            prevCookies.forEach((cookie) => {
-              response.headers.append("set-cookie", cookie);
-            });
-
             // Set new cookies
             cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
           }
