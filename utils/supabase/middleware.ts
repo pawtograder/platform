@@ -24,8 +24,7 @@ export const updateSession = async (request: NextRequest) => {
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
             // Reflect updated cookies in forwarded request headers
-            const cookieHeader = request
-              .cookies
+            const cookieHeader = request.cookies
               .getAll()
               .map(({ name, value }) => `${name}=${value}`)
               .join("; ");
@@ -36,7 +35,7 @@ export const updateSession = async (request: NextRequest) => {
               }
             });
             cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
-          },
+          }
         }
       }
     );
