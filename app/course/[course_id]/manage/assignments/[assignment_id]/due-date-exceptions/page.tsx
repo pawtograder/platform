@@ -444,6 +444,16 @@ export default function DueDateExceptions() {
   const course = useCourse();
   const { assignment_id } = useParams();
   const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
+  //Ensure all data is fresh
+  useEffect(() => {
+    assignments.refetchAll();
+  }, [assignments]);
+  useEffect(() => {
+    assignmentDueDateExceptions.refetchAll();
+  }, [assignmentDueDateExceptions]);
+  useEffect(() => {
+    assignmentGroupsWithMembers.refetchAll();
+  }, [assignmentGroupsWithMembers]);
   const controller = useCourseController();
 
   // Get assignment data
