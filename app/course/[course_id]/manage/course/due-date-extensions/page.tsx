@@ -3,12 +3,19 @@
 import { Box, Container, List, Text, VStack } from "@chakra-ui/react";
 import ClassLateTokenSettings from "./classLateTokenSettings";
 import DueDateExceptionsTable from "./tables/dueDateExceptionsTable";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useEffect } from "react";
 
 /**
  * Assignment Exceptions page - the default page for due date extensions.
  * Shows class-wide late token settings and assignment-level exceptions.
  */
 export default function DueDateExtensionsPage() {
+  const { assignmentDueDateExceptions } = useCourseController();
+  useEffect(() => {
+    //Ensure not cached
+    assignmentDueDateExceptions.refetchAll();
+  }, [assignmentDueDateExceptions]);
   return (
     <Container>
       <VStack align="stretch" gap={6} py={4}>

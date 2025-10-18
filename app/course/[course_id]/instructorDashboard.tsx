@@ -24,8 +24,10 @@ import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import { getPrivateProfileId } from "@/lib/ssrUtils";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import LinkAccount from "@/components/github/link-account";
+import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -87,7 +89,19 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const supabase = await createClient();
 
   // Get current user's private profile ID for review assignments
-  const private_profile_id = await getPrivateProfileId(course_id);
+  const headersList = await headers();
+  const user_id = headersList.get("X-User-ID");
+  if (!user_id) {
+    redirect("/");
+  }
+  const role = await getUserRolesForCourse(course_id, user_id);
+  if (!role) {
+    redirect("/");
+  }
+  if (!role.private_profile_id) {
+    redirect("/");
+  }
+  const private_profile_id = role.private_profile_id;
 
   // Get dashboard metrics via RPC
   const { data: metricsRaw, error: metricsError } = await supabase.rpc("get_instructor_dashboard_metrics", {

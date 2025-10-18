@@ -6,8 +6,10 @@ import TableController, {
   PossiblyTentativeResult,
   useFindTableControllerValue,
   useListTableControllerValues,
-  useTableControllerTableValues
+  useTableControllerTableValues,
+  useTableControllerValueById
 } from "@/lib/TableController";
+import type { CourseControllerInitialData } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -40,6 +42,15 @@ import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
+export function useAssignmentGroupWithMembers({
+  assignment_group_id
+}: {
+  assignment_group_id: number | null | undefined;
+}) {
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const assignmentGroup = useTableControllerValueById(assignmentGroupsWithMembers, assignment_group_id);
+  return assignmentGroup;
+}
 export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: number }) {
   const { assignmentGroupsWithMembers } = useCourseController();
   const { private_profile_id } = useClassProfiles();
@@ -54,8 +65,7 @@ export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: nu
     },
     [assignment_id, private_profile_id]
   );
-  const assignmentGroup = assignmentGroupsWithMembers.rows.find(assignmentGroupFilter);
-  return assignmentGroup;
+  return useFindTableControllerValue(assignmentGroupsWithMembers, assignmentGroupFilter);
 }
 
 export function useAllProfilesForClass() {
@@ -372,16 +382,20 @@ export class CourseController {
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
 
+  private _initialData?: CourseControllerInitialData;
+
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
     public courseId: number,
     client: SupabaseClient<Database>,
     classRealTimeController: ClassRealTimeController,
-    userId: string
+    userId: string,
+    initialData?: CourseControllerInitialData
   ) {
     this._classRealTimeController = classRealTimeController;
     this.client = client as SupabaseClient<Database>;
     this._userId = userId;
+    this._initialData = initialData;
   }
 
   get userId() {
@@ -402,6 +416,17 @@ export class CourseController {
     void this.assignments; // Triggers lazy creation
     void this.assignmentGroupsWithMembers; // Triggers lazy creation
     void this.notifications; // Triggers lazy creation
+    void this.discussionThreadTeasers; // Triggers lazy creation
+    void this.tags; // Triggers lazy creation
+    void this.labSections; // Triggers lazy creation
+    void this.labSectionMeetings; // Triggers lazy creation
+    void this.classSections; // Triggers lazy creation
+    void this.discussionTopics; // Triggers lazy creation
+    void this.repositories; // Triggers lazy creation
+    void this.gradebookColumns; // Triggers lazy creation
+
+    // Clear initialData to free memory after all eager controllers are initialized
+    this._initialData = undefined;
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -412,43 +437,6 @@ export class CourseController {
   }
 
   // Lazy getters
-
-  get notifications(): TableController<"notifications"> {
-    if (!this._notifications) {
-      this._notifications = new TableController({
-        client: this.client,
-        table: "notifications",
-        query: this.client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._notifications;
-  }
-
-  get profiles(): TableController<"profiles"> {
-    if (!this._profiles) {
-      this._profiles = new TableController({
-        client: this.client,
-        table: "profiles",
-        query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._profiles;
-  }
-
-  get discussionThreadTeasers(): TableController<"discussion_threads"> {
-    if (!this._discussionThreadTeasers) {
-      this._discussionThreadTeasers = new TableController({
-        client: this.client,
-        table: "discussion_threads",
-        query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { root_class_id: this.courseId }
-      });
-    }
-    return this._discussionThreadTeasers;
-  }
 
   get discussionThreadReadStatus(): TableController<"discussion_thread_read_status"> {
     if (!this._discussionThreadReadStatus) {
@@ -479,13 +467,53 @@ export class CourseController {
     return this._discussionThreadWatchers;
   }
 
+  get notifications(): TableController<"notifications"> {
+    if (!this._notifications) {
+      this._notifications = new TableController({
+        client: this.client,
+        table: "notifications",
+        query: this.client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._notifications;
+  }
+
+  get profiles(): TableController<"profiles"> {
+    if (!this._profiles) {
+      this._profiles = new TableController({
+        client: this.client,
+        table: "profiles",
+        query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.profiles
+      });
+    }
+    return this._profiles;
+  }
+
+  get discussionThreadTeasers(): TableController<"discussion_threads"> {
+    if (!this._discussionThreadTeasers) {
+      this._discussionThreadTeasers = new TableController({
+        client: this.client,
+        table: "discussion_threads",
+        query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { root_class_id: this.courseId },
+        initialData: this._initialData?.discussionThreadTeasers
+      });
+    }
+    return this._discussionThreadTeasers;
+  }
+
   get tags(): TableController<"tags"> {
     if (!this._tags) {
       this._tags = new TableController({
         client: this.client,
         table: "tags",
         query: this.client.from("tags").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.tags
       });
     }
     return this._tags;
@@ -497,7 +525,8 @@ export class CourseController {
         client: this.client,
         table: "lab_sections",
         query: this.client.from("lab_sections").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.labSections
       });
     }
     return this._labSections;
@@ -509,7 +538,8 @@ export class CourseController {
         client: this.client,
         table: "lab_section_meetings",
         query: this.client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.labSectionMeetings
       });
     }
     return this._labSectionMeetings;
@@ -521,7 +551,8 @@ export class CourseController {
         client: this.client,
         table: "class_sections",
         query: this.client.from("class_sections").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.classSections
       });
     }
     return this._classSections;
@@ -537,7 +568,8 @@ export class CourseController {
           .select("*, profiles!private_profile_id(*), users(*)")
           .eq("class_id", this.courseId),
         selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.userRolesWithProfiles
       });
     }
     return this._userRolesWithProfiles;
@@ -549,7 +581,8 @@ export class CourseController {
         client: this.client,
         table: "student_deadline_extensions",
         query: this.client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.studentDeadlineExtensions
       });
     }
     return this._studentDeadlineExtensions;
@@ -561,7 +594,8 @@ export class CourseController {
         client: this.client,
         table: "assignment_due_date_exceptions",
         query: this.client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.assignmentDueDateExceptions
       });
     }
     return this._assignmentDueDateExceptions;
@@ -578,7 +612,8 @@ export class CourseController {
           .eq("class_id", this.courseId)
           .order("due_date", { ascending: true })
           .order("id", { ascending: true }),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.assignments
       });
     }
     return this._assignments;
@@ -594,7 +629,8 @@ export class CourseController {
           .select("*, assignment_groups_members(*)")
           .eq("class_id", this.courseId),
         selectForSingleRow: "*, assignment_groups_members(*)",
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.assignmentGroupsWithMembers
       });
     }
     return this._assignmentGroupsWithMembers;
@@ -606,18 +642,21 @@ export class CourseController {
         client: this.client,
         table: "repositories",
         query: this.client.from("repositories").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.repositories
       });
     }
     return this._repositories;
   }
+
   get gradebookColumns(): TableController<"gradebook_columns"> {
     if (!this._gradebookColumns) {
       this._gradebookColumns = new TableController({
         client: this.client,
         table: "gradebook_columns",
         query: this.client.from("gradebook_columns").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController
+        classRealTimeController: this.classRealTimeController,
+        initialData: this._initialData?.gradebookColumns
       });
     }
     return this._gradebookColumns;
@@ -646,7 +685,8 @@ export class CourseController {
         table: "discussion_topics",
         query: this.client.from("discussion_topics").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId }
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.discussionTopics
       });
     }
     return this._discussionTopics;
@@ -1183,12 +1223,14 @@ export function CourseControllerProvider({
   course_id,
   profile_id,
   role,
-  children
+  children,
+  initialData
 }: {
   profile_id: string;
   role: Database["public"]["Enums"]["app_role"];
   course_id: number;
   children: React.ReactNode;
+  initialData?: CourseControllerInitialData;
 }) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
@@ -1206,7 +1248,7 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      const _courseController = new CourseController(role, course_id, client, realTimeController, userId);
+      const _courseController = new CourseController(role, course_id, client, realTimeController, userId, initialData);
       setCourseController(_courseController);
       const start = async () => {
         try {
@@ -1237,7 +1279,7 @@ export function CourseControllerProvider({
         realTimeController.close();
       };
     }
-  }, [course_id, profile_id, role, userId]);
+  }, [course_id, profile_id, role, userId, initialData]);
 
   if (!courseController || !userId) {
     return (
@@ -1266,7 +1308,7 @@ export function formatWithTimeZone(date: string, timeZone: string) {
 }
 
 export function useAssignmentDueDate(
-  assignment: Assignment,
+  assignment: { id: number; due_date: string; minutes_due_after_lab: number | null },
   options?: { studentPrivateProfileId?: string; labSectionId?: number; assignmentGroupId?: number }
 ) {
   const controller = useCourseController();

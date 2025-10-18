@@ -4,34 +4,31 @@ import {
   useAllRubricChecks,
   useAssignmentController,
   useMyReviewAssignments,
-  useRubricCheck as useNewRubricCheck,
   useReferencingRubricChecks,
-  useRubricChecksByCriteria,
-  useRubricCriteria,
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
-  HydratedRubric,
-  HydratedRubricCheck,
-  HydratedRubricCriteria,
+  useRubricCheck as useAssignmentUseRubricCheck,
+  useRubricCriteria as useAssignmentUseRubricCriteria
+} from "@/hooks/useAssignment";
+import {
   HydratedRubricPart,
   RegradeRequestComment,
   Rubric,
   RubricChecks,
   RubricCriteria,
-  RubricCriteriaWithRubricChecks,
   SubmissionArtifact,
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionReview,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
@@ -42,7 +39,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { SubmissionReviewProvider } from "./useSubmissionReview";
 
 class SubmissionController {
-  private _submission?: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  private _submission?: SubmissionWithGraderResultsAndFiles;
   private _file?: SubmissionFile;
   private _artifact?: SubmissionArtifact;
 
@@ -116,7 +113,7 @@ class SubmissionController {
     return this._submission !== undefined;
   }
 
-  set submission(submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric) {
+  set submission(submission: SubmissionWithGraderResultsAndFiles) {
     this._submission = submission;
   }
 
@@ -532,15 +529,13 @@ function SubmissionControllerCreator({
   const submissionController = ctx.submissionController;
 
   // Single comprehensive query to load all data upfront
-  const { query } = useShow<SubmissionWithFilesGraderResultsOutputTestsAndRubric>({
+  const { query } = useShow<SubmissionWithGraderResultsAndFiles>({
     resource: "submissions",
     id: submission_id,
     meta: {
       select: `
         *,
-        assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))),
         submission_files(*),
-        assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))),
         grader_results(*, grader_result_tests(*), grader_result_output(*)),
         submission_artifacts(*)
       `.trim()
@@ -665,9 +660,8 @@ export function useSubmissionRubric(reviewAssignmentId?: number | null): {
     reviewAssignmentId ?? undefined
   );
 
-  // Get submission details, but only if context is available
-  const submission = context?.submissionController?.submission;
-  const rubricIdFromSubmission = submission?.assignments?.grading_rubric_id;
+  const { assignment } = useAssignmentController();
+  const rubricIdFromSubmission = assignment?.grading_rubric_id;
   const rubricIdFromReviewAssignment = reviewAssignment?.rubric_id;
 
   const finalRubricId = reviewAssignmentId != null ? rubricIdFromReviewAssignment : rubricIdFromSubmission;
@@ -722,7 +716,6 @@ export function useRubricCriteriaInstances({
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
-  const rubricData = useSubmissionRubric(review_id); // Pass review_id to useSubmissionRubric
   const allChecks = useAllRubricChecks();
 
   // Use useMemo to ensure the filtered result updates when comments change
@@ -817,18 +810,8 @@ export function useSubmissionReviewOrGradingReview(reviewId: number | undefined)
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {
-  const context = useContext(SubmissionContext);
-  if (!rubric_check_id || !context) {
-    return {
-      rubricCheck: undefined,
-      rubricCriteria: undefined
-    };
-  }
-  const controller = context.submissionController;
-  const criteria = controller.submission.assignments.rubrics?.rubric_criteria?.find((c: HydratedRubricCriteria) =>
-    c.rubric_checks?.some((c: HydratedRubricCheck) => c.id === rubric_check_id)
-  );
-  const check = criteria?.rubric_checks?.find((c: HydratedRubricCheck) => c.id === rubric_check_id);
+  const check = useAssignmentUseRubricCheck(rubric_check_id);
+  const criteria = useAssignmentUseRubricCriteria(check?.rubric_criteria_id);
   return {
     rubricCheck: check,
     rubricCriteria: criteria

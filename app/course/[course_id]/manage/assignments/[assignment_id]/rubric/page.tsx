@@ -43,6 +43,7 @@ import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from 
 import { configureMonacoYaml } from "monaco-yaml";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheck } from "react-icons/fa6";
+import * as Sentry from "@sentry/nextjs";
 import * as YAML from "yaml";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
@@ -357,7 +358,11 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
   return Object.keys(newItem)
     .filter(
       (key) =>
-        !Array.isArray(newItem[key as keyof T]) && key !== "rubric_id" && key !== "class_id" && key !== "created_at"
+        !Array.isArray(newItem[key as keyof T]) &&
+        key !== "rubric_id" &&
+        key !== "class_id" &&
+        key !== "created_at" &&
+        key !== "assignment_id"
     )
     .filter(
       (key) =>
@@ -373,6 +378,44 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
  * Displays the rubric editor interface with YAML editing, validation, and preview features.
  */
 export default function RubricPage() {
+  const assignmentController = useAssignmentController();
+  const [ready, setReady] = useState(false);
+  //Before showing the rubric page, force a refresh of all rubric data
+  useEffect(() => {
+    let cleanedUp = false;
+    async function refreshRubricData() {
+      if (cleanedUp) return;
+      try {
+        await Promise.all([
+          assignmentController.rubricsController.refetchAll(),
+          assignmentController.rubricPartsController.refetchAll(),
+          assignmentController.rubricCriteriaController.refetchAll(),
+          assignmentController.rubricChecksController.refetchAll(),
+          assignmentController.rubricCheckReferencesController.refetchAll()
+        ]);
+      } catch (error) {
+        Sentry.captureException(error);
+        toaster.error({
+          title: "Error refreshing rubric data",
+          description: "An unexpected error occurred while refreshing the rubric data. Please try again later."
+        });
+        return;
+      }
+      if (cleanedUp) return;
+      setReady(true);
+    }
+    refreshRubricData();
+    return () => {
+      cleanedUp = true;
+    };
+  }, [assignmentController]);
+  if (!ready)
+    return (
+      <Center height="100%" width="100%">
+        Refreshing rubric data...
+        <Spinner />
+      </Center>
+    );
   return <InnerRubricPage />;
 }
 const MemoizedRubricSidebar = memo(RubricSidebar);
@@ -1363,6 +1406,8 @@ function InnerRubricPage() {
                   description: "The rubric has been saved successfully."
                 });
               } catch (error) {
+                Sentry.captureException(error);
+                console.error(error);
                 if (error instanceof Error) {
                   toaster.error({
                     title: "Failed to save rubric",

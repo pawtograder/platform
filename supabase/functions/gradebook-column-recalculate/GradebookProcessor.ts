@@ -485,7 +485,9 @@ export async function processGradebookRowCalculation(
         }
       } catch (e) {
         console.log(e);
-        Sentry.captureException(e, scope);
+        const error = new Error(`Error calculating gradebook column in class ${column.class_id} num ${column.id}`);
+        error.cause = e;
+        Sentry.captureException(error, scope);
         nextScore = null;
         isMissing = true;
         nextIncomplete = null;

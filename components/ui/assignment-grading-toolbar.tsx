@@ -110,7 +110,7 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
     if (studentSubmissions.length > 0) {
       groups.push({
         label: "Students",
-        options: studentSubmissions
+        options: studentSubmissions.sort((a, b) => a.label.localeCompare(b.label))
       });
     }
 
@@ -118,7 +118,7 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
     if (staffSubmissions.length > 0) {
       groups.push({
         label: "Instructors & Graders",
-        options: staffSubmissions
+        options: staffSubmissions.sort((a, b) => a.label.localeCompare(b.label))
       });
     }
 

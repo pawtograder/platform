@@ -1360,13 +1360,7 @@ Deno.serve(async (req) => {
           await redis.set(webhookKey, JSON.stringify(updatedStatus), { ex: ttlSeconds });
         }
 
-        if (attemptCount >= 3) {
-          scope.setTag("attempt_count", String(attemptCount));
-          Sentry.captureMessage(
-            "Uncompleted webhook redelivered 3+ times. Consider processing duplicate webhooks safely?",
-            scope
-          );
-        }
+        scope.setTag("attempt_count", String(attemptCount));
       } catch (redisError) {
         console.error("Redis error during webhook status check:", redisError);
         Sentry.captureException(redisError, scope);

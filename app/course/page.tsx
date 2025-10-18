@@ -9,11 +9,9 @@ import { signOutAction } from "../actions";
 export default async function ProtectedPage() {
   const supabase = await createClient();
 
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
+  const claims = await supabase.auth.getClaims();
 
-  if (!user) {
+  if (!claims.data?.claims) {
     return redirect("/sign-in?redirect=/course");
   }
 
@@ -21,7 +19,7 @@ export default async function ProtectedPage() {
   const roles = await supabase
     .from("user_roles")
     .select("role, classes(*)")
-    .eq("user_id", user.id)
+    .eq("user_id", claims.data?.claims.sub)
     .eq("disabled", false);
 
   const sortedRoles = roles.data?.sort((a, b) => {

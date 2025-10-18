@@ -1,15 +1,10 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import * as Sentry from "npm:@sentry/deno";
+import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
+import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import {
-  createRepo,
-  getFileFromRepo,
-  syncRepoPermissions,
-  updateAutograderWorkflowHash
-} from "../_shared/GitHubWrapper.ts";
-import * as Sentry from "npm:@sentry/deno";
 
 const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
 

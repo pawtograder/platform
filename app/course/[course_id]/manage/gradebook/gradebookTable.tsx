@@ -1189,14 +1189,14 @@ function GradebookColumnHeader({
 
   // Check for mixed release status (some students have released grades, others don't)
   const hasMixedReleaseStatus = useMemo(() => {
-    if (!column.score_expression || allGrades.length === 0) return false;
+    if (allGrades.length === 0) return false;
 
     const releasedCount = allGrades.filter((grade) => grade.released).length;
     const totalCount = allGrades.length;
 
     // Mixed status: some but not all grades are released
     return releasedCount > 0 && releasedCount < totalCount;
-  }, [column.score_expression, allGrades]);
+  }, [allGrades]);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
@@ -1549,15 +1549,21 @@ function GradebookColumnHeader({
                   <Icon as={LucideInfo} size="sm" color="blue.500" />
                 </WrappedTooltip>
               </Box>
-            ) : gradebookController.isColumnEffectivelyReleased(column_id) ? (
+            ) : hasMixedReleaseStatus ? (
               <Box position="relative" zIndex={100}>
-                <WrappedTooltip content="Effectively released to students (either released or all grades are null)">
+                <WrappedTooltip content="Some students have released grades, others don't">
+                  <Icon as={LucideInfo} size="sm" color="red.500" />
+                </WrappedTooltip>
+              </Box>
+            ) : column.released ? (
+              <Box position="relative" zIndex={100}>
+                <WrappedTooltip content="Released to students">
                   <Icon as={FaLockOpen} size="sm" color="green.500" />
                 </WrappedTooltip>
               </Box>
             ) : (
               <Box position="relative" zIndex={100}>
-                <WrappedTooltip content="Not effectively released to students">
+                <WrappedTooltip content="Not released to students">
                   <Icon as={FaLock} size="sm" color="orange.500" />
                 </WrappedTooltip>
               </Box>

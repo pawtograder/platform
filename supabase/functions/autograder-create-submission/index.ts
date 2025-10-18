@@ -762,10 +762,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.log(`Profile ID: ${repoData.profile_id}`);
         console.log(`Assignment Group ID: ${repoData.assignment_group_id}`);
 
+        let profileId = repoData.profile_id;
+        if (!profileId) {
+          // Use the first profile ID for a user in the assignment group
+          const { data: assignmentGroupmembers, error: assignmentGroupmembersError } = await adminSupabase
+            .from("assignment_groups_members")
+            .select("profile_id")
+            .eq("assignment_group_id", repoData.assignment_group_id!)
+            .limit(1)
+            .maybeSingle();
+          if (assignmentGroupmembersError) {
+            throw new UserVisibleError(
+              `Failed to find assignment group members: ${assignmentGroupmembersError.message}`
+            );
+          }
+          if (assignmentGroupmembers) {
+            profileId = assignmentGroupmembers.profile_id;
+          }
+        }
         // Use the database function to calculate the final due date (includes lab scheduling + extensions)
         const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
           assignment_id_param: repoData.assignment_id,
-          student_profile_id_param: repoData.profile_id || "",
+          student_profile_id_param: profileId || "0xd34db34f",
           assignment_group_id_param: repoData.assignment_group_id || undefined
         });
 
