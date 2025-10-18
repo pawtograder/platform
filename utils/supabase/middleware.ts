@@ -44,12 +44,15 @@ export const updateSession = async (request: NextRequest) => {
     if (claims && claims.data && claims.data.claims) {
       // Inject the validated user ID into request headers for downstream handlers
       requestHeaders.set("X-User-ID", claims.data.claims.sub);
+      const prevCookies = response.cookies.getAll();
       // Recreate response with updated request headers
       response = NextResponse.next({
         request: {
           headers: requestHeaders
         }
       });
+      // restore previous cookies
+      prevCookies.forEach((cookie) => response.cookies.set(cookie.name, cookie.value));
       Sentry.setUser({
         id: claims.data.claims.sub,
         email: claims.data.claims.email
