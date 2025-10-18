@@ -4,13 +4,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 
+//Submit a response to a survey
+
+
 export type SurveySubmitResponseRequest = {
-  survey_response_id: string;
-  response: Json;
+  survey_response_id: string; //id of the survey response to submit a response to 
+  response: Json; //reponse to the survey 
 }
 
 export type SurveySubmitResponseResponse = {
-  success: boolean;
+  success: boolean; //true if the response was submitted successfully, false otherwise
 }
 
 async function handleRequest(
@@ -21,7 +24,7 @@ async function handleRequest(
   
   scope?.setTag("function", "survey-submit-response");
   scope?.setTag("survey_response_id", survey_response_id);
-
+  
   const supabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_ANON_KEY")!,
@@ -32,7 +35,7 @@ async function handleRequest(
     }
   );
 
-  // First, check if the survey response is already submitted
+  //Check if the survey response is already submitted
   const { data: existingResponse, error: fetchError } = await supabase
     .from("survey_responses")
     .select("is_submitted")
@@ -43,17 +46,21 @@ async function handleRequest(
     throw new Error(`Failed to fetch survey response: ${fetchError.message}`);
   }
 
+  //if the survey response has already been submitted, throw an error
   if (existingResponse.is_submitted) {
     throw new Error("Survey response has already been submitted");
+
+    return {
+      success: false,
+    };
   }
 
-  // Now update the response
+  //Update the response
   const { error: survey_responseError } = await supabase
     .from("survey_responses")
     .update({
       response: response,
       is_submitted: true,
-      // submitted_at is automatically set by database trigger when is_submitted becomes true
     })
     .eq("id", survey_response_id);
   

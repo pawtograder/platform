@@ -3,19 +3,22 @@ import { assertUserIsInstructorOrGrader, wrapRequestHandler } from "../_shared/H
 import * as Sentry from "npm:@sentry/deno";
 import { Json } from "../_shared/SupabaseTypes.d.ts";
 
+
+//Functions for publishing, archiving, and drafting surveys.
+
 export type Request = {
-  operation: "publish" | "archive" | "draft";
-  survey_id?: string;
-  class_id?: number;
-  class_section_id?: number;
-  title?: string;
-  description?: string;
-  questions?: Json;
+  operation: "publish" | "archive" | "draft"; //The operation to perform for a survey
+  survey_id?: string; //To publish, archive, draft, an existing survey
+  class_id: number; //To publish a survey for a class
+  class_section_id?: number; //To publish a survey for a specific section
+  title?: string; //Title of survey to publish or draft
+  description?: string; //Description of survey to publish or draft 
+  questions?: Json; //Question of survey to publish or draft 
 };
 
 export type Response = {
-  success: boolean;
-  survey_ids: string[];
+  success: boolean; 
+  survey_ids: string[]; //The ids of the surveys that were created
 };
 
 async function handleRequest(
@@ -23,7 +26,7 @@ async function handleRequest(
   scope: Sentry.Scope
 ): Promise<Response> {
   const { operation, survey_id, class_id, class_section_id, title, description, questions } = (await req.json()) as Request;
-
+  
   scope?.setTag("function", "survey-create-survey");
   scope?.setTag("operation", operation);
   scope?.setTag("class_id", class_id?.toString() || "");
@@ -32,61 +35,38 @@ async function handleRequest(
   scope?.setTag("description", description || "");
   scope?.setTag("questions", JSON.stringify(questions || []));
 
-  // Determine which class_id to use for authentication
-  let auth_class_id: number;
-  if (class_id) {
-    auth_class_id = class_id;
-  } else if (class_section_id) {
-    // Get class_id from class_section_id for authentication
-    const supabase_temp = await import("https://esm.sh/@supabase/supabase-js@2").then(m => m.createClient);
-    const temp_client = supabase_temp(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      {
-        global: {
-          headers: { Authorization: req.headers.get("Authorization")! }
-        }
-      }
-    );
-    const { data: section } = await temp_client
-      .from("class_sections")
-      .select("class_id")
-      .eq("id", class_section_id)
-      .single();
-
-    if (!section) {
-      throw new Error("Invalid class_section_id");
-    }
-    auth_class_id = section.class_id;
-  } else {
-    throw new Error("Must provide either class_id or class_section_id");
+  // Verify user is an instructor or grader and get their profile
+  const { supabase, enrollment } = await assertUserIsInstructorOrGrader(class_id, req.headers.get("Authorization")!);
+  if (!enrollment) {
+    throw new Error("User is not an instructor or grader for this course");
   }
+  const publisher_profile_id = enrollment?.public_profile_id;
 
-  const { supabase, enrollment } = await assertUserIsInstructorOrGrader(auth_class_id, req.headers.get("Authorization")!);
-  const publisher_profile_id = enrollment.public_profile_id;
-
+  //handle the different operations
   switch (operation) {
     case "publish":
       return await publishSurvey(supabase, survey_id, publisher_profile_id, class_id, class_section_id, title, description, questions);
     case "archive":
       return await archiveSurvey(supabase, survey_id);
     case "draft":
-      return await draftSurvey(supabase, publisher_profile_id, class_section_id, title, description, questions);
+      return await draftSurvey(supabase, publisher_profile_id, class_id, class_section_id, title, description, questions);
   }
 
   throw new Error(`Invalid operation: ${operation}`);
 }
 
+//Publish an existing survey or create a new survey and publish it
 const publishSurvey = async (
   supabase: any,
   survey_id?: string,
   publisher_profile_id: string,
-  class_id?: number,
+  class_id: number,
   class_section_id?: number,
   title?: string,
   description?: string,
   questions?: Json
 ) => {
+
   // If survey_id is provided, publish an existing draft survey
   if (survey_id) {
     const { data: survey, error: surveyError } = await supabase
@@ -110,58 +90,74 @@ const publishSurvey = async (
       survey_ids: [survey.id],
     };
   }
-  let class_sections_ids: number[] = [];
 
-  if (class_id) {
-    // Get all sections in the class
-    const { data: class_sections, error: class_sectionsError } = await supabase
-      .from("class_sections")
-      .select("id")
-      .eq("class_id", class_id);
+  
+  //if class_section_id is provided, publish a survey for the single section
+  if (class_section_id) {
+    const survey = await createSurvey(supabase, class_id, class_section_id, publisher_profile_id, title, description, questions, "published");
+    await create_survey_responses(supabase, survey.id, class_section_id);
+    return {
+      success: true,
+      survey_ids: [survey.id],
+    };
+  }
+  // Get all sections in the class
+  const { data: class_sections, error: class_sectionsError } = await supabase
+  .from("class_sections")
+  .select("id")
+  .eq("class_id", class_id);
 
-    if (class_sectionsError) {
-      throw new Error(`Failed to fetch class sections: ${class_sectionsError.message}`);
-    }
-
-    class_sections_ids = class_sections.map((section: any) => section.id);
-  } else if (class_section_id) {
-    // Just use the single section
-    class_sections_ids = [class_section_id];
-  } else {
-    throw new Error("Must provide either class_id or class_section_id");
+  if (class_sectionsError) {
+    throw new Error(`Failed to fetch class sections: ${class_sectionsError.message}`);
   }
 
+  const class_sections_ids = class_sections.map((section: any) => section.id);
+
+  //store ids of surveys created
   const new_survey_ids: string[] = [];
 
-  // Use for...of to properly await each survey creation
+  //create a survey for each section 
   for (const section_id of class_sections_ids) {
-    const { data: survey, error: surveyError } = await supabase
-      .from("surveys")
-      .insert({
-        class_section_id: section_id,
-        assigned_by: publisher_profile_id,
-        title: title,
-        description: description,
-        questions: questions,
-        status: "published",
-      })
-      .select("id")
-      .single();
-
-    if (surveyError) {
-      throw new Error(`Failed to create survey: ${surveyError.message}`);
-    }
-
-    new_survey_ids.push(survey.id);
-    
-    // Create survey responses for students in this section
+    const survey = await createSurvey(supabase, class_id, section_id, publisher_profile_id, title, description, questions, "published");
     await create_survey_responses(supabase, survey.id, section_id);
+    new_survey_ids.push(survey.id);
   }
-  
   return {
     success: true,
     survey_ids: new_survey_ids,
   };
+}
+
+//Create a single survey
+const createSurvey = async (
+  supabase: any,
+  class_id: number,
+  section_id: number,
+  publisher_profile_id: string,
+  title: string,
+  description?: string,
+  questions: Json,
+  status: "draft" | "published" = "published"
+) => {
+  const { data: survey, error: surveyError } = await supabase
+    .from("surveys")
+    .insert({
+      class_id: class_id,
+      class_section_id: section_id,
+      assigned_by: publisher_profile_id,
+      title: title,
+      description: description,
+      questions: questions,
+      status: status,
+    })
+    .select("id")
+    .single();
+
+  if (surveyError) {
+    throw new Error(`Failed to create survey: ${surveyError.message}`);
+  }
+
+  return survey;
 }
 
 // Create empty survey responses for all students in a class section
@@ -196,6 +192,7 @@ const create_survey_responses = async (
   }
 }
 
+//Archive an existing survey
 const archiveSurvey = async (supabase: any, survey_id?: string) => {
   if (!survey_id) {
     throw new Error("survey_id is required for archive operation");
@@ -218,34 +215,34 @@ const archiveSurvey = async (supabase: any, survey_id?: string) => {
   };
 }
 
+//Save a survey as a draft
 const draftSurvey = async (
   supabase: any,
   publisher_profile_id: string,
-  class_section_id?: number,
-  title?: string,
+  class_id: number,
+  class_section_id: number,
+  title: string,
   description?: string,
-  questions?: Json
+  questions: Json,
 ) => {
-  if (!class_section_id) {
-    throw new Error("class_section_id is required for draft operation");
+  //check for valid titld, and questions
+  if (!title) {
+    throw new Error("Title is required for draft operation");
+  }
+  if (!questions) {
+    throw new Error("Questions are required for draft operation");
   }
 
-  const { data: survey, error: surveyError } = await supabase
-    .from("surveys")
-    .insert({
-      class_section_id: class_section_id,
-      assigned_by: publisher_profile_id,
-      title: title,
-      description: description,
-      questions: questions,
-      status: "draft",
-    })
-    .select("id")
-    .single();
-
-  if (surveyError) {
-    throw new Error(`Failed to create survey: ${surveyError.message}`);
-  }
+  const survey = await createSurvey(
+    supabase,
+    class_id,
+    class_section_id,
+    publisher_profile_id,
+    title,
+    description,
+    questions,
+    "draft"
+  );
 
   return {
     success: true,
