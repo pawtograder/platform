@@ -23,19 +23,11 @@ export const updateSession = async (request: NextRequest) => {
           },
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-            // Reflect updated cookies in forwarded request headers
-            const cookieHeader = request.cookies
-              .getAll()
-              .map(({ name, value }) => `${name}=${value}`)
-              .join("; ");
-            if (cookieHeader) requestHeaders.set("cookie", cookieHeader);
             response = NextResponse.next({
               request: {
                 headers: requestHeaders
               }
             });
-
-            // Set new cookies
             cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
           }
         }
@@ -46,26 +38,11 @@ export const updateSession = async (request: NextRequest) => {
     if (claims && claims.data && claims.data.claims) {
       // Inject the validated user ID into request headers for downstream handlers
       requestHeaders.set("X-User-ID", claims.data.claims.sub);
-      const prevCookies = response.cookies.getAll();
       // Recreate response with updated request headers
       response = NextResponse.next({
         request: {
           headers: requestHeaders
         }
-      });
-      // restore previous cookies WITH their options to preserve security attributes
-      prevCookies.forEach((cookie) => {
-        response.cookies.set({
-          name: cookie.name,
-          value: cookie.value,
-          ...(cookie.httpOnly !== undefined && { httpOnly: cookie.httpOnly }),
-          ...(cookie.secure !== undefined && { secure: cookie.secure }),
-          ...(cookie.sameSite !== undefined && { sameSite: cookie.sameSite }),
-          ...(cookie.maxAge !== undefined && { maxAge: cookie.maxAge }),
-          ...(cookie.path !== undefined && { path: cookie.path }),
-          ...(cookie.domain !== undefined && { domain: cookie.domain }),
-          ...(cookie.expires !== undefined && { expires: cookie.expires })
-        });
       });
       Sentry.setUser({
         id: claims.data.claims.sub,
@@ -79,43 +56,17 @@ export const updateSession = async (request: NextRequest) => {
     if (request.nextUrl.pathname.startsWith("/course")) {
       if (!claims || claims.error || !claims.data || !claims.data.claims) {
         const signInUrl = new URL("/sign-in", request.url);
+        //Clear cookies
+        response.cookies.delete("sb-access-token");
+        response.cookies.delete("sb-refresh-token");
         const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
         signInUrl.searchParams.set("redirect", originalPathWithSearch);
-        const redirect = NextResponse.redirect(signInUrl);
-        // propagate cookies set earlier in this middleware WITH their options
-        for (const cookie of response.cookies.getAll()) {
-          redirect.cookies.set({
-            name: cookie.name,
-            value: cookie.value,
-            ...(cookie.httpOnly !== undefined && { httpOnly: cookie.httpOnly }),
-            ...(cookie.secure !== undefined && { secure: cookie.secure }),
-            ...(cookie.sameSite !== undefined && { sameSite: cookie.sameSite }),
-            ...(cookie.maxAge !== undefined && { maxAge: cookie.maxAge }),
-            ...(cookie.path !== undefined && { path: cookie.path }),
-            ...(cookie.domain !== undefined && { domain: cookie.domain }),
-            ...(cookie.expires !== undefined && { expires: cookie.expires })
-          });
-        }
-        return redirect;
+        return NextResponse.redirect(signInUrl);
       }
     }
 
-    if (request.nextUrl.pathname === "/" && !claims?.data?.claims?.sub) {
-      const redirect = NextResponse.redirect(new URL("/course", request.url));
-      for (const cookie of response.cookies.getAll()) {
-        redirect.cookies.set({
-          name: cookie.name,
-          value: cookie.value,
-          ...(cookie.httpOnly !== undefined && { httpOnly: cookie.httpOnly }),
-          ...(cookie.secure !== undefined && { secure: cookie.secure }),
-          ...(cookie.sameSite !== undefined && { sameSite: cookie.sameSite }),
-          ...(cookie.maxAge !== undefined && { maxAge: cookie.maxAge }),
-          ...(cookie.path !== undefined && { path: cookie.path }),
-          ...(cookie.domain !== undefined && { domain: cookie.domain }),
-          ...(cookie.expires !== undefined && { expires: cookie.expires })
-        });
-      }
-      return redirect;
+    if (request.nextUrl.pathname === "/" && !claims.error && !!claims.data?.claims) {
+      return NextResponse.redirect(new URL("/course", request.url));
     }
 
     return response;
