@@ -183,14 +183,17 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     return unsubscribe;
   }, [courseController]);
 
-  useEffect(() => {
-    if (assignmentController.reviewAssignments) {
-      assignmentController.reviewAssignments.refetchAll();
-    }
-  }, [assignmentController.reviewAssignments]);
+  // Use a separate TableController from the one in useAssignment, since it is scoped to the current user as assignee
+  const reviewAssignmentsController = useMemo(() => {
+    return new TableController({
+      client: supabase,
+      table: "review_assignments",
+      query: supabase.from("review_assignments").select("*").eq("assignment_id", Number(assignment_id)),
+      classRealTimeController: courseController.classRealTimeController
+    });
+  }, [supabase, assignment_id, courseController.classRealTimeController]);
 
-  // Current assignment review assignments rows (live via TableController)
-  const currentReviewAssignments = useTableControllerTableValues(assignmentController.reviewAssignments);
+  const currentReviewAssignments = useTableControllerTableValues(reviewAssignmentsController);
 
   // Map of review_assignment_id -> assigned rubric_part_ids
   const [reviewAssignmentPartsById, setReviewAssignmentPartsById] = useState<Map<number, number[]>>(new Map());

@@ -1,9 +1,6 @@
 "use client";
 import {
-  ActiveSubmissionsWithGradesForAssignment,
-  AssignmentGroup,
   AssignmentWithRubricsAndReferences,
-  HydratedRubric,
   RegradeRequest,
   ReviewAssignmentParts,
   ReviewAssignments,
@@ -17,17 +14,17 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
 import TableController, {
   useFindTableControllerValue,
   useListTableControllerValues,
   useTableControllerTableValues,
   useTableControllerValueById
 } from "@/lib/TableController";
-import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { useShow } from "@refinedev/core";
+import { useList, useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -246,39 +243,20 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
   }, [controller, review_assignment_id]);
   return reviewAssignment;
 }
-export function useReviewAssignmentForReview(review_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findReviewAssignmentPredicate = useCallback(
-    (reviewAssignment: ReviewAssignments) => {
-      return (review_id && reviewAssignment.submission_review_id === review_id) || false;
-    },
-    [review_id]
-  );
-  return useFindTableControllerValue(controller.reviewAssignments, findReviewAssignmentPredicate);
-}
 
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
-  const [reviewAssignments, setReviewAssignments] = useState<ReviewAssignments[]>(controller.reviewAssignments.rows);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.reviewAssignments.list((data) => {
-      setReviewAssignments(data);
-    });
-    setReviewAssignments(data);
-    return () => unsubscribe();
-  }, [controller]);
-
-  const myReviewAssignments = useMemo(
-    () =>
-      reviewAssignments.filter(
-        (ra) =>
-          ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
-      ),
-    [reviewAssignments, private_profile_id, submission_id]
+  const filter = useCallback(
+    (reviewAssignment: ReviewAssignments) => {
+      return (
+        reviewAssignment.assignee_profile_id === private_profile_id &&
+        (submission_id ? reviewAssignment.submission_id === submission_id : true)
+      );
+    },
+    [private_profile_id, submission_id]
   );
-  return myReviewAssignments;
+  return useListTableControllerValues(controller.reviewAssignments, filter);
 }
 
 /**
@@ -418,11 +396,14 @@ export class AssignmentController {
       initialData: initialData?.assignmentGroups
     });
     this.reviewAssignments = new TableController({
-      query: client.from("review_assignments").select("*").eq("assignment_id", assignment_id),
+      query: client
+        .from("review_assignments")
+        .select("*")
+        .eq("assignment_id", assignment_id)
+        .eq("assignee_profile_id", classRealTimeController.profileId),
       client: client,
       table: "review_assignments",
-      classRealTimeController,
-      initialData: initialData?.reviewAssignments
+      classRealTimeController
     });
     this.regradeRequests = new TableController({
       query: client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id),

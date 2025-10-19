@@ -28,6 +28,8 @@ import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   useAssignmentController,
+  useReviewAssignment,
+  useRubricById,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
   useRubricWithParts
@@ -35,14 +37,13 @@ import {
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import {
-  useReviewAssignment,
   useRubricCheck,
   useSubmission,
   useSubmissionArtifactComments,
   useSubmissionController,
   useSubmissionFileComments,
   useSubmissionMaybe,
-  useSubmissionReviewByAssignmentId,
+  useSubmissionReview,
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
@@ -224,9 +225,10 @@ function ArtifactAnnotation({
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_artifact_comments"
   });
-  const { reviewAssignment, isLoading: reviewAssignmentLoading } = useReviewAssignment(reviewAssignmentId);
+  const reviewAssignment = useReviewAssignment(reviewAssignmentId);
+  const rubric = useRubricById(reviewAssignment?.rubric_id);
 
-  if (reviewAssignmentLoading || !comment.submission_review_id) {
+  if (!comment.submission_review_id) {
     return <Skeleton height="100px" width="100%" />;
   }
 
@@ -234,9 +236,7 @@ function ArtifactAnnotation({
     return <Skeleton height="100px" width="100%" />;
   }
 
-  const reviewName = comment.submission_review_id
-    ? reviewAssignment?.rubrics?.name || "Grading Review" || "Review"
-    : "Self-Review";
+  const reviewName = comment.submission_review_id ? rubric?.name || "Grading Review" || "Review" : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
 
@@ -412,10 +412,6 @@ function ArtifactComments({
       return true;
     });
   }, [allArtifactComments, artifact.id, isGraderOrInstructor, submission.released]);
-
-  // Keep review assignment context only for labeling in child components
-  // Do not use reviewAssignmentId as a submission_review_id
-  useReviewAssignment(reviewAssignmentId);
 
   if (!submission) {
     return null;
@@ -948,10 +944,9 @@ export default function FilesView() {
   const writableSubmissionReviews = useWritableSubmissionReviews(activeRubricId);
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
-  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(activeReviewAssignmentId);
+  const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
 
-  const { submissionReview: currentSubmissionReview, isLoading: isLoadingSubmissionReviewList } =
-    useSubmissionReviewByAssignmentId(activeReviewAssignmentId);
+  const currentSubmissionReview = useSubmissionReview(reviewAssignment?.submission_review_id);
 
   const currentSubmissionReviewRecordId = currentSubmissionReview?.id;
 
@@ -1106,8 +1101,7 @@ export default function FilesView() {
         ? submissionData.submission_artifacts[0]
         : undefined;
 
-  const isLoading =
-    isLoadingSubmission || isLoadingReviewAssignment || (!!reviewAssignment && isLoadingSubmissionReviewList);
+  const isLoading = isLoadingSubmission || (!!reviewAssignment && currentSubmissionReview === undefined);
 
   // Resolve prop types
   const filePickerDisplayIndex = curFileIndex === -1 ? 0 : curFileIndex;
