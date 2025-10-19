@@ -403,14 +403,19 @@ export class AssignmentController {
         .eq("assignee_profile_id", classRealTimeController.profileId),
       client: client,
       table: "review_assignments",
-      classRealTimeController
+      classRealTimeController,
+      realtimeFilter: {
+        assignment_id,
+        assignee_profile_id: classRealTimeController.profileId
+      }
     });
     this.regradeRequests = new TableController({
       query: client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id),
       client: client,
       table: "submission_regrade_requests",
       classRealTimeController,
-      initialData: initialData?.regradeRequests
+      initialData: initialData?.regradeRequests,
+      realtimeFilter: { assignment_id }
     });
 
     // Initialize rubric table controllers - each filtered by assignment_id
