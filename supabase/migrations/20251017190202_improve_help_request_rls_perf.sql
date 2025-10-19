@@ -188,3 +188,48 @@ USING (
       )
   )
 );
+
+-- ============================================================================
+-- INDICES FOR RLS PERFORMANCE
+-- ============================================================================
+
+-- Index for help_requests RLS policy - class_id filtering
+CREATE INDEX IF NOT EXISTS idx_help_requests_class_id 
+  ON "public"."help_requests" (class_id);
+
+-- Index for help_requests RLS policy - assignee and created_by checks
+CREATE INDEX IF NOT EXISTS idx_help_requests_assignee 
+  ON "public"."help_requests" (assignee) WHERE assignee IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_help_requests_created_by 
+  ON "public"."help_requests" (created_by);
+
+-- CRITICAL: Composite index for the LEFT JOIN in help_requests RLS policy
+-- This prevents the seq scan on help_request_students that was removing 1749 rows per loop
+CREATE INDEX IF NOT EXISTS idx_help_request_students_request_profile 
+  ON "public"."help_request_students" (help_request_id, profile_id);
+
+-- Index for help_request_students RLS policy - class_id filtering
+CREATE INDEX IF NOT EXISTS idx_help_request_students_class_id 
+  ON "public"."help_request_students" (class_id);
+
+-- Index for help_request_messages RLS policy - class_id and help_request_id
+CREATE INDEX IF NOT EXISTS idx_help_request_messages_class_id 
+  ON "public"."help_request_messages" (class_id);
+
+CREATE INDEX IF NOT EXISTS idx_help_request_messages_help_request_id 
+  ON "public"."help_request_messages" (help_request_id);
+
+-- Index for help_request_message_read_receipts RLS policy
+CREATE INDEX IF NOT EXISTS idx_help_request_message_read_receipts_class_id 
+  ON "public"."help_request_message_read_receipts" (class_id);
+
+CREATE INDEX IF NOT EXISTS idx_help_request_message_read_receipts_help_request_id 
+  ON "public"."help_request_message_read_receipts" (help_request_id);
+
+-- Index for help_request_moderation RLS policy
+CREATE INDEX IF NOT EXISTS idx_help_request_moderation_class_id 
+  ON "public"."help_request_moderation" (class_id);
+
+CREATE INDEX IF NOT EXISTS idx_help_request_moderation_student_profile 
+  ON "public"."help_request_moderation" (student_profile_id);
