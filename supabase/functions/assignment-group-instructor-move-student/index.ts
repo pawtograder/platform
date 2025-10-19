@@ -83,6 +83,27 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         debug_id: `assignment-group-instructor-move-student-${old_assignment_group_id}-${profile_id}`
       });
     }
+  } else {
+    const { data: currentGroup } = await adminSupabase
+      .from("assignment_groups")
+      .select("assignment_id")
+      .eq("id", new_assignment_group_id!)
+      .single();
+    if (!currentGroup) {
+      throw new IllegalArgumentError("Group not found");
+    }
+    //Deactivate any submissions for this assignment for this student
+    const { error: deactivateError } = await adminSupabase
+      .from("submissions")
+      .update({
+        is_active: false
+      })
+      .eq("assignment_id", currentGroup.assignment_id)
+      .eq("is_active", true)
+      .eq("profile_id", profile_id);
+    if (deactivateError) {
+      throw new Error("Failed to deactivate submissions");
+    }
   }
 
   //Add student to new group
@@ -141,6 +162,26 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
           .map((m) => m.profiles!.user_roles!.users!.github_username!),
         debug_id: `assignment-group-instructor-move-student-${new_assignment_group_id}-${profile_id}`
       });
+    }
+  } else {
+    const { data: oldGroup } = await adminSupabase
+      .from("assignment_groups")
+      .select("assignment_id")
+      .eq("id", old_assignment_group_id!)
+      .single();
+    if (!oldGroup) {
+      throw new IllegalArgumentError("Group not found");
+    }
+    //Reactivate the student's individual submission
+    const { error: reactivateError } = await adminSupabase
+      .from("submissions")
+      .update({
+        is_active: true
+      })
+      .eq("assignment_id", oldGroup.assignment_id)
+      .eq("profile_id", profile_id);
+    if (reactivateError) {
+      throw new Error("Failed to reactivate submissions");
     }
   }
 }

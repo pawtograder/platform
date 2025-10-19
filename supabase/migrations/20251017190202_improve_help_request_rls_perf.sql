@@ -47,7 +47,7 @@ USING (
       AND "up"."class_id" = "help_requests"."class_id"
       AND (
         -- Graders/instructors can see all
-        "up"."role" IN ('instructor', 'grader')
+        "up"."role" IN ('instructor', 'grader', 'admin')
         OR
         -- Students can see non-private help requests
         ("up"."role" = 'student' AND "help_requests"."is_private" = false)
@@ -95,7 +95,7 @@ USING (
       AND "up"."class_id" = "help_request_messages"."class_id"
       AND (
         -- Graders/instructors can see all messages
-        "up"."role" IN ('instructor', 'grader')
+        "up"."role" IN ('instructor', 'grader', 'admin')
         OR
         -- Students can see messages in non-private help requests
         ("up"."role" = 'student' AND "hr"."is_private" = false)
@@ -138,7 +138,7 @@ USING (
       AND "up"."class_id" = "help_request_message_read_receipts"."class_id"
       AND (
         -- Graders/instructors can see all read receipts
-        "up"."role" IN ('instructor', 'grader')
+        "up"."role" IN ('instructor', 'grader', 'admin')
         OR
         -- Students can see read receipts for non-private help requests
         ("up"."role" = 'student' AND "hr"."is_private" = false)
@@ -178,7 +178,7 @@ USING (
       AND "up"."class_id" = "help_request_moderation"."class_id"
       AND (
         -- Graders/instructors can see all
-        "up"."role" IN ('instructor', 'grader')
+        "up"."role" IN ('instructor', 'grader', 'admin')
         OR
         -- Students can see their own records
         (

@@ -149,6 +149,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
       is_active: false
     })
     .eq("assignment_id", assignment_id)
+    .eq("is_active", true)
     .eq("profile_id", profile_id);
   if (deactivateError) {
     console.error(deactivateError);
