@@ -1,9 +1,139 @@
 -- ============================================================================
--- OPTIMIZE HELP_REQUEST_STUDENTS SELECT POLICY
+-- SECURITY DEFINER FUNCTIONS FOR RLS (to avoid circular dependencies)
 -- ============================================================================
-DROP POLICY IF EXISTS "Students can view help request members" ON "public"."help_request_students";
 
--- Simplified policy: anyone in the class can see all help_request_students
+-- Function to check if a user can add students to a help request
+-- This bypasses RLS to avoid circular dependency with help_requests table
+CREATE OR REPLACE FUNCTION check_can_add_to_help_request(
+  p_help_request_id bigint,
+  p_user_id uuid,
+  p_class_id bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_is_staff boolean;
+  v_is_private boolean;
+  v_is_creator boolean;
+  v_is_member boolean;
+  v_private_profile_id uuid;
+  v_public_profile_id uuid;
+BEGIN
+  -- Get user's role and profile IDs
+  SELECT 
+    role IN ('instructor', 'grader', 'admin'),
+    private_profile_id,
+    public_profile_id
+  INTO v_is_staff, v_private_profile_id, v_public_profile_id
+  FROM user_privileges
+  WHERE user_id = p_user_id AND class_id = p_class_id
+  LIMIT 1;
+
+  -- Staff can add to any help request
+  IF v_is_staff THEN
+    RETURN true;
+  END IF;
+
+  -- For students, check help request privacy (bypass RLS with SECURITY DEFINER)
+  SELECT is_private INTO v_is_private
+  FROM help_requests
+  WHERE id = p_help_request_id;
+
+  -- Anyone can add to non-private help requests
+  IF NOT v_is_private THEN
+    RETURN true;
+  END IF;
+
+  -- For private help requests, check if user is creator
+  SELECT EXISTS (
+    SELECT 1 FROM help_requests
+    WHERE id = p_help_request_id
+      AND (created_by = v_private_profile_id OR created_by = v_public_profile_id)
+  ) INTO v_is_creator;
+
+  IF v_is_creator THEN
+    RETURN true;
+  END IF;
+
+  -- Check if user is already a member of the private help request
+  SELECT EXISTS (
+    SELECT 1 FROM help_request_students
+    WHERE help_request_id = p_help_request_id
+      AND (profile_id = v_private_profile_id OR profile_id = v_public_profile_id)
+  ) INTO v_is_member;
+
+  RETURN v_is_member;
+END;
+$$;
+
+-- Function to check if a user can remove students from a help request
+-- This bypasses RLS to avoid circular dependency with help_requests table
+CREATE OR REPLACE FUNCTION check_can_remove_from_help_request(
+  p_help_request_id bigint,
+  p_profile_id_to_remove uuid,
+  p_user_id uuid,
+  p_class_id bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_is_staff boolean;
+  v_is_removing_self boolean;
+  v_is_member boolean;
+  v_private_profile_id uuid;
+  v_public_profile_id uuid;
+BEGIN
+  -- Get user's role and profile IDs
+  SELECT 
+    role IN ('instructor', 'grader', 'admin'),
+    private_profile_id,
+    public_profile_id
+  INTO v_is_staff, v_private_profile_id, v_public_profile_id
+  FROM user_privileges
+  WHERE user_id = p_user_id AND class_id = p_class_id
+  LIMIT 1;
+
+  -- Staff can remove anyone
+  IF v_is_staff THEN
+    RETURN true;
+  END IF;
+
+  -- Check if user is removing themselves
+  v_is_removing_self := (p_profile_id_to_remove = v_private_profile_id OR p_profile_id_to_remove = v_public_profile_id);
+  
+  IF v_is_removing_self THEN
+    RETURN true;
+  END IF;
+
+  -- For removing others, check if user is a member of the help request
+  SELECT EXISTS (
+    SELECT 1 FROM help_request_students
+    WHERE help_request_id = p_help_request_id
+      AND (profile_id = v_private_profile_id OR profile_id = v_public_profile_id)
+  ) INTO v_is_member;
+
+  -- Members can remove others from the same help request
+  RETURN v_is_member;
+END;
+$$;
+
+-- ============================================================================
+-- OPTIMIZE HELP_REQUEST_STUDENTS POLICIES
+-- ============================================================================
+
+-- Drop all existing policies to prevent circular dependencies
+DROP POLICY IF EXISTS "Students can view help request members" ON "public"."help_request_students";
+DROP POLICY IF EXISTS "Students can add students to help requests they have access to" ON "public"."help_request_students";
+DROP POLICY IF EXISTS "Students can remove students from help requests they're part of" ON "public"."help_request_students";
+DROP POLICY IF EXISTS "Staff can update help request memberships" ON "public"."help_request_students";
+
+-- SELECT: Simplified policy - anyone in the class can see all help_request_students
 -- This is safe because:
 -- 1. Seeing who's in a help request doesn't leak sensitive info
 -- 2. The help_requests RLS policy controls access to actual metadata
@@ -19,6 +149,65 @@ USING (
     FROM "public"."user_privileges" "up"
     WHERE "up"."user_id" = "auth"."uid"()
       AND "up"."class_id" = "help_request_students"."class_id"
+  )
+);
+
+-- INSERT: Use SECURITY DEFINER function to check access without circular dependency
+-- Logic:
+-- 1. Staff can add anyone
+-- 2. Students can add to non-private help requests
+-- 3. Students can add to private help requests if they're the creator or already a member
+CREATE POLICY "Students can add students to help requests they have access to" 
+ON "public"."help_request_students" 
+FOR INSERT 
+TO "authenticated" 
+WITH CHECK (
+  check_can_add_to_help_request(
+    help_request_students.help_request_id,
+    auth.uid(),
+    help_request_students.class_id
+  )
+);
+
+-- DELETE: Use SECURITY DEFINER function to check access without circular dependency
+-- Logic:
+-- 1. Staff can remove anyone
+-- 2. Students can remove themselves
+-- 3. Students who are members can remove others from the same help request
+CREATE POLICY "Students can remove students from help requests they're part of" 
+ON "public"."help_request_students" 
+FOR DELETE 
+TO "authenticated" 
+USING (
+  check_can_remove_from_help_request(
+    help_request_students.help_request_id,
+    help_request_students.profile_id,
+    auth.uid(),
+    help_request_students.class_id
+  )
+);
+
+-- UPDATE: Staff only
+CREATE POLICY "Staff can update help request memberships" 
+ON "public"."help_request_students" 
+FOR UPDATE 
+TO "authenticated" 
+USING (
+  EXISTS (
+    SELECT 1
+    FROM "public"."user_privileges" "up"
+    WHERE "up"."user_id" = "auth"."uid"()
+      AND "up"."class_id" = "help_request_students"."class_id"
+      AND "up"."role" IN ('instructor', 'grader', 'admin')
+  )
+) 
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM "public"."user_privileges" "up"
+    WHERE "up"."user_id" = "auth"."uid"()
+      AND "up"."class_id" = "help_request_students"."class_id"
+      AND "up"."role" IN ('instructor', 'grader', 'admin')
   )
 );
 
@@ -233,7 +422,3 @@ CREATE INDEX IF NOT EXISTS idx_help_request_moderation_class_id
 
 CREATE INDEX IF NOT EXISTS idx_help_request_moderation_student_profile 
   ON "public"."help_request_moderation" (student_profile_id);
-
-CREATE INDEX ON public.submission_regrade_requests USING btree (created_at);
-CREATE INDEX ON public.assignment_due_date_exceptions USING btree (created_at);
-    
