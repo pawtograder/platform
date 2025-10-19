@@ -233,3 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_help_request_moderation_class_id
 
 CREATE INDEX IF NOT EXISTS idx_help_request_moderation_student_profile 
   ON "public"."help_request_moderation" (student_profile_id);
+
+CREATE INDEX ON public.submission_regrade_requests USING btree (created_at);
+CREATE INDEX ON public.assignment_due_date_exceptions USING btree (created_at);
+    
