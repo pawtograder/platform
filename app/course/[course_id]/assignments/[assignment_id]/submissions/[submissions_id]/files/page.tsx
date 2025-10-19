@@ -228,7 +228,7 @@ function ArtifactAnnotation({
   const reviewAssignment = useReviewAssignment(reviewAssignmentId);
   const rubric = useRubricById(reviewAssignment?.rubric_id);
 
-  if (!comment.submission_review_id) {
+  if (comment.submission_review_id && !rubric) {
     return <Skeleton height="100px" width="100%" />;
   }
 

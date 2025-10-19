@@ -192,6 +192,11 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       classRealTimeController: courseController.classRealTimeController
     });
   }, [supabase, assignment_id, courseController.classRealTimeController]);
+  useEffect(() => {
+    return () => {
+      reviewAssignmentsController.close();
+    };
+  }, [reviewAssignmentsController]);
 
   const currentReviewAssignments = useTableControllerTableValues(reviewAssignmentsController);
 
@@ -211,6 +216,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     });
     return controller;
   }, [supabase, course_id]);
+
+  useEffect(() => {
+    return () => {
+      reviewAssignmentPartsController.close();
+    };
+  }, [reviewAssignmentPartsController]);
+
   const reviewAssignmentsPredicate = useCallback(
     (
       row: PossiblyTentativeResult<{
@@ -255,6 +267,11 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       realtimeFilter: { class_id: Number(course_id) }
     });
   }, [supabase, course_id, courseController.classRealTimeController]);
+  useEffect(() => {
+    return () => {
+      gradingConflictsController.close();
+    };
+  }, [gradingConflictsController]);
   const gradingConflicts = useTableControllerTableValues(gradingConflictsController);
   const gradersAndInstructors = useGradersAndInstructors();
 
@@ -275,6 +292,15 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .eq("class_id", Number(course_id))
     });
   }, [supabase, selectedReferenceAssignment, course_id]);
+
+  useEffect(() => {
+    return () => {
+      if (referenceReviewAssignmentsController) {
+        referenceReviewAssignmentsController.close();
+      }
+    };
+  }, [referenceReviewAssignmentsController]);
+
   const exclusionReviewAssignmentsController = useMemo(() => {
     if (!selectedExclusionAssignment) return null;
     //Note EXPLICLTLY NOT REALTIME FOR THIS! Need to do bulk realtime updates to avoid herding, fix later...
@@ -288,6 +314,15 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .eq("class_id", Number(course_id))
     });
   }, [supabase, selectedExclusionAssignment, course_id]);
+
+  useEffect(() => {
+    return () => {
+      if (exclusionReviewAssignmentsController) {
+        exclusionReviewAssignmentsController.close();
+      }
+    };
+  }, [exclusionReviewAssignmentsController]);
+
   const referenceReviewAssignments = useMemo(() => {
     if (!referenceReviewAssignmentsController)
       return [] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];
