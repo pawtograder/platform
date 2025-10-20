@@ -4,6 +4,7 @@ import * as Sentry from "npm:@sentry/deno";
 import { AssignmentGroupInstructorMoveStudentRequest } from "../_shared/FunctionTypes.d.ts";
 import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { enqueueGithubArchiveRepo, enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 
 async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: Sentry.Scope): Promise<void> {
   const { new_assignment_group_id, old_assignment_group_id, profile_id, class_id } =
@@ -147,53 +148,3 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
 Deno.serve(async (req) => {
   return wrapRequestHandler(req, handleAssignmentGroupInstructorMoveStudent);
 });
-
-async function enqueueSyncRepoPermissions({
-  class_id,
-  course_slug,
-  org,
-  repo,
-  githubUsernames,
-  debug_id
-}: {
-  class_id: number;
-  course_slug: string;
-  org: string;
-  repo: string;
-  githubUsernames: string[];
-  debug_id?: string;
-}) {
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
-  const { data, error } = await adminSupabase.rpc("enqueue_github_sync_repo_permissions", {
-    p_class_id: class_id,
-    p_org: org,
-    p_repo: repo,
-    p_course_slug: course_slug,
-    p_github_usernames: githubUsernames,
-    p_debug_id: debug_id
-  });
-  if (error) {
-    Sentry.captureException(error);
-    throw new Error("Failed to enqueue sync repo permissions");
-  }
-  return data;
-}
-async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string) {
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
-  const { data, error } = await adminSupabase.rpc("enqueue_github_archive_repo", {
-    p_class_id: class_id,
-    p_org: org,
-    p_repo: repo
-  });
-  if (error) {
-    Sentry.captureException(error);
-    throw new Error("Failed to enqueue github archive repo");
-  }
-  return data;
-}

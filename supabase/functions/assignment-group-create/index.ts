@@ -2,7 +2,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
 import { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -156,39 +155,37 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     throw new UserVisibleError("Failed to deactivate submissions");
   }
 
-  //Create the repo for the group
+  //Enqueue async repo creation for the group
   const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
-  const { error: repoError } = await adminSupabase.from("repositories").insert({
-    class_id: assignment.class_id!,
-    assignment_group_id: newGroup.id,
-    assignment_id: assignment.id,
-    repository: `${profile.classes!.github_org}/${repoName}`,
-    synced_handout_sha: assignment.latest_template_sha
-  });
-  if (repoError) {
-    console.error(repoError);
-    Sentry.captureException(repoError, scope);
-    throw new UserVisibleError(`Error creating repo: ${repoError}`);
-  }
   scope.setTag("repo_name", repoName);
   scope.setTag("repo_org", profile.classes!.github_org!);
-  const headSha = await createRepo(profile.classes!.github_org!, repoName, assignment.template_repo!);
-  await adminSupabase
-    .from("repositories")
-    .update({
-      synced_repo_sha: headSha
-    })
-    .eq("assignment_group_id", newGroup.id);
 
-  if (profile.users.github_username) {
-    await syncRepoPermissions(
-      profile.classes!.github_org!,
-      repoName,
-      profile.classes!.slug!,
-      [profile.users.github_username!],
-      scope
-    );
+  // Gather GitHub usernames for all current members
+  const githubUsernames = profile.users.github_username ? [profile.users.github_username] : [];
+
+  // Enqueue the repo creation (this will create the repository record and enqueue the GitHub operations)
+  const { data: messageId, error: enqueueError } = await adminSupabase.rpc("enqueue_github_create_repo", {
+    p_class_id: assignment.class_id!,
+    p_org: profile.classes!.github_org!,
+    p_repo_name: repoName,
+    p_template_repo: assignment.template_repo!,
+    p_course_slug: profile.classes!.slug!,
+    p_github_usernames: githubUsernames,
+    p_is_template_repo: false,
+    p_debug_id: `group-create-${newGroup.id}`,
+    p_assignment_id: assignment.id,
+    p_profile_id: undefined, // Group repos don't have a profile_id
+    p_assignment_group_id: newGroup.id,
+    p_latest_template_sha: assignment.latest_template_sha ?? undefined
+  });
+
+  if (enqueueError) {
+    console.error(enqueueError);
+    Sentry.captureException(enqueueError, scope);
+    throw new UserVisibleError(`Error enqueueing repo creation: ${enqueueError.message}`);
   }
+
+  console.log(`Enqueued repo creation for group ${newGroup.id}, message ID: ${messageId}`);
   return {
     message: `Group #${newGroup.id} created successfully`
   };
