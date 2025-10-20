@@ -18,19 +18,23 @@ import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubr
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useAssignmentController, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useReviewAssignment,
+  useReviewAssignmentRubricParts,
+  useRubricById,
+  useRubricParts
+} from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
+  useAssignmentGroupWithMembers,
   useCourse,
-  useIsDroppedStudent,
   useCourseController,
-  useAssignmentGroupWithMembers
+  useIsDroppedStudent
 } from "@/hooks/useCourseController";
-import { BroadcastMessage } from "@/lib/TableController";
 import {
   SubmissionProvider,
-  useReviewAssignment,
   useRubricCriteriaInstances,
   useSubmission,
   useSubmissionComments,
@@ -41,6 +45,7 @@ import {
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
+import { BroadcastMessage } from "@/lib/TableController";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
@@ -766,16 +771,13 @@ function RubricView() {
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const course = useCourse();
 
-  const {
-    reviewAssignment,
-    isLoading: isLoadingReviewAssignment,
-    error: reviewAssignmentError
-  } = useReviewAssignment(activeReviewAssignmentId);
+  const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
+  const rubric = useRubricById(reviewAssignment?.rubric_id);
+  const assignedParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const allParts = useRubricParts(reviewAssignment?.rubric_id);
   const rubricPartsAdvice = useMemo(() => {
-    return reviewAssignment?.review_assignment_rubric_parts
-      ?.map((part) => reviewAssignment?.rubrics?.rubric_parts?.find((p) => p.id === part.rubric_part_id)?.name)
-      .join(", ");
-  }, [reviewAssignment?.review_assignment_rubric_parts, reviewAssignment?.rubrics?.rubric_parts]);
+    return assignedParts?.map((part) => allParts?.find((p) => p.id === part.rubric_part_id)?.name).join(", ");
+  }, [assignedParts, allParts]);
 
   const reviewId = submission.grading_review_id;
   if (!reviewId) {
@@ -798,17 +800,14 @@ function RubricView() {
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
-        {isLoadingReviewAssignment && activeReviewAssignmentId && <Skeleton height="100px" />}
-        {reviewAssignmentError && activeReviewAssignmentId && (
-          <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>
-        )}
-        {activeReviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
+        {reviewAssignment === undefined && activeReviewAssignmentId && <Skeleton height="100px" />}
+        {activeReviewAssignmentId && reviewAssignment && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
             <Heading size="md">
-              Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
+              Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
-            <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
+            <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
             <Text fontSize="sm" data-visual-test="blackout">
               Due:{" "}
               {reviewAssignment.due_date

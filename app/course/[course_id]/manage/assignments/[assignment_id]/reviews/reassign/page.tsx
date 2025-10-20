@@ -71,7 +71,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   const assignmentController = useAssignmentController();
   const allActiveSubmissions = useActiveSubmissions();
   const courseController = useCourseController();
-  const currentReviewAssignments = useTableControllerTableValues(assignmentController.reviewAssignments);
+  const currentReviewAssignments = useTableControllerTableValues(assignmentController.allReviewAssignments);
   const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
   const [role, setRole] = useState<string>("Graders");
