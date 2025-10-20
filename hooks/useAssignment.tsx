@@ -24,7 +24,7 @@ import TableController, {
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { useList, useShow } from "@refinedev/core";
+import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -351,6 +351,7 @@ export class AssignmentController {
   private _classRealTimeController: ClassRealTimeController;
 
   readonly reviewAssignments: TableController<"review_assignments">;
+  private _allReviewAssignments: TableController<"review_assignments"> | null = null;
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
@@ -470,6 +471,10 @@ export class AssignmentController {
     this.submissions.close();
     this.assignmentGroups.close();
 
+    if (this._allReviewAssignments) {
+      this._allReviewAssignments.close();
+      this._allReviewAssignments = null;
+    }
     // Close rubric table controllers
     this.rubricsController.close();
     this.rubricPartsController.close();
@@ -496,6 +501,19 @@ export class AssignmentController {
 
   get isReady() {
     return !!this._assignment;
+  }
+
+  get allReviewAssignments() {
+    if (!this._allReviewAssignments) {
+      this._allReviewAssignments = new TableController({
+        query: this._client.from("review_assignments").select("*").eq("assignment_id", this.assignment.id),
+        client: this._client,
+        table: "review_assignments",
+        classRealTimeController: this._classRealTimeController,
+        realtimeFilter: { assignment_id: this.assignment.id }
+      });
+    }
+    return this._allReviewAssignments;
   }
 
   getReviewAssignmentRubricPartsController(
