@@ -4,7 +4,6 @@ import {
   useAssignmentController,
   useMyReviewAssignments,
   useReviewAssignment,
-  useRubricById,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric
 } from "./useAssignment";

@@ -105,6 +105,7 @@ async function handleAssignmentGroupJoin(
         is_active: false
       })
       .eq("assignment_id", assignmentGroup.assignment_id)
+      .eq("is_active", true)
       .eq("profile_id", enrollment.private_profile_id);
     if (deactivateError) {
       console.log(deactivateError);

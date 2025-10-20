@@ -74,6 +74,20 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
     throw new Error("Failed to update join request status");
   }
 
+  //Deactivate any submissions for this assignment for this student
+  const { error: deactivateError } = await adminSupabase
+    .from("submissions")
+    .update({
+      is_active: false
+    })
+    .eq("assignment_id", data.assignment_groups.assignments.id)
+    .eq("is_active", true)
+    .eq("profile_id", data.profile_id);
+  if (deactivateError) {
+    console.error(deactivateError);
+    throw new Error("Failed to deactivate submissions");
+  }
+
   return {
     message: `Join request approved for group ${data.assignment_groups.name}`
   };

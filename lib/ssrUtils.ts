@@ -337,10 +337,6 @@ export async function fetchAssignmentControllerData(
 ): Promise<AssignmentControllerInitialData> {
   const roleKey = isStaff ? "staff" : "student";
   const client = await createClientWithCaching({ tags: [`assignment_controller:${assignment_id}:${roleKey}`] });
-  const reviewAssignmentsClient = await createClientWithCaching({
-    tags: [`review_assignments:${assignment_id}:${roleKey}`],
-    revalidate: 10 // review assignments are updated somewhat frequently, a good candidate for using invalidation
-  });
   const regradeRequestsClient = await createClientWithCaching({
     tags: [`regrade_requests:${assignment_id}:${roleKey}`],
     revalidate: 10 // regrade requests are updated somewhat frequently, a good candidate for using invalidation
@@ -358,7 +354,6 @@ export async function fetchAssignmentControllerData(
   const [
     submissions,
     assignmentGroups,
-    reviewAssignments,
     regradeRequests,
     rubrics,
     rubricParts,
@@ -377,13 +372,6 @@ export async function fetchAssignmentControllerData(
     fetchAllPages<AssignmentGroup>(
       assignmentGroupsClient.from("assignment_groups").select("*").eq("assignment_id", assignment_id)
     ),
-
-    // Review assignments
-    isStaff
-      ? fetchAllPages<Database["public"]["Tables"]["review_assignments"]["Row"]>(
-          reviewAssignmentsClient.from("review_assignments").select("*").eq("assignment_id", assignment_id)
-        )
-      : Promise.resolve(undefined),
 
     // Regrade requests
     isStaff
@@ -413,7 +401,6 @@ export async function fetchAssignmentControllerData(
   return {
     submissions,
     assignmentGroups,
-    reviewAssignments,
     regradeRequests,
     rubrics,
     rubricParts,

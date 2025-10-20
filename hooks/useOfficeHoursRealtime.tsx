@@ -56,18 +56,20 @@ export class OfficeHoursController {
   private _helpRequestReadReceiptControllers: Map<number, TableController<"help_request_message_read_receipts">> =
     new Map();
 
-  // TableControllers for all tables
-  readonly helpRequests: TableController<"help_requests">;
-  readonly helpQueues: TableController<"help_queues">;
-  readonly helpRequestStudents: TableController<"help_request_students">;
-  readonly helpQueueAssignments: TableController<"help_queue_assignments">;
-  readonly studentKarmaNotes: TableController<"student_karma_notes">;
-  readonly helpRequestTemplates: TableController<"help_request_templates">;
-  readonly helpRequestModeration: TableController<"help_request_moderation">;
-  readonly studentHelpActivity: TableController<"student_help_activity">;
-  readonly helpRequestFeedback: TableController<"help_request_feedback">;
-  readonly helpRequestFileReferences: TableController<"help_request_file_references">;
-  readonly videoMeetingSessions: TableController<"video_meeting_sessions">;
+  // Lazily created TableController instances to avoid realtime subscription bursts
+  private _helpRequests?: TableController<"help_requests">;
+  private _helpQueues?: TableController<"help_queues">;
+  private _helpRequestStudents?: TableController<"help_request_students">;
+  private _helpQueueAssignments?: TableController<"help_queue_assignments">;
+  private _studentKarmaNotes?: TableController<"student_karma_notes">;
+  private _helpRequestTemplates?: TableController<"help_request_templates">;
+  private _helpRequestModeration?: TableController<"help_request_moderation">;
+  private _studentHelpActivity?: TableController<"student_help_activity">;
+  private _helpRequestFeedback?: TableController<"help_request_feedback">;
+  private _helpRequestFileReferences?: TableController<"help_request_file_references">;
+  private _videoMeetingSessions?: TableController<"video_meeting_sessions">;
+
+  private _classRealTimeController: ClassRealTimeController;
 
   constructor(
     public classId: number,
@@ -76,106 +78,8 @@ export class OfficeHoursController {
     officeHoursRealTimeController: OfficeHoursRealTimeController
   ) {
     this._client = client;
+    this._classRealTimeController = classRealTimeController;
     this._officeHoursRealTimeController = officeHoursRealTimeController;
-
-    this.helpRequests = new TableController({
-      client,
-      table: "help_requests",
-      query: client.from("help_requests").select("*").eq("class_id", classId),
-      classRealTimeController,
-      realtimeFilter: {
-        class_id: classId
-      },
-      debounceInterval: 0
-    });
-
-    this.helpQueues = new TableController({
-      client,
-      table: "help_queues",
-      query: client.from("help_queues").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController],
-      realtimeFilter: {
-        class_id: classId
-      }
-    });
-
-    this.helpRequestStudents = new TableController({
-      client,
-      table: "help_request_students",
-      query: client.from("help_request_students").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController],
-      realtimeFilter: {
-        class_id: classId
-      }
-    });
-
-    this.helpQueueAssignments = new TableController({
-      client,
-      table: "help_queue_assignments",
-      query: client.from("help_queue_assignments").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController],
-      realtimeFilter: {
-        class_id: classId
-      }
-    });
-
-    this.studentKarmaNotes = new TableController({
-      client,
-      table: "student_karma_notes",
-      query: client.from("student_karma_notes").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController]
-    });
-
-    this.helpRequestTemplates = new TableController({
-      client,
-      table: "help_request_templates",
-      query: client.from("help_request_templates").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController],
-      realtimeFilter: {
-        class_id: classId
-      }
-    });
-
-    this.helpRequestModeration = new TableController({
-      client,
-      table: "help_request_moderation",
-      query: client.from("help_request_moderation").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController]
-    });
-
-    this.studentHelpActivity = new TableController({
-      client,
-      table: "student_help_activity",
-      query: client.from("student_help_activity").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController]
-    });
-
-    this.helpRequestFeedback = new TableController({
-      client,
-      table: "help_request_feedback",
-      query: client.from("help_request_feedback").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController]
-    });
-
-    this.helpRequestFileReferences = new TableController({
-      client,
-      table: "help_request_file_references",
-      query: client.from("help_request_file_references").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController],
-      realtimeFilter: {
-        class_id: classId
-      }
-    });
-
-    this.videoMeetingSessions = new TableController({
-      client,
-      table: "video_meeting_sessions",
-      query: client.from("video_meeting_sessions").select("*").eq("class_id", classId),
-      additionalRealTimeControllers: [officeHoursRealTimeController],
-      realtimeFilter: {
-        class_id: classId
-      }
-    });
 
     // Subscribe to broadcast messages and integrate with remaining data maps
     this._broadcastUnsubscribe = this._officeHoursRealTimeController.subscribe(
@@ -184,6 +88,172 @@ export class OfficeHoursController {
         this._handleBroadcastMessage(message as DatabaseBroadcastMessage);
       }
     );
+  }
+
+  /**
+   * Initialize critical TableControllers immediately after construction
+   * This creates them eagerly but in a controlled manner after realtime controllers are stable
+   */
+  initializeEagerControllers() {
+    // These are accessed frequently and should be ready
+    void this.helpRequests; // Triggers lazy creation
+    void this.helpQueues; // Triggers lazy creation
+    void this.helpRequestTemplates; // Triggers lazy creation
+  }
+
+  // Lazy getters for TableControllers
+  get helpRequests(): TableController<"help_requests"> {
+    if (!this._helpRequests) {
+      this._helpRequests = new TableController({
+        client: this._client,
+        table: "help_requests",
+        query: this._client.from("help_requests").select("*").eq("class_id", this.classId),
+        classRealTimeController: this._classRealTimeController,
+        realtimeFilter: {
+          class_id: this.classId
+        },
+        debounceInterval: 0
+      });
+    }
+    return this._helpRequests;
+  }
+
+  get helpQueues(): TableController<"help_queues"> {
+    if (!this._helpQueues) {
+      this._helpQueues = new TableController({
+        client: this._client,
+        table: "help_queues",
+        query: this._client.from("help_queues").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._helpQueues;
+  }
+
+  get helpRequestStudents(): TableController<"help_request_students"> {
+    if (!this._helpRequestStudents) {
+      this._helpRequestStudents = new TableController({
+        client: this._client,
+        table: "help_request_students",
+        query: this._client.from("help_request_students").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._helpRequestStudents;
+  }
+
+  get helpQueueAssignments(): TableController<"help_queue_assignments"> {
+    if (!this._helpQueueAssignments) {
+      this._helpQueueAssignments = new TableController({
+        client: this._client,
+        table: "help_queue_assignments",
+        query: this._client.from("help_queue_assignments").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._helpQueueAssignments;
+  }
+
+  get studentKarmaNotes(): TableController<"student_karma_notes"> {
+    if (!this._studentKarmaNotes) {
+      this._studentKarmaNotes = new TableController({
+        client: this._client,
+        table: "student_karma_notes",
+        query: this._client.from("student_karma_notes").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController]
+      });
+    }
+    return this._studentKarmaNotes;
+  }
+
+  get helpRequestTemplates(): TableController<"help_request_templates"> {
+    if (!this._helpRequestTemplates) {
+      this._helpRequestTemplates = new TableController({
+        client: this._client,
+        table: "help_request_templates",
+        query: this._client.from("help_request_templates").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._helpRequestTemplates;
+  }
+
+  get helpRequestModeration(): TableController<"help_request_moderation"> {
+    if (!this._helpRequestModeration) {
+      this._helpRequestModeration = new TableController({
+        client: this._client,
+        table: "help_request_moderation",
+        query: this._client.from("help_request_moderation").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController]
+      });
+    }
+    return this._helpRequestModeration;
+  }
+
+  get studentHelpActivity(): TableController<"student_help_activity"> {
+    if (!this._studentHelpActivity) {
+      this._studentHelpActivity = new TableController({
+        client: this._client,
+        table: "student_help_activity",
+        query: this._client.from("student_help_activity").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController]
+      });
+    }
+    return this._studentHelpActivity;
+  }
+
+  get helpRequestFeedback(): TableController<"help_request_feedback"> {
+    if (!this._helpRequestFeedback) {
+      this._helpRequestFeedback = new TableController({
+        client: this._client,
+        table: "help_request_feedback",
+        query: this._client.from("help_request_feedback").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController]
+      });
+    }
+    return this._helpRequestFeedback;
+  }
+
+  get helpRequestFileReferences(): TableController<"help_request_file_references"> {
+    if (!this._helpRequestFileReferences) {
+      this._helpRequestFileReferences = new TableController({
+        client: this._client,
+        table: "help_request_file_references",
+        query: this._client.from("help_request_file_references").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._helpRequestFileReferences;
+  }
+
+  get videoMeetingSessions(): TableController<"video_meeting_sessions"> {
+    if (!this._videoMeetingSessions) {
+      this._videoMeetingSessions = new TableController({
+        client: this._client,
+        table: "video_meeting_sessions",
+        query: this._client.from("video_meeting_sessions").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._videoMeetingSessions;
   }
 
   set officeHoursRealTimeController(officeHoursRealTimeController: OfficeHoursRealTimeController) {
@@ -334,18 +404,18 @@ export class OfficeHoursController {
       this._officeHoursRealTimeController = null;
     }
 
-    // Close all TableControllers
-    this.helpRequests.close();
-    this.helpQueues.close();
-    this.helpRequestStudents.close();
-    this.helpQueueAssignments.close();
-    this.studentKarmaNotes.close();
-    this.helpRequestTemplates.close();
-    this.helpRequestModeration.close();
-    this.studentHelpActivity.close();
-    this.helpRequestFeedback.close();
-    this.helpRequestFileReferences.close();
-    this.videoMeetingSessions.close();
+    // Close all TableControllers (only if they were created)
+    this._helpRequests?.close();
+    this._helpQueues?.close();
+    this._helpRequestStudents?.close();
+    this._helpQueueAssignments?.close();
+    this._studentKarmaNotes?.close();
+    this._helpRequestTemplates?.close();
+    this._helpRequestModeration?.close();
+    this._studentHelpActivity?.close();
+    this._helpRequestFeedback?.close();
+    this._helpRequestFileReferences?.close();
+    this._videoMeetingSessions?.close();
 
     // Close per-help-request message controllers
     for (const controller of this._helpRequestMessageControllers.values()) {
@@ -410,6 +480,8 @@ export function OfficeHoursControllerProvider({
       classRealTimeController,
       officeHoursRealTimeController
     );
+    // Initialize the critical controllers now that everything is stable
+    controller.current.initializeEagerControllers();
   }
 
   useEffect(() => {
