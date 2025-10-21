@@ -4,6 +4,7 @@ CREATE OR REPLACE FUNCTION "public"."update_review_assignments_on_submission_dea
     AS $$
 DECLARE
     new_active_submission_id bigint;
+    deleted_conflicting_assignments integer;
     updated_assignments_count integer;
     updated_links_count integer;
     updated_submission_comments_count integer;
@@ -55,6 +56,21 @@ BEGIN
             FROM public.review_assignments ra
             WHERE ra.submission_id = OLD.id
             ON CONFLICT (submission_id, rubric_id) DO NOTHING;
+
+            -- Delete any conflicting review_assignments on the target submission to avoid
+            -- unique constraint violations on (assignee_profile_id, submission_review_id)
+            -- when we move the old review_assignments over
+            DELETE FROM public.review_assignments ra_target
+            WHERE ra_target.submission_id = new_active_submission_id
+              AND EXISTS (
+                  SELECT 1
+                  FROM public.review_assignments ra_old
+                  WHERE ra_old.submission_id = OLD.id
+                    AND ra_old.assignee_profile_id = ra_target.assignee_profile_id
+                    AND ra_old.rubric_id = ra_target.rubric_id
+              );
+
+            GET DIAGNOSTICS deleted_conflicting_assignments = ROW_COUNT;
 
             -- Move review assignments to the new active submission
             -- If SHA matches AND old review was completed, preserve completion status
@@ -171,8 +187,8 @@ BEGIN
                 updated_artifact_comments_count := updated_artifact_comments_count + rows_moved;
 
                 -- Log the updates for observability
-                RAISE NOTICE 'SHA matches: Updated % review_assignments, % submission_review links, % submission_comments, % file_comments, % artifact_comments from submission_id % to %',
-                    updated_assignments_count, updated_links_count, updated_submission_comments_count, 
+                RAISE NOTICE 'SHA matches: Deleted % conflicting assignments, updated % review_assignments, % submission_review links, % submission_comments, % file_comments, % artifact_comments from submission_id % to %',
+                    deleted_conflicting_assignments, updated_assignments_count, updated_links_count, updated_submission_comments_count, 
                     updated_file_comments_count, updated_artifact_comments_count, OLD.id, new_active_submission_id;
             ELSE
                 -- SHA doesn't match: only update review assignments, not comments
@@ -180,8 +196,8 @@ BEGIN
                 updated_file_comments_count := 0;
                 updated_artifact_comments_count := 0;
                 
-                RAISE NOTICE 'SHA differs: Updated % review_assignments, % submission_review links (no comments moved) from submission_id % to %',
-                    updated_assignments_count, updated_links_count, OLD.id, new_active_submission_id;
+                RAISE NOTICE 'SHA differs: Deleted % conflicting assignments, updated % review_assignments, % submission_review links (no comments moved) from submission_id % to %',
+                    deleted_conflicting_assignments, updated_assignments_count, updated_links_count, OLD.id, new_active_submission_id;
             END IF;
         ELSE
             -- Log when no new active submission is found
