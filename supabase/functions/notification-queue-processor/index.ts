@@ -648,7 +648,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     }
     const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
     const transporter = nodemailer.createTransport({
-      pool: false,
+      pool: true,
       host: Deno.env.get("SMTP_HOST") || "",
       port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
       secure: isInbucketEmail ? false : true, // use TLS
