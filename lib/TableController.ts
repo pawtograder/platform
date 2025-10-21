@@ -40,6 +40,53 @@ type ChannelType =
   | "discussion_thread_root";
 
 /**
+ * Tables that have an updated_at column and support incremental refetching.
+ * Tables in this set can use the updated_at watermark optimization for efficient reconnection refetches.
+ * Tables NOT in this set will skip refetch on reconnection unless enableAutoRefetch flag is explicitly set.
+ */
+const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
+  "notifications",
+  "discussion_topics",
+  "discussion_thread_likes",
+  "assignments",
+  "assignment_due_date_exceptions",
+  "discussion_thread_read_status",
+  "discussion_thread_watchers",
+  "discussion_threads",
+  "gradebook_column_students",
+  "gradebook_columns",
+  "help_queue_assignments",
+  "help_queues",
+  "help_request_feedback",
+  "help_request_file_references",
+  "help_request_message_read_receipts",
+  "help_request_messages",
+  "help_request_moderation",
+  "help_request_students",
+  "help_request_templates",
+  "help_requests",
+  "lab_section_meetings",
+  "lab_sections",
+  "notification_preferences",
+  "profiles",
+  "repositories",
+  "review_assignment_rubric_parts",
+  "review_assignments",
+  "student_deadline_extensions",
+  "student_help_activity",
+  "student_karma_notes",
+  "submission_artifact_comments",
+  "submission_comments",
+  "submission_file_comments",
+  "submission_regrade_request_comments",
+  "submission_regrade_requests",
+  "submission_reviews",
+  "tags",
+  "user_roles",
+  "workflow_runs"
+]);
+
+/**
  * Map of tables to the channel types that broadcast their changes.
  * This allows TableController to only refetch when relevant channels reconnect,
  * preventing unnecessary refetches when unrelated channels (e.g., submission channels)
@@ -534,6 +581,7 @@ export default class TableController<
   private _additionalStatusUnsubscribes: (() => void)[] = [];
   private _submissionId: number | null = null;
   private _lastChannelStates: Map<string, string> = new Map(); // Track individual channel states
+  private _channelsCompletedInitialConnection: Set<string> = new Set(); // Track which channels have completed their first connection
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
   private _lastFetchTimestamp: number = 0;
   private _closed: boolean = false;
@@ -558,6 +606,15 @@ export default class TableController<
   private _isProcessingBatch: boolean = false;
   /** Tracks the maximum updated_at timestamp (ms) of rows currently loaded. Used for incremental refetches. */
   private _maxUpdatedAtMs: number | null = null;
+  /**
+   * Controls whether this table should auto-refetch on reconnection.
+   * If undefined (default), auto-refetch is enabled only if table has updated_at column.
+   * If true, always refetch on reconnection.
+   * If false, never refetch on reconnection.
+   */
+  private _enableAutoRefetch: boolean | undefined;
+  /** Debug ID for tracking controller instances in logs */
+  readonly _debugID: string = Math.random().toString(36).substring(2, 15);
 
   get table() {
     return this._table;
@@ -597,7 +654,7 @@ export default class TableController<
   private _bumpMaxUpdatedAtFrom(rowLike: unknown): void {
     const ts = this._extractUpdatedAtMs(rowLike);
     if (ts != null) {
-      this._maxUpdatedAtMs = this._maxUpdatedAtMs == null ? ts : Math.max(this._maxUpdatedAtMs, ts);
+      this._maxUpdatedAtMs = this._maxUpdatedAtMs == null ? ts + 100 : Math.max(this._maxUpdatedAtMs, ts + 100);
     }
   }
 
@@ -884,6 +941,13 @@ export default class TableController<
     let page = 0;
     const pageSize = 1000;
     let nRows: number | undefined;
+
+    // Always add ORDER BY id to ensure deterministic pagination
+    // This prevents rows from being skipped or duplicated across page boundaries
+    // when PostgreSQL returns results in non-deterministic order
+    // PostgREST query builders are immutable, so this doesn't affect the original query
+    const orderedQuery = this._query.order("id", { ascending: true });
+
     if (loadEntireTable) {
       // Load initial data, do all of the pages.
       // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
@@ -894,7 +958,7 @@ export default class TableController<
           if (rangeStart >= nRows) break;
           rangeEnd = Math.min(rangeEnd, nRows - 1);
         }
-        const { data, error } = await this._query.range(rangeStart, rangeEnd);
+        const { data, error } = await orderedQuery.range(rangeStart, rangeEnd);
         if (this._closed) {
           return [];
         }
@@ -911,7 +975,7 @@ export default class TableController<
         page++;
       }
     } else {
-      const { data, error } = await this._query;
+      const { data, error } = await orderedQuery;
       if (error) {
         throw error;
       }
@@ -1149,6 +1213,7 @@ export default class TableController<
   /**
    * Handle connection status changes (debounced to avoid thrashing during channel oscillations)
    * Only refetches when channels relevant to this table's data reconnect
+   * Does NOT refetch on initial connection, only on subsequent reconnections
    */
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     // Track which relevant channels have reconnected
@@ -1160,19 +1225,39 @@ export default class TableController<
       }
 
       const previousState = this._lastChannelStates.get(channel.name);
-      const wasChannelDisconnected = !previousState || previousState !== "joined";
       const isChannelNowConnected = channel.state === "joined";
+      const hadCompletedInitialConnection = this._channelsCompletedInitialConnection.has(channel.name);
 
-      if (wasChannelDisconnected && isChannelNowConnected) {
+      // Only treat as reconnection if:
+      // 1. Channel had previously completed an initial connection (not the first time)
+      // 2. Channel was disconnected in the previous state
+      // 3. Channel is now connected
+      const wasChannelDisconnected = previousState !== undefined && previousState !== "joined";
+      const isReconnection = hadCompletedInitialConnection && wasChannelDisconnected && isChannelNowConnected;
+
+      if (isReconnection) {
         relevantReconnections.push(channel.name);
+      }
+
+      // Mark channel as having completed initial connection once it reaches "joined" state for the first time
+      if (isChannelNowConnected && !hadCompletedInitialConnection) {
+        this._channelsCompletedInitialConnection.add(channel.name);
       }
 
       // Update tracked state
       this._lastChannelStates.set(channel.name, channel.state);
     }
 
-    // Only refetch if a relevant channel has reconnected
+    // Only refetch if a relevant channel has reconnected (not initial connection)
     if (relevantReconnections.length > 0 && this._ready) {
+      // Determine if auto-refetch should be enabled for this table
+      const shouldAutoRefetch = this._shouldEnableAutoRefetch();
+
+      if (!shouldAutoRefetch) {
+        // Skip refetch for tables without updated_at (unless explicitly enabled)
+        return;
+      }
+
       // Clear any pending refetch
       if (this._connectionStatusDebounceTimer) {
         clearTimeout(this._connectionStatusDebounceTimer);
@@ -1194,7 +1279,26 @@ export default class TableController<
     }
   }
 
-  readonly _debugID: string = Math.random().toString(36).substring(2, 15);
+  /**
+   * Determine if auto-refetch should be enabled for this table.
+   * Returns true if:
+   * - enableAutoRefetch is explicitly true, OR
+   * - enableAutoRefetch is undefined AND table has updated_at column
+   * Returns false if:
+   * - enableAutoRefetch is explicitly false, OR
+   * - enableAutoRefetch is undefined AND table does NOT have updated_at column
+   */
+  private _shouldEnableAutoRefetch(): boolean {
+    if (this._enableAutoRefetch === true) {
+      return true;
+    }
+    if (this._enableAutoRefetch === false) {
+      return false;
+    }
+    // Default behavior: only refetch if table has updated_at
+    return TABLES_WITH_UPDATED_AT.has(this._table);
+  }
+
   constructor({
     query,
     client,
@@ -1205,7 +1309,9 @@ export default class TableController<
     additionalRealTimeControllers,
     realtimeFilter,
     debounceInterval,
-    loadEntireTable = true
+    loadEntireTable = true,
+    initialData,
+    enableAutoRefetch
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1226,6 +1332,15 @@ export default class TableController<
     realtimeFilter?: RealtimeFilter<RelationName>;
     debounceInterval?: number;
     loadEntireTable?: boolean;
+    /** Optional pre-loaded initial data to hydrate the controller without fetching. Query is still required for refetches. */
+    initialData?: ResultOne[];
+    /**
+     * Controls auto-refetch behavior on reconnection.
+     * - undefined (default): Auto-refetch only if table has updated_at column
+     * - true: Always auto-refetch on reconnection
+     * - false: Never auto-refetch on reconnection
+     */
+    enableAutoRefetch?: boolean;
   }) {
     this._rows = [];
     this._client = client;
@@ -1237,6 +1352,7 @@ export default class TableController<
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
     this._debounceInterval = debounceInterval || 500;
+    this._enableAutoRefetch = enableAutoRefetch;
 
     // Track controller creation
     const tableName = table as string;
@@ -1275,17 +1391,27 @@ export default class TableController<
           }
         };
 
-        // Fetch initial data first, respecting cancellation
+        // Use provided initial data or fetch it
         if (this._closed) {
           resolve();
           return;
         }
-        const initialData = await this._fetchInitialData(loadEntireTable);
+
+        let dataToLoad: ResultOne[];
+        if (initialData) {
+          // Use pre-loaded data from server (skip initial fetch)
+          dataToLoad = initialData;
+        } else {
+          // Fetch data from database
+          dataToLoad = await this._fetchInitialData(loadEntireTable);
+        }
+
         if (this._closed) {
           resolve();
           return;
         }
-        this._rows = initialData.map((row) => ({
+
+        this._rows = dataToLoad.map((row) => ({
           ...row,
           __db_pending: false
         }));
@@ -1424,6 +1550,7 @@ export default class TableController<
     this._itemDataListeners.clear();
     // Clear tracked channel states
     this._lastChannelStates.clear();
+    this._channelsCompletedInitialConnection.clear();
     this._pendingOperations = [];
     this._isProcessingBatch = false;
   }

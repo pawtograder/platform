@@ -4,7 +4,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import {
   SubmissionFile,
   SubmissionFileComment,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Skeleton } from "@chakra-ui/react";
 import { useCallback, useState } from "react";
@@ -25,7 +25,7 @@ export default function LineCommentForm({
   onSubmitted
 }: {
   lineNumber: number;
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  submission: SubmissionWithGraderResultsAndFiles;
   file: SubmissionFile;
   submissionReviewId?: number;
   rubricCheckId?: number;

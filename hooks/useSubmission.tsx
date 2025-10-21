@@ -2,36 +2,30 @@
 import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
-  useAssignmentController,
+  useRubricCheck as useAssignmentUseRubricCheck,
+  useRubricCriteria as useAssignmentUseRubricCriteria,
   useMyReviewAssignments,
-  useRubricCheck as useNewRubricCheck,
   useReferencingRubricChecks,
-  useRubricChecksByCriteria,
-  useRubricCriteria,
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
-  HydratedRubric,
-  HydratedRubricCheck,
-  HydratedRubricCriteria,
   HydratedRubricPart,
   RegradeRequestComment,
   Rubric,
   RubricChecks,
   RubricCriteria,
-  RubricCriteriaWithRubricChecks,
   SubmissionArtifact,
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionReview,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
@@ -42,7 +36,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { SubmissionReviewProvider } from "./useSubmissionReview";
 
 class SubmissionController {
-  private _submission?: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  private _submission?: SubmissionWithGraderResultsAndFiles;
   private _file?: SubmissionFile;
   private _artifact?: SubmissionArtifact;
 
@@ -116,7 +110,7 @@ class SubmissionController {
     return this._submission !== undefined;
   }
 
-  set submission(submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric) {
+  set submission(submission: SubmissionWithGraderResultsAndFiles) {
     this._submission = submission;
   }
 
@@ -532,15 +526,13 @@ function SubmissionControllerCreator({
   const submissionController = ctx.submissionController;
 
   // Single comprehensive query to load all data upfront
-  const { query } = useShow<SubmissionWithFilesGraderResultsOutputTestsAndRubric>({
+  const { query } = useShow<SubmissionWithGraderResultsAndFiles>({
     resource: "submissions",
     id: submission_id,
     meta: {
       select: `
         *,
-        assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))),
         submission_files(*),
-        assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))),
         grader_results(*, grader_result_tests(*), grader_result_output(*)),
         submission_artifacts(*)
       `.trim()
@@ -656,60 +648,6 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
 
   return filteredComments;
 }
-export function useSubmissionRubric(reviewAssignmentId?: number | null): {
-  rubric: (Database["public"]["Tables"]["rubrics"]["Row"] & { rubric_parts: HydratedRubricPart[] }) | undefined;
-  isLoading: boolean;
-} {
-  const context = useContext(SubmissionContext);
-  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
-    reviewAssignmentId ?? undefined
-  );
-
-  // Get submission details, but only if context is available
-  const submission = context?.submissionController?.submission;
-  const rubricIdFromSubmission = submission?.assignments?.grading_rubric_id;
-  const rubricIdFromReviewAssignment = reviewAssignment?.rubric_id;
-
-  const finalRubricId = reviewAssignmentId != null ? rubricIdFromReviewAssignment : rubricIdFromSubmission;
-
-  const { query: rubricQuery } = useShow<
-    Database["public"]["Tables"]["rubrics"]["Row"] & {
-      rubric_parts: HydratedRubricPart[];
-    }
-  >({
-    resource: "rubrics",
-    id: finalRubricId || -1,
-    queryOptions: {
-      enabled: !!finalRubricId && !!context // Also ensure context is loaded before enabling
-    },
-    meta: {
-      select:
-        "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*, rubric_checks!referenced_rubric_check_id(*)))))"
-    }
-  });
-
-  const rubricDataResult = rubricQuery?.data;
-  const isLoadingRubricFromHook = rubricQuery?.isLoading ?? !rubricQuery;
-
-  if (!context) {
-    return { rubric: undefined, isLoading: true }; // Still loading if context isn't ready
-  }
-
-  let isLoading = isLoadingRubricFromHook;
-  if (reviewAssignmentId != null) {
-    isLoading = isLoadingReviewAssignment || isLoadingRubricFromHook;
-  }
-
-  if (!finalRubricId && !isLoading) {
-    return { rubric: undefined, isLoading: false };
-  }
-  if (reviewAssignmentId != null && !rubricIdFromReviewAssignment && !isLoadingReviewAssignment) {
-    // If review assignment was specified, but it (or its rubric_id) wasn't found, and we're done loading it.
-    return { rubric: undefined, isLoading: false };
-  }
-
-  return { rubric: rubricDataResult?.data, isLoading }; // Refine's useShow often has { data: { data: actualRecord } }
-}
 
 export function useRubricCriteriaInstances({
   criteria,
@@ -722,7 +660,6 @@ export function useRubricCriteriaInstances({
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
-  const rubricData = useSubmissionRubric(review_id); // Pass review_id to useSubmissionRubric
   const allChecks = useAllRubricChecks();
 
   // Use useMemo to ensure the filtered result updates when comments change
@@ -817,18 +754,8 @@ export function useSubmissionReviewOrGradingReview(reviewId: number | undefined)
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {
-  const context = useContext(SubmissionContext);
-  if (!rubric_check_id || !context) {
-    return {
-      rubricCheck: undefined,
-      rubricCriteria: undefined
-    };
-  }
-  const controller = context.submissionController;
-  const criteria = controller.submission.assignments.rubrics?.rubric_criteria?.find((c: HydratedRubricCriteria) =>
-    c.rubric_checks?.some((c: HydratedRubricCheck) => c.id === rubric_check_id)
-  );
-  const check = criteria?.rubric_checks?.find((c: HydratedRubricCheck) => c.id === rubric_check_id);
+  const check = useAssignmentUseRubricCheck(rubric_check_id);
+  const criteria = useAssignmentUseRubricCriteria(check?.rubric_criteria_id);
   return {
     rubricCheck: check,
     rubricCriteria: criteria
@@ -857,130 +784,6 @@ export type ReviewAssignmentWithDetails = Database["public"]["Tables"]["review_a
   })[];
   profiles?: Database["public"]["Tables"]["profiles"]["Row"];
 };
-
-export function useReviewAssignment(reviewAssignmentId?: number) {
-  const idForHook = reviewAssignmentId === undefined ? -1 : reviewAssignmentId;
-  const queryEnabled = !!reviewAssignmentId; // True if reviewAssignmentId is a truthy number
-
-  const { query } = useShow<ReviewAssignmentWithDetails>({
-    resource: "review_assignments",
-    id: idForHook,
-    queryOptions: {
-      enabled: queryEnabled
-    },
-    meta: {
-      select:
-        "*, profiles!assignee_profile_id(*), rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))), review_assignment_rubric_parts(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
-    }
-  });
-
-  // If the query was never meant to be enabled (original ID was undefined, 0, or NaN),
-  // return a non-loading, no-data state immediately.
-  if (!queryEnabled) {
-    return { reviewAssignment: undefined, isLoading: false, error: undefined };
-  }
-
-  // query might be undefined if the hook is not ready or an issue occurs before it runs
-  if (!query) {
-    // This state might occur if useShow is called but react-query hasn't fully initialized its result.
-    // Given queryEnabled is true, we expect it to be loading.
-    return { reviewAssignment: undefined, isLoading: true, error: undefined };
-  }
-
-  const { data, isLoading, error } = query;
-
-  if (isLoading) {
-    return { reviewAssignment: undefined, isLoading: true, error: undefined };
-  }
-
-  if (error) {
-    toaster.error({
-      title: "Error fetching review assignment",
-      description: error.message
-    });
-    return { reviewAssignment: undefined, isLoading: false, error };
-  }
-
-  return { reviewAssignment: data?.data, isLoading: false, error: undefined };
-}
-
-export function useSubmissionReviewByAssignmentId(reviewAssignmentId?: number | null): {
-  submissionReview: SubmissionReview | undefined;
-  isLoading: boolean;
-  error: Error | undefined;
-} {
-  const controller = useSubmissionController();
-  const {
-    reviewAssignment,
-    isLoading: reviewAssignmentLoading,
-    error: reviewAssignmentError
-  } = useReviewAssignment(reviewAssignmentId ?? undefined);
-
-  const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | undefined>(undefined);
-
-  useEffect(() => {
-    if (!reviewAssignmentId) {
-      setSubmissionReview(undefined);
-      setIsLoading(false);
-      setError(undefined);
-      return;
-    }
-
-    if (reviewAssignmentLoading) {
-      setIsLoading(true);
-      return;
-    }
-
-    if (reviewAssignmentError) {
-      setError(new Error(reviewAssignmentError.message || "Error fetching review assignment details"));
-      setIsLoading(false);
-      setSubmissionReview(undefined);
-      return;
-    }
-
-    if (reviewAssignment && controller) {
-      // Try to find an existing submission_review
-      const { unsubscribe, data: existingReview } = controller.submission_reviews.getById(
-        reviewAssignment.submission_review_id,
-        (updatedReview) => {
-          setSubmissionReview(updatedReview);
-        }
-      );
-
-      if (existingReview) {
-        setSubmissionReview(existingReview);
-        setIsLoading(false);
-      } else {
-        // If no existing review, create a new in-memory one (partial)
-        // This will be fully populated and saved when the first rubric check is made or comment posted
-        const newReviewPlaceholder: Partial<SubmissionReview> = {
-          submission_id: reviewAssignment.submission_id,
-          rubric_id: reviewAssignment.rubric_id,
-          grader: reviewAssignment.assignee_profile_id,
-          class_id: reviewAssignment.class_id,
-          name: `Review for submission ${reviewAssignment.submission_id} by ${reviewAssignment.profiles?.name ?? reviewAssignment.assignee_profile_id}`,
-          total_score: 0,
-          total_autograde_score: 0,
-          tweak: 0,
-          released: false
-          // id will be undefined until saved
-        };
-        setSubmissionReview(newReviewPlaceholder as SubmissionReview); // Cast for now, ensure downstream handles partial data
-        setIsLoading(false);
-      }
-
-      return () => unsubscribe();
-    } else {
-      // Conditions not met to fetch or create a review
-      setSubmissionReview(undefined);
-      setIsLoading(false);
-    }
-  }, [reviewAssignmentId, reviewAssignment, reviewAssignmentLoading, reviewAssignmentError, controller]);
-
-  return { submissionReview, isLoading, error };
-}
 
 export type ReferencedRubricCheckInstance = {
   referencedRubricCheck: Tables<"rubric_checks">;

@@ -183,8 +183,22 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     return unsubscribe;
   }, [courseController]);
 
-  // Current assignment review assignments rows (live via TableController)
-  const currentReviewAssignments = useTableControllerTableValues(assignmentController.reviewAssignments);
+  // Use a separate TableController from the one in useAssignment, since it is scoped to the current user as assignee
+  const reviewAssignmentsController = useMemo(() => {
+    return new TableController({
+      client: supabase,
+      table: "review_assignments",
+      query: supabase.from("review_assignments").select("*").eq("assignment_id", Number(assignment_id)),
+      classRealTimeController: courseController.classRealTimeController
+    });
+  }, [supabase, assignment_id, courseController.classRealTimeController]);
+  useEffect(() => {
+    return () => {
+      reviewAssignmentsController.close();
+    };
+  }, [reviewAssignmentsController]);
+
+  const currentReviewAssignments = useTableControllerTableValues(reviewAssignmentsController);
 
   // Map of review_assignment_id -> assigned rubric_part_ids
   const [reviewAssignmentPartsById, setReviewAssignmentPartsById] = useState<Map<number, number[]>>(new Map());
@@ -202,6 +216,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     });
     return controller;
   }, [supabase, course_id]);
+
+  useEffect(() => {
+    return () => {
+      reviewAssignmentPartsController.close();
+    };
+  }, [reviewAssignmentPartsController]);
+
   const reviewAssignmentsPredicate = useCallback(
     (
       row: PossiblyTentativeResult<{
@@ -246,6 +267,11 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       realtimeFilter: { class_id: Number(course_id) }
     });
   }, [supabase, course_id, courseController.classRealTimeController]);
+  useEffect(() => {
+    return () => {
+      gradingConflictsController.close();
+    };
+  }, [gradingConflictsController]);
   const gradingConflicts = useTableControllerTableValues(gradingConflictsController);
   const gradersAndInstructors = useGradersAndInstructors();
 
@@ -266,6 +292,15 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .eq("class_id", Number(course_id))
     });
   }, [supabase, selectedReferenceAssignment, course_id]);
+
+  useEffect(() => {
+    return () => {
+      if (referenceReviewAssignmentsController) {
+        referenceReviewAssignmentsController.close();
+      }
+    };
+  }, [referenceReviewAssignmentsController]);
+
   const exclusionReviewAssignmentsController = useMemo(() => {
     if (!selectedExclusionAssignment) return null;
     //Note EXPLICLTLY NOT REALTIME FOR THIS! Need to do bulk realtime updates to avoid herding, fix later...
@@ -279,6 +314,15 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .eq("class_id", Number(course_id))
     });
   }, [supabase, selectedExclusionAssignment, course_id]);
+
+  useEffect(() => {
+    return () => {
+      if (exclusionReviewAssignmentsController) {
+        exclusionReviewAssignmentsController.close();
+      }
+    };
+  }, [exclusionReviewAssignmentsController]);
+
   const referenceReviewAssignments = useMemo(() => {
     if (!referenceReviewAssignmentsController)
       return [] as { assignee_profile_id: string; submission_id: number; rubric_id: number }[];

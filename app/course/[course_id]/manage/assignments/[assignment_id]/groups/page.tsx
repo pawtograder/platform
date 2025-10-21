@@ -38,6 +38,7 @@ import {
 } from "./GroupManagementContext";
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
+import * as Sentry from "@sentry/nextjs";
 
 export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -88,13 +89,18 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
    */
   const publishChanges = async () => {
     // move students where staged
-    movesToFulfill.forEach(async (move) => {
-      await updateGroupForStudent(move);
-    });
+
+    await Promise.all(
+      movesToFulfill.map(async (move) => {
+        await updateGroupForStudent(move);
+      })
+    );
     // create groups where staged
-    groupsToCreate.forEach(async (group) => {
-      await createGroupWithStudents(group);
-    });
+    await Promise.all(
+      groupsToCreate.map(async (group) => {
+        await createGroupWithStudents(group);
+      })
+    );
     // clear context
     clearGroupsToCreate();
     clearMovesToFulfill();
@@ -116,8 +122,10 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         },
         supabase
       );
-      group.member_ids.map(async (member_id) => {
-        try {
+
+      // Use Promise.allSettled to collect all results
+      const results = await Promise.allSettled(
+        group.member_ids.map(async (member_id) => {
           await assignmentGroupInstructorMoveStudent(
             {
               new_assignment_group_id: id || null,
@@ -127,17 +135,75 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             },
             supabase
           );
-          toaster.create({ title: "Student moved", description: "", type: "success" });
-        } catch (e) {
-          console.error(e);
-          toaster.create({
-            title: "Error moving student",
-            description: e instanceof Error ? e.message : "Unknown error",
-            type: "error"
-          });
-        }
-      });
-      toaster.create({ title: "New group created", description: "", type: "success" });
+          return member_id;
+        })
+      );
+
+      // Categorize results
+      const successes = results.filter((r) => r.status === "fulfilled");
+      const failures = results.filter((r) => r.status === "rejected");
+
+      // Show consolidated toast based on results
+      if (failures.length === 0) {
+        // All succeeded
+        toaster.create({
+          title: "New group created",
+          description: `All ${successes.length} student(s) added successfully`,
+          type: "success"
+        });
+      } else if (successes.length === 0) {
+        // All failed
+        const failedIds = group.member_ids
+          .map((member_id) => {
+            const profile = profiles?.data?.find(
+              (prof: { private_profile_id: string }) => prof.private_profile_id === member_id
+            );
+            return profile?.profiles?.name || member_id;
+          })
+          .join(", ");
+
+        toaster.create({
+          title: "Error creating group",
+          description: `Failed to add ${failures.length} student(s): ${failedIds}`,
+          type: "error"
+        });
+
+        // Log detailed errors
+        results.forEach((result, idx) => {
+          if (result.status === "rejected") {
+            Sentry.captureException(result.reason);
+            console.error(`Failed to move student ${group.member_ids[idx]}:`, result.reason);
+          }
+        });
+      } else {
+        // Partial success - collect failed member IDs by matching results array indices
+        const failedMemberIds = results
+          .map((result, idx) => (result.status === "rejected" ? group.member_ids[idx] : null))
+          .filter((id) => id !== null) as string[];
+
+        const failedNames = failedMemberIds
+          .map((member_id) => {
+            const profile = profiles?.data?.find(
+              (prof: { private_profile_id: string }) => prof.private_profile_id === member_id
+            );
+            return profile?.profiles?.name || member_id;
+          })
+          .join(", ");
+
+        toaster.create({
+          title: "Group created with partial success",
+          description: `${successes.length} student(s) added, ${failures.length} failed: ${failedNames}`,
+          type: "warning"
+        });
+
+        // Log detailed errors
+        results.forEach((result, idx) => {
+          if (result.status === "rejected") {
+            Sentry.captureException(result.reason);
+            console.error(`Failed to move student ${group.member_ids[idx]}:`, result.reason);
+          }
+        });
+      }
     } catch (e) {
       console.error(e);
       toaster.create({
@@ -157,7 +223,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       await assignmentGroupInstructorMoveStudent(
         {
           new_assignment_group_id: move.new_group_id,
-          old_assignment_group_id: move.new_group_id,
+          old_assignment_group_id: move.old_group_id,
           profile_id: move.profile_id,
           class_id: course_id
         },

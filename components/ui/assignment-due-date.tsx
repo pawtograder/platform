@@ -236,10 +236,13 @@ export function SelfReviewDueDate({
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
-    studentPrivateProfileId: private_profile_id,
-    assignmentGroupId: ourAssignmentGroup?.id
-  });
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(
+    { id: assignment.id, due_date: assignment.due_date!, minutes_due_after_lab: assignment.minutes_due_after_lab },
+    {
+      studentPrivateProfileId: private_profile_id,
+      assignmentGroupId: ourAssignmentGroup?.id
+    }
+  );
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }

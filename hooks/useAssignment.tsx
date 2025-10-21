@@ -1,9 +1,6 @@
 "use client";
 import {
-  ActiveSubmissionsWithGradesForAssignment,
-  AssignmentGroup,
   AssignmentWithRubricsAndReferences,
-  HydratedRubric,
   RegradeRequest,
   ReviewAssignmentParts,
   ReviewAssignments,
@@ -17,6 +14,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
 import TableController, {
   useFindTableControllerValue,
   useListTableControllerValues,
@@ -245,39 +243,20 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
   }, [controller, review_assignment_id]);
   return reviewAssignment;
 }
-export function useReviewAssignmentForReview(review_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findReviewAssignmentPredicate = useCallback(
-    (reviewAssignment: ReviewAssignments) => {
-      return (review_id && reviewAssignment.submission_review_id === review_id) || false;
-    },
-    [review_id]
-  );
-  return useFindTableControllerValue(controller.reviewAssignments, findReviewAssignmentPredicate);
-}
 
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
-  const [reviewAssignments, setReviewAssignments] = useState<ReviewAssignments[]>(controller.reviewAssignments.rows);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.reviewAssignments.list((data) => {
-      setReviewAssignments(data);
-    });
-    setReviewAssignments(data);
-    return () => unsubscribe();
-  }, [controller]);
-
-  const myReviewAssignments = useMemo(
-    () =>
-      reviewAssignments.filter(
-        (ra) =>
-          ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
-      ),
-    [reviewAssignments, private_profile_id, submission_id]
+  const filter = useCallback(
+    (reviewAssignment: ReviewAssignments) => {
+      return (
+        reviewAssignment.assignee_profile_id === private_profile_id &&
+        (submission_id ? reviewAssignment.submission_id === submission_id : true)
+      );
+    },
+    [private_profile_id, submission_id]
   );
-  return myReviewAssignments;
+  return useListTableControllerValues(controller.reviewAssignments, filter);
 }
 
 /**
@@ -372,6 +351,7 @@ export class AssignmentController {
   private _classRealTimeController: ClassRealTimeController;
 
   readonly reviewAssignments: TableController<"review_assignments">;
+  private _allReviewAssignments: TableController<"review_assignments"> | null = null;
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
@@ -392,11 +372,13 @@ export class AssignmentController {
   constructor({
     client,
     assignment_id,
-    classRealTimeController
+    classRealTimeController,
+    initialData
   }: {
     client: SupabaseClient<Database>;
     assignment_id: number;
     classRealTimeController: ClassRealTimeController;
+    initialData?: AssignmentControllerInitialData;
   }) {
     this._client = client;
     this._classRealTimeController = classRealTimeController;
@@ -404,25 +386,37 @@ export class AssignmentController {
       query: client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true),
       client: client,
       table: "submissions",
-      classRealTimeController
+      classRealTimeController,
+      initialData: initialData?.submissions
     });
     this.assignmentGroups = new TableController({
       query: client.from("assignment_groups").select("*").eq("assignment_id", assignment_id),
       client: client,
       table: "assignment_groups",
-      classRealTimeController
+      classRealTimeController,
+      initialData: initialData?.assignmentGroups
     });
     this.reviewAssignments = new TableController({
-      query: client.from("review_assignments").select("*").eq("assignment_id", assignment_id),
+      query: client
+        .from("review_assignments")
+        .select("*")
+        .eq("assignment_id", assignment_id)
+        .eq("assignee_profile_id", classRealTimeController.profileId),
       client: client,
       table: "review_assignments",
-      classRealTimeController
+      classRealTimeController,
+      realtimeFilter: {
+        assignment_id,
+        assignee_profile_id: classRealTimeController.profileId
+      }
     });
     this.regradeRequests = new TableController({
       query: client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id),
       client: client,
       table: "submission_regrade_requests",
-      classRealTimeController
+      classRealTimeController,
+      initialData: initialData?.regradeRequests,
+      realtimeFilter: { assignment_id }
     });
 
     // Initialize rubric table controllers - each filtered by assignment_id
@@ -431,7 +425,8 @@ export class AssignmentController {
       client: client,
       table: "rubrics",
       classRealTimeController,
-      realtimeFilter: { assignment_id }
+      realtimeFilter: { assignment_id },
+      initialData: initialData?.rubrics
     });
 
     this.rubricPartsController = new TableController({
@@ -439,7 +434,8 @@ export class AssignmentController {
       client: client,
       table: "rubric_parts",
       classRealTimeController,
-      realtimeFilter: { assignment_id }
+      realtimeFilter: { assignment_id },
+      initialData: initialData?.rubricParts
     });
 
     this.rubricCriteriaController = new TableController({
@@ -447,7 +443,8 @@ export class AssignmentController {
       client: client,
       table: "rubric_criteria",
       classRealTimeController,
-      realtimeFilter: { assignment_id }
+      realtimeFilter: { assignment_id },
+      initialData: initialData?.rubricCriteria
     });
 
     this.rubricChecksController = new TableController({
@@ -455,7 +452,8 @@ export class AssignmentController {
       client: client,
       table: "rubric_checks",
       classRealTimeController,
-      realtimeFilter: { assignment_id }
+      realtimeFilter: { assignment_id },
+      initialData: initialData?.rubricChecks
     });
 
     this.rubricCheckReferencesController = new TableController({
@@ -463,7 +461,8 @@ export class AssignmentController {
       client: client,
       table: "rubric_check_references",
       classRealTimeController,
-      realtimeFilter: { assignment_id }
+      realtimeFilter: { assignment_id },
+      initialData: initialData?.rubricCheckReferences
     });
   }
   close() {
@@ -472,6 +471,10 @@ export class AssignmentController {
     this.submissions.close();
     this.assignmentGroups.close();
 
+    if (this._allReviewAssignments) {
+      this._allReviewAssignments.close();
+      this._allReviewAssignments = null;
+    }
     // Close rubric table controllers
     this.rubricsController.close();
     this.rubricPartsController.close();
@@ -498,6 +501,19 @@ export class AssignmentController {
 
   get isReady() {
     return !!this._assignment;
+  }
+
+  get allReviewAssignments() {
+    if (!this._allReviewAssignments) {
+      this._allReviewAssignments = new TableController({
+        query: this._client.from("review_assignments").select("*").eq("assignment_id", this.assignment.id),
+        client: this._client,
+        table: "review_assignments",
+        classRealTimeController: this._classRealTimeController,
+        realtimeFilter: { assignment_id: this.assignment.id }
+      });
+    }
+    return this._allReviewAssignments;
   }
 
   getReviewAssignmentRubricPartsController(
@@ -553,10 +569,12 @@ export function useAssignmentController() {
 
 export function AssignmentProvider({
   assignment_id: initial_assignment_id,
-  children
+  children,
+  initialData
 }: {
   assignment_id?: number;
   children: React.ReactNode;
+  initialData?: AssignmentControllerInitialData;
 }) {
   const params = useParams();
   const controller = useRef<AssignmentController | null>(null);
@@ -568,7 +586,8 @@ export function AssignmentProvider({
     controller.current = new AssignmentController({
       client: createClient(),
       assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      classRealTimeController: courseController.classRealTimeController
+      classRealTimeController: courseController.classRealTimeController,
+      initialData
     });
     setReady(false);
   }

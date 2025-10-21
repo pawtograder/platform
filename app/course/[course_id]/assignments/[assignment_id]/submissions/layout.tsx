@@ -1,8 +1,10 @@
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import AssignmentGradingToolbar from "@/components/ui/assignment-grading-toolbar";
-import { isInstructorOrGrader } from "@/lib/ssrUtils";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, VStack } from "@chakra-ui/react";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 export default async function SubmissionsLayout({
   params,
@@ -12,6 +14,16 @@ export default async function SubmissionsLayout({
   children: React.ReactNode;
 }) {
   const { course_id, assignment_id } = await params;
+  const headersList = await headers();
+  const user_id = headersList.get("X-User-ID");
+  if (!user_id) {
+    redirect("/");
+  }
+  const role = await getUserRolesForCourse(Number(course_id), user_id);
+  if (!role) {
+    redirect("/");
+  }
+
   const client = await createClient();
   const { data: assignment } = await client
     .from("assignments")
@@ -22,7 +34,8 @@ export default async function SubmissionsLayout({
   if (!assignment) {
     return <div>Assignment not found</div>;
   }
-  const instructorOrGrader = await isInstructorOrGrader(Number(course_id));
+
+  const instructorOrGrader = role.role === "instructor" || role.role === "grader";
   return (
     <VStack w="100%" gap={0} alignItems="flex-start">
       <HStack

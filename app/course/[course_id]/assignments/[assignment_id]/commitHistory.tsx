@@ -12,6 +12,7 @@ import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { FaGitAlt } from "react-icons/fa";
+import { useAssignmentController } from "@/hooks/useAssignment";
 
 function CommitHistory({
   repository_id,
@@ -21,9 +22,10 @@ function CommitHistory({
   repository_full_name: string;
 }) {
   const { time_zone } = useCourse();
+  const { assignment } = useAssignmentController();
   const { data } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
-    meta: { select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
+    meta: { select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
     filters: [{ field: "repository", operator: "eq", value: repository_full_name }],
     sorters: [{ field: "created_at", order: "desc" }]
   });
@@ -65,14 +67,14 @@ function CommitHistory({
                 <Table.Cell>
                   {relatedSubmission ? (
                     <Link
-                      href={`/course/${relatedSubmission.class_id}/assignments/${relatedSubmission.assignments.id}/submissions/${relatedSubmission.id}`}
+                      href={`/course/${relatedSubmission.class_id}/assignments/${assignment.id}/submissions/${relatedSubmission.id}`}
                     >
                       {relatedSubmission.is_active && <ActiveSubmissionIcon />}#{relatedSubmission.ordinal},{" "}
                       {!relatedSubmission.grader_results
                         ? "In Progress"
                         : relatedSubmission.grader_results.errors
                           ? "Error"
-                          : `${relatedSubmission.grader_results.score}/${relatedSubmission.grader_results.max_score ?? relatedSubmission.assignments.autograder_points}`}
+                          : `${relatedSubmission.grader_results.score}/${relatedSubmission.grader_results.max_score ?? assignment.autograder_points}`}
                     </Link>
                   ) : (
                     <Box>

@@ -1,7 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import { archiveRepoAndLock, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import {
+  archiveRepoAndLock,
+  enqueueGithubArchiveRepo,
+  enqueueSyncRepoPermissions,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
@@ -68,18 +73,17 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
   if (repository) {
     if (remaining_members.length === 0) {
       //Archive
-      await archiveRepoAndLock(membership.classes!.github_org!, repository.repository);
+      await enqueueGithubArchiveRepo(membership.class_id, membership.classes!.github_org!, repository.repository);
     } else {
       //Update the repo permissions
-      await syncRepoPermissions(
-        membership.classes!.github_org!,
-        repository.repository,
-        membership.classes!.slug!,
-        remaining_members
-          .filter((m) => m.profiles!.user_roles!.users!.github_username)
-          .map((m) => m.profiles!.user_roles!.users!.github_username!),
-        scope
-      );
+      await enqueueSyncRepoPermissions({
+        class_id: membership.class_id,
+        course_slug: membership.classes!.slug!,
+        org: membership.classes!.github_org!,
+        repo: repository.repository,
+        githubUsernames: remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        debug_id: `assignment-group-leave-${membership.assignment_group_id}`
+      });
     }
   }
   return {

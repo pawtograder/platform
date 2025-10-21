@@ -383,7 +383,7 @@ entrypoint = "./functions/assignment-create-all-repos/index.ts"
 
 [functions.enrollments-add]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/enrollments-add/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -394,7 +394,7 @@ entrypoint = "./functions/enrollments-add/index.ts"
 
 [functions.enrollments-sync-canvas]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/enrollments-sync-canvas/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -405,7 +405,7 @@ entrypoint = "./functions/enrollments-sync-canvas/index.ts"
 
 [functions.repositories-list]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/repositories-list/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -416,7 +416,7 @@ entrypoint = "./functions/repositories-list/index.ts"
 
 [functions.repository-get-file]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/repository-get-file/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -424,17 +424,6 @@ entrypoint = "./functions/repository-get-file/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/repository-get-file/*.html" ]
-
-[functions.autograder-test-workflow]
-enabled = true
-verify_jwt = true
-import_map = "./functions/autograder-test-workflow/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/autograder-test-workflow/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/autograder-test-workflow/*.html" ]
 
 [functions.live-meeting-end]
 enabled = true
@@ -460,7 +449,7 @@ entrypoint = "./functions/live-meeting-callback/index.ts"
 
 [functions.live-meeting-for-help-request]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/live-meeting-for-help-request/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -471,7 +460,7 @@ entrypoint = "./functions/live-meeting-for-help-request/index.ts"
 
 [functions.repository-list-files]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/repository-list-files/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -482,7 +471,7 @@ entrypoint = "./functions/repository-list-files/index.ts"
 
 [functions.assignment-group-create]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-group-create/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -493,7 +482,7 @@ entrypoint = "./functions/assignment-group-create/index.ts"
 
 [functions.assignment-group-join]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-group-join/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -504,7 +493,7 @@ entrypoint = "./functions/assignment-group-join/index.ts"
 
 [functions.assignment-group-approve-request]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-group-approve-request/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -515,7 +504,7 @@ entrypoint = "./functions/assignment-group-approve-request/index.ts"
 
 [functions.assignment-group-leave]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-group-leave/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -537,7 +526,7 @@ entrypoint = "./functions/autograder-sync-staff-team/index.ts"
 
 [functions.assignment-group-instructor-move-student]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-group-instructor-move-student/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -548,7 +537,7 @@ entrypoint = "./functions/assignment-group-instructor-move-student/index.ts"
 
 [functions.assignment-group-copy-groups-from-assignment]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-group-copy-groups-from-assignment/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -570,7 +559,7 @@ entrypoint = "./functions/notification-queue-processor/index.ts"
 
 [functions.repository-list-commits]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/repository-list-commits/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -581,7 +570,7 @@ entrypoint = "./functions/repository-list-commits/index.ts"
 
 [functions.autograder-trigger-grading-workflow]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/autograder-trigger-grading-workflow/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -617,7 +606,7 @@ entrypoint = "./functions/submission-serve-artifact/index.ts"
 
 [functions.assignment-create-handout-repo]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-create-handout-repo/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -628,7 +617,7 @@ entrypoint = "./functions/assignment-create-handout-repo/index.ts"
 
 [functions.assignment-create-solution-repo]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-create-solution-repo/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -650,7 +639,7 @@ entrypoint = "./functions/autograder-sync-student-team/index.ts"
 
 [functions.autograder-reinvite-to-class-org]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/autograder-reinvite-to-class-org/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -705,7 +694,7 @@ entrypoint = "./functions/gradebook-column-inserted/index.ts"
 
 [functions.github-user-sync]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/github-user-sync/deno.json"
 entrypoint = "./functions/github-user-sync/index.ts"
 

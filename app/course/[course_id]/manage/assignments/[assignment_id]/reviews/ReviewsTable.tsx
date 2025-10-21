@@ -126,21 +126,21 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       let csvData: PopulatedReviewAssignment[];
       try {
         //Use existing TableController logic that can fetch all pages, making sure to clean up afterwards
-        const joinData = `  *,
-              profiles!assignee_profile_id(*),
-              rubrics(*),
-              submissions(*,
-                profiles!profile_id(*),
-                assignment_groups(*,
-                  assignment_groups_members(*,
-                    profiles!profile_id(*)
+        // Only select fields actually used in the CSV export
+        const joinData = `id, assignee_profile_id, assignment_id, rubric_id, submission_id, due_date, completed_at,
+              profiles!assignee_profile_id(name),
+              rubrics(name),
+              submissions(id, profile_id, assignment_group_id,
+                profiles!profile_id(name),
+                assignment_groups(name,
+                  assignment_groups_members(profile_id,
+                    profiles!profile_id(name)
                   )
                 ),
-                assignments(*),
                 submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)
               ),
-              review_assignment_rubric_parts(*,
-                rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name)
+              review_assignment_rubric_parts(review_assignment_id, rubric_part_id,
+                rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(name)
               )`;
         const tableController = new TableController<"review_assignments", typeof joinData, number>({
           client: supabase,
@@ -153,7 +153,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             .order("id", { ascending: true })
         });
         await tableController.readyPromise;
-        csvData = tableController.rows;
+        // Type assertion is safe here - we've selected all fields used in CSV export
+        csvData = tableController.rows as unknown as PopulatedReviewAssignment[];
         tableController.close();
       } catch (error: unknown) {
         const description = error instanceof Error ? error.message : "Unknown error";
@@ -682,7 +683,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       }),
       rubric: createFilterOptions(data, (row) => row.rubrics?.name || "N/A"),
       status: createFilterOptions(data, (row) => getReviewStatus(row)),
-      rubricPart: createFilterOptions(
+      "rubric-part": createFilterOptions(
         data,
         (row) =>
           row.review_assignment_rubric_parts

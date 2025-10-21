@@ -744,6 +744,7 @@ export type Database = {
           template_repo: string | null;
           title: string;
           total_points: number | null;
+          updated_at: string;
         };
         Insert: {
           allow_not_graded_submissions?: boolean;
@@ -775,6 +776,7 @@ export type Database = {
           template_repo?: string | null;
           title: string;
           total_points?: number | null;
+          updated_at?: string;
         };
         Update: {
           allow_not_graded_submissions?: boolean;
@@ -806,6 +808,7 @@ export type Database = {
           template_repo?: string | null;
           title?: string;
           total_points?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -1317,6 +1320,7 @@ export type Database = {
           discussion_thread: number;
           emoji: string;
           id: number;
+          updated_at: string;
         };
         Insert: {
           created_at?: string;
@@ -1324,6 +1328,7 @@ export type Database = {
           discussion_thread: number;
           emoji: string;
           id?: number;
+          updated_at?: string;
         };
         Update: {
           created_at?: string;
@@ -1331,6 +1336,7 @@ export type Database = {
           discussion_thread?: number;
           emoji?: string;
           id?: number;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -1643,6 +1649,7 @@ export type Database = {
           id: number;
           ordinal: number;
           topic: string;
+          updated_at: string;
         };
         Insert: {
           class_id: number;
@@ -1652,6 +1659,7 @@ export type Database = {
           id?: number;
           ordinal?: number;
           topic: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;
@@ -1661,6 +1669,7 @@ export type Database = {
           id?: number;
           ordinal?: number;
           topic?: string;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -2318,6 +2327,33 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      grader_links_cache: {
+        Row: {
+          created_at: string;
+          expires_at: string;
+          id: number;
+          repo: string;
+          sha: string;
+          signed_url: string;
+        };
+        Insert: {
+          created_at?: string;
+          expires_at?: string;
+          id?: number;
+          repo: string;
+          sha: string;
+          signed_url: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string;
+          id?: number;
+          repo?: string;
+          sha?: string;
+          signed_url?: string;
+        };
+        Relationships: [];
       };
       grader_result_output: {
         Row: {
@@ -4129,6 +4165,7 @@ export type Database = {
           id: number;
           style: string | null;
           subject: Json;
+          updated_at: string;
           user_id: string;
           viewed_at: string | null;
         };
@@ -4139,6 +4176,7 @@ export type Database = {
           id?: number;
           style?: string | null;
           subject: Json;
+          updated_at?: string;
           user_id: string;
           viewed_at?: string | null;
         };
@@ -4149,6 +4187,7 @@ export type Database = {
           id?: number;
           style?: string | null;
           subject?: Json;
+          updated_at?: string;
           user_id?: string;
           viewed_at?: string | null;
         };
@@ -4602,6 +4641,7 @@ export type Database = {
           sync_data: Json | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
+          updated_at: string;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -4617,6 +4657,7 @@ export type Database = {
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
+          updated_at?: string;
         };
         Update: {
           assignment_group_id?: number | null;
@@ -4632,6 +4673,7 @@ export type Database = {
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -9925,7 +9967,8 @@ export type Database = {
         | "create_repo"
         | "sync_repo_permissions"
         | "archive_repo_and_lock"
-        | "rerun_autograder";
+        | "rerun_autograder"
+        | "sync_repo_to_handout";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
@@ -10085,7 +10128,8 @@ export const Constants = {
         "create_repo",
         "sync_repo_permissions",
         "archive_repo_and_lock",
-        "rerun_autograder"
+        "rerun_autograder",
+        "sync_repo_to_handout"
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],

@@ -11,8 +11,7 @@ import {
   useSubmission,
   useSubmissionController,
   useSubmissionFileComment,
-  useSubmissionFileComments,
-  useSubmissionReviewByAssignmentId
+  useSubmissionFileComments
 } from "@/hooks/useSubmission";
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -22,7 +21,7 @@ import {
   RubricCriteria,
   SubmissionFile,
   SubmissionFileComment,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
@@ -77,7 +76,7 @@ export function isRubricCheckDataWithOptions(data: Json | null | undefined): dat
 }
 
 type CodeLineCommentContextType = {
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  submission: SubmissionWithGraderResultsAndFiles;
   comments: SubmissionFileComment[];
   file: SubmissionFile;
   expanded: number[];
@@ -520,7 +519,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
  * @param comment_id - The ID of the comment to display.
  * @param submissionReviewId - Optional ID of the submission review, used for context.
  */
-function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: number; submissionReviewId?: number }) {
+function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
@@ -528,7 +527,6 @@ function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: numbe
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
-  useSubmissionReviewByAssignmentId(submissionReviewId ?? comment?.submission_review_id ?? undefined);
 
   if (!authorProfile || !comment) {
     return <Skeleton height="100px" width="100%" />;
@@ -1095,7 +1093,7 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
           comment.rubric_check_id ? (
             <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
           ) : (
-            <CodeLineComment key={comment.id} comment_id={comment.id} submissionReviewId={submissionReviewId} />
+            <CodeLineComment key={comment.id} comment_id={comment.id} />
           )
         )}
         {showReply && !hasARegradeRequest && (

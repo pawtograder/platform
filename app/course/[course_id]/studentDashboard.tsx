@@ -28,6 +28,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .from("assignments_with_effective_due_dates")
     .select("*, submissions!submissio_assignment_id_fkey(*, grader_results(*)), classes(time_zone)")
     .eq("class_id", course_id)
+    .eq("submissions.is_active", true)
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: false })
     .limit(5);
