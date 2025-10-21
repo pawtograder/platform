@@ -28,6 +28,7 @@ import {
   FiClipboard,
   FiClock,
   FiCompass,
+  FiFileText,
   FiMenu,
   FiMessageSquare,
   FiSettings,
@@ -81,6 +82,20 @@ const LinkItems = (courseID: number) => [
     instructor_only: true,
     target: `/course/${courseID}/manage/gradebook`,
     feature_flag: "gradebook"
+  },
+  {
+    name: "Surveys",
+    icon: FiFileText,
+    student_only: true,
+    target: `/course/${courseID}/surveys`,
+    feature_flag: "surveys"
+  },
+  {
+    name: "Manage Surveys",
+    icon: FiFileText,
+    instructors_or_graders_only: true,
+    target: `/course/${courseID}/manage/surveys`,
+    feature_flag: "surveys"
   },
   {
     name: "Course Settings",
