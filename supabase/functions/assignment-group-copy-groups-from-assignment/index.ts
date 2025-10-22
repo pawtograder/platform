@@ -29,16 +29,6 @@ async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Prom
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
 
-  // Fetch existing groups in target assignment
-  const { data: existingGroups } = await adminSupabase
-    .from("assignment_groups")
-    .select("*, assignment_groups_members(*)")
-    .eq("class_id", class_id)
-    .eq("assignment_id", target_assignment_id)
-    .limit(1000);
-
-  const existingGroupsByName = new Map((existingGroups || []).map((g) => [g.name, g]));
-
   // Process each source group
   for (const sourceGroup of sourceAssignmentGroups) {
     // Upsert group (create if doesn't exist, or return existing if conflict on assignment_id,name)
@@ -64,9 +54,6 @@ async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Prom
 
     const targetGroupId = targetGroup.id;
     console.log(`Group "${sourceGroup.name}" ready with id ${targetGroupId}`);
-
-    // Update lookup map with this group for subsequent iterations
-    existingGroupsByName.set(sourceGroup.name, { ...targetGroup, assignment_groups_members: [] });
 
     // Fetch current members in target group
     const { data: currentMembers } = await adminSupabase
