@@ -13,6 +13,8 @@ async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Prom
   scope?.setTag("class_id", class_id.toString());
   scope?.setTag("target_assignment_id", target_assignment_id.toString());
   const { supabase, enrollment } = await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
+  
+  // Fetch source groups with their members
   const { data: sourceAssignmentGroups } = await supabase
     .from("assignment_groups")
     .select("*, assignment_groups_members(*)")
@@ -21,36 +23,103 @@ async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Prom
   if (!sourceAssignmentGroups || !sourceAssignmentGroups.length) {
     throw new IllegalArgumentError("Source assignment groups not found");
   }
+  
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const newGroups = await adminSupabase
+  
+  // Fetch existing groups in target assignment
+  const { data: existingGroups } = await adminSupabase
     .from("assignment_groups")
-    .insert(
-      sourceAssignmentGroups.map((group) => ({
-        assignment_id: target_assignment_id,
-        name: group.name,
-        class_id: class_id
-      }))
-    )
-    .select();
-  if (newGroups.error) {
-    console.error(newGroups.error);
-    throw new IllegalArgumentError("Failed to create new groups");
-  }
-  const newMemberships = sourceAssignmentGroups.flatMap((group) =>
-    group.assignment_groups_members.map((member) => ({
-      assignment_group_id: newGroups.data.find((g) => g.name === group.name)?.id || 0,
-      profile_id: member.profile_id,
-      class_id: class_id,
-      assignment_id: target_assignment_id,
-      added_by: enrollment.private_profile_id
-    }))
+    .select("*, assignment_groups_members(*)")
+    .eq("class_id", class_id)
+    .eq("assignment_id", target_assignment_id).limit(1000);
+  
+  const existingGroupsByName = new Map(
+    (existingGroups || []).map((g) => [g.name, g])
   );
-  const { error } = await adminSupabase.from("assignment_groups_members").insert(newMemberships);
-  if (error) {
-    throw new IllegalArgumentError("Failed to create new memberships");
+  
+  // Process each source group
+  for (const sourceGroup of sourceAssignmentGroups) {
+    const existingGroup = existingGroupsByName.get(sourceGroup.name);
+    let targetGroupId: number;
+    
+    if (existingGroup) {
+      // Group already exists, use it
+      targetGroupId = existingGroup.id;
+      console.log(`Group "${sourceGroup.name}" already exists with id ${targetGroupId}`);
+    } else {
+      // Create new group
+      const { data: newGroup, error: createError } = await adminSupabase
+        .from("assignment_groups")
+        .insert({
+          assignment_id: target_assignment_id,
+          name: sourceGroup.name,
+          class_id: class_id
+        })
+        .select()
+        .single();
+      
+      if (createError || !newGroup) {
+        console.error("Failed to create group:", createError);
+        throw new IllegalArgumentError(`Failed to create group "${sourceGroup.name}"`);
+      }
+      
+      targetGroupId = newGroup.id;
+      console.log(`Created new group "${sourceGroup.name}" with id ${targetGroupId}`);
+    }
+    
+    // Get existing members in target group
+    const existingMemberIds = new Set(
+      existingGroup?.assignment_groups_members?.map((m) => m.profile_id) || []
+    );
+    
+    // Process each member from source group
+    for (const sourceMember of sourceGroup.assignment_groups_members) {
+      if (existingMemberIds.has(sourceMember.profile_id)) {
+        // Member already in this group, skip
+        console.log(`Member ${sourceMember.profile_id} already in group "${sourceGroup.name}"`);
+        continue;
+      }
+      
+      // Check if member is in a different group for this assignment (need to move them)
+      const { data: existingMembership } = await adminSupabase
+        .from("assignment_groups_members")
+        .select("id, assignment_group_id")
+        .eq("assignment_id", target_assignment_id)
+        .eq("profile_id", sourceMember.profile_id)
+        .single();
+      
+      if (existingMembership) {
+        // Move member from old group to new group
+        console.log(`Moving member ${sourceMember.profile_id} to group "${sourceGroup.name}"`);
+        await adminSupabase
+          .from("assignment_groups_members")
+          .update({
+            assignment_group_id: targetGroupId,
+            added_by: enrollment.private_profile_id
+          })
+          .eq("id", existingMembership.id);
+      } else {
+        // Add new member to group
+        console.log(`Adding member ${sourceMember.profile_id} to group "${sourceGroup.name}"`);
+        const { error: insertError } = await adminSupabase
+          .from("assignment_groups_members")
+          .insert({
+            assignment_group_id: targetGroupId,
+            profile_id: sourceMember.profile_id,
+            class_id: class_id,
+            assignment_id: target_assignment_id,
+            added_by: enrollment.private_profile_id
+          });
+        
+        if (insertError) {
+          console.error("Failed to add member:", insertError);
+          throw new IllegalArgumentError(`Failed to add member to group "${sourceGroup.name}"`);
+        }
+      }
+    }
   }
 }
 
