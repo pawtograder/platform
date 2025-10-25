@@ -8,9 +8,10 @@ import { toaster } from "@/components/ui/toaster";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useCallback, useState } from "react";
 import { LuCheck } from "react-icons/lu";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import SurveyCreatorModal from "@/components/SurveyCreatorModal";
 
 type SurveyFormData = {
   title: string;
@@ -36,11 +37,13 @@ const sampleJsonTemplate = `{
 export default function SurveyForm({
   form,
   onSubmit,
-  saveDraftOnly
+  saveDraftOnly,
+  isEdit = false
 }: {
   form: UseFormReturnType<SurveyFormData>;
   onSubmit: (values: FieldValues) => void;
-  saveDraftOnly: (values: FieldValues) => void;
+  saveDraftOnly: (values: FieldValues, shouldRedirect?: boolean) => void;
+  isEdit?: boolean;
 }) {
   // Color mode values where the first values correspond as follows:
   // useColorModeValue(lightModeValue, darkModeValue)
@@ -69,7 +72,9 @@ export default function SurveyForm({
 
   const router = useRouter();
   const { course_id } = useParams();
+  const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSurveyCreatorOpen, setIsSurveyCreatorOpen] = useState(false);
 
   const status = watch("status");
 
@@ -109,14 +114,68 @@ export default function SurveyForm({
     });
   }, [setValue]);
 
-  const showPreview = useCallback(() => {
-    // Placeholder for now - will open in new tab
-    toaster.create({
-      title: "Preview Feature",
-      description: "Preview functionality will be implemented soon",
-      type: "info"
-    });
-  }, []);
+  const handleSurveyCreatorSave = useCallback(
+    (json: string) => {
+      setValue("json", json, { shouldDirty: true });
+      toaster.create({
+        title: "Survey Created",
+        description: "Your survey has been created using SurveyJS Creator.",
+        type: "success"
+      });
+    },
+    [setValue]
+  );
+
+  const showPreview = useCallback(async () => {
+    const currentValues = getValues();
+    const jsonValue = currentValues.json;
+
+    if (!jsonValue.trim()) {
+      toaster.create({
+        title: "No Survey Data",
+        description: "Please enter JSON configuration before previewing",
+        type: "error"
+      });
+      return;
+    }
+
+    try {
+      // Validate JSON first
+      JSON.parse(jsonValue);
+
+      // Save as draft first to preserve form state (without redirecting)
+      try {
+        await saveDraftOnly(currentValues, false);
+        // No toast needed - this is just for persistence
+      } catch (draftError) {
+        toaster.create({
+          title: "Draft Save Failed",
+          description: "Could not save draft, but preview will still work",
+          type: "warning"
+        });
+        // Continue with preview even if draft save fails
+      }
+
+      // Encode the JSON for URL parameter
+      const encodedJson = encodeURIComponent(jsonValue);
+
+      // Navigate to survey preview page
+      const previewUrl = `/course/${course_id}/manage/surveys/preview?json=${encodedJson}`;
+      router.push(previewUrl);
+
+      toaster.create({
+        title: "Opening Preview",
+        description: "Survey preview is loading...",
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Invalid JSON",
+        description: `Cannot preview: ${error instanceof Error ? error.message : "Invalid JSON format"}`,
+        type: "error"
+      });
+    }
+  }, [getValues, router, course_id, saveDraftOnly]);
 
   const handleBackNavigation = useCallback(async () => {
     if (isDirty) {
@@ -187,7 +246,7 @@ export default function SurveyForm({
 
         {/* Header */}
         <Heading size="xl" color={textColor} textAlign="left">
-          Create New Survey
+          {isEdit ? "Edit Survey" : "Create New Survey"}
         </Heading>
       </VStack>
 
@@ -267,6 +326,17 @@ export default function SurveyForm({
                     })}
                   />
                   <HStack justify="space-between" mt={2}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      bg="transparent"
+                      borderColor={buttonBorderColor}
+                      color={buttonTextColor}
+                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      onClick={() => setIsSurveyCreatorOpen(true)}
+                    >
+                      Create with SurveyJS
+                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -444,6 +514,15 @@ export default function SurveyForm({
           </Fieldset.Root>
         </form>
       </Box>
+
+      {/* SurveyJS Creator Modal */}
+      <SurveyCreatorModal
+        isOpen={isSurveyCreatorOpen}
+        onClose={() => setIsSurveyCreatorOpen(false)}
+        onSave={handleSurveyCreatorSave}
+        initialJson={getValues("json")}
+        startFresh={!isEdit && searchParams.get("from") !== "preview"}
+      />
     </VStack>
   );
 }

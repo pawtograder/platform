@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import SurveyForm from "./form";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useState, useRef } from "react";
+import SurveyForm from "../../new/form";
 import { Box, Heading, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 
@@ -19,29 +19,15 @@ type SurveyFormData = {
   allow_response_editing: boolean;
 };
 
-export default function NewSurveyPage() {
-  const { course_id } = useParams();
+export default function EditSurveyPage() {
+  const { course_id, survey_id } = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const trackEvent = useTrackEvent();
-  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
-
-  // Get current user ID on mount
-  React.useEffect(() => {
-    const fetchUser = async () => {
-      const supabase = createClient();
-      const {
-        data: { user }
-      } = await supabase.auth.getUser();
-      if (user) {
-        setCurrentUserId(user.id);
-      }
-    };
-    fetchUser();
-  }, []);
+  const [isLoading, setIsLoading] = useState(true);
+  const [surveyData, setSurveyData] = useState<any>(null);
 
   const form = useForm<SurveyFormData>({
-    refineCoreProps: { resource: "surveys", action: "create" },
+    refineCoreProps: { resource: "surveys", action: "edit" },
     defaultValues: {
       title: "",
       description: "",
@@ -53,67 +39,73 @@ export default function NewSurveyPage() {
   });
 
   const { getValues, setValue, reset } = form;
-  const hasLoadedDraft = useRef(false);
+  const hasLoadedSurvey = useRef(false);
 
-  // Only load draft if returning from preview (indicated by URL parameter)
+  // Load the survey data when component mounts
   useEffect(() => {
-    const isReturningFromPreview = searchParams.get("from") === "preview";
+    if (hasLoadedSurvey.current) return; // Prevent duplicate loading
+    const loadSurveyData = async () => {
+      try {
+        setIsLoading(true);
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .from("surveys" as any)
+          .select("*")
+          .eq("id", survey_id)
+          .eq("class_id", Number(course_id))
+          .single();
 
-    if (isReturningFromPreview && !hasLoadedDraft.current) {
-      hasLoadedDraft.current = true; // Mark as loaded to prevent duplicate loading
-
-      const loadLatestDraft = async () => {
-        try {
-          const supabase = createClient();
-          const { data, error } = await supabase
-            .from("surveys" as any)
-            .select("*")
-            .eq("class_id", Number(course_id))
-            .eq("status", "draft")
-            // Note: created_by is a text field used for auditing, filtered by class_id and status instead
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single();
-
-          if (data && !error) {
-            // Load the draft data into the form
-            reset({
-              title: (data as any).title || "",
-              description: (data as any).description || "",
-              json: (data as any).questions || "",
-              status: "draft",
-              due_date: (data as any).due_date || "",
-              allow_response_editing: (data as any).allow_response_editing || false
-            });
-
-            toaster.create({
-              title: "Draft Restored",
-              description: "Your previous work has been restored.",
-              type: "info"
-            });
-          }
-        } catch (error) {
-          // Silently fail - this is just for convenience
-          console.log("No draft found or error loading draft:", error);
+        if (error || !data) {
+          toaster.create({
+            title: "Survey Not Found",
+            description: "The survey you're trying to edit could not be found.",
+            type: "error"
+          });
+          router.push(`/course/${course_id}/manage/surveys`);
+          return;
         }
-      };
 
-      loadLatestDraft();
+        setSurveyData(data);
 
-      // Clean up the URL parameter
-      const url = new URL(window.location.href);
-      url.searchParams.delete("from");
-      window.history.replaceState({}, "", url.toString());
-    }
-  }, [course_id, reset, searchParams]);
+        // Load the survey data into the form
+        reset({
+          title: (data as any).title || "",
+          description: (data as any).description || "",
+          json: (data as any).questions || "",
+          status: (data as any).status || "draft",
+          due_date: (data as any).due_date || "",
+          allow_response_editing: (data as any).allow_response_editing || false
+        });
+
+        hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
+
+        toaster.create({
+          title: "Survey Loaded",
+          description: "Survey data has been loaded for editing.",
+          type: "success"
+        });
+      } catch (error) {
+        console.error("Error loading survey:", error);
+        toaster.create({
+          title: "Error Loading Survey",
+          description: "An error occurred while loading the survey data.",
+          type: "error"
+        });
+        router.push(`/course/${course_id}/manage/surveys`);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadSurveyData();
+  }, [course_id, survey_id, reset, router]);
 
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
       // This function saves as draft without validation - for back navigation
-      async function createDraft() {
+      async function updateDraft() {
         try {
           const supabase = createClient();
-          const survey_id = crypto.randomUUID();
 
           // For drafts, we'll store the JSON as-is without validation
           // If JSON is empty or invalid, we'll store it as empty string
@@ -130,20 +122,16 @@ export default function NewSurveyPage() {
 
           const { data, error } = await supabase
             .from("surveys" as any)
-            .insert({
-              survey_id: survey_id,
-              version: 1,
-              class_id: Number(course_id),
-              created_by: currentUserId || null, // Store user auth UUID for auditing
+            .update({
               title: (values.title as string) || "Untitled Survey",
               description: (values.description as string) || null,
               questions: jsonToStore,
               status: "draft",
-              created_at: new Date().toISOString(),
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: (values.due_date as string) || null,
               validation_errors: null // No validation errors for draft saves
             })
+            .eq("id", survey_id)
             .select("id, survey_id")
             .single();
 
@@ -152,7 +140,7 @@ export default function NewSurveyPage() {
             throw new Error(error?.message || "Failed to save draft");
           }
 
-          trackEvent("survey_created" as any, {
+          trackEvent("survey_updated" as any, {
             course_id: Number(course_id),
             survey_id: (data as any).survey_id,
             status: "draft",
@@ -177,17 +165,17 @@ export default function NewSurveyPage() {
           throw error;
         }
       }
-      await createDraft();
+      await updateDraft();
     },
-    [course_id, trackEvent, router]
+    [course_id, trackEvent, router, survey_id]
   );
 
   const onSubmit = useCallback(
     async (values: FieldValues) => {
-      async function create() {
+      async function update() {
         // Show loading toast before starting the process
         const loadingToast = toaster.create({
-          title: "Creating Survey",
+          title: "Updating Survey",
           description: "Saving your survey configuration...",
           type: "loading"
         });
@@ -195,10 +183,7 @@ export default function NewSurveyPage() {
         try {
           const supabase = createClient();
 
-          // Generate new survey_id using crypto.randomUUID()
-          const survey_id = crypto.randomUUID();
-
-          // Parse the JSON to ensure it's valid (only for active creation)
+          // Parse the JSON to ensure it's valid (only for active updates)
           let parsedJson;
           let validationErrors = null;
           try {
@@ -209,23 +194,19 @@ export default function NewSurveyPage() {
             parsedJson = values.json as string; // Store the invalid JSON as-is
           }
 
-          // Insert into surveys table
+          // Update the survey
           const { data, error } = await supabase
             .from("surveys" as any)
-            .insert({
-              survey_id: survey_id,
-              version: 1,
-              class_id: Number(course_id),
-              created_by: currentUserId || null, // Store user auth UUID for auditing
+            .update({
               title: values.title as string,
               description: (values.description as string) || null,
               questions: parsedJson,
               status: validationErrors ? "draft" : (values.status as string), // Force to draft if validation errors
-              created_at: new Date().toISOString(),
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: (values.due_date as string) || null,
               validation_errors: validationErrors
             })
+            .eq("id", survey_id)
             .select("id, survey_id")
             .single();
 
@@ -234,20 +215,16 @@ export default function NewSurveyPage() {
             try {
               const fallbackData = await supabase
                 .from("surveys" as any)
-                .insert({
-                  survey_id: survey_id,
-                  version: 1,
-                  class_id: Number(course_id),
-                  created_by: currentUserId || null,
+                .update({
                   title: values.title as string,
                   description: (values.description as string) || null,
                   questions: values.json as string,
                   status: "draft",
-                  created_at: new Date().toISOString(),
                   allow_response_editing: values.allow_response_editing as boolean,
                   due_date: (values.due_date as string) || null,
                   validation_errors: `Database error: ${error?.message || "Unknown error"}`
                 })
+                .eq("id", survey_id)
                 .select("id, survey_id")
                 .single();
 
@@ -255,13 +232,13 @@ export default function NewSurveyPage() {
                 throw new Error(fallbackData.error.message);
               }
             } catch (fallbackError) {
-              throw new Error(`Failed to save survey: ${error?.message || "Unknown error"}`);
+              throw new Error(`Failed to update survey: ${error?.message || "Unknown error"}`);
             }
             return;
           }
 
-          // Track survey creation
-          trackEvent("survey_created" as any, {
+          // Track survey update
+          trackEvent("survey_updated" as any, {
             course_id: Number(course_id),
             survey_id: (data as any).survey_id,
             status: validationErrors ? "draft" : values.status,
@@ -301,19 +278,39 @@ export default function NewSurveyPage() {
           // Dismiss loading toast and show error
           toaster.dismiss(loadingToast);
           toaster.error({
-            title: "Error creating survey",
+            title: "Error updating survey",
             description: error instanceof Error ? error.message : "An unexpected error occurred"
           });
         }
       }
-      await create();
+      await update();
     },
-    [course_id, router, trackEvent]
+    [course_id, router, trackEvent, survey_id]
   );
+
+  if (isLoading) {
+    return (
+      <Box py={8} maxW="1200px" my={2} mx="auto">
+        <Box display="flex" alignItems="center" justifyContent="center" p={8}>
+          <Text>Loading survey data...</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (!surveyData) {
+    return (
+      <Box py={8} maxW="1200px" my={2} mx="auto">
+        <Box display="flex" alignItems="center" justifyContent="center" p={8}>
+          <Text>Survey not found.</Text>
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
-      <SurveyForm form={form} onSubmit={onSubmit} saveDraftOnly={saveDraftOnly} />
+      <SurveyForm form={form} onSubmit={onSubmit} saveDraftOnly={saveDraftOnly} isEdit={true} />
     </Box>
   );
 }

@@ -21,7 +21,7 @@ type Survey = {
   version: number;
   created_at: string;
   class_id: number;
-  json?: string;
+  questions?: string;
 };
 
 type SurveyWithCounts = Survey & {
@@ -75,13 +75,12 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   };
 
   const getSurveyLink = (survey: Survey) => {
-    if (survey.status === "draft") {
-      return `/course/${courseId}/manage/surveys/new?draft_id=${survey.id}`;
-    } else if (survey.status === "published") {
-      return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
-    } else {
+    if (survey.status === "closed") {
       // closed - read-only view
       return `/course/${courseId}/manage/surveys/${survey.id}`;
+    } else {
+      // draft and published surveys go to edit page
+      return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     }
   };
 
@@ -100,8 +99,8 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         // Validate JSON before publishing
         let validationErrors = null;
         try {
-          if (survey.json) {
-            JSON.parse(survey.json);
+          if (survey.questions) {
+            JSON.parse(survey.questions);
           }
         } catch (error) {
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
@@ -429,9 +428,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                     {survey.status === "published" && (
                       <>
                         <MenuItem value="responses" asChild>
-                          <Link href={`/course/${courseId}/manage/surveys/${survey.survey_id}/responses`}>
-                            View Responses
-                          </Link>
+                          <Link href={`/course/${courseId}/manage/surveys/${survey.id}/responses`}>View Responses</Link>
                         </MenuItem>
                         <MenuItem value="edit" asChild>
                           <Link href={getSurveyLink(survey)}>Edit (New Version)</Link>
@@ -447,9 +444,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                     {survey.status === "closed" && (
                       <>
                         <MenuItem value="responses" asChild>
-                          <Link href={`/course/${courseId}/manage/surveys/${survey.survey_id}/responses`}>
-                            View Responses
-                          </Link>
+                          <Link href={`/course/${courseId}/manage/surveys/${survey.id}/responses`}>View Responses</Link>
                         </MenuItem>
                         <MenuItem value="reopen">Re-open</MenuItem>
                         <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>

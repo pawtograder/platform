@@ -9,7 +9,7 @@ DROP FUNCTION IF EXISTS set_survey_submitted_at() CASCADE;
 DROP TYPE IF EXISTS survey_status CASCADE;
 
 -- Create ENUM type for survey status
-CREATE TYPE survey_status AS ENUM('draft', 'published', 'archived');
+CREATE TYPE survey_status AS ENUM('draft', 'published', 'closed');
 
 -- Create surveys table
 CREATE TABLE surveys (
