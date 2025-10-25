@@ -14,7 +14,7 @@ The frontend expects the following columns in the `surveys` table:
 - `survey_id` (UUID) - Groups survey versions together
 - `version` (INTEGER) - Version number for the survey
 - `class_id` (BIGINT) - Foreign key to classes table
-- `created_by` (TEXT) - User auth UUID for auditing (not a foreign key)
+- `created_by` (UUID) - Foreign key to profiles table
 - `title` (TEXT) - Survey title
 - `description` (TEXT) - Optional survey description
 - `json` (JSONB) - SurveyJS configuration
@@ -32,7 +32,7 @@ The frontend expects the following columns in the `survey_responses` table:
 
 - `id` (UUID) - Primary key
 - `survey_id` (UUID) - Foreign key to surveys.id
-- `student_id` (UUID) - User auth UUID (auth.uid()), not a profile ID
+- `student_id` (UUID) - Foreign key to profiles.id
 - `answers` (JSONB) - Student response data
 - `submitted_at` (TIMESTAMPTZ) - Submission timestamp
 - `updated_at` (TIMESTAMPTZ) - Last update timestamp
@@ -49,7 +49,7 @@ The frontend expects the following columns in the `survey_templates` table:
 - `template` (JSONB) - SurveyJS template configuration
 - `created_at` (TIMESTAMPTZ) - Creation timestamp
 - `updated_at` (TIMESTAMPTZ) - Last update timestamp
-- `created_by` (TEXT) - User auth UUID for auditing (not a foreign key)
+- `created_by` (UUID) - Foreign key to profiles table
 - `version` (INTEGER) - Template version
 
 ## Story Implementation Status
@@ -365,7 +365,7 @@ All components implement adaptive light/dark theme styling using `useColorModeVa
 1. **Survey Response Columns:** Currently hardcoded as Q1, Q2, Q3 expecting specific JSON structure
 2. **Sample Templates:** "Load Sample Template" button is non-functional
 3. **Export Functionality:** "Export to CSV" button is placeholder only
-4. **User Authentication:** Now correctly uses actual user auth UUID for created_by field
+4. **User Authentication:** Uses profile UUID from useClassProfiles() for created_by field
 5. **Checkbox Implementation:** Uses custom layered approach with separate background and control elements for precise styling control
 
 ### Missing Features

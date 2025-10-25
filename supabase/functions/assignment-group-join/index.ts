@@ -1,8 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
+import * as Sentry from "npm:@sentry/deno";
 import { AssignmentGroupJoinRequest } from "../_shared/FunctionTypes.d.ts";
-import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import { enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
@@ -11,7 +12,6 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
 async function handleAssignmentGroupJoin(
   req: Request,
   scope: Sentry.Scope
@@ -87,13 +87,14 @@ async function handleAssignmentGroupJoin(
       )
       .eq("assignment_group_id", assignment_group_id);
     if (remaining_members) {
-      await syncRepoPermissions(
-        assignmentGroup.classes!.github_org!,
-        assignmentGroup.repositories[0].repository,
-        assignmentGroup.classes!.slug!,
-        remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
-        scope
-      );
+      await enqueueSyncRepoPermissions({
+        class_id: assignmentGroup.class_id,
+        course_slug: assignmentGroup.classes!.slug!,
+        org: assignmentGroup.classes!.github_org!,
+        repo: assignmentGroup.repositories[0].repository,
+        githubUsernames: remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        debug_id: `assignment-group-join-${assignment_group_id}`
+      });
     } else if (remaining_members_error) {
       console.log(remaining_members_error);
       throw new UserVisibleError("Failed to get remaining members");
@@ -105,6 +106,7 @@ async function handleAssignmentGroupJoin(
         is_active: false
       })
       .eq("assignment_id", assignmentGroup.assignment_id)
+      .eq("is_active", true)
       .eq("profile_id", enrollment.private_profile_id);
     if (deactivateError) {
       console.log(deactivateError);

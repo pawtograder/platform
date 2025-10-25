@@ -13,17 +13,22 @@ CREATE TYPE survey_status AS ENUM('draft', 'published', 'closed');
 
 -- Create surveys table
 CREATE TABLE surveys (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  class_id bigint NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
-  class_section_id bigint NOT NULL REFERENCES class_sections(id) ON DELETE CASCADE,
-  assigned_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT,
-  questions JSONB NOT NULL DEFAULT '[]'::jsonb,
-  status survey_status NOT NULL DEFAULT 'draft',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  version INTEGER NOT NULL DEFAULT 1
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    survey_id UUID NOT NULL DEFAULT gen_random_uuid(),
+    class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    class_section_id BIGINT REFERENCES class_sections(id) ON DELETE CASCADE,
+    created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    json TEXT NOT NULL DEFAULT '',
+    status survey_status NOT NULL DEFAULT 'draft',
+    allow_response_editing BOOLEAN NOT NULL DEFAULT FALSE,
+    due_date TIMESTAMPTZ DEFAULT NULL,
+    validation_errors TEXT DEFAULT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    version INTEGER NOT NULL DEFAULT 1
 );
 
 -- Create survey_templates table

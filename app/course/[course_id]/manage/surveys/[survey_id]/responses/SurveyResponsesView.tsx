@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 type SurveyResponse = {
   id: string;
   survey_id: string;
-  student_id: string; // User auth UUID (auth.uid())
+  student_id: string; // Foreign key to profiles
   answers: {
     satisfaction?: string;
     helpful_aspects?: string;

@@ -6,8 +6,9 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
-import { Box, Heading, Text } from "@chakra-ui/react";
+import { Box } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 
 type SurveyFormData = {
@@ -24,21 +25,9 @@ export default function NewSurveyPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const trackEvent = useTrackEvent();
-  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
 
-  // Get current user ID on mount
-  React.useEffect(() => {
-    const fetchUser = async () => {
-      const supabase = createClient();
-      const {
-        data: { user }
-      } = await supabase.auth.getUser();
-      if (user) {
-        setCurrentUserId(user.id);
-      }
-    };
-    fetchUser();
-  }, []);
+  // 🚨 THIS is where we're allowed to call hooks like useClassProfiles
+  const { private_profile_id } = useClassProfiles();
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "create" },
@@ -70,7 +59,6 @@ export default function NewSurveyPage() {
             .select("*")
             .eq("class_id", Number(course_id))
             .eq("status", "draft")
-            // Note: created_by is a text field used for auditing, filtered by class_id and status instead
             .order("created_at", { ascending: false })
             .limit(1)
             .single();
@@ -80,7 +68,7 @@ export default function NewSurveyPage() {
             reset({
               title: (data as any).title || "",
               description: (data as any).description || "",
-              json: (data as any).questions || "",
+              json: (data as any).json || "",
               status: "draft",
               due_date: (data as any).due_date || "",
               allow_response_editing: (data as any).allow_response_editing || false
@@ -107,208 +95,178 @@ export default function NewSurveyPage() {
     }
   }, [course_id, reset, searchParams]);
 
+  // -------- SAVE DRAFT ONLY --------
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
-      // This function saves as draft without validation - for back navigation
-      async function createDraft() {
+      const supabase = createClient();
+
+      const survey_id = crypto.randomUUID();
+
+      // Accept possibly invalid JSON for drafts
+      let jsonToStore = "";
+      if (values.json && (values.json as string).trim()) {
         try {
-          const supabase = createClient();
-          const survey_id = crypto.randomUUID();
-
-          // For drafts, we'll store the JSON as-is without validation
-          // If JSON is empty or invalid, we'll store it as empty string
-          let jsonToStore = "";
-          if (values.json && values.json.trim()) {
-            try {
-              JSON.parse(values.json as string);
-              jsonToStore = values.json as string;
-            } catch (error) {
-              // For drafts, store invalid JSON as-is (user can fix later)
-              jsonToStore = values.json as string;
-            }
-          }
-
-          const { data, error } = await supabase
-            .from("surveys" as any)
-            .insert({
-              survey_id: survey_id,
-              version: 1,
-              class_id: Number(course_id),
-              created_by: currentUserId || null, // Store user auth UUID for auditing
-              title: (values.title as string) || "Untitled Survey",
-              description: (values.description as string) || null,
-              questions: jsonToStore,
-              status: "draft",
-              created_at: new Date().toISOString(),
-              allow_response_editing: values.allow_response_editing as boolean,
-              due_date: (values.due_date as string) || null,
-              validation_errors: null // No validation errors for draft saves
-            })
-            .select("id, survey_id")
-            .single();
-
-          if (error || !data) {
-            console.error("Draft save error:", error);
-            throw new Error(error?.message || "Failed to save draft");
-          }
-
-          trackEvent("survey_created" as any, {
-            course_id: Number(course_id),
-            survey_id: (data as any).survey_id,
-            status: "draft",
-            has_due_date: !!values.due_date,
-            allow_response_editing: values.allow_response_editing
-          });
-
-          // Only show success toast and redirect if shouldRedirect is true
-          if (shouldRedirect) {
-            // Show success toast
-            toaster.create({
-              title: "Draft Saved",
-              description: "Your survey has been saved as a draft.",
-              type: "success"
-            });
-
-            // Redirect to manage surveys page
-            router.push(`/course/${course_id}/manage/surveys`);
-          }
-          // If shouldRedirect is false, we don't show any toast (used for preview auto-save)
-        } catch (error) {
-          throw error;
+          JSON.parse(values.json as string); // just a check
+          jsonToStore = values.json as string;
+        } catch {
+          jsonToStore = values.json as string; // keep raw
         }
       }
-      await createDraft();
-    },
-    [course_id, trackEvent, router]
-  );
 
-  const onSubmit = useCallback(
-    async (values: FieldValues) => {
-      async function create() {
-        // Show loading toast before starting the process
-        const loadingToast = toaster.create({
-          title: "Creating Survey",
-          description: "Saving your survey configuration...",
-          type: "loading"
+      const insertPayload = {
+        survey_id,
+        version: 1,
+        class_id: Number(course_id),
+        created_by: private_profile_id, // ✅ profile UUID, not auth.user.id
+        title: (values.title as string) || "Untitled Survey",
+        description: (values.description as string) || null,
+        json: jsonToStore,
+        status: "draft",
+        created_at: new Date().toISOString(),
+        allow_response_editing: values.allow_response_editing as boolean,
+        due_date: (values.due_date as string) || null,
+        validation_errors: null
+      };
+
+      console.log("[saveDraftOnly] inserting survey payload =", insertPayload);
+
+      const { data, error } = await supabase
+        .from("surveys" as any)
+        .insert(insertPayload)
+        .select("id, survey_id")
+        .single();
+
+      if (error || !data) {
+        console.error("[saveDraftOnly] insert error:", error);
+        toaster.error({
+          title: "Error saving draft",
+          description: error?.message || "Failed to save draft"
+        });
+        throw new Error(error?.message || "Failed to save draft");
+      }
+
+      trackEvent("survey_created" as any, {
+        course_id: Number(course_id),
+        survey_id: (data as any).survey_id,
+        status: "draft",
+        has_due_date: !!values.due_date,
+        allow_response_editing: values.allow_response_editing
+      });
+
+      // Only show success toast and redirect if shouldRedirect is true
+      if (shouldRedirect) {
+        toaster.create({
+          title: "Draft Saved",
+          description: "Your survey has been saved as a draft.",
+          type: "success"
         });
 
+        router.push(`/course/${course_id}/manage/surveys`);
+      }
+      // If shouldRedirect is false, we don't show any toast (used for preview auto-save)
+    },
+    [course_id, private_profile_id, router, trackEvent]
+  );
+
+  // -------- FULL SUBMIT (PUBLISH OR DRAFT WITH VALIDATION) --------
+  const onSubmit = useCallback(
+    async (values: FieldValues) => {
+      const supabase = createClient();
+
+      // toast: loading
+      const loadingToast = toaster.create({
+        title: "Creating Survey",
+        description: "Saving your survey configuration...",
+        type: "loading"
+      });
+
+      try {
+        const survey_id = crypto.randomUUID();
+
+        // Validate JSON if they're trying to publish
+        let parsedJson: any;
+        let validationErrors: string | null = null;
         try {
-          const supabase = createClient();
+          parsedJson = JSON.parse(values.json as string);
+        } catch (err) {
+          validationErrors = `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`;
+          parsedJson = values.json as string; // keep raw
+        }
 
-          // Generate new survey_id using crypto.randomUUID()
-          const survey_id = crypto.randomUUID();
+        const insertPayload = {
+          survey_id,
+          version: 1,
+          class_id: Number(course_id),
+          created_by: private_profile_id, // ✅ correct identity
+          title: values.title as string,
+          description: (values.description as string) || null,
+          json: parsedJson,
+          status: validationErrors ? "draft" : (values.status as string), // force draft on error
+          created_at: new Date().toISOString(),
+          allow_response_editing: values.allow_response_editing as boolean,
+          due_date: (values.due_date as string) || null,
+          validation_errors: validationErrors
+        };
 
-          // Parse the JSON to ensure it's valid (only for active creation)
-          let parsedJson;
-          let validationErrors = null;
-          try {
-            parsedJson = JSON.parse(values.json as string);
-          } catch (error) {
-            // Instead of throwing, create a draft with validation errors
-            validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
-            parsedJson = values.json as string; // Store the invalid JSON as-is
-          }
+        console.log("[onSubmit] inserting survey payload =", insertPayload);
 
-          // Insert into surveys table
-          const { data, error } = await supabase
-            .from("surveys" as any)
-            .insert({
-              survey_id: survey_id,
-              version: 1,
-              class_id: Number(course_id),
-              created_by: currentUserId || null, // Store user auth UUID for auditing
-              title: values.title as string,
-              description: (values.description as string) || null,
-              questions: parsedJson,
-              status: validationErrors ? "draft" : (values.status as string), // Force to draft if validation errors
-              created_at: new Date().toISOString(),
-              allow_response_editing: values.allow_response_editing as boolean,
-              due_date: (values.due_date as string) || null,
-              validation_errors: validationErrors
-            })
-            .select("id, survey_id")
-            .single();
+        const { data, error } = await supabase
+          .from("surveys" as any)
+          .insert(insertPayload)
+          .select("id, survey_id")
+          .single();
 
-          if (error || !data) {
-            // If database error, try to save as draft with error flag
-            try {
-              const fallbackData = await supabase
-                .from("surveys" as any)
-                .insert({
-                  survey_id: survey_id,
-                  version: 1,
-                  class_id: Number(course_id),
-                  created_by: currentUserId || null,
-                  title: values.title as string,
-                  description: (values.description as string) || null,
-                  questions: values.json as string,
-                  status: "draft",
-                  created_at: new Date().toISOString(),
-                  allow_response_editing: values.allow_response_editing as boolean,
-                  due_date: (values.due_date as string) || null,
-                  validation_errors: `Database error: ${error?.message || "Unknown error"}`
-                })
-                .select("id, survey_id")
-                .single();
+        if (error || !data) {
+          console.error("[onSubmit] insert error:", error);
+          throw new Error(error.message || "Failed to save survey");
+        }
 
-              if (fallbackData.error) {
-                throw new Error(fallbackData.error.message);
-              }
-            } catch (fallbackError) {
-              throw new Error(`Failed to save survey: ${error?.message || "Unknown error"}`);
-            }
-            return;
-          }
+        // Track analytics
+        trackEvent("survey_created" as any, {
+          course_id: Number(course_id),
+          survey_id: (data as any).survey_id,
+          status: validationErrors ? "draft" : values.status,
+          has_due_date: !!values.due_date,
+          allow_response_editing: values.allow_response_editing,
+          has_validation_errors: !!validationErrors
+        });
 
-          // Track survey creation
-          trackEvent("survey_created" as any, {
-            course_id: Number(course_id),
-            survey_id: (data as any).survey_id,
-            status: validationErrors ? "draft" : values.status,
-            has_due_date: !!values.due_date,
-            allow_response_editing: values.allow_response_editing,
-            has_validation_errors: !!validationErrors
+        // Kill loading toast
+        toaster.dismiss(loadingToast);
+
+        // Show user-facing toast
+        if (validationErrors) {
+          toaster.create({
+            title: "Survey Saved as Draft",
+            description: "Your survey was saved as a draft due to validation issues. Please review and fix the errors.",
+            type: "warning"
           });
-
-          // Dismiss loading toast and show success
-          toaster.dismiss(loadingToast);
-
-          // Show appropriate success message
-          if (validationErrors) {
-            toaster.create({
-              title: "Survey Saved as Draft",
-              description:
-                "Your survey was saved as a draft due to validation issues. Please review and fix the errors.",
-              type: "warning"
-            });
-          } else if (values.status === "draft") {
-            toaster.create({
-              title: "Draft Saved",
-              description: "Your survey has been saved as a draft.",
-              type: "success"
-            });
-          } else {
-            toaster.create({
-              title: "Survey Published",
-              description: "Your survey has been published and is now available to students.",
-              type: "success"
-            });
-          }
-
-          // Redirect to manage surveys page
-          router.push(`/course/${course_id}/manage/surveys`);
-        } catch (error) {
-          // Dismiss loading toast and show error
-          toaster.dismiss(loadingToast);
-          toaster.error({
-            title: "Error creating survey",
-            description: error instanceof Error ? error.message : "An unexpected error occurred"
+        } else if (values.status === "draft") {
+          toaster.create({
+            title: "Draft Saved",
+            description: "Your survey has been saved as a draft.",
+            type: "success"
+          });
+        } else {
+          toaster.create({
+            title: "Survey Published",
+            description: "Your survey has been published and is now available to students.",
+            type: "success"
           });
         }
+
+        // Redirect
+        router.push(`/course/${course_id}/manage/surveys`);
+      } catch (err: any) {
+        console.error("[onSubmit] final error:", err);
+        toaster.dismiss(loadingToast);
+        toaster.error({
+          title: "Error creating survey",
+          description: err instanceof Error ? err.message : "An unexpected error occurred"
+        });
       }
-      await create();
     },
-    [course_id, router, trackEvent]
+    [course_id, private_profile_id, router, trackEvent]
   );
 
   return (

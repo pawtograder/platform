@@ -1440,3 +1440,53 @@ export async function isUserInOrg(github_username: string, org: string) {
     throw error;
   }
 }
+
+export async function enqueueSyncRepoPermissions({
+  class_id,
+  course_slug,
+  org,
+  repo,
+  githubUsernames,
+  debug_id
+}: {
+  class_id: number;
+  course_slug: string;
+  org: string;
+  repo: string;
+  githubUsernames: string[];
+  debug_id?: string;
+}) {
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+  const { data, error } = await adminSupabase.rpc("enqueue_github_sync_repo_permissions", {
+    p_class_id: class_id,
+    p_org: org,
+    p_repo: repo,
+    p_course_slug: course_slug,
+    p_github_usernames: githubUsernames,
+    p_debug_id: debug_id
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new Error("Failed to enqueue sync repo permissions");
+  }
+  return data;
+}
+export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string) {
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+  const { data, error } = await adminSupabase.rpc("enqueue_github_archive_repo", {
+    p_class_id: class_id,
+    p_org: org,
+    p_repo: repo
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new Error("Failed to enqueue github archive repo");
+  }
+  return data;
+}
