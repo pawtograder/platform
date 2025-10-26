@@ -137,3 +137,82 @@ COMMENT ON TRIGGER grader_result_tests_recalculate_submission_review_insert ON p
 COMMENT ON TRIGGER grader_result_tests_recalculate_submission_review_update ON public.grader_result_tests IS 
 'Recalculates submission review scores after updating test results. Runs once per statement rather than per row for better performance.';
 
+
+CREATE INDEX IF NOT EXISTS idx_help_requests_class_privacy_status
+ON public.help_requests (class_id, is_private, status)
+INCLUDE (id, assignee, created_by, help_queue);
+
+-- Fix 2: Add index for assignee/creator lookups in RLS
+CREATE INDEX IF NOT EXISTS idx_help_requests_class_assignee
+ON public.help_requests (class_id, assignee)
+WHERE assignee IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_help_requests_class_creator
+ON public.help_requests (class_id, created_by)
+WHERE created_by IS NOT NULL;
+
+
+-- ============================================================================
+-- OPTIMIZE HELP_REQUESTS SELECT POLICY
+-- ============================================================================
+DROP POLICY IF EXISTS "Students can view help requests in their class with creator acc" ON "public"."help_requests";
+
+-- Create optimized policy that short-circuits for common cases
+-- Avoids unnecessary joins to help_request_students for most queries
+CREATE POLICY "Students can view help requests in their class with creator acc"
+ON "public"."help_requests"
+FOR SELECT
+TO "authenticated"
+USING (
+  -- Path 1: Instructors/graders see all in their classes (most efficient, no further checks)
+  EXISTS (
+    SELECT 1
+    FROM "public"."user_privileges" "up"
+    WHERE "up"."user_id" = "auth"."uid"()
+      AND "up"."class_id" = "help_requests"."class_id"
+      AND "up"."role" IN ('instructor', 'grader', 'admin')
+  )
+  OR
+  -- Path 2: Students see non-private requests in their classes
+  (
+    NOT "help_requests"."is_private"
+    AND EXISTS (
+      SELECT 1
+      FROM "public"."user_privileges" "up"
+      WHERE "up"."user_id" = "auth"."uid"()
+        AND "up"."class_id" = "help_requests"."class_id"
+        AND "up"."role" = 'student'
+    )
+  )
+  OR
+  -- Path 3: Students see private requests they created
+  (
+    "help_requests"."is_private"
+    AND EXISTS (
+      SELECT 1
+      FROM "public"."user_privileges" "up"
+      WHERE "up"."user_id" = "auth"."uid"()
+        AND "up"."class_id" = "help_requests"."class_id"
+        AND "up"."role" = 'student'
+        AND "help_requests"."created_by" = "up"."private_profile_id"
+    )
+  )
+  OR
+  -- Path 4: Students see private requests they're members of (only checked as last resort)
+  (
+    "help_requests"."is_private"
+    AND EXISTS (
+      SELECT 1
+      FROM "public"."user_privileges" "up"
+      WHERE "up"."user_id" = "auth"."uid"()
+        AND "up"."class_id" = "help_requests"."class_id"
+        AND "up"."role" = 'student'
+        AND EXISTS (
+          SELECT 1
+          FROM "public"."help_request_students" "hrs"
+          WHERE "hrs"."help_request_id" = "help_requests"."id"
+            AND "hrs"."profile_id" = "up"."private_profile_id"
+        )
+    )
+  )
+);

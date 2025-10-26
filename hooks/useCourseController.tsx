@@ -409,7 +409,9 @@ export class CourseController {
     // Create profiles and userRolesWithProfiles immediately
     // These are accessed frequently and should be ready
     void this.profiles; // Triggers lazy creation
-    void this.userRolesWithProfiles; // Triggers lazy creation
+    if (this.isStaff) {
+      void this.userRolesWithProfiles; // Triggers lazy creation
+    }
     // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
     void this.assignmentDueDateExceptions; // Triggers lazy creation
     void this.studentDeadlineExtensions; // Triggers lazy creation
@@ -560,16 +562,21 @@ export class CourseController {
 
   get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
     if (!this._userRolesWithProfiles) {
+      let query = this.client
+        .from("user_roles")
+        .select("*, profiles!private_profile_id(*), users(*)")
+        .eq("class_id", this.courseId);
+      if (!this.isStaff) {
+        query = query.eq("user_id", this._userId);
+      }
       this._userRolesWithProfiles = new TableController({
         client: this.client,
         table: "user_roles",
-        query: this.client
-          .from("user_roles")
-          .select("*, profiles!private_profile_id(*), users(*)")
-          .eq("class_id", this.courseId),
+        query,
         selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.userRolesWithProfiles
+        initialData: this._initialData?.userRolesWithProfiles,
+        autoFetchMissingRows: this.isStaff
       });
     }
     return this._userRolesWithProfiles;
@@ -577,10 +584,17 @@ export class CourseController {
 
   get studentDeadlineExtensions(): TableController<"student_deadline_extensions"> {
     if (!this._studentDeadlineExtensions) {
+      let query = this.client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId);
+      if (!this.isStaff) {
+        const profileId = this.classRealTimeController.profileId;
+        if (profileId) {
+          query = query.or(`student_id.eq.${profileId}`);
+        }
+      }
       this._studentDeadlineExtensions = new TableController({
         client: this.client,
         table: "student_deadline_extensions",
-        query: this.client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId),
+        query,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.studentDeadlineExtensions
       });
@@ -590,10 +604,20 @@ export class CourseController {
 
   get assignmentDueDateExceptions(): TableController<"assignment_due_date_exceptions"> {
     if (!this._assignmentDueDateExceptions) {
+      let query = this.client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId);
+      if (!this.isStaff) {
+        // For students, filter to only their exceptions by joining with user_roles
+        // Match: student_id matches their private_profile_id OR assignment_group_id for a group they're in
+        const profileId = this.classRealTimeController.profileId;
+        if (profileId) {
+          // Filter by student_id matching profile OR assignment_group_id (RLS will filter groups)
+          query = query.or(`student_id.eq.${profileId},assignment_group_id.not.is.null`);
+        }
+      }
       this._assignmentDueDateExceptions = new TableController({
         client: this.client,
         table: "assignment_due_date_exceptions",
-        query: this.client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId),
+        query,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.assignmentDueDateExceptions
       });
@@ -638,10 +662,31 @@ export class CourseController {
 
   get repositories(): TableController<"repositories"> {
     if (!this._repositories) {
+      let query = this.client.from("repositories").select("*");
+
+      if (this.isStaff) {
+        // Staff can see all repositories for the class
+        query = query.eq("class_id", this.courseId);
+      } else {
+        // Students: apply RLS restrictions to reduce data transfer
+        // RLS allows viewing repos where:
+        // 1. profile_id matches student's private_profile_id or public_profile_id
+        // 2. OR assignment_group_id is set and student is a member
+        // We filter by class_id and profile_id for individual repos,
+        // and include assignment_group_id not null for group repos.
+        const profileId = this.classRealTimeController.profileId;
+        if (profileId) {
+          query = query.eq("class_id", this.courseId).or(`profile_id.eq.${profileId},assignment_group_id.not.is.null`);
+        } else {
+          // Fallback: just filter by class_id if profileId is not available
+          query = query.eq("class_id", this.courseId);
+        }
+      }
+
       this._repositories = new TableController({
         client: this.client,
         table: "repositories",
-        query: this.client.from("repositories").select("*").eq("class_id", this.courseId),
+        query,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.repositories
       });
