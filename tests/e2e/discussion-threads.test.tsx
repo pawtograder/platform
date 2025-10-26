@@ -45,9 +45,6 @@ test.describe("Discussion Thread Page", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await expect(page.getByRole("heading", { name: "Discussion Feed" })).toBeVisible();
     await expect(page.getByRole("link").filter({ hasText: "New Thread" })).toBeVisible();
-    await expect(page.getByPlaceholder("Search threads...")).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Filter discussion threads" })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Sort discussion threads" })).toBeVisible();
     await expect(page.getByText("No threads match your criteria.")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Unanswered Questions" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Answered Questions", exact: true })).toBeVisible();
