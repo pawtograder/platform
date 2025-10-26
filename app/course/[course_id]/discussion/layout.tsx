@@ -1,30 +1,72 @@
 "use client";
 
 import { Box, Flex } from "@chakra-ui/react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import DiscussionThreadList from "./DiscussionThreadList";
 
 const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>) => {
   const [listWidth, setListWidth] = useState(450);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = listWidth;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = Math.max(300, Math.min(800, startWidth + (e.clientX - startX)));
-      setListWidth(newWidth);
+  // Cleanup effect - removes listeners if component unmounts during drag
+  useEffect(() => {
+    return () => {
+      if (cleanupRef.current) {
+        cleanupRef.current();
+        cleanupRef.current = null;
+      }
     };
+  }, []);
 
-    const handleMouseUp = () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = listWidth;
 
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  };
+      const handleMouseMove = (e: MouseEvent) => {
+        const newWidth = Math.max(300, Math.min(800, startWidth + (e.clientX - startX)));
+        setListWidth(newWidth);
+      };
+
+      const handleMouseUp = () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        cleanupRef.current = null;
+      };
+
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+
+      // Store cleanup function in ref so it can be called on unmount
+      cleanupRef.current = () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+      };
+    },
+    [listWidth]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = e.shiftKey ? 50 : 10; // Larger steps with Shift key
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setListWidth((prev) => Math.max(300, prev - step));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setListWidth((prev) => Math.min(800, prev + step));
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        setListWidth(300); // Min width
+      } else if (e.key === "End") {
+        e.preventDefault();
+        setListWidth(800); // Max width
+      }
+    },
+    []
+  );
 
   return (
     <Box height="100dvh" overflow="hidden">
@@ -51,11 +93,26 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
           cursor="ew-resize"
           bg="transparent"
           _hover={{ bg: "blue.500" }}
+          _focusVisible={{
+            bg: "blue.600",
+            outline: "2px solid",
+            outlineColor: "blue.500",
+            outlineOffset: "2px"
+          }}
           transition="background 0.2s"
           height="100%"
           position="relative"
           onMouseDown={handleMouseDown}
+          onKeyDown={handleKeyDown}
           userSelect="none"
+          tabIndex={0}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize discussion panel"
+          aria-valuenow={listWidth}
+          aria-valuemin={300}
+          aria-valuemax={800}
+          aria-valuetext={`Discussion panel width: ${listWidth} pixels`}
         />
 
         {/* Main Content */}
