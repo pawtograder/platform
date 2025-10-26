@@ -23,7 +23,7 @@ type Survey = {
   id: string;
   title: string;
   description?: string;
-  questions: any;
+  json: any;
   due_date?: string;
   allow_response_editing: boolean;
   status: "draft" | "published" | "closed";
@@ -298,7 +298,7 @@ export default function SurveyTakingPage() {
         {/* Survey */}
         <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
           <SurveyComponent
-            surveyJson={survey.questions}
+            surveyJson={survey.json}
             onComplete={handleSurveyComplete}
             onValueChanged={handleValueChanged}
             isPopup={false}

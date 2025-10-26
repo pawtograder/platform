@@ -53,39 +53,76 @@ export default function StudentSurveysPage() {
             description: "Please log in to view surveys.",
             type: "error"
           });
+          setIsLoading(false);
           return;
         }
 
-        // Get published surveys for this course
+        // Resolve this user's class-specific profile (private_profile_id) for this course
+        const { data: roleDataRaw, error: roleError } = await supabase
+          .from("user_roles" as any)
+          .select("private_profile_id")
+          .eq("user_id", user.id)
+          .eq("class_id", Number(course_id))
+          .eq("role", "student")
+          .eq("disabled", false)
+          .single();
+
+        // Tell TypeScript what we actually expect from that query
+        const roleData = roleDataRaw as { private_profile_id: string } | null;
+
+        if (roleError || !roleData || !roleData.private_profile_id) {
+          toaster.create({
+            title: "Access Error",
+            description: "We couldn't find your course profile.",
+            type: "error"
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        const profileId = roleData.private_profile_id;
+
+        // Get published surveys for this course (and not soft-deleted)
         const { data: surveysData, error: surveysError } = await supabase
           .from("surveys" as any)
           .select("*")
           .eq("class_id", Number(course_id))
           .eq("status", "published")
+          .is("deleted_at", null)
           .order("created_at", { ascending: false });
 
         if (surveysError) {
           throw surveysError;
         }
 
-        // Get responses for current user (student_id stores the user's auth UUID)
+        // If there are no surveys, just finish early
+        if (!surveysData || surveysData.length === 0) {
+          setSurveys([]);
+          setIsLoading(false);
+          return;
+        }
+
+        // Get this profile's responses for those surveys
         const { data: responsesData, error: responsesError } = await supabase
           .from("survey_responses" as any)
           .select("*")
-          .eq("student_id", user.id)
-          .in("survey_id", surveysData?.map((s: any) => s.id) || []);
+          .eq("profile_id", profileId)
+          .in(
+            "survey_id",
+            surveysData.map((s: any) => s.id)
+          );
 
         if (responsesError) {
           throw responsesError;
         }
 
-        // Combine surveys with response status
-        const surveysWithResponse: SurveyWithResponse[] = (surveysData || []).map((survey: any) => {
+        // Merge surveys with the current profile's response status
+        const surveysWithResponse: SurveyWithResponse[] = surveysData.map((survey: any) => {
           const response = responsesData?.find((r: any) => r.survey_id === survey.id);
 
           let response_status: "not_started" | "in_progress" | "completed" = "not_started";
           if (response) {
-            if ((response as any).is_submitted) {
+            if (response.is_submitted) {
               response_status = "completed";
             } else {
               response_status = "in_progress";
@@ -95,8 +132,8 @@ export default function StudentSurveysPage() {
           return {
             ...survey,
             response_status,
-            submitted_at: (response as any)?.submitted_at,
-            is_submitted: (response as any)?.is_submitted
+            submitted_at: response?.submitted_at,
+            is_submitted: response?.is_submitted
           };
         });
 
@@ -243,8 +280,8 @@ export default function StudentSurveysPage() {
                       {survey.response_status === "completed"
                         ? "View Response"
                         : survey.response_status === "in_progress"
-                          ? "Continue Survey"
-                          : "Start Survey"}
+                        ? "Continue Survey"
+                        : "Start Survey"}
                     </Button>
                   </Link>
                 </HStack>
