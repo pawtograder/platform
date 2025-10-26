@@ -3,8 +3,8 @@
 import { useParams } from "next/navigation";
 
 import Markdown from "@/components/ui/markdown";
+import { MenuContent, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
@@ -13,9 +13,7 @@ import {
   useDiscussionTopics,
   useRootDiscussionThreadReadStatuses
 } from "@/hooks/useCourseController";
-import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
-  Avatar,
   Badge,
   Box,
   Button,
@@ -36,8 +34,8 @@ import {
 import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
-import { Fragment, useId, useMemo, useState } from "react";
-import { FaPlus, FaThumbsUp, FaThumbtack } from "react-icons/fa";
+import { Fragment, useMemo, useState } from "react";
+import { FaFilter, FaPlus, FaThumbsUp, FaThumbtack } from "react-icons/fa";
 
 interface Props {
   thread_id: number;
@@ -47,7 +45,6 @@ interface Props {
 
 export const DiscussionThreadTeaser = (props: Props) => {
   const thread = useDiscussionThreadTeaser(props.thread_id);
-  const avatarTriggerId = useId();
   const { root_id } = useParams();
   const selected = root_id ? props.thread_id === Number.parseInt(root_id as string) : false;
   const is_answered = thread?.answer != undefined;
@@ -57,7 +54,6 @@ export const DiscussionThreadTeaser = (props: Props) => {
   const numReadDescendants = useMemo(() => {
     return childrenReadStatuses?.filter((status) => status.read_at != null).length ?? 0;
   }, [childrenReadStatuses]);
-  const userProfile = useUserProfile(thread?.author);
   const isUnread = readStatus === null || readStatus?.read_at === null;
   return (
     <Box position="relative" width={props.width || "100%"}>
@@ -75,14 +71,6 @@ export const DiscussionThreadTeaser = (props: Props) => {
           width="100%"
           bg={isUnread ? "bg.info" : selected ? "bg.muted" : ""}
         >
-          <Box pt="1">
-            <Tooltip ids={{ trigger: avatarTriggerId }} openDelay={0} showArrow content={userProfile?.name}>
-              <Avatar.Root size="xs">
-                <Avatar.Image id={avatarTriggerId} src={userProfile?.avatar_url} />
-                <Avatar.Fallback id={avatarTriggerId}>{userProfile?.name?.charAt(0) || "?"}</Avatar.Fallback>
-              </Avatar.Root>
-            </Tooltip>
-          </Box>
           <Stack spaceY="0" fontSize="sm" flex="1" truncate>
             <HStack>
               {thread?.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="3" />}
@@ -260,88 +248,102 @@ export default function DiscussionThreadList() {
     return createListCollection({ items });
   }, []);
 
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
   return (
     <Flex width={"100%"} maxHeight={"100vh"} direction="column" overflow="hidden">
       <Box p="4" w="100%" flexShrink={0}>
         <Heading size="md" mb="2">
           Discussion Feed
         </Heading>
-        <Button asChild size="sm" variant="surface" colorPalette="green" mb="4" width="100%">
-          <NextLink href={`/course/${course_id}/discussion/new`}>
-            <Icon as={FaPlus} mr="1" />
-            New Thread
-          </NextLink>
-        </Button>
+        <HStack mb="4" gap="2">
+          <Button asChild size="sm" variant="surface" colorPalette="green" flex="1">
+            <NextLink href={`/course/${course_id}/discussion/new`}>
+              <Icon as={FaPlus} mr="1" />
+              New Thread
+            </NextLink>
+          </Button>
+          <MenuRoot open={isFilterOpen} onOpenChange={(e) => setIsFilterOpen(e.open)}>
+            <MenuTrigger asChild>
+              <Button size="sm" variant="outline" colorPalette="gray">
+                <Icon as={FaFilter} />
+              </Button>
+            </MenuTrigger>
+            <MenuContent minWidth="300px">
+              <Box p="3">
+                <VStack align="stretch" gap="3">
+                  <Input
+                    placeholder="Search threads..."
+                    value={searchTerm}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
+                    size="sm"
+                  />
+                  <Select.Root
+                    collection={filterCollection}
+                    size="sm"
+                    value={filterOption ? [filterOption] : []}
+                    onValueChange={(details) => setFilterOption(details.value[0] || "all")}
+                    width="100%"
+                  >
+                    <Select.Label display="none">Filter discussion threads</Select.Label>
+                    <Select.Control>
+                      <Select.Trigger>
+                        <Select.ValueText placeholder="Filter by..." />
+                      </Select.Trigger>
+                      <Select.IndicatorGroup>
+                        <Select.Indicator />
+                      </Select.IndicatorGroup>
+                    </Select.Control>
+                    <Portal>
+                      <Select.Positioner>
+                        <Select.Content>
+                          {filterCollection.items.map((item) => (
+                            <Select.Item key={item.value} item={item}>
+                              {item.label}
+                              <Select.ItemIndicator />
+                            </Select.Item>
+                          ))}
+                        </Select.Content>
+                      </Select.Positioner>
+                    </Portal>
+                    <Select.HiddenSelect aria-label="Filter discussion threads" />
+                  </Select.Root>
 
-        <VStack mb="4" align="stretch">
-          <Input
-            placeholder="Search threads..."
-            value={searchTerm}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
-            size="sm"
-          />
-          <Select.Root
-            collection={filterCollection}
-            size="sm"
-            value={filterOption ? [filterOption] : []}
-            onValueChange={(details) => setFilterOption(details.value[0] || "all")}
-            width="100%"
-          >
-            <Select.Label display="none">Filter discussion threads</Select.Label>
-            <Select.Control>
-              <Select.Trigger>
-                <Select.ValueText placeholder="Filter by..." />
-              </Select.Trigger>
-              <Select.IndicatorGroup>
-                <Select.Indicator />
-              </Select.IndicatorGroup>
-            </Select.Control>
-            <Portal>
-              <Select.Positioner>
-                <Select.Content>
-                  {filterCollection.items.map((item) => (
-                    <Select.Item key={item.value} item={item}>
-                      {item.label}
-                      <Select.ItemIndicator />
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Positioner>
-            </Portal>
-            <Select.HiddenSelect aria-label="Filter discussion threads" />
-          </Select.Root>
-
-          <Select.Root
-            collection={sortCollection}
-            size="sm"
-            value={sortOption ? [sortOption] : []}
-            onValueChange={(details) => setSortOption(details.value[0] || "newest")}
-            width="100%"
-          >
-            <Select.Label display="none">Sort discussion threads</Select.Label>
-            <Select.Control>
-              <Select.Trigger>
-                <Select.ValueText placeholder="Sort by..." />
-              </Select.Trigger>
-              <Select.IndicatorGroup>
-                <Select.Indicator />
-              </Select.IndicatorGroup>
-            </Select.Control>
-            <Portal>
-              <Select.Positioner>
-                <Select.Content>
-                  {sortCollection.items.map((item) => (
-                    <Select.Item key={item.value} item={item}>
-                      {item.label}
-                      <Select.ItemIndicator />
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Positioner>
-            </Portal>
-            <Select.HiddenSelect aria-label="Sort discussion threads" />
-          </Select.Root>
-        </VStack>
+                  <Select.Root
+                    collection={sortCollection}
+                    size="sm"
+                    value={sortOption ? [sortOption] : []}
+                    onValueChange={(details) => setSortOption(details.value[0] || "newest")}
+                    width="100%"
+                  >
+                    <Select.Label display="none">Sort discussion threads</Select.Label>
+                    <Select.Control>
+                      <Select.Trigger>
+                        <Select.ValueText placeholder="Sort by..." />
+                      </Select.Trigger>
+                      <Select.IndicatorGroup>
+                        <Select.Indicator />
+                      </Select.IndicatorGroup>
+                    </Select.Control>
+                    <Portal>
+                      <Select.Positioner>
+                        <Select.Content>
+                          {sortCollection.items.map((item) => (
+                            <Select.Item key={item.value} item={item}>
+                              {item.label}
+                              <Select.ItemIndicator />
+                            </Select.Item>
+                          ))}
+                        </Select.Content>
+                      </Select.Positioner>
+                    </Portal>
+                    <Select.HiddenSelect aria-label="Sort discussion threads" />
+                  </Select.Root>
+                </VStack>
+              </Box>
+            </MenuContent>
+          </MenuRoot>
+        </HStack>
       </Box>
 
       <Box width="100%" flex={1} overflowY="auto" pr="4" minHeight={0}>
