@@ -371,7 +371,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
 
                     // Allow intermediate states: "-", "+", ".", "-.", "+.", and valid numbers
                     // This matches: optional +/-, optional digits, optional decimal, optional more digits
-                    if (/^[+-]?\.?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
+                    if (/^[+-]?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
                       setPointsAdjustment(inputValue);
                     }
                   }}
@@ -665,7 +665,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
 
                     // Allow intermediate states: "-", "+", ".", "-.", "+.", and valid numbers
                     // This matches: optional +/-, optional digits, optional decimal, optional more digits
-                    if (/^[+-]?\.?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
+                    if (/^[+-]?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
                       setPointsAdjustment(inputValue);
                     }
                   }}
