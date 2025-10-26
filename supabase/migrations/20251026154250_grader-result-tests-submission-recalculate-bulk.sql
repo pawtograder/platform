@@ -112,18 +112,28 @@ $$;
 -- Drop the old per-row trigger
 DROP TRIGGER IF EXISTS grader_result_tests_recalculate_submission_review ON public.grader_result_tests;
 
--- Create the new per-statement trigger
--- Uses REFERENCING NEW TABLE to access all inserted/updated rows
-CREATE TRIGGER grader_result_tests_recalculate_submission_review 
-  AFTER INSERT OR UPDATE ON public.grader_result_tests
+-- Create separate per-statement triggers for INSERT and UPDATE
+-- PostgreSQL requires separate triggers when using REFERENCING NEW TABLE with multiple events
+
+CREATE TRIGGER grader_result_tests_recalculate_submission_review_insert
+  AFTER INSERT ON public.grader_result_tests
   REFERENCING NEW TABLE AS new_table
   FOR EACH STATEMENT 
   EXECUTE FUNCTION public.submissionreviewrecompute_bulk_grader_tests();
 
--- Add comment
+CREATE TRIGGER grader_result_tests_recalculate_submission_review_update
+  AFTER UPDATE ON public.grader_result_tests
+  REFERENCING NEW TABLE AS new_table
+  FOR EACH STATEMENT 
+  EXECUTE FUNCTION public.submissionreviewrecompute_bulk_grader_tests();
+
+-- Add comments
 COMMENT ON FUNCTION public.submissionreviewrecompute_bulk_grader_tests() IS 
 'Statement-level trigger function that recalculates submission review scores for all affected submissions in a single statement. This prevents redundant recalculations when inserting multiple test results.';
 
-COMMENT ON TRIGGER grader_result_tests_recalculate_submission_review ON public.grader_result_tests IS 
-'Recalculates submission review scores after inserting/updating test results. Runs once per statement rather than per row for better performance.';
+COMMENT ON TRIGGER grader_result_tests_recalculate_submission_review_insert ON public.grader_result_tests IS 
+'Recalculates submission review scores after inserting test results. Runs once per statement rather than per row for better performance.';
+
+COMMENT ON TRIGGER grader_result_tests_recalculate_submission_review_update ON public.grader_result_tests IS 
+'Recalculates submission review scores after updating test results. Runs once per statement rather than per row for better performance.';
 
