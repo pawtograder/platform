@@ -178,6 +178,13 @@ export type SubmissionFileWithComments = GetResult<
   Database["public"]["Tables"]["submission_files"]["Relationships"],
   "*, submission_file_comments(*, profiles(*))"
 >;
+export type SubmissionRegradeRequest = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["submission_regrade_requests"]["Row"],
+  "submission_regrade_requests",
+  Database["public"]["Tables"]["submission_regrade_requests"]["Relationships"],
+  "*"
+>;
 export type SubmissionComments = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submission_comments"]["Row"],

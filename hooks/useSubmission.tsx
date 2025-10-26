@@ -436,12 +436,16 @@ export function useSubmissionRegradeRequestComments({
  * @param comment_id - The ID of the submission file comment to subscribe to
  * @returns The submission file comment object, or undefined if not found
  */
-export function useSubmissionFileComment(comment_id: number) {
+export function useSubmissionFileComment(comment_id: number | undefined | null) {
   const submissionController = useSubmissionController();
   const [comment, setComment] = useState<SubmissionFileComment | undefined>(
-    submissionController.submission_file_comments.getById(comment_id).data
+    comment_id ? submissionController.submission_file_comments.getById(comment_id).data : undefined
   );
   useEffect(() => {
+    if (comment_id === undefined || comment_id === null) {
+      setComment(undefined);
+      return;
+    }
     const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
       setComment(data);
     });
@@ -450,12 +454,16 @@ export function useSubmissionFileComment(comment_id: number) {
   }, [submissionController, comment_id]);
   return comment;
 }
-export function useSubmissionArtifactComment(comment_id: number) {
+export function useSubmissionArtifactComment(comment_id: number | undefined | null) {
   const submissionController = useSubmissionController();
   const [comment, setComment] = useState<SubmissionArtifactComment | undefined>(
-    submissionController.submission_artifact_comments.getById(comment_id).data
+    comment_id ? submissionController.submission_artifact_comments.getById(comment_id).data : undefined
   );
   useEffect(() => {
+    if (comment_id === undefined || comment_id === null) {
+      setComment(undefined);
+      return;
+    }
     const { unsubscribe, data } = submissionController.submission_artifact_comments.getById(comment_id, (data) => {
       setComment(data);
     });
@@ -464,12 +472,16 @@ export function useSubmissionArtifactComment(comment_id: number) {
   }, [submissionController, comment_id]);
   return comment;
 }
-export function useSubmissionComment(comment_id: number) {
+export function useSubmissionComment(comment_id: number | undefined | null) {
   const submissionController = useSubmissionController();
   const [comment, setComment] = useState<SubmissionComments | undefined>(
-    submissionController.submission_comments.getById(comment_id).data
+    comment_id ? submissionController.submission_comments.getById(comment_id).data : undefined
   );
   useEffect(() => {
+    if (comment_id === undefined || comment_id === null) {
+      setComment(undefined);
+      return;
+    }
     const { unsubscribe, data } = submissionController.submission_comments.getById(comment_id, (data) => {
       setComment(data);
     });
