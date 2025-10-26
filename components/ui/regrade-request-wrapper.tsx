@@ -431,12 +431,12 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                 )}
 
                 {wouldBeNegative && (
-                  <Box 
-                    mt={2} 
-                    p={2} 
-                    bg="red.50" 
-                    borderRadius="md" 
-                    borderWidth="1px" 
+                  <Box
+                    mt={2}
+                    p={2}
+                    bg="red.50"
+                    borderRadius="md"
+                    borderWidth="1px"
                     borderColor="red.200"
                     id="resolve-negative-score-warning"
                     role="alert"
@@ -775,12 +775,12 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                 )}
 
                 {wouldBeNegative && (
-                  <Box 
-                    mt={2} 
-                    p={2} 
-                    bg="red.50" 
-                    borderRadius="md" 
-                    borderWidth="1px" 
+                  <Box
+                    mt={2}
+                    p={2}
+                    bg="red.50"
+                    borderRadius="md"
+                    borderWidth="1px"
                     borderColor="red.200"
                     id="close-negative-score-warning"
                     role="alert"
