@@ -1392,14 +1392,7 @@ export async function createCheckRun(repo_full_name: string, sha: string, detail
       title: "Submission Status",
       summary: "Submission not created",
       text: "Code was received by GitHub, but has not been automatically submitted to Pawtograder."
-    },
-    actions: [
-      {
-        label: "Submit",
-        description: "Creates a submission for this commit",
-        identifier: "submit"
-      }
-    ]
+    }
   });
   return res.data;
 }
