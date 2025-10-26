@@ -602,10 +602,10 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   // Keep table in sync when related tables change in realtime
   useEffect(() => {
     if (!classRealTimeController || !tableController) return;
-    
+
     let isEffectActive = true;
     let debouncedRefetchTimeout: ReturnType<typeof setTimeout> | null = null;
-    
+
     const debouncedRefetch = () => {
       if (debouncedRefetchTimeout) {
         return;
