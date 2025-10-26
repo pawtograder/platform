@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DiscussionThreadList from "./DiscussionThreadList";
 
 const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>) => {
-  const [listWidth, setListWidth] = useState(450);
+  const [listWidth, setListWidth] = useState(320);
   const cleanupRef = useRef<(() => void) | null>(null);
 
   // Cleanup effect - removes listeners if component unmounts during drag
