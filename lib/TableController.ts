@@ -613,6 +613,8 @@ export default class TableController<
    * If false, never refetch on reconnection.
    */
   private _enableAutoRefetch: boolean | undefined;
+
+  private _autoFetchMissingRows: boolean = true;
   /** Debug ID for tracking controller instances in logs */
   readonly _debugID: string = Math.random().toString(36).substring(2, 15);
 
@@ -1311,7 +1313,8 @@ export default class TableController<
     debounceInterval,
     loadEntireTable = true,
     initialData,
-    enableAutoRefetch
+    enableAutoRefetch,
+    autoFetchMissingRows
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1341,6 +1344,12 @@ export default class TableController<
      * - false: Never auto-refetch on reconnection
      */
     enableAutoRefetch?: boolean;
+    /**
+     * Controls whether this table should auto-fetch missing rows.
+     * If true, auto-fetch missing rows on getById.
+     * If false, never auto-fetch missing rows on getById.
+     */
+    autoFetchMissingRows?: boolean;
   }) {
     this._rows = [];
     this._client = client;
@@ -1353,7 +1362,7 @@ export default class TableController<
     this._realtimeFilter = realtimeFilter || null;
     this._debounceInterval = debounceInterval || 500;
     this._enableAutoRefetch = enableAutoRefetch;
-
+    this._autoFetchMissingRows = autoFetchMissingRows ?? true;
     // Track controller creation
     const tableName = table as string;
     const currentCount = TableController._controllerCounts.get(tableName) || 0;
@@ -2083,7 +2092,7 @@ export default class TableController<
 
   private _nonExistantKeys: Set<IDType> = new Set();
   private async _maybeRefetchKey(id: IDType) {
-    if (!this._ready) {
+    if (!this._ready || !this._autoFetchMissingRows) {
       return;
     }
     if (this._nonExistantKeys.has(id)) {
