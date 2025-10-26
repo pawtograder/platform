@@ -20,7 +20,7 @@ CREATE TABLE surveys (
     created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    json TEXT NOT NULL DEFAULT '',
+    json JSONB NOT NULL DEFAULT '{}'::jsonb,
     status survey_status NOT NULL DEFAULT 'draft',
     allow_response_editing BOOLEAN NOT NULL DEFAULT FALSE,
     due_date TIMESTAMPTZ DEFAULT NULL,
@@ -49,7 +49,9 @@ CREATE TABLE survey_responses (
   submitted_at TIMESTAMPTZ DEFAULT NULL,
   is_submitted BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ DEFAULT NULL,
+  CONSTRAINT survey_responses_unique_per_profile UNIQUE (survey_id, profile_id)
 );
 
 -- Create unique constraint to prevent duplicate responses from same user
@@ -97,4 +99,6 @@ CREATE TRIGGER set_survey_submitted_at_trigger
   FOR EACH ROW
   EXECUTE FUNCTION set_survey_submitted_at();
 
---TODO: ENABLE RLS
+ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE survey_responses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE survey_templates ENABLE ROW LEVEL SECURITY;

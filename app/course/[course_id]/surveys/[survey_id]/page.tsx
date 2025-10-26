@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
 import dynamic from "next/dynamic";
 import { saveResponse, getResponse, ResponseData } from "./submit";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -38,11 +39,14 @@ type SurveyResponse = {
 export default function SurveyTakingPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
+
+  // pulls from ClassProfileProvider 
+  const { private_profile_id } = useClassProfiles();
+
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [studentId, setStudentId] = useState<string | null>(null);
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -71,16 +75,27 @@ export default function SurveyTakingPage() {
           return;
         }
 
-        setStudentId(user.id);
+        // If we somehow don't have a profile for this class context, bail early
+        if (!private_profile_id) {
+          toaster.create({
+            title: "Access Error",
+            description: "We couldn't find your course profile.",
+            type: "error"
+          });
+          router.push(`/course/${course_id}/surveys`);
+          return;
+        }
 
         // Get survey data
-        const { data: surveyData, error: surveyError } = await supabase
+        const { data: surveyDataRaw, error: surveyError } = await supabase
           .from("surveys" as any)
           .select("*")
           .eq("id", survey_id)
           .eq("class_id", Number(course_id))
           .eq("status", "published")
           .single();
+
+        const surveyData = surveyDataRaw as Survey | null;
 
         if (surveyError || !surveyData) {
           toaster.create({
@@ -95,8 +110,8 @@ export default function SurveyTakingPage() {
         setSurvey(surveyData);
 
         // Get existing response if any
-        const response = await getResponse(survey_id as string, user.id);
-        setExistingResponse(response);
+        const response = await getResponse(survey_id as string, private_profile_id);
+        setExistingResponse(response || null);
       } catch (error) {
         console.error("Error loading survey:", error);
         toaster.create({
@@ -111,13 +126,13 @@ export default function SurveyTakingPage() {
     };
 
     loadSurveyData();
-  }, [course_id, survey_id]); // Removed router from dependencies
+  }, [course_id, survey_id, private_profile_id, router]); // Removed manual user_roles fetch, now depends on context
 
   const handleSurveyComplete = useCallback(
     async (surveyData: any) => {
-      if (!studentId || !survey) {
-        console.error("❌ Cannot submit survey: Missing studentId or survey", {
-          hasStudentId: !!studentId,
+      if (!private_profile_id || !survey) {
+        console.error("❌ Cannot submit survey: Missing profile_id or survey", {
+          hasProfileId: !!private_profile_id,
           hasSurvey: !!survey,
           surveyId: survey_id
         });
@@ -126,14 +141,14 @@ export default function SurveyTakingPage() {
 
       console.log("📤 Submitting survey:", {
         surveyId: survey_id,
-        studentId,
+        profileId: private_profile_id,
         surveyTitle: survey.title,
         responseKeys: Object.keys(surveyData)
       });
 
       setIsSubmitting(true);
       try {
-        await saveResponse(survey_id as string, studentId, surveyData, true);
+        await saveResponse(survey_id as string, private_profile_id, surveyData, true);
 
         toaster.create({
           title: "Survey Submitted",
@@ -150,7 +165,7 @@ export default function SurveyTakingPage() {
           errorMessage: error instanceof Error ? error.message : String(error),
           errorStack: error instanceof Error ? error.stack : undefined,
           surveyId: survey_id,
-          studentId
+          profileId: private_profile_id
         });
 
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
@@ -163,22 +178,22 @@ export default function SurveyTakingPage() {
         setIsSubmitting(false);
       }
     },
-    [studentId, survey, survey_id, course_id, router]
+    [private_profile_id, survey, survey_id, course_id, router]
   );
 
   const handleValueChanged = useCallback(
     async (surveyData: any, options: any) => {
-      if (!studentId || !survey || !survey.allow_response_editing) return;
+      if (!private_profile_id || !survey || !survey.allow_response_editing) return;
 
       // Auto-save on value change if editing is allowed
       try {
-        await saveResponse(survey_id as string, studentId, surveyData, false);
+        await saveResponse(survey_id as string, private_profile_id, surveyData, false);
       } catch (error) {
         console.error("Error auto-saving response:", error);
         // Don't show error toast for auto-save failures to avoid spam
       }
     },
-    [studentId, survey, survey_id]
+    [private_profile_id, survey, survey_id]
   );
 
   const handleBackToSurveys = useCallback(() => {
