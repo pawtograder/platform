@@ -239,10 +239,10 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
     ? (initialPoints || 0) + pointsAdjustmentNum
     : (initialPoints || 0) - pointsAdjustmentNum;
   const hasChange = pointsAdjustmentNum !== 0;
-  
+
   // Check if the adjustment would result in a negative score
   const wouldBeNegative = finalScore < 0;
-  const maxPositiveAdjustment = isAdditive ? Infinity : (initialPoints || 0);
+  const maxPositiveAdjustment = isAdditive ? Infinity : initialPoints || 0;
   const maxNegativeAdjustment = isAdditive ? -(initialPoints || 0) : -Infinity;
 
   // Helper function to check if the score change is significant (>50%)
@@ -423,12 +423,12 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                     ⚠️ This is a significant change ({">"}50%) from the original score
                   </Text>
                 )}
-                
+
                 {wouldBeNegative && (
                   <Box mt={2} p={2} bg="red.50" borderRadius="md" borderWidth="1px" borderColor="red.200">
                     <Text fontSize="xs" color="red.700" fontWeight="medium">
                       ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
-                      {isAdditive 
+                      {isAdditive
                         ? ` Maximum negative adjustment is ${maxNegativeAdjustment}.`
                         : ` Maximum positive adjustment is +${maxPositiveAdjustment}.`}
                     </Text>
@@ -437,12 +437,12 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
               </Box>
             </VStack>
 
-            <Button 
-              colorPalette="blue" 
-              size="sm" 
-              onClick={handleResolve} 
-              loading={isUpdating} 
-              w="100%" 
+            <Button
+              colorPalette="blue"
+              size="sm"
+              onClick={handleResolve}
+              loading={isUpdating}
+              w="100%"
               disabled={wouldBeNegative}
             >
               {hasChange
@@ -555,10 +555,10 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     : (resolvedPoints || 0) - pointsAdjustmentNum;
   const changeFromInitial = isAdditive ? finalScore - (initialPoints || 0) : (initialPoints || 0) - finalScore; // For deductive, compare deduction amounts
   const hasChange = pointsAdjustmentNum !== 0;
-  
+
   // Check if the adjustment would result in a negative score
   const wouldBeNegative = finalScore < 0;
-  const maxPositiveAdjustment = isAdditive ? Infinity : (resolvedPoints || 0);
+  const maxPositiveAdjustment = isAdditive ? Infinity : resolvedPoints || 0;
   const maxNegativeAdjustment = isAdditive ? -(resolvedPoints || 0) : -Infinity;
 
   // Helper function to check if the score change is significant (>50%)
@@ -749,12 +749,12 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                     ⚠️ This is a significant change ({">"}50%) from the original score
                   </Text>
                 )}
-                
+
                 {wouldBeNegative && (
                   <Box mt={2} p={2} bg="red.50" borderRadius="md" borderWidth="1px" borderColor="red.200">
                     <Text fontSize="xs" color="red.700" fontWeight="medium">
                       ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
-                      {isAdditive 
+                      {isAdditive
                         ? ` Maximum negative adjustment is ${maxNegativeAdjustment}.`
                         : ` Maximum positive adjustment is +${maxPositiveAdjustment}.`}
                     </Text>
