@@ -602,6 +602,21 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   // Keep table in sync when related tables change in realtime
   useEffect(() => {
     if (!classRealTimeController || !tableController) return;
+
+    let isEffectActive = true;
+    let debouncedRefetchTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const debouncedRefetch = () => {
+      if (debouncedRefetchTimeout) {
+        return;
+      }
+      debouncedRefetchTimeout = setTimeout(() => {
+        debouncedRefetchTimeout = null;
+        if (isEffectActive && tableController) {
+          void tableController.refetchAll();
+        }
+      }, 1000);
+    };
     // When a submission_review changes, invalidate the matching review_assignment row (or refetch all as fallback)
     const unsubscribeSubmissionReviews = classRealTimeController.subscribeToTable("submission_reviews", (message) => {
       try {
@@ -621,9 +636,9 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           }
         }
         // Fallback to a lightweight full refresh
-        void tableController.refetchAll();
+        debouncedRefetch();
       } catch {
-        void tableController.refetchAll();
+        debouncedRefetch();
       }
     });
 
@@ -635,7 +650,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         if (data?.review_assignment_id) {
           void tableController.invalidate(data.review_assignment_id as number);
         } else {
-          void tableController.refetchAll();
+          debouncedRefetch();
         }
       }
     );
@@ -651,15 +666,19 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           } else if (typeof message.row_id === "number") {
             void tableController.invalidate(message.row_id as number);
           } else {
-            void tableController.refetchAll();
+            debouncedRefetch();
           }
         }
       } catch {
-        void tableController.refetchAll();
+        debouncedRefetch();
       }
     });
 
     return () => {
+      isEffectActive = false;
+      if (debouncedRefetchTimeout) {
+        clearTimeout(debouncedRefetchTimeout);
+      }
       unsubscribeSubmissionReviews();
       unsubscribeReviewAssignmentRubricParts();
       unsubscribeReviewAssignments();

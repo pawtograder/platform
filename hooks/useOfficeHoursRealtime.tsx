@@ -95,10 +95,10 @@ export class OfficeHoursController {
    * This creates them eagerly but in a controlled manner after realtime controllers are stable
    */
   initializeEagerControllers() {
-    // These are accessed frequently and should be ready
-    void this.helpRequests; // Triggers lazy creation
-    void this.helpQueues; // Triggers lazy creation
-    void this.helpRequestTemplates; // Triggers lazy creation
+    // You could do this, but it should be more targetted than for every page load.
+    // void this.helpRequests; // Triggers lazy creation
+    // void this.helpQueues; // Triggers lazy creation
+    // void this.helpRequestTemplates; // Triggers lazy creation
   }
 
   // Lazy getters for TableControllers
