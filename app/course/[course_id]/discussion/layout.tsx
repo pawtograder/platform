@@ -47,26 +47,23 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
     [listWidth]
   );
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? 50 : 10; // Larger steps with Shift key
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 50 : 10; // Larger steps with Shift key
 
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setListWidth((prev) => Math.max(300, prev - step));
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setListWidth((prev) => Math.min(800, prev + step));
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        setListWidth(300); // Min width
-      } else if (e.key === "End") {
-        e.preventDefault();
-        setListWidth(800); // Max width
-      }
-    },
-    []
-  );
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setListWidth((prev) => Math.max(300, prev - step));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setListWidth((prev) => Math.min(800, prev + step));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setListWidth(300); // Min width
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setListWidth(800); // Max width
+    }
+  }, []);
 
   return (
     <Box height="100dvh" overflow="hidden">
