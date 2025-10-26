@@ -357,10 +357,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
     await argosScreenshot(page, "Instructors can resolve the regrade request");
-    await page.getByRole("spinbutton").fill("40");
+    await page.getByRole("textbox", { name: "Grade adjustment" }).fill("40");
     await new Promise((resolve) => setTimeout(resolve, 2000));
     await expect(page.getByText("This is a significant change (>50%)")).toBeVisible();
-    await page.getByRole("button", { name: "Override Score and Resolve Request", exact: true }).click();
+    await page.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
     await loginAsUser(page, student!, course);
@@ -405,9 +405,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByLabel("Grading checks on line 4").filter({ hasText: REGRADE_FINAL_COMMENT })).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Escalation" }).click();
-    await page.getByRole("spinbutton").fill("100");
-    await expect(page.getByText("This is a significant change")).toBeVisible();
-    await page.getByRole("dialog").getByRole("button", { name: "Decide Escalation and Close Request" }).click();
+    await page.getByRole("textbox", { name: "Grade adjustment" }).fill("100");
+    await expect(page.getByRole("dialog").getByText("This is a significant change")).toBeVisible();
+    await page.getByRole("dialog").getByRole("button", { name: "Close regrade request" }).click();
     await argosScreenshot(page, "Instructors can close the regrade request");
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });

@@ -229,12 +229,13 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   }, [isOpen]);
 
   const isAdditive = rubricCriteria?.is_additive ?? true;
-  const changeDescription = isAdditive ? "points earned" : "deduction";
+  const changeDescription = isAdditive ? "points awarded" : "deduction";
 
   // Calculate the final score based on adjustment
   const pointsAdjustmentNum = parseFloat(pointsAdjustment) || 0;
-  // For deductive criteria, positive adjustment means reducing the deduction (giving points back)
-  // So we subtract the adjustment from the deduction value
+  // Adjustment represents GRADE IMPACT: +5 = improve grade, -5 = worsen grade
+  // For additive: +5 = add 5 points earned = better
+  // For deductive: +5 = subtract 5 from deduction = better
   const finalScore = isAdditive
     ? (initialPoints || 0) + pointsAdjustmentNum
     : (initialPoints || 0) - pointsAdjustmentNum;
@@ -347,10 +348,10 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
             {/* Input for points adjustment */}
             <VStack gap={2} align="start" w="100%">
               <VStack gap={1} align="start" w="100%">
-                <Text fontSize="sm" fontWeight="medium">
+                <Text fontSize="sm" fontWeight="medium" id="resolve-grade-adjustment-label">
                   Grade Adjustment:
                 </Text>
-                <Text fontSize="xs" color="fg.muted">
+                <Text fontSize="xs" color="fg.muted" id="resolve-grade-adjustment-description">
                   Enter +/- points to adjust grade (e.g., +5 to improve, -2 to worsen, 0 for no change)
                 </Text>
               </VStack>
@@ -400,6 +401,11 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                   placeholder="0"
                   size="sm"
                   w="100%"
+                  aria-label="Grade adjustment points"
+                  aria-labelledby="resolve-grade-adjustment-label"
+                  aria-describedby={`resolve-grade-adjustment-description${wouldBeNegative ? " resolve-negative-score-warning" : ""}`}
+                  aria-invalid={wouldBeNegative}
+                  aria-required="false"
                 />
 
                 {/* Change indicator */}
@@ -412,7 +418,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                         {pointsAdjustmentNum > 0 ? " (grade increases)" : " (grade decreases)"}
                       </Text>
                       <Text fontSize="xs" fontWeight="semibold">
-                        New {changeDescription}: {finalScore} {isAdditive ? "pts" : "pts deducted"}
+                        New {changeDescription}: {finalScore} {isAdditive ? "pts awarded" : "pts deducted"}
                       </Text>
                     </VStack>
                   </Box>
@@ -425,7 +431,17 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
                 )}
 
                 {wouldBeNegative && (
-                  <Box mt={2} p={2} bg="red.50" borderRadius="md" borderWidth="1px" borderColor="red.200">
+                  <Box 
+                    mt={2} 
+                    p={2} 
+                    bg="red.50" 
+                    borderRadius="md" 
+                    borderWidth="1px" 
+                    borderColor="red.200"
+                    id="resolve-negative-score-warning"
+                    role="alert"
+                    aria-live="polite"
+                  >
                     <Text fontSize="xs" color="red.700" fontWeight="medium">
                       ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
                       {isAdditive
@@ -444,6 +460,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
               loading={isUpdating}
               w="100%"
               disabled={wouldBeNegative}
+              aria-label={wouldBeNegative ? "Cannot resolve with negative score" : "Resolve regrade request"}
             >
               {hasChange
                 ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Resolve`
@@ -545,11 +562,13 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   }, [isOpen]);
 
   const isAdditive = rubricCriteria?.is_additive ?? true;
-  const changeDescription = isAdditive ? "points earned" : "deduction";
+  const changeDescription = isAdditive ? "points awarded" : "deduction";
 
   // Calculate the final score based on adjustment from grader's resolved score
   const pointsAdjustmentNum = parseFloat(pointsAdjustment) || 0;
-  // For deductive criteria, positive adjustment means reducing the deduction (giving points back)
+  // Adjustment represents GRADE IMPACT: +5 = improve grade, -5 = worsen grade
+  // For additive: +5 = add 5 points earned = better
+  // For deductive: +5 = subtract 5 from deduction = better
   const finalScore = isAdditive
     ? (resolvedPoints || 0) + pointsAdjustmentNum
     : (resolvedPoints || 0) - pointsAdjustmentNum;
@@ -664,10 +683,10 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
             {/* Input for adjustment from grader's decision */}
             <VStack gap={2} align="start" w="100%">
               <VStack gap={1} align="start" w="100%">
-                <Text fontSize="sm" fontWeight="medium">
+                <Text fontSize="sm" fontWeight="medium" id="close-grade-adjustment-label">
                   Grade Adjustment from Grader&apos;s Decision:
                 </Text>
-                <Text fontSize="xs" color="fg.muted">
+                <Text fontSize="xs" color="fg.muted" id="close-grade-adjustment-description">
                   Enter +/- points to adjust grade or 0 to uphold grader&apos;s decision
                 </Text>
               </VStack>
@@ -717,6 +736,11 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                   placeholder="0"
                   size="sm"
                   w="100%"
+                  aria-label="Instructor grade adjustment from grader decision"
+                  aria-labelledby="close-grade-adjustment-label"
+                  aria-describedby={`close-grade-adjustment-description${wouldBeNegative ? " close-negative-score-warning" : ""}`}
+                  aria-invalid={wouldBeNegative}
+                  aria-required="false"
                 />
 
                 {/* Change indicators */}
@@ -728,7 +752,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                         {pointsAdjustmentNum} pts from grader&apos;s decision
                       </Text>
                       <Text fontSize="xs" fontWeight="semibold">
-                        Final {changeDescription}: {finalScore} {isAdditive ? "pts" : "pts deducted"}
+                        Final {changeDescription}: {finalScore} {isAdditive ? "pts awarded" : "pts deducted"}
                       </Text>
                       <Text
                         fontSize="xs"
@@ -751,7 +775,17 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                 )}
 
                 {wouldBeNegative && (
-                  <Box mt={2} p={2} bg="red.50" borderRadius="md" borderWidth="1px" borderColor="red.200">
+                  <Box 
+                    mt={2} 
+                    p={2} 
+                    bg="red.50" 
+                    borderRadius="md" 
+                    borderWidth="1px" 
+                    borderColor="red.200"
+                    id="close-negative-score-warning"
+                    role="alert"
+                    aria-live="polite"
+                  >
                     <Text fontSize="xs" color="red.700" fontWeight="medium">
                       ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
                       {isAdditive
@@ -777,6 +811,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                 loading={isUpdating}
                 w="100%"
                 disabled={wouldBeNegative}
+                aria-label={wouldBeNegative ? "Cannot close with negative score" : "Close regrade request"}
               >
                 {hasChange
                   ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Close`
@@ -1106,7 +1141,7 @@ export default function RegradeRequestWrapper({
                       {rubricCriteria && (
                         <Text as="span" fontWeight="normal">
                           {" "}
-                          {rubricCriteria.is_additive ? "pts earned" : "pts deducted"}
+                          {rubricCriteria.is_additive ? "pts awarded" : "pts deducted"}
                         </Text>
                       )}
                     </Text>
@@ -1136,7 +1171,7 @@ export default function RegradeRequestWrapper({
                     ) : (
                       regradeRequest.resolved_points || 0
                     )}
-                    {rubricCriteria?.is_additive ? " pts earned" : " pts deducted"}
+                    {rubricCriteria?.is_additive ? " pts awarded" : " pts deducted"}
                     {(() => {
                       const change = (regradeRequest.resolved_points || 0) - (regradeRequest.initial_points || 0);
                       // For additive: higher is better (green). For deductive: higher is worse (red)
