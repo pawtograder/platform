@@ -21,9 +21,13 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
       </Box>
     );
   }
+  if(!role?.private_profile_id) {
+    throw new Error("No private profile id found");
+  }
+  const private_profile_id = role.private_profile_id;
   return (
     <Box>
-      <StudentDashboard course_id={course_id} private_profile_id={role?.private_profile_id} />
+      <StudentDashboard course_id={course_id} private_profile_id={private_profile_id} />
     </Box>
   );
 }

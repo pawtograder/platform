@@ -602,14 +602,19 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   // Keep table in sync when related tables change in realtime
   useEffect(() => {
     if (!classRealTimeController || !tableController) return;
-    let debouncedRefetchTimeout: NodeJS.Timeout | null = null;
+    
+    let isEffectActive = true;
+    let debouncedRefetchTimeout: ReturnType<typeof setTimeout> | null = null;
+    
     const debouncedRefetch = () => {
       if (debouncedRefetchTimeout) {
         return;
       }
       debouncedRefetchTimeout = setTimeout(() => {
         debouncedRefetchTimeout = null;
-        void tableController.refetchAll();
+        if (isEffectActive && tableController) {
+          void tableController.refetchAll();
+        }
       }, 1000);
     };
     // When a submission_review changes, invalidate the matching review_assignment row (or refetch all as fallback)
@@ -670,6 +675,10 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     });
 
     return () => {
+      isEffectActive = false;
+      if (debouncedRefetchTimeout) {
+        clearTimeout(debouncedRefetchTimeout);
+      }
       unsubscribeSubmissionReviews();
       unsubscribeReviewAssignmentRubricParts();
       unsubscribeReviewAssignments();
