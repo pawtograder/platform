@@ -22,13 +22,20 @@ import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
 import RegradeRequestsTable from "./RegradeRequestsTable";
-export default async function StudentDashboard({ course_id }: { course_id: number }) {
+export default async function StudentDashboard({
+  course_id,
+  private_profile_id
+}: {
+  course_id: number;
+  private_profile_id: string;
+}) {
   const supabase = await createClient();
   const { data: assignments } = await supabase
     .from("assignments_with_effective_due_dates")
     .select("*, submissions!submissio_assignment_id_fkey(*, grader_results(*)), classes(time_zone)")
     .eq("class_id", course_id)
     .eq("submissions.is_active", true)
+    .eq("student_profile_id", private_profile_id)
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: false })
     .limit(5);

@@ -23,7 +23,7 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   }
   return (
     <Box>
-      <StudentDashboard course_id={course_id} />
+      <StudentDashboard course_id={course_id} private_profile_id={role?.private_profile_id} />
     </Box>
   );
 }
