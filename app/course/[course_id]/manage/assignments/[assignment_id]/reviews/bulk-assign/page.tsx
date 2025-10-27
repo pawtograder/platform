@@ -184,17 +184,24 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   }, [courseController]);
 
   // Use a separate TableController from the one in useAssignment, since it is scoped to the current user as assignee
-  const reviewAssignmentsController = useMemo(() => {
-    return new TableController({
-      client: supabase,
-      table: "review_assignments",
-      query: supabase.from("review_assignments").select("*").eq("assignment_id", Number(assignment_id)),
-      classRealTimeController: courseController.classRealTimeController
-    });
+  const [reviewAssignmentsController, setReviewAssignmentsController] = useState<
+    TableController<"review_assignments"> | undefined
+  >(undefined);
+  useEffect(() => {
+    setReviewAssignmentsController(
+      new TableController({
+        client: supabase,
+        table: "review_assignments",
+        query: supabase.from("review_assignments").select("*").eq("assignment_id", Number(assignment_id)),
+        classRealTimeController: courseController.classRealTimeController
+      })
+    );
   }, [supabase, assignment_id, courseController.classRealTimeController]);
   useEffect(() => {
     return () => {
-      reviewAssignmentsController.close();
+      if (reviewAssignmentsController) {
+        reviewAssignmentsController.close();
+      }
     };
   }, [reviewAssignmentsController]);
 
@@ -202,27 +209,29 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // Map of review_assignment_id -> assigned rubric_part_ids
   const [reviewAssignmentPartsById, setReviewAssignmentPartsById] = useState<Map<number, number[]>>(new Map());
-  const reviewAssignmentPartsController = useMemo(() => {
-    const controller = new TableController<
-      "review_assignment_rubric_parts",
-      "id, review_assignment_id, rubric_part_id"
-    >({
-      client: supabase,
-      table: "review_assignment_rubric_parts",
-      query: supabase
-        .from("review_assignment_rubric_parts")
-        .select("id,review_assignment_id, rubric_part_id")
-        .eq("class_id", Number(course_id))
-    });
-    return controller;
-  }, [supabase, course_id]);
-
+  const [reviewAssignmentPartsController, setReviewAssignmentPartsController] = useState<
+    TableController<"review_assignment_rubric_parts"> | undefined
+  >(undefined);
+  useEffect(() => {
+    setReviewAssignmentPartsController(
+      new TableController({
+        client: supabase,
+        table: "review_assignment_rubric_parts",
+        query: supabase
+          .from("review_assignment_rubric_parts")
+          .select("class_id,created_at,id,review_assignment_id, rubric_part_id,updated_at")
+          .eq("class_id", Number(course_id)),
+        classRealTimeController: courseController.classRealTimeController
+      })
+    );
+  }, [supabase, course_id, courseController.classRealTimeController]);
   useEffect(() => {
     return () => {
-      reviewAssignmentPartsController.close();
+      if (reviewAssignmentPartsController) {
+        reviewAssignmentPartsController.close();
+      }
     };
   }, [reviewAssignmentPartsController]);
-
   const reviewAssignmentsPredicate = useCallback(
     (
       row: PossiblyTentativeResult<{
@@ -255,21 +264,28 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   }, [currentReviewAssignments, reviewAssignmentParts]);
 
   // Grading conflicts via local TableController scoped to current class
-  const gradingConflictsController = useMemo(() => {
-    return new TableController({
-      client: supabase,
-      table: "grading_conflicts",
-      query: supabase
-        .from("grading_conflicts")
-        .select("id, grader_profile_id, student_profile_id, class_id, created_at, created_by_profile_id, reason")
-        .eq("class_id", Number(course_id)),
-      classRealTimeController: courseController.classRealTimeController,
-      realtimeFilter: { class_id: Number(course_id) }
-    });
+  const [gradingConflictsController, setGradingConflictsController] = useState<
+    TableController<"grading_conflicts"> | undefined
+  >(undefined);
+  useEffect(() => {
+    setGradingConflictsController(
+      new TableController({
+        client: supabase,
+        table: "grading_conflicts",
+        query: supabase
+          .from("grading_conflicts")
+          .select("id, grader_profile_id, student_profile_id, class_id, created_at, created_by_profile_id, reason")
+          .eq("class_id", Number(course_id)),
+        classRealTimeController: courseController.classRealTimeController,
+        realtimeFilter: { class_id: Number(course_id) }
+      })
+    );
   }, [supabase, course_id, courseController.classRealTimeController]);
   useEffect(() => {
     return () => {
-      gradingConflictsController.close();
+      if (gradingConflictsController) {
+        gradingConflictsController.close();
+      }
     };
   }, [gradingConflictsController]);
   const gradingConflicts = useTableControllerTableValues(gradingConflictsController);
@@ -279,19 +295,28 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const [referenceRubrics, setReferenceRubrics] = useState<RubricWithParts[] | undefined>(undefined);
   const [exclusionRubrics, setExclusionRubrics] = useState<RubricWithParts[] | undefined>(undefined);
   // Reference & Exclusion review_assignments via local TableControllers
-  const referenceReviewAssignmentsController = useMemo(() => {
-    if (!selectedReferenceAssignment) return null;
+  const [referenceReviewAssignmentsController, setReferenceReviewAssignmentsController] = useState<
+    | TableController<
+        "review_assignments",
+        "id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id"
+      >
+    | undefined
+  >(undefined);
+  useEffect(() => {
+    if (!selectedReferenceAssignment) return;
     //Note EXPLICLTLY NOT REALTIME FOR THIS! Need to do bulk realtime updates to avoid herding, fix later...
-    return new TableController({
-      client: supabase,
-      table: "review_assignments",
-      query: supabase
-        .from("review_assignments")
-        .select("id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id")
-        .eq("assignment_id", selectedReferenceAssignment.id)
-        .eq("class_id", Number(course_id))
-    });
-  }, [supabase, selectedReferenceAssignment, course_id]);
+    setReferenceReviewAssignmentsController(
+      new TableController({
+        client: supabase,
+        table: "review_assignments",
+        query: supabase
+          .from("review_assignments")
+          .select("id, assignee_profile_id, submission_id, rubric_id, assignment_id, class_id")
+          .eq("assignment_id", selectedReferenceAssignment.id)
+          .eq("class_id", Number(course_id))
+      })
+    );
+  }, [supabase, selectedReferenceAssignment, course_id, courseController.classRealTimeController]);
 
   useEffect(() => {
     return () => {
@@ -1473,10 +1498,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                   setSelectedUsers(e);
                 }}
                 value={sortedSelectedUsers}
-                options={selectedGraders().map((user) => ({
-                  label: user.profiles.name,
-                  value: user
-                }))}
+                options={selectedGraders()
+                  .map((user) => ({
+                    label: user.profiles.name,
+                    value: user
+                  }))
+                  .sort((a, b) => a.label.localeCompare(b.label))}
                 components={{
                   MultiValue: ({ data, removeProps, ...props }) => {
                     const allValues = props.selectProps.value as typeof selectedUsers;
