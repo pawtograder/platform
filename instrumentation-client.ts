@@ -39,6 +39,13 @@ Sentry.init({
         if (exception.type === "TypeError" && exception.value?.includes("NetworkError when attempting to fetch")) {
           return null; // Discard network errors
         }
+        if (
+          exception.type === "ChunkLoadError" &&
+          exception.value?.includes("Loading chunk") &&
+          exception.value?.includes("failed")
+        ) {
+          return null; // Discard chunk load errors
+        }
       }
     }
     return event; // Send other events
