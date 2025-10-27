@@ -36,10 +36,9 @@ Sentry.init({
         if (exception.type === "TypeError" && exception.value?.includes("Failed to fetch")) {
           return null; // Discard network errors
         }
-        if(exception.type === "TypeError" && exception.value?.includes("NetworkError when attempting to fetch")) {
+        if (exception.type === "TypeError" && exception.value?.includes("NetworkError when attempting to fetch")) {
           return null; // Discard network errors
         }
-        
       }
     }
     return event; // Send other events
