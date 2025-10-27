@@ -9,18 +9,18 @@ DROP FUNCTION IF EXISTS set_survey_submitted_at() CASCADE;
 DROP TYPE IF EXISTS survey_status CASCADE;
 
 -- Create ENUM type for survey status
-CREATE TYPE survey_status AS ENUM ('draft', 'published', 'closed');
+CREATE TYPE survey_status AS ENUM('draft', 'published', 'closed');
 
 -- Create surveys table
 CREATE TABLE surveys (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     survey_id UUID NOT NULL DEFAULT gen_random_uuid(),
     class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
-    -- class_section_id BIGINT REFERENCES class_sections(id) ON DELETE CASCADE,
+    class_section_id BIGINT REFERENCES class_sections(id) ON DELETE CASCADE,
     created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    json JSONB NOT NULL DEFAULT '{}'::jsonb,
     status survey_status NOT NULL DEFAULT 'draft',
     allow_response_editing BOOLEAN NOT NULL DEFAULT FALSE,
     due_date TIMESTAMPTZ DEFAULT NULL,
@@ -35,30 +35,27 @@ CREATE TABLE surveys (
 CREATE TABLE survey_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
     template JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    version INTEGER NOT NULL DEFAULT 1
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Create survey_responses table
+-- Create responses table
 CREATE TABLE survey_responses (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    survey_id UUID NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
-    student_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    answers JSONB NOT NULL DEFAULT '{}'::jsonb,
-    is_submitted BOOLEAN NOT NULL DEFAULT FALSE,
-    submitted_at TIMESTAMPTZ DEFAULT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ DEFAULT NULL
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  survey_id UUID NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  response JSONB NOT NULL DEFAULT '{}'::jsonb,
+  submitted_at TIMESTAMPTZ DEFAULT NULL,
+  is_submitted BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ DEFAULT NULL,
+  CONSTRAINT survey_responses_unique_per_profile UNIQUE (survey_id, profile_id)
 );
 
 -- Create unique constraint to prevent duplicate responses from same user
-CREATE UNIQUE INDEX idx_responses_survey_user
-  ON survey_responses(survey_id, student_id);
+CREATE UNIQUE INDEX idx_responses_survey_user ON survey_responses(survey_id, profile_id);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_survey_column()
@@ -89,9 +86,8 @@ CREATE TRIGGER update_survey_templates_updated_at
 CREATE OR REPLACE FUNCTION set_survey_submitted_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- Only set submitted_at when is_submitted flips from false -> true
-  IF NEW.is_submitted = TRUE
-     AND (OLD.is_submitted = FALSE OR OLD.is_submitted IS NULL) THEN
+  -- Only set submitted_at when is_submitted changes from false to true
+  IF NEW.is_submitted = TRUE AND (OLD.is_submitted = FALSE OR OLD.is_submitted IS NULL) THEN
     NEW.submitted_at = NOW();
   END IF;
   RETURN NEW;
@@ -123,3 +119,6 @@ CREATE INDEX idx_survey_responses_student_id_active
   WHERE deleted_at IS NULL;
 
 -- TODO: ENABLE RLS
+-- ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE survey_responses ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE survey_templates ENABLE ROW LEVEL SECURITY;

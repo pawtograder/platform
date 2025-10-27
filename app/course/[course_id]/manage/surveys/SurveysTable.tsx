@@ -76,7 +76,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
   const getSurveyLink = (survey: Survey) => {
     if (survey.status === "draft") {
-      return `/course/${courseId}/manage/surveys/new?draft_id=${survey.id}`;
+      return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else {

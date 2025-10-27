@@ -8,9 +8,11 @@ import { toaster } from "@/components/ui/toaster";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useCallback, useState } from "react";
 import { LuCheck } from "react-icons/lu";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import SurveyCreatorModal from "@/components/SurveyCreatorModal";
+import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 
 type SurveyFormData = {
   title: string;
@@ -36,11 +38,13 @@ const sampleJsonTemplate = `{
 export default function SurveyForm({
   form,
   onSubmit,
-  saveDraftOnly
+  saveDraftOnly,
+  isEdit = false
 }: {
   form: UseFormReturnType<SurveyFormData>;
   onSubmit: (values: FieldValues) => void;
-  saveDraftOnly: (values: FieldValues) => void;
+  saveDraftOnly: (values: FieldValues, shouldRedirect?: boolean) => void;
+  isEdit?: boolean;
 }) {
   // Color mode values where the first values correspond as follows:
   // useColorModeValue(lightModeValue, darkModeValue)
@@ -69,7 +73,10 @@ export default function SurveyForm({
 
   const router = useRouter();
   const { course_id } = useParams();
+  const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSurveyCreatorOpen, setIsSurveyCreatorOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const status = watch("status");
 
@@ -109,14 +116,40 @@ export default function SurveyForm({
     });
   }, [setValue]);
 
+  const handleSurveyCreatorSave = useCallback(
+    (json: string) => {
+      setValue("json", json, { shouldDirty: true });
+      toaster.create({
+        title: "Survey Created",
+        description: "Your survey has been created using SurveyJS Creator.",
+        type: "success"
+      });
+    },
+    [setValue]
+  );
+
   const showPreview = useCallback(() => {
-    // Placeholder for now - will open in new tab
-    toaster.create({
-      title: "Preview Feature",
-      description: "Preview functionality will be implemented soon",
-      type: "info"
-    });
-  }, []);
+    const jsonValue = getValues("json");
+    if (!jsonValue.trim()) {
+      toaster.create({
+        title: "No Survey Configuration",
+        description: "Please enter a JSON configuration before previewing",
+        type: "error"
+      });
+      return;
+    }
+
+    try {
+      JSON.parse(jsonValue);
+      setIsPreviewOpen(true);
+    } catch (error) {
+      toaster.create({
+        title: "Invalid JSON",
+        description: "Please fix the JSON configuration before previewing",
+        type: "error"
+      });
+    }
+  }, [getValues]);
 
   const handleBackNavigation = useCallback(async () => {
     if (isDirty) {
@@ -187,7 +220,7 @@ export default function SurveyForm({
 
         {/* Header */}
         <Heading size="xl" color={textColor} textAlign="left">
-          Create New Survey
+          {isEdit ? "Edit Survey" : "Create New Survey"}
         </Heading>
       </VStack>
 
@@ -274,6 +307,17 @@ export default function SurveyForm({
                       borderColor={buttonBorderColor}
                       color={buttonTextColor}
                       _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      onClick={() => setIsSurveyCreatorOpen(true)}
+                    >
+                      Create with SurveyJS
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      bg="transparent"
+                      borderColor={buttonBorderColor}
+                      color={buttonTextColor}
+                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
                       onClick={loadSampleTemplate}
                     >
                       Load Sample Template
@@ -304,7 +348,6 @@ export default function SurveyForm({
                   <Controller
                     name="status"
                     control={control}
-                    defaultValue="draft"
                     rules={{ required: "Status is required" }}
                     render={({ field }) => (
                       <VStack align="start" gap={2}>
@@ -364,27 +407,36 @@ export default function SurveyForm({
 
               {/* Allow Response Editing */}
               <Fieldset.Content>
-                <HStack gap={3} align="center">
-                  <Box position="relative">
-                    <Box
-                      position="absolute"
-                      top="0"
-                      left="0"
-                      w="5"
-                      h="5"
-                      bg={checkboxBgColor}
-                      border="1px solid"
-                      borderColor={checkboxBorderColor}
-                      borderRadius="xs"
-                      zIndex="0"
-                    />
-                    <Checkbox.Root {...register("allow_response_editing")}>
-                      <Checkbox.HiddenInput />
-                      <Checkbox.Control></Checkbox.Control>
-                    </Checkbox.Root>
-                  </Box>
-                  <Text color={textColor}>Allow students to edit their responses after submission</Text>
-                </HStack>
+                <Controller
+                  name="allow_response_editing"
+                  control={control}
+                  render={({ field }) => (
+                    <HStack gap={3} align="center">
+                      <Box position="relative">
+                        <Box
+                          position="absolute"
+                          top="0"
+                          left="0"
+                          w="5"
+                          h="5"
+                          bg={checkboxBgColor}
+                          border="1px solid"
+                          borderColor={checkboxBorderColor}
+                          borderRadius="xs"
+                          zIndex="0"
+                        />
+                        <Checkbox.Root
+                          checked={field.value}
+                          onCheckedChange={(details) => field.onChange(details.checked)}
+                        >
+                          <Checkbox.HiddenInput />
+                          <Checkbox.Control></Checkbox.Control>
+                        </Checkbox.Root>
+                      </Box>
+                      <Text color={textColor}>Allow students to edit their responses after submission</Text>
+                    </HStack>
+                  )}
+                />
               </Fieldset.Content>
 
               {/* Preview Section */}
@@ -444,6 +496,23 @@ export default function SurveyForm({
           </Fieldset.Root>
         </form>
       </Box>
+
+      {/* SurveyJS Creator Modal */}
+      <SurveyCreatorModal
+        isOpen={isSurveyCreatorOpen}
+        onClose={() => setIsSurveyCreatorOpen(false)}
+        onSave={handleSurveyCreatorSave}
+        initialJson={getValues("json")}
+        startFresh={!isEdit && searchParams.get("from") !== "preview"}
+      />
+
+      {/* Survey Preview Modal */}
+      <SurveyPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        surveyJson={watch("json")}
+        surveyTitle={watch("title")}
+      />
     </VStack>
   );
 }

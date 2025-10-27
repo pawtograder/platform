@@ -73,6 +73,7 @@
     "@types/jszip": "^3.4.0",
     "@uiw/react-md-editor": "^4.0.5",
     "@wooorm/starry-night": "^3.6.0",
+    "ace-builds": "^1.43.4",
     "amazon-chime-sdk-component-library-react": "^3.9.0",
     "amazon-chime-sdk-js": "^3.26.0",
     "autoprefixer": "10.4.20",
@@ -127,6 +128,10 @@
     "sharp": "^0.34.3",
     "styled-components": "^5.3.11",
     "styled-system": "^5.1.5",
+    "survey-creator-core": "^2.3.11",
+    "survey-creator-react": "^2.3.11",
+    "survey-react-ui": "^2.3.11",
+    "surveyjs": "^4.0.2",
     "universal-github-app-jwt": "^2.2.2",
     "yaml": "^2.7.1",
     "zod": "^3.24.1"

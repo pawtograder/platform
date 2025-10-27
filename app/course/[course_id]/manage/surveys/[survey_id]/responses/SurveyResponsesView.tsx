@@ -10,8 +10,8 @@ import { useRouter } from "next/navigation";
 type SurveyResponse = {
   id: string;
   survey_id: string;
-  student_id: string; // Foreign key to profiles
-  answers: {
+  profile_id: string; // Foreign key to profiles
+  response: {
     satisfaction?: string;
     helpful_aspects?: string;
     comments?: string;
@@ -228,13 +228,13 @@ export default function SurveyResponsesView({
                     </Text>
                   </Table.Cell>
                   <Table.Cell py={4}>
-                    <Text color={textColor}>{response.answers?.satisfaction || "—"}</Text>
+                    <Text color={textColor}>{response.response?.satisfaction || "—"}</Text>
                   </Table.Cell>
                   <Table.Cell py={4}>
-                    <Text color={textColor}>{response.answers?.helpful_aspects || "—"}</Text>
+                    <Text color={textColor}>{response.response?.helpful_aspects || "—"}</Text>
                   </Table.Cell>
                   <Table.Cell py={4} pr={6}>
-                    <Text color={textColor}>{response.answers?.comments || "—"}</Text>
+                    <Text color={textColor}>{response.response?.comments || "—"}</Text>
                   </Table.Cell>
                 </Table.Row>
               ))

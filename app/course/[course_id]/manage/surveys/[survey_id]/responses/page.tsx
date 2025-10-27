@@ -51,7 +51,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     .select(
       `
       *,
-      profiles!student_id (
+      profiles!profile_id (
         name
       )
     `
