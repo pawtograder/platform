@@ -114,9 +114,9 @@ CREATE INDEX idx_survey_responses_survey_id_active
   ON survey_responses (survey_id)
   WHERE deleted_at IS NULL;
 
-CREATE INDEX idx_survey_responses_student_id_active
-  ON survey_responses (student_id)
-  WHERE deleted_at IS NULL;
+--CREATE INDEX idx_survey_responses_student_id_active
+  --ON survey_responses (student_id)
+  --WHERE deleted_at IS NULL;
 
 -- TODO: ENABLE RLS
 -- ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
