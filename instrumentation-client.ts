@@ -30,9 +30,16 @@ Sentry.init({
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
           return null; // Discard the event
         }
+        if (exception.type === "AbortError" && exception.value?.includes("Fetch is aborted")) {
+          return null; // Discard fetch abort errors
+        }
         if (exception.type === "TypeError" && exception.value?.includes("Failed to fetch")) {
           return null; // Discard network errors
         }
+        if(exception.type === "TypeError" && exception.value?.includes("NetworkError when attempting to fetch")) {
+          return null; // Discard network errors
+        }
+        
       }
     }
     return event; // Send other events
