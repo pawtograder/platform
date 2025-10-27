@@ -4,6 +4,8 @@
 import { useState, useEffect } from "react";
 import { ICreatorOptions } from "survey-creator-core";
 import { SurveyCreatorComponent, SurveyCreator } from "survey-creator-react";
+import { useColorModeValue } from "@/components/ui/color-mode";
+import SurveyCreatorTheme from "survey-creator-core/themes";
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 
@@ -38,6 +40,9 @@ export default function SurveyCreatorWidget(props: {
   onCreatorReady?: (creator: SurveyCreator) => void;
 }) {
   const [creator, setCreator] = useState<SurveyCreator | null>(null);
+  
+  // Get color mode to determine theme (same as survey-preview-modal.tsx)
+  const isDarkMode = useColorModeValue(false, true);
 
   // Initialize creator once
   useEffect(() => {
@@ -49,6 +54,12 @@ export default function SurveyCreatorWidget(props: {
         callback(saveNo, true);
       };
 
+      // Apply SurveyJS Creator theme based on color mode (same logic as survey-preview-modal.tsx)
+      if (isDarkMode) {
+        newCreator.applyCreatorTheme(SurveyCreatorTheme.DefaultDark);
+      }
+      // Note: Light theme is the default CSS, so no need to apply anything for light mode
+
       setCreator(newCreator);
 
       // Notify parent component that creator is ready
@@ -56,7 +67,7 @@ export default function SurveyCreatorWidget(props: {
         props.onCreatorReady(newCreator);
       }
     }
-  }, [props.options, props.onCreatorReady]);
+  }, [props.options, props.onCreatorReady, isDarkMode]);
 
   // Handle JSON loading when props change
   useEffect(() => {

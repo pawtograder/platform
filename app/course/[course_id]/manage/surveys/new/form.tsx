@@ -12,6 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import SurveyCreatorModal from "@/components/SurveyCreatorModal";
+import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 
 type SurveyFormData = {
   title: string;
@@ -75,6 +76,7 @@ export default function SurveyForm({
   const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSurveyCreatorOpen, setIsSurveyCreatorOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const status = watch("status");
 
@@ -126,56 +128,28 @@ export default function SurveyForm({
     [setValue]
   );
 
-  const showPreview = useCallback(async () => {
-    const currentValues = getValues();
-    const jsonValue = currentValues.json;
-
+  const showPreview = useCallback(() => {
+    const jsonValue = getValues("json");
     if (!jsonValue.trim()) {
       toaster.create({
-        title: "No Survey Data",
-        description: "Please enter JSON configuration before previewing",
+        title: "No Survey Configuration",
+        description: "Please enter a JSON configuration before previewing",
         type: "error"
       });
       return;
     }
 
     try {
-      // Validate JSON first
       JSON.parse(jsonValue);
-
-      // Save as draft first to preserve form state (without redirecting)
-      try {
-        await saveDraftOnly(currentValues, false);
-        // No toast needed - this is just for persistence
-      } catch (draftError) {
-        toaster.create({
-          title: "Draft Save Failed",
-          description: "Could not save draft, but preview will still work",
-          type: "warning"
-        });
-        // Continue with preview even if draft save fails
-      }
-
-      // Encode the JSON for URL parameter
-      const encodedJson = encodeURIComponent(jsonValue);
-
-      // Navigate to survey preview page
-      const previewUrl = `/course/${course_id}/manage/surveys/preview?json=${encodedJson}`;
-      router.push(previewUrl);
-
-      toaster.create({
-        title: "Opening Preview",
-        description: "Survey preview is loading...",
-        type: "success"
-      });
+      setIsPreviewOpen(true);
     } catch (error) {
       toaster.create({
         title: "Invalid JSON",
-        description: `Cannot preview: ${error instanceof Error ? error.message : "Invalid JSON format"}`,
+        description: "Please fix the JSON configuration before previewing",
         type: "error"
       });
     }
-  }, [getValues, router, course_id, saveDraftOnly]);
+  }, [getValues]);
 
   const handleBackNavigation = useCallback(async () => {
     if (isDirty) {
@@ -530,6 +504,14 @@ export default function SurveyForm({
         onSave={handleSurveyCreatorSave}
         initialJson={getValues("json")}
         startFresh={!isEdit && searchParams.get("from") !== "preview"}
+      />
+
+      {/* Survey Preview Modal */}
+      <SurveyPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        surveyJson={watch("json")}
+        surveyTitle={watch("title")}
       />
     </VStack>
   );
