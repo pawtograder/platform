@@ -59,7 +59,7 @@ CREATE TABLE survey_responses (
 
 -- Create unique constraint to prevent duplicate responses from same user
 CREATE UNIQUE INDEX idx_responses_survey_user
-  ON survey_responses(survey_id, student_id);
+  ON survey_responses(survey_id, profile_id);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_survey_column()
