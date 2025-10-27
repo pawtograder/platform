@@ -198,12 +198,12 @@ export function useListTableControllerValues<
     Query
   >
 >(
-  controller: TableController<T, Query, IDType, ResultType>,
+  controller: TableController<T, Query, IDType, ResultType> | undefined,
   predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
 ) {
   const [matchingIds, setMatchingIds] = useState<Set<ExtractIdType<T>>>(() => {
     const ret = new Set<ExtractIdType<T>>();
-    for (const row of controller.list().data) {
+    for (const row of controller?.list().data ?? []) {
       if (predicate(row as PossiblyTentativeResult<ResultType>)) {
         ret.add((row as unknown as { id: ExtractIdType<T> }).id);
       }
@@ -212,7 +212,7 @@ export function useListTableControllerValues<
   });
   const [values, setValues] = useState<Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>>(() => {
     const ret = new Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>();
-    for (const row of controller.list().data) {
+    for (const row of controller?.list().data ?? []) {
       if (predicate(row as PossiblyTentativeResult<ResultType>)) {
         ret.set((row as unknown as { id: ExtractIdType<T> }).id, row as PossiblyTentativeResult<ResultType>);
       }
@@ -225,6 +225,7 @@ export function useListTableControllerValues<
 
   // Effect to subscribe to the list and detect matching items
   useEffect(() => {
+    if (!controller) return;
     const handleDataUpdate = (data: ResultType[]) => {
       // Find all rows that match the predicate
       const matchingRows = data.filter((row) => predicate(row as PossiblyTentativeResult<ResultType>));
@@ -264,6 +265,7 @@ export function useListTableControllerValues<
 
   // Effect to manage individual ID subscriptions
   useEffect(() => {
+    if (!controller) return;
     const subscriptions = subscriptionsRef.current;
 
     // Subscribe to new IDs
@@ -499,11 +501,13 @@ export function useTableControllerTableValues<
     Database["public"]["Tables"][T]["Relationships"],
     Query
   >
->(controller: TableController<T, Query, IDType, ResultType>): PossiblyTentativeResult<ResultType>[] {
+>(controller?: TableController<T, Query, IDType, ResultType>): PossiblyTentativeResult<ResultType>[] {
   const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>(() => {
+    if (!controller) return [];
     return controller.list().data.map((row) => row as PossiblyTentativeResult<ResultType>);
   });
   useEffect(() => {
+    if (!controller) return;
     const { unsubscribe, data } = controller.list((data) => {
       // Update for any list change (membership or item updates)
       setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));

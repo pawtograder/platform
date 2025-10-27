@@ -330,13 +330,13 @@ export default function DragAndDropExample({
   }
 
   function hasConflict(over_id: UniqueIdentifier, draggedItem?: DraftReviewAssignment) {
-    return !!courseStaffWithConflicts
-      ?.find((staff) => staff.private_profile_id === over_id)
-      ?.profiles.grading_conflicts.find((conflict) => {
-        return draggedItem?.submitters.some(
-          (submitter) => conflict.student_profile_id === submitter.private_profile_id
-        );
-      });
+    const staff = courseStaffWithConflicts?.find((staff) => staff.private_profile_id === over_id);
+    if (!staff?.profiles?.grading_conflicts) {
+      return false;
+    }
+    return !!staff.profiles.grading_conflicts.find((conflict) => {
+      return draggedItem?.submitters.some((submitter) => conflict.student_profile_id === submitter.private_profile_id);
+    });
   }
 
   const getItemsByAssignee = (assignee_profile_id: string): DraftReviewAssignment[] => {
