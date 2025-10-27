@@ -24,11 +24,27 @@ Sentry.init({
   sendClientReports: false,
   replaysSessionSampleRate: 0,
   replaysOnErrorSampleRate: 0,
-  beforeSend(event, hint) {
+  beforeSend(event) {
     if (event.exception && event.exception.values) {
       for (const exception of event.exception.values) {
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
           return null; // Discard the event
+        }
+        if (exception.type === "AbortError" && exception.value?.includes("Fetch is aborted")) {
+          return null; // Discard fetch abort errors
+        }
+        if (exception.type === "TypeError" && exception.value?.includes("Failed to fetch")) {
+          return null; // Discard network errors
+        }
+        if (exception.type === "TypeError" && exception.value?.includes("NetworkError when attempting to fetch")) {
+          return null; // Discard network errors
+        }
+        if (
+          exception.type === "ChunkLoadError" &&
+          exception.value?.includes("Loading chunk") &&
+          exception.value?.includes("failed")
+        ) {
+          return null; // Discard chunk load errors
         }
       }
     }
