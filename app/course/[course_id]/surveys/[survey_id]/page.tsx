@@ -139,16 +139,21 @@ export default function SurveyTakingPage() {
         return;
       }
 
+    const response =
+      surveyData?.data && typeof surveyData.data === "object"
+        ? surveyData.data
+        : surveyData;     
+
       console.log("📤 Submitting survey:", {
         surveyId: survey_id,
         profileId: private_profile_id,
         surveyTitle: survey.title,
-        responseKeys: Object.keys(surveyData)
+        responseKeys: Object.keys(response || {})
       });
 
       setIsSubmitting(true);
       try {
-        await saveResponse(survey_id as string, private_profile_id, surveyData, true);
+        await saveResponse(survey_id as string, private_profile_id, response, true);
 
         toaster.create({
           title: "Survey Submitted",
@@ -185,9 +190,14 @@ export default function SurveyTakingPage() {
     async (surveyData: any, options: any) => {
       if (!private_profile_id || !survey || !survey.allow_response_editing) return;
 
+      const draftResponse =
+      surveyData?.data && typeof surveyData.data === "object"
+        ? surveyData.data
+        : surveyData;
+
       // Auto-save on value change if editing is allowed
       try {
-        await saveResponse(survey_id as string, private_profile_id, surveyData, false);
+        await saveResponse(survey_id as string, private_profile_id, draftResponse, false);
       } catch (error) {
         console.error("Error auto-saving response:", error);
         // Don't show error toast for auto-save failures to avoid spam

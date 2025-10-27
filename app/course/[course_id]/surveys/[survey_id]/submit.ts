@@ -127,7 +127,7 @@ export async function getAllResponses(surveyId: string, classId: string) {
     }
 
     // Get the profile_ids from responses
-    const profileIds = responses.map((r: any) => r.profile_id); // ✅ was student_id
+    const profileIds = responses.map((r: any) => r.profile_id); 
 
     // Get user_roles to map profile -> profile data (and optionally user_id)
     // We assume survey_responses.profile_id corresponds to user_roles.private_profile_id
