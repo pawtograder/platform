@@ -95,7 +95,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER set_survey_submitted_at_trigger
-  BEFORE UPDATE ON survey_responses
+  BEFORE INSERT OR UPDATE ON survey_responses
   FOR EACH ROW
   EXECUTE FUNCTION set_survey_submitted_at();
 

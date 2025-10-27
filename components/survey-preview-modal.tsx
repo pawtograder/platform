@@ -13,8 +13,7 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 import { Survey } from "survey-react-ui";
 import { Model } from "survey-core";
 import { useCallback, useEffect, useState } from "react";
-import { PlainLight } from "survey-core/themes";
-import { PlainDark } from "survey-core/themes";
+import { DefaultDark, DefaultLight } from "survey-core/themes";
 
 interface SurveyPreviewModalProps {
   isOpen: boolean;
@@ -55,9 +54,9 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
 
       // Apply SurveyJS theme based on color mode
       if (isDarkMode) {
-        model.applyTheme(PlainDark);
+        model.applyTheme(DefaultDark);
       } else {
-        model.applyTheme(PlainLight);
+        model.applyTheme(DefaultLight);
       }
 
       setSurveyModel(model);

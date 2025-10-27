@@ -1,30 +1,27 @@
 "use client";
 
+import React from "react";
 import { Model } from "survey-core";
-import { Survey, PopupSurvey } from "survey-react-ui";
+import { Survey } from "survey-react-ui";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
-import "survey-core/survey-core.css";
+import "survey-core/survey-core.min.css";
 
-interface SurveyComponentProps {
+interface ViewSurveyResponseProps {
   surveyJson: any;
-  isPopup?: boolean;
-  isExpanded?: boolean;
-  onComplete?: (survey: Model) => void;
-  onValueChanged?: (survey: Model, options: any) => void;
-  initialData?: any;
+  responseData: any;
   readOnly?: boolean;
+  onComplete?: (sender: Model, options: any) => void;
+  onValueChanged?: (sender: Model, options: any) => void;
 }
 
-export default function SurveyComponent({
+export default function ViewSurveyResponse({
   surveyJson,
-  isPopup = false,
-  isExpanded = true,
+  responseData,
+  readOnly = true,
   onComplete,
-  onValueChanged,
-  initialData,
-  readOnly = false
-}: SurveyComponentProps) {
+  onValueChanged
+}: ViewSurveyResponseProps) {
   // Get color mode to determine theme
   const isDarkMode = useColorModeValue(false, true);
 
@@ -39,8 +36,8 @@ export default function SurveyComponent({
   }
 
   // Set initial data FIRST, before setting other properties
-  if (initialData) {
-    survey.data = initialData;
+  if (responseData) {
+    survey.data = responseData;
   }
 
   // Set read-only mode if specified
@@ -57,11 +54,5 @@ export default function SurveyComponent({
     survey.onValueChanged.add(onValueChanged);
   }
 
-  // Render the survey in a pop-up window
-  if (isPopup) {
-    return <PopupSurvey model={survey} isExpanded={isExpanded} />;
-  }
-
-  // Render the survey inside the page
   return <Survey model={survey} />;
 }

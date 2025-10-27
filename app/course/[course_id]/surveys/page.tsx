@@ -8,22 +8,7 @@ import { useEffect, useState } from "react";
 import { toaster } from "@/components/ui/toaster";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
-
-type Survey = {
-  id: string;
-  title: string;
-  description?: string;
-  due_date?: string;
-  allow_response_editing: boolean;
-  status: "draft" | "published" | "closed";
-  created_at: string;
-};
-
-type SurveyWithResponse = Survey & {
-  response_status: "not_started" | "in_progress" | "completed";
-  submitted_at?: string;
-  is_submitted?: boolean;
-};
+import { SurveyWithResponse } from "@/types/survey";
 
 export default function StudentSurveysPage() {
   const { course_id } = useParams();
@@ -32,11 +17,27 @@ export default function StudentSurveysPage() {
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
+
+  // Status badge colors for dark mode
+  const statusColors = {
+    not_started: {
+      bg: useColorModeValue("#F2F2F2", "#374151"),
+      color: useColorModeValue("#4B5563", "#9CA3AF"),
+      text: "Not Started"
+    },
+    in_progress: {
+      bg: useColorModeValue("#FEF3C7", "#451A03"),
+      color: useColorModeValue("#92400E", "#FCD34D"),
+      text: "In Progress"
+    },
+    completed: {
+      bg: useColorModeValue("#D1FAE5", "#064E3B"),
+      color: useColorModeValue("#065F46", "#A7F3D0"),
+      text: "Completed"
+    }
+  };
 
   useEffect(() => {
     const loadSurveys = async () => {
@@ -122,7 +123,7 @@ export default function StudentSurveysPage() {
 
           let response_status: "not_started" | "in_progress" | "completed" = "not_started";
           if (response) {
-            if (response.is_submitted) {
+            if ((response as any).is_submitted) {
               response_status = "completed";
             } else {
               response_status = "in_progress";
@@ -132,8 +133,8 @@ export default function StudentSurveysPage() {
           return {
             ...survey,
             response_status,
-            submitted_at: response?.submitted_at,
-            is_submitted: response?.is_submitted
+            submitted_at: (response as any)?.submitted_at,
+            is_submitted: (response as any)?.is_submitted
           };
         });
 
@@ -154,12 +155,6 @@ export default function StudentSurveysPage() {
   }, [course_id]);
 
   const getStatusBadge = (survey: SurveyWithResponse) => {
-    const statusColors = {
-      not_started: { bg: "#F2F2F2", color: "#4B5563", text: "Not Started" },
-      in_progress: { bg: "#FEF3C7", color: "#92400E", text: "In Progress" },
-      completed: { bg: "#D1FAE5", color: "#065F46", text: "Completed" }
-    };
-
     const status = statusColors[survey.response_status];
 
     return (
@@ -280,8 +275,8 @@ export default function StudentSurveysPage() {
                       {survey.response_status === "completed"
                         ? "View Response"
                         : survey.response_status === "in_progress"
-                        ? "Continue Survey"
-                        : "Start Survey"}
+                          ? "Continue Survey"
+                          : "Start Survey"}
                     </Button>
                   </Link>
                 </HStack>

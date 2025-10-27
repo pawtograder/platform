@@ -6,17 +6,15 @@ import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
 import { differenceInMinutes } from "date-fns";
 import { useRouter } from "next/navigation";
+import { Model } from "survey-core";
+import { useMemo } from "react";
 
 type SurveyResponse = {
   id: string;
   survey_id: string;
   profile_id: string; // Foreign key to profiles
-  response: {
-    satisfaction?: string;
-    helpful_aspects?: string;
-    comments?: string;
-    [key: string]: any; // Allow for other properties
-  };
+  response: Record<string, any>; // Dynamic response data based on survey questions
+  created_at: string;
   submitted_at: string;
   updated_at: string;
   is_submitted: boolean;
@@ -35,6 +33,69 @@ type SurveyResponsesViewProps = {
   responses: SurveyResponse[];
   totalStudents: number;
 };
+
+/**
+ * Gets question titles from survey JSON for dynamic column headers
+ */
+function getQuestionTitles(surveyJson: any): Record<string, string> {
+  const titles: Record<string, string> = {};
+
+  try {
+    const survey = new Model(surveyJson);
+
+    // Get all questions from the survey
+    survey.getAllQuestions().forEach((question) => {
+      if (question.name) {
+        titles[question.name] = question.title || question.name;
+      }
+    });
+  } catch (error) {
+    console.warn("Error parsing survey JSON for question titles:", error);
+  }
+
+  return titles;
+}
+
+/**
+ * Formats response values for display in the table
+ */
+function formatResponseValue(value: any): string {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+
+  if (typeof value === "object") {
+    // For complex objects, try to extract meaningful data
+    if (value.text) return value.text;
+    if (value.value) return String(value.value);
+    if (value.name) return value.name;
+    if (value.title) return value.title;
+
+    // If it's a simple object with string values, join them
+    const stringValues = Object.values(value).filter((v) => typeof v === "string");
+    if (stringValues.length > 0) {
+      return stringValues.join(", ");
+    }
+
+    // Last resort: JSON stringify (truncated)
+    const jsonStr = JSON.stringify(value);
+    return jsonStr.length > 50 ? jsonStr.substring(0, 50) + "..." : jsonStr;
+  }
+
+  return String(value);
+}
 
 export default function SurveyResponsesView({
   courseId,
@@ -58,11 +119,29 @@ export default function SurveyResponsesView({
   const totalResponses = responses.length;
   const responseRate = totalStudents > 0 ? ((totalResponses / totalStudents) * 100).toFixed(0) : 0;
 
+  // Get dynamic question columns from survey JSON
+  const questionTitles = useMemo(() => {
+    return getQuestionTitles(surveyJson);
+  }, [surveyJson]);
+
+  // Get all unique question names from responses
+  const allQuestionNames = useMemo(() => {
+    const questionNames = new Set<string>();
+    responses.forEach((response) => {
+      if (response.response) {
+        Object.keys(response.response).forEach((key) => {
+          questionNames.add(key);
+        });
+      }
+    });
+    return Array.from(questionNames);
+  }, [responses]);
+
   // Calculate average completion time
   let avgCompletionTime = "—";
   if (totalResponses > 0) {
     const totalMinutes = responses.reduce((sum, response) => {
-      const start = new Date(response.updated_at);
+      const start = new Date(response.created_at);
       const end = new Date(response.submitted_at);
       return sum + differenceInMinutes(end, start);
     }, 0);
@@ -179,40 +258,25 @@ export default function SurveyResponsesView({
               >
                 SUBMITTED AT
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={headerTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
-                Q1: SATISFACTION
-              </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={headerTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
-                Q2: HELPFUL ASPECTS
-              </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={headerTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-                pr={6}
-              >
-                Q3: COMMENTS
-              </Table.ColumnHeader>
+              {allQuestionNames.map((questionName) => (
+                <Table.ColumnHeader
+                  key={questionName}
+                  color={headerTextColor}
+                  fontSize="xs"
+                  fontWeight="semibold"
+                  textTransform="uppercase"
+                  py={3}
+                  pr={questionName === allQuestionNames[allQuestionNames.length - 1] ? 6 : undefined}
+                >
+                  {questionTitles[questionName] || questionName}
+                </Table.ColumnHeader>
+              ))}
             </Table.Row>
           </Table.Header>
           <Table.Body>
             {totalResponses === 0 ? (
               <Table.Row bg={tableRowBg} borderColor={borderColor}>
-                <Table.Cell colSpan={5} py={4} textAlign="center">
+                <Table.Cell colSpan={2 + allQuestionNames.length} py={4} textAlign="center">
                   <Text color={emptyStateTextColor}>Students haven't submitted any responses to this survey.</Text>
                 </Table.Cell>
               </Table.Row>
@@ -227,15 +291,15 @@ export default function SurveyResponsesView({
                       {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")}
                     </Text>
                   </Table.Cell>
-                  <Table.Cell py={4}>
-                    <Text color={textColor}>{response.response?.satisfaction || "—"}</Text>
-                  </Table.Cell>
-                  <Table.Cell py={4}>
-                    <Text color={textColor}>{response.response?.helpful_aspects || "—"}</Text>
-                  </Table.Cell>
-                  <Table.Cell py={4} pr={6}>
-                    <Text color={textColor}>{response.response?.comments || "—"}</Text>
-                  </Table.Cell>
+                  {allQuestionNames.map((questionName) => (
+                    <Table.Cell
+                      key={questionName}
+                      py={4}
+                      pr={questionName === allQuestionNames[allQuestionNames.length - 1] ? 6 : undefined}
+                    >
+                      <Text color={textColor}>{formatResponseValue(response.response?.[questionName])}</Text>
+                    </Table.Cell>
+                  ))}
                 </Table.Row>
               ))
             )}
