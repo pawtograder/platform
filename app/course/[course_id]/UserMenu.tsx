@@ -40,8 +40,11 @@ import { PiSignOut } from "react-icons/pi";
 import { RiChatSettingsFill } from "react-icons/ri";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../../actions";
+import { LuCopy, LuCheck } from "react-icons/lu";
 
 function SupportMenu() {
+  const [isCopied, setIsCopied] = useState(false);
+  
   const buildNumber = useMemo(() => {
     const str =
       process.env.SENTRY_RELEASE ??
@@ -53,7 +56,25 @@ function SupportMenu() {
     }
     return "Unknown";
   }, []);
+  
   const { course_id } = useParams();
+  
+  const handleCopyBuildNumber = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    try {
+      await navigator.clipboard.writeText(buildNumber);
+      setIsCopied(true);
+      
+      setTimeout(() => {
+        setIsCopied(false);
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to copy build number:', err);
+    }
+  };
+  
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
@@ -100,8 +121,21 @@ function SupportMenu() {
                 View open bugs
               </Link>
             </Menu.Item>
-            <Menu.Item value="current-version">
-              <Text>Build: {buildNumber}</Text>
+            <Menu.Item
+              value="current-version"
+              onClick={handleCopyBuildNumber}
+              closeOnSelect={false}
+              cursor="pointer"
+              _hover={{ bg: "bg.subtle" }}
+            >
+              <HStack gap={2} width="100%" justifyContent="space-between">
+                <Text>Build: {buildNumber}</Text>
+                {isCopied ? (
+                  <LuCheck size={16} color="green" />
+                ) : (
+                  <LuCopy size={16} />
+                )}
+              </HStack>
             </Menu.Item>
           </Menu.Content>
         </Menu.Positioner>
