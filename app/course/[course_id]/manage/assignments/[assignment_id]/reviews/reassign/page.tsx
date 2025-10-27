@@ -84,6 +84,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   });
   const [selectedUser, setSelectedUser] = useState<UserRoleWithConflictsAndName>();
   const [baseOnAll, setBaseOnAll] = useState<boolean>(false);
+  const [numToReassign, setNumToReassign] = useState<number>(0);
   const [selectedTags, setSelectedTags] = useState<
     MultiValue<{
       label: string;
@@ -272,6 +273,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       });
 
     setSubmissionsToDo(filteredSubmissions);
+    setNumToReassign(filteredSubmissions.length);
 
     // Derive and preserve original parts for each submission (union across matching RAs)
     const rubricPartsMap = new Map<number, RubricPart[]>();
@@ -417,7 +419,9 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       }));
 
       // For "by_submission" mode, preserve the original rubric parts that were assigned
-      const reviewAssignments = generateReviewsByRubric(usersWithConflicts, submissionsToDo, historicalWorkload);
+      // Only reassign the first numToReassign submissions
+      const submissionsToReassign = submissionsToDo.slice(0, numToReassign);
+      const reviewAssignments = generateReviewsByRubric(usersWithConflicts, submissionsToReassign, historicalWorkload);
       setDraftReviews(reviewAssignments);
     } catch (e) {
       Sentry.captureException(e);
@@ -541,8 +545,25 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       return false;
     }
 
-    // Clear remaining work for the selected grader first
-    await clearIncompleteAssignmentsForUser();
+    // Clear only the specific review assignments for submissions being reassigned
+    // (not all assignments for the user, since we're only reassigning a subset)
+    const submissionIdsToReassign = draftReviews.map((review) => review.submission.id);
+    if (submissionIdsToReassign.length > 0 && selectedUser) {
+      const { error: deleteError } = await supabase
+        .from("review_assignments")
+        .delete()
+        .eq("class_id", Number(course_id))
+        .eq("assignment_id", Number(assignment_id))
+        .eq("assignee_profile_id", selectedUser.private_profile_id)
+        .eq("rubric_id", selectedRubric.id)
+        .in("submission_id", submissionIdsToReassign)
+        .is("completed_at", null);
+
+      if (deleteError) {
+        toaster.error({ title: "Error clearing assignments", description: deleteError.message });
+        return false;
+      }
+    }
 
     // Build RPC payload from draftReviews
     const rpcDraftAssignments = (draftReviews ?? []).map((review: DraftReviewAssignment) => ({
@@ -623,25 +644,8 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     setSelectedTags([]);
     setSelectedUsers([]);
     setOriginalRubricParts(new Map());
+    setNumToReassign(0);
   }, []);
-
-  /**
-   * Deletes all of the review-assignments for the selected user that are incomplete for this
-   * rubric and assignment. Used when review assignments are being reassigned.
-   */
-  const clearIncompleteAssignmentsForUser = useCallback(async () => {
-    if (!selectedUser) return;
-    const { error } = await supabase.rpc("clear_incomplete_assignments_for_user", {
-      p_class_id: Number(course_id),
-      p_assignment_id: Number(assignment_id),
-      p_assignee_profile_id: selectedUser.private_profile_id,
-      p_rubric_id: selectedRubric?.id ?? undefined,
-      p_rubric_part_ids: undefined
-    });
-    if (error) {
-      toaster.error({ title: "Error clearing assignments", description: error.message });
-    }
-  }, [supabase, course_id, assignment_id, selectedUser, selectedRubric]);
 
   // Note: clearUnfinishedAssignments function moved to shared ClearAssignmentsButton component
 
@@ -656,9 +660,11 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
               onChange={(e) => {
                 setSelectedUser(e?.value);
               }}
-              options={courseStaff?.map((staff) => {
-                return { label: staff.profiles.name, value: staff };
-              })}
+              options={courseStaff
+                ?.map((staff) => {
+                  return { label: staff.profiles.name, value: staff };
+                })
+                .sort((a, b) => a.label.localeCompare(b.label))}
             />
           </Field.Root>
 
@@ -688,6 +694,27 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                 selectedUser?.profiles.name ? `to ${selectedUser?.profiles.name}` : ""
               } that are incomplete for this rubric on this assignment.`}
             </Text>
+            <Field.Root>
+              <Field.Label>Number of submissions to reassign</Field.Label>
+              <Input
+                type="number"
+                min={0}
+                max={submissionsToDo?.length ?? 0}
+                value={numToReassign}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value);
+                  const maxValue = submissionsToDo?.length ?? 0;
+                  if (!isNaN(value)) {
+                    setNumToReassign(Math.min(Math.max(0, value), maxValue));
+                  }
+                }}
+              />
+              <Field.HelperText>
+                Choose how many submissions to reassign (max: {submissionsToDo?.length ?? 0}). The first {numToReassign}{" "}
+                submission{numToReassign !== 1 ? "s" : ""} will be reassigned, and the rest will remain assigned to{" "}
+                {selectedUser?.profiles.name || "the current grader"}.
+              </Field.HelperText>
+            </Field.Root>
             {originalRubricParts.size > 0 && (
               <Text fontSize={"sm"} color="blue.600" fontStyle="italic">
                 Note: Original rubric part assignments will be preserved. The new graders will get the same rubric parts
@@ -751,10 +778,12 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                   setSelectedUsers(e || []);
                 }}
                 value={selectedUsers}
-                options={selectedGraders().map((user) => ({
-                  label: user.profiles.name,
-                  value: user
-                }))}
+                options={selectedGraders()
+                  .map((user) => ({
+                    label: user.profiles.name,
+                    value: user
+                  }))
+                  .sort((a, b) => a.label.localeCompare(b.label))}
               />
               <Field.HelperText>
                 {selectedUsers.length === 0
@@ -832,31 +861,38 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                 variant="subtle"
                 colorPalette="green"
                 loading={isGeneratingReviews}
-                disabled={!dueDate || !selectedRubric || !role || !selectedUser || submissionsToDo?.length === 0}
+                disabled={
+                  !dueDate ||
+                  !selectedRubric ||
+                  !role ||
+                  !selectedUser ||
+                  submissionsToDo?.length === 0 ||
+                  numToReassign === 0
+                }
               >
                 Prepare Reassignments
               </Button>
             </HStack>
-
-            {draftReviews.length > 0 && (
-              <Flex flexDir={"column"} gap="3" padding="2">
-                <DragAndDropExample
-                  draftReviews={draftReviews}
-                  setDraftReviews={setDraftReviews}
-                  courseStaffWithConflicts={finalSelectedUsers() ?? []}
-                  currentReviewAssignments={currentReviewAssignments}
-                  selectedRubric={selectedRubric}
-                  allActiveSubmissions={allActiveSubmissions}
-                  groupMembersByGroupId={groupMembersByGroupId}
-                />
-                <Button maxWidth={"md"} variant="subtle" onClick={() => assignReviews()} float={"right"}>
-                  Reassign
-                </Button>
-              </Flex>
-            )}
           </VStack>
         </Fieldset.Content>
       </Fieldset.Root>
+
+      {draftReviews.length > 0 && (
+        <Flex flexDir={"column"} gap="3" padding="2" w="100%">
+          <DragAndDropExample
+            draftReviews={draftReviews}
+            setDraftReviews={setDraftReviews}
+            courseStaffWithConflicts={finalSelectedUsers() ?? []}
+            currentReviewAssignments={currentReviewAssignments}
+            selectedRubric={selectedRubric}
+            allActiveSubmissions={allActiveSubmissions}
+            groupMembersByGroupId={groupMembersByGroupId}
+          />
+          <Button maxWidth={"md"} variant="subtle" onClick={() => assignReviews()} float={"right"}>
+            Reassign
+          </Button>
+        </Flex>
+      )}
     </VStack>
   );
 }
