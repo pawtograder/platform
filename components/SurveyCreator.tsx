@@ -40,7 +40,7 @@ export default function SurveyCreatorWidget(props: {
   onCreatorReady?: (creator: SurveyCreator) => void;
 }) {
   const [creator, setCreator] = useState<SurveyCreator | null>(null);
-  
+
   // Get color mode to determine theme (same as survey-preview-modal.tsx)
   const isDarkMode = useColorModeValue(false, true);
 
