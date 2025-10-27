@@ -8,8 +8,9 @@ import { useEffect, useState } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { formatInTimeZone } from "date-fns-tz";
 import dynamic from "next/dynamic";
+import { Survey, SurveyResponseWithProfile } from "@/types/survey";
 
-const SurveyComponent = dynamic(() => import("@/components/Survey"), {
+const ViewSurveyResponse = dynamic(() => import("@/components/ViewSurveyResponse"), {
   ssr: false,
   loading: () => (
     <Box display="flex" alignItems="center" justifyContent="center" p={8}>
@@ -18,31 +19,10 @@ const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   )
 });
 
-type SurveyResponse = {
-  id: string;
-  response: Record<string, any>;
-  is_submitted: boolean;
-  submitted_at?: string;
-  created_at: string;
-  updated_at: string;
-  profiles: {
-    id: string;
-    name: string;
-    sis_user_id: string | null;
-  };
-};
-
-type Survey = {
-  id: string;
-  title: string;
-  description?: string;
-  questions: any;
-};
-
 export default function IndividualResponsePage() {
   const { course_id, survey_id, response_id } = useParams();
   const router = useRouter();
-  const [response, setResponse] = useState<SurveyResponse | null>(null);
+  const [response, setResponse] = useState<SurveyResponseWithProfile | null>(null);
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -54,18 +34,36 @@ export default function IndividualResponsePage() {
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
 
+  // Status badge colors for dark mode
+  const completedBadgeBg = useColorModeValue("#D1FAE5", "#064E3B");
+  const completedBadgeColor = useColorModeValue("#065F46", "#A7F3D0");
+  const partialBadgeBg = useColorModeValue("#FEF3C7", "#451A03");
+  const partialBadgeColor = useColorModeValue("#92400E", "#FCD34D");
+
   useEffect(() => {
     const loadResponseData = async () => {
+      console.log("🚀 Loading response data:", { course_id, survey_id, response_id });
+
       try {
         const supabase = createClient();
 
         // Get response with student info
+        console.log("📊 Fetching survey response...");
         const { data: responseData, error: responseError } = await supabase
           .from("survey_responses" as any)
           .select("*")
           .eq("id", response_id)
           .eq("survey_id", survey_id)
           .single();
+
+        console.log("📊 Response query result:", {
+          hasData: !!responseData,
+          hasError: !!responseError,
+          errorCode: responseError?.code,
+          errorMessage: responseError?.message,
+          responseKeys: responseData ? Object.keys(responseData) : [],
+          responseSample: responseData ? JSON.stringify(responseData).slice(0, 200) : "No data"
+        });
 
         if (responseError || !responseData) {
           toaster.create({
@@ -77,7 +75,8 @@ export default function IndividualResponsePage() {
           return;
         }
 
-        // Get the student's profile via user_roles
+        // Get the student's profile via user_roles using profile_id
+        console.log("👤 Fetching user profile for profile_id:", (responseData as any).profile_id);
         const { data: userRole, error: userRoleError } = await supabase
           .from("user_roles" as any)
           .select(
@@ -92,34 +91,58 @@ export default function IndividualResponsePage() {
           `
           )
           .eq("class_id", Number(course_id))
-          .eq("user_id", (responseData as any).student_id)
+          .eq("private_profile_id", (responseData as any).profile_id)
           .single();
 
+        console.log("👤 User profile query result:", {
+          hasData: !!userRole,
+          hasError: !!userRoleError,
+          errorCode: userRoleError?.code,
+          errorMessage: userRoleError?.message,
+          profileData: userRole ? (userRole as any).profiles : null
+        });
+
         if (userRoleError || !userRole) {
-          console.error("Error getting user profile:", userRoleError);
+          console.error("❌ Error getting user profile:", userRoleError);
           // Set response with fallback profile data
-          setResponse({
+          const fallbackResponse = {
             ...(responseData as any),
             profiles: {
-              id: (responseData as any).student_id,
+              id: (responseData as any).profile_id,
               name: "Unknown Student",
               sis_user_id: null
             }
-          } as SurveyResponse);
+          } as SurveyResponseWithProfile;
+          console.log("🔄 Using fallback profile data:", fallbackResponse);
+          setResponse(fallbackResponse);
         } else {
-          setResponse({
+          const responseWithProfile = {
             ...(responseData as any),
             profiles: (userRole as any).profiles
-          } as SurveyResponse);
+          } as SurveyResponseWithProfile;
+          console.log("✅ Response with profile data:", responseWithProfile);
+          setResponse(responseWithProfile);
         }
 
         // Get survey info
+        console.log("📋 Fetching survey info for survey_id:", survey_id);
         const { data: surveyData, error: surveyError } = await supabase
           .from("surveys" as any)
-          .select("id, title, description, questions")
+          .select("id, title, description, json, allow_response_editing")
           .eq("id", survey_id)
           .eq("class_id", Number(course_id))
           .single();
+
+        console.log("📋 Survey query result:", {
+          hasData: !!surveyData,
+          hasError: !!surveyError,
+          errorCode: surveyError?.code,
+          errorMessage: surveyError?.message,
+          surveyKeys: surveyData ? Object.keys(surveyData) : [],
+          allowResponseEditing: surveyData ? (surveyData as any).allow_response_editing : null,
+          hasJson: surveyData ? !!(surveyData as any).json : false,
+          jsonKeys: surveyData && (surveyData as any).json ? Object.keys((surveyData as any).json) : []
+        });
 
         if (surveyError || !surveyData) {
           toaster.create({
@@ -131,7 +154,15 @@ export default function IndividualResponsePage() {
           return;
         }
 
-        setSurvey(surveyData as unknown as Survey);
+        const finalSurvey = surveyData as unknown as Survey;
+        console.log("✅ Final survey data:", {
+          id: finalSurvey.id,
+          title: finalSurvey.title,
+          allowResponseEditing: finalSurvey.allow_response_editing,
+          hasJson: !!finalSurvey.json,
+          jsonSample: finalSurvey.json ? JSON.stringify(finalSurvey.json).slice(0, 200) : "No JSON"
+        });
+        setSurvey(finalSurvey);
       } catch (error) {
         console.error("Error loading response:", error);
         toaster.create({
@@ -159,13 +190,29 @@ export default function IndividualResponsePage() {
   const getStatusBadge = (isSubmitted: boolean) => {
     if (isSubmitted) {
       return (
-        <Badge bg="#D1FAE5" color="#065F46" px={3} py={1} borderRadius="md" fontSize="sm" fontWeight="medium">
+        <Badge
+          bg={completedBadgeBg}
+          color={completedBadgeColor}
+          px={3}
+          py={1}
+          borderRadius="md"
+          fontSize="sm"
+          fontWeight="medium"
+        >
           Completed
         </Badge>
       );
     } else {
       return (
-        <Badge bg="#FEF3C7" color="#92400E" px={3} py={1} borderRadius="md" fontSize="sm" fontWeight="medium">
+        <Badge
+          bg={partialBadgeBg}
+          color={partialBadgeColor}
+          px={3}
+          py={1}
+          borderRadius="md"
+          fontSize="sm"
+          fontWeight="medium"
+        >
           Partial
         </Badge>
       );
@@ -222,6 +269,16 @@ export default function IndividualResponsePage() {
       </Box>
     );
   }
+
+  console.log("🎨 Rendering IndividualResponsePage with:", {
+    isLoading,
+    hasResponse: !!response,
+    hasSurvey: !!survey,
+    responseData: response?.response ? "Present" : "Missing",
+    surveyJson: survey?.json ? "Present" : "Missing",
+    allowResponseEditing: survey?.allow_response_editing,
+    readOnly: survey ? !survey.allow_response_editing : true
+  });
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
@@ -287,14 +344,14 @@ export default function IndividualResponsePage() {
                 <Text color={textColor} fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Started
                 </Text>
-                <Text color={textColor}>{formatDate(response.created_at)}</Text>
+                <Text color={textColor}>{formatDate(response.created_at || "")}</Text>
               </VStack>
 
               <VStack align="start" gap={1}>
                 <Text color={textColor} fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Last Updated
                 </Text>
-                <Text color={textColor}>{formatDate(response.updated_at)}</Text>
+                <Text color={textColor}>{formatDate(response.updated_at || "")}</Text>
               </VStack>
 
               {response.submitted_at && (
@@ -312,18 +369,30 @@ export default function IndividualResponsePage() {
         {/* Survey Response */}
         <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
           <VStack align="stretch" gap={4}>
-            <Heading size="md" color={textColor}>
-              Response
-            </Heading>
+            <HStack justify="space-between" align="center">
+              <Heading size="md" color={textColor}>
+                Response
+              </Heading>
+              <Badge
+                bg={survey.allow_response_editing ? "#D1FAE5" : "#FEF3C7"}
+                color={survey.allow_response_editing ? "#065F46" : "#92400E"}
+                px={3}
+                py={1}
+                borderRadius="md"
+                fontSize="sm"
+                fontWeight="medium"
+              >
+                {survey.allow_response_editing ? "Editable" : "Read Only"}
+              </Badge>
+            </HStack>
 
             <Box>
-              <SurveyComponent
-                surveyJson={survey.questions}
-                initialData={response.response}
-                readOnly={true}
+              <ViewSurveyResponse
+                surveyJson={survey.json}
+                responseData={response.response}
+                readOnly={!survey.allow_response_editing}
                 onComplete={() => {}} // No-op for display mode
                 onValueChanged={() => {}} // No-op for display mode
-                isPopup={false}
               />
             </Box>
           </VStack>

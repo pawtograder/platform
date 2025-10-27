@@ -7,8 +7,9 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
 import dynamic from "next/dynamic";
-import { saveResponse, getResponse, ResponseData } from "./submit";
+import { saveResponse, getResponse } from "./submit";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Survey, SurveyResponse } from "@/types/survey";
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -19,28 +20,11 @@ const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   )
 });
 
-type Survey = {
-  id: string;
-  title: string;
-  description?: string;
-  json: any;
-  due_date?: string;
-  allow_response_editing: boolean;
-  status: "draft" | "published" | "closed";
-};
-
-type SurveyResponse = {
-  id: string;
-  response: ResponseData;
-  is_submitted: boolean;
-  submitted_at?: string;
-};
-
 export default function SurveyTakingPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
 
-  // pulls from ClassProfileProvider 
+  // pulls from ClassProfileProvider
   const { private_profile_id } = useClassProfiles();
 
   const [survey, setSurvey] = useState<Survey | null>(null);
@@ -50,11 +34,18 @@ export default function SurveyTakingPage() {
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
+
+  // Status box colors for dark mode
+  const warningBgColor = useColorModeValue("#FEF3C7", "#451A03");
+  const warningBorderColor = useColorModeValue("#F59E0B", "#D97706");
+  const warningTextColor = useColorModeValue("#92400E", "#FCD34D");
+  const successBgColor = useColorModeValue("#D1FAE5", "#064E3B");
+  const successBorderColor = useColorModeValue("#10B981", "#059669");
+  const successTextColor = useColorModeValue("#065F46", "#A7F3D0");
 
   useEffect(() => {
     const loadSurveyData = async () => {
@@ -110,7 +101,7 @@ export default function SurveyTakingPage() {
         setSurvey(surveyData);
 
         // Get existing response if any
-        const response = await getResponse(survey_id as string, private_profile_id);
+        const response = await getResponse(surveyData.id, private_profile_id);
         setExistingResponse(response || null);
       } catch (error) {
         console.error("Error loading survey:", error);
@@ -126,34 +117,21 @@ export default function SurveyTakingPage() {
     };
 
     loadSurveyData();
-  }, [course_id, survey_id, private_profile_id, router]); // Removed manual user_roles fetch, now depends on context
+  }, [course_id, survey_id, private_profile_id]); // Include private_profile_id from hook
 
   const handleSurveyComplete = useCallback(
-    async (surveyData: any) => {
+    async (surveyModel: any) => {
       if (!private_profile_id || !survey) {
-        console.error("❌ Cannot submit survey: Missing profile_id or survey", {
-          hasProfileId: !!private_profile_id,
-          hasSurvey: !!survey,
-          surveyId: survey_id
-        });
+        console.error("Cannot submit survey: Missing profile_id or survey");
         return;
       }
 
-    const response =
-      surveyData?.data && typeof surveyData.data === "object"
-        ? surveyData.data
-        : surveyData;     
-
-      console.log("📤 Submitting survey:", {
-        surveyId: survey_id,
-        profileId: private_profile_id,
-        surveyTitle: survey.title,
-        responseKeys: Object.keys(response || {})
-      });
+      // Extract only the survey data from the model, not the entire model object
+      const surveyData = surveyModel.data;
 
       setIsSubmitting(true);
       try {
-        await saveResponse(survey_id as string, private_profile_id, response, true);
+        await saveResponse(survey.id, private_profile_id, surveyData, true);
 
         toaster.create({
           title: "Survey Submitted",
@@ -164,14 +142,7 @@ export default function SurveyTakingPage() {
         // Redirect back to surveys list
         router.push(`/course/${course_id}/surveys`);
       } catch (error) {
-        console.error("❌ Error submitting survey:", {
-          error,
-          errorType: error instanceof Error ? error.constructor.name : typeof error,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          errorStack: error instanceof Error ? error.stack : undefined,
-          surveyId: survey_id,
-          profileId: private_profile_id
-        });
+        console.error("Error submitting survey:", error);
 
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
         toaster.create({
@@ -187,17 +158,15 @@ export default function SurveyTakingPage() {
   );
 
   const handleValueChanged = useCallback(
-    async (surveyData: any, options: any) => {
+    async (surveyModel: any, options: any) => {
       if (!private_profile_id || !survey || !survey.allow_response_editing) return;
 
-      const draftResponse =
-      surveyData?.data && typeof surveyData.data === "object"
-        ? surveyData.data
-        : surveyData;
+      // Extract only the survey data from the model, not the entire model object
+      const surveyData = surveyModel.data;
 
       // Auto-save on value change if editing is allowed
       try {
-        await saveResponse(survey_id as string, private_profile_id, draftResponse, false);
+        await saveResponse(survey.id, private_profile_id, surveyData, false);
       } catch (error) {
         console.error("Error auto-saving response:", error);
         // Don't show error toast for auto-save failures to avoid spam
@@ -289,16 +258,16 @@ export default function SurveyTakingPage() {
           )}
 
           {isReadOnly && (
-            <Box bg="#FEF3C7" border="1px solid" borderColor="#F59E0B" borderRadius="md" p={3}>
-              <Text color="#92400E" fontSize="sm" fontWeight="medium">
+            <Box bg={warningBgColor} border="1px solid" borderColor={warningBorderColor} borderRadius="md" p={3}>
+              <Text color={warningTextColor} fontSize="sm" fontWeight="medium">
                 This survey has been submitted and cannot be edited.
               </Text>
             </Box>
           )}
 
           {existingResponse?.is_submitted && survey.allow_response_editing && (
-            <Box bg="#D1FAE5" border="1px solid" borderColor="#10B981" borderRadius="md" p={3}>
-              <Text color="#065F46" fontSize="sm" fontWeight="medium">
+            <Box bg={successBgColor} border="1px solid" borderColor={successBorderColor} borderRadius="md" p={3}>
+              <Text color={successTextColor} fontSize="sm" fontWeight="medium">
                 You can edit your response since editing is allowed for this survey.
               </Text>
             </Box>
@@ -309,6 +278,8 @@ export default function SurveyTakingPage() {
         <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
           <SurveyComponent
             surveyJson={survey.json}
+            initialData={existingResponse?.response}
+            readOnly={isReadOnly}
             onComplete={handleSurveyComplete}
             onValueChanged={handleValueChanged}
             isPopup={false}

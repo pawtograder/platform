@@ -1,6 +1,5 @@
 import { createClient } from "@/utils/supabase/client";
-
-export type ResponseData = Record<string, any>;
+import { ResponseData, SurveyResponse } from "@/types/survey";
 
 export async function saveResponse(
   surveyId: string,
@@ -10,14 +9,6 @@ export async function saveResponse(
 ) {
   const supabase = createClient();
 
-  console.log("💾 Saving survey response:", {
-    surveyId,
-    profileID,
-    isSubmitted,
-    responseDataKeys: Object.keys(responseData),
-    responseDataSample: JSON.stringify(responseData).slice(0, 200)
-  });
-
   try {
     // Upsert to survey_responses table
     const { data, error } = await supabase
@@ -25,58 +16,29 @@ export async function saveResponse(
       .upsert(
         {
           survey_id: surveyId,
-          profile_id: profileID, // ✅ use profile_id in DB
+          profile_id: profileID,
           response: responseData,
           is_submitted: isSubmitted
         },
         {
-          onConflict: "survey_id,profile_id" // ✅ matches UNIQUE(survey_id, profile_id)
+          onConflict: "survey_id,profile_id"
         }
       )
       .select()
       .single();
 
     if (error) {
-      console.error("❌ Database error saving response:", {
-        error,
-        errorCode: error.code,
-        errorMessage: error.message,
-        errorDetails: error.details,
-        errorHint: error.hint,
-        surveyId,
-        profileID
-      });
+      console.error("Database error saving response:", error);
       throw error;
     }
 
-    /*if (data) {
-      console.log("✅ Response saved successfully:", {
-        responseId: data.id,
-        isSubmitted
-      });
-    } else {
-      console.warn("⚠️ Upsert completed but returned no data");
-    }*/
-
     return data;
   } catch (error) {
-    console.error("❌ Exception saving response:", {
-      error,
-      errorType: error instanceof Error ? error.constructor.name : typeof error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      surveyId,
-      profileID
-    });
+    console.error("Exception saving response:", error);
     throw error;
   }
 }
 
-export type SurveyResponse = {
-  id: string;
-  response: ResponseData;
-  is_submitted: boolean;
-  submitted_at?: string;
-};
 
 export async function getResponse(
   surveyId: string,
@@ -93,10 +55,10 @@ export async function getResponse(
       .single();
 
     if (error && error.code !== "PGRST116") {
+      console.error("getResponse error:", error);
       throw error;
     }
 
-    // force the shape TS should expect
     return (data ?? null) as SurveyResponse | null;
   } catch (error) {
     console.error("Error getting response:", error);
