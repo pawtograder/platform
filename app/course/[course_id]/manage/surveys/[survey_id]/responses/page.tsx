@@ -57,13 +57,8 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     .select(
       `
       *,
-      profiles!student_id (
-        name,
-        user_roles!user_roles_private_profile_id_fkey (
-          users!user_roles_user_id_fkey1 (
-            email
-          )
-        )
+      profiles!profile_id (
+        name
       )
     `
     )
