@@ -24,11 +24,14 @@ Sentry.init({
   sendClientReports: false,
   replaysSessionSampleRate: 0,
   replaysOnErrorSampleRate: 0,
-  beforeSend(event, hint) {
+  beforeSend(event) {
     if (event.exception && event.exception.values) {
       for (const exception of event.exception.values) {
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
           return null; // Discard the event
+        }
+        if (exception.type === "TypeError" && exception.value?.includes("Failed to fetch")) {
+          return null; // Discard network errors
         }
       }
     }
