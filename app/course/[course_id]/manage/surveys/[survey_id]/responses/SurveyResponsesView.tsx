@@ -20,6 +20,11 @@ type SurveyResponse = {
   is_submitted: boolean;
   profiles: {
     name: string;
+    user_roles: Array<{
+      users: {
+        email: string;
+      };
+    }>;
   };
 };
 
@@ -256,6 +261,15 @@ export default function SurveyResponsesView({
                 textTransform="uppercase"
                 py={3}
               >
+               EMAIL
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={headerTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+              >
                 SUBMITTED AT
               </Table.ColumnHeader>
               {allQuestionNames.map((questionName) => (
@@ -276,7 +290,7 @@ export default function SurveyResponsesView({
           <Table.Body>
             {totalResponses === 0 ? (
               <Table.Row bg={tableRowBg} borderColor={borderColor}>
-                <Table.Cell colSpan={2 + allQuestionNames.length} py={4} textAlign="center">
+                <Table.Cell colSpan={3 + allQuestionNames.length} py={4} textAlign="center">
                   <Text color={emptyStateTextColor}>Students haven't submitted any responses to this survey.</Text>
                 </Table.Cell>
               </Table.Row>
@@ -286,6 +300,9 @@ export default function SurveyResponsesView({
                   <Table.Cell py={4} pl={6}>
                     <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
                   </Table.Cell>
+                  <Table.Cell py={4}>
+                    <Text color={textColor}>{response.profiles?.user_roles?.[0]?.users?.email || "N/A"}</Text>
+                    </Table.Cell>
                   <Table.Cell py={4}>
                     <Text color={textColor}>
                       {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")}
