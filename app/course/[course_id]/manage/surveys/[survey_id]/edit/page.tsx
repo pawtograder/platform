@@ -27,7 +27,7 @@ export default function EditSurveyPage() {
   const [surveyData, setSurveyData] = useState<any>(null);
 
   const form = useForm<SurveyFormData>({
-    refineCoreProps: { resource: "surveys", action: "edit" },
+    refineCoreProps: { resource: "surveys", action: "edit", id: survey_id as string },
     defaultValues: {
       title: "",
       description: "",
@@ -40,12 +40,25 @@ export default function EditSurveyPage() {
 
   const { getValues, setValue, reset } = form;
   const hasLoadedSurvey = useRef(false);
+  const loadingPromise = useRef<Promise<void> | null>(null);
 
   // Load the survey data when component mounts
   useEffect(() => {
-    if (hasLoadedSurvey.current) return; // Prevent duplicate loading
+    console.log("[EditSurvey] useEffect triggered", {
+      hasLoadedSurvey: hasLoadedSurvey.current,
+      survey_id,
+      course_id,
+      hasLoadingPromise: !!loadingPromise.current
+    });
+
+    if (hasLoadedSurvey.current || loadingPromise.current) {
+      console.log("[EditSurvey] Skipping load - already loaded or loading");
+      return; // Prevent duplicate loading
+    }
+
     const loadSurveyData = async () => {
       try {
+        console.log("[EditSurvey] Starting to load survey data");
         setIsLoading(true);
         const supabase = createClient();
         const { data, error } = await supabase
@@ -56,6 +69,7 @@ export default function EditSurveyPage() {
           .single();
 
         if (error || !data) {
+          console.log("[EditSurvey] Survey not found:", error);
           toaster.create({
             title: "Survey Not Found",
             description: "The survey you're trying to edit could not be found.",
@@ -65,19 +79,29 @@ export default function EditSurveyPage() {
           return;
         }
 
+        console.log("[EditSurvey] Survey data loaded successfully:", (data as any).id);
         setSurveyData(data);
+
+        // Convert due_date from ISO string to datetime-local format
+        let dueDateFormatted = "";
+        if ((data as any).due_date) {
+          const date = new Date((data as any).due_date);
+          // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
+          dueDateFormatted = date.toISOString().slice(0, 16);
+        }
 
         // Load the survey data into the form
         reset({
           title: (data as any).title || "",
           description: (data as any).description || "",
-          json: (data as any).questions || "",
+          json: (data as any).json || "",
           status: (data as any).status || "draft",
-          due_date: (data as any).due_date || "",
-          allow_response_editing: (data as any).allow_response_editing || false
+          due_date: dueDateFormatted,
+          allow_response_editing: Boolean((data as any).allow_response_editing)
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
+        console.log("[EditSurvey] Survey loaded and form reset completed");
 
         toaster.create({
           title: "Survey Loaded",
@@ -85,7 +109,7 @@ export default function EditSurveyPage() {
           type: "success"
         });
       } catch (error) {
-        console.error("Error loading survey:", error);
+        console.error("[EditSurvey] Error loading survey:", error);
         toaster.create({
           title: "Error Loading Survey",
           description: "An error occurred while loading the survey data.",
@@ -94,11 +118,13 @@ export default function EditSurveyPage() {
         router.push(`/course/${course_id}/manage/surveys`);
       } finally {
         setIsLoading(false);
+        loadingPromise.current = null; // Clear the promise ref
       }
     };
 
-    loadSurveyData();
-  }, [course_id, survey_id, reset, router]);
+    // Store the promise to prevent duplicate calls
+    loadingPromise.current = loadSurveyData();
+  }, [course_id, survey_id]); // Removed reset and router from dependencies
 
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
@@ -125,7 +151,7 @@ export default function EditSurveyPage() {
             .update({
               title: (values.title as string) || "Untitled Survey",
               description: (values.description as string) || null,
-              questions: jsonToStore,
+              json: jsonToStore,
               status: "draft",
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: (values.due_date as string) || null,
@@ -200,7 +226,7 @@ export default function EditSurveyPage() {
             .update({
               title: values.title as string,
               description: (values.description as string) || null,
-              questions: parsedJson,
+              json: parsedJson,
               status: validationErrors ? "draft" : (values.status as string), // Force to draft if validation errors
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: (values.due_date as string) || null,

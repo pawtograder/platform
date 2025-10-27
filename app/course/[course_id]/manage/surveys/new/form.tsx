@@ -374,7 +374,6 @@ export default function SurveyForm({
                   <Controller
                     name="status"
                     control={control}
-                    defaultValue="draft"
                     rules={{ required: "Status is required" }}
                     render={({ field }) => (
                       <VStack align="start" gap={2}>
@@ -434,27 +433,36 @@ export default function SurveyForm({
 
               {/* Allow Response Editing */}
               <Fieldset.Content>
-                <HStack gap={3} align="center">
-                  <Box position="relative">
-                    <Box
-                      position="absolute"
-                      top="0"
-                      left="0"
-                      w="5"
-                      h="5"
-                      bg={checkboxBgColor}
-                      border="1px solid"
-                      borderColor={checkboxBorderColor}
-                      borderRadius="xs"
-                      zIndex="0"
-                    />
-                    <Checkbox.Root {...register("allow_response_editing")}>
-                      <Checkbox.HiddenInput />
-                      <Checkbox.Control></Checkbox.Control>
-                    </Checkbox.Root>
-                  </Box>
-                  <Text color={textColor}>Allow students to edit their responses after submission</Text>
-                </HStack>
+                <Controller
+                  name="allow_response_editing"
+                  control={control}
+                  render={({ field }) => (
+                    <HStack gap={3} align="center">
+                      <Box position="relative">
+                        <Box
+                          position="absolute"
+                          top="0"
+                          left="0"
+                          w="5"
+                          h="5"
+                          bg={checkboxBgColor}
+                          border="1px solid"
+                          borderColor={checkboxBorderColor}
+                          borderRadius="xs"
+                          zIndex="0"
+                        />
+                        <Checkbox.Root
+                          checked={field.value}
+                          onCheckedChange={(details) => field.onChange(details.checked)}
+                        >
+                          <Checkbox.HiddenInput />
+                          <Checkbox.Control></Checkbox.Control>
+                        </Checkbox.Root>
+                      </Box>
+                      <Text color={textColor}>Allow students to edit their responses after submission</Text>
+                    </HStack>
+                  )}
+                />
               </Fieldset.Content>
 
               {/* Preview Section */}

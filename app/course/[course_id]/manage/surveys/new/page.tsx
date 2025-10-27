@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
@@ -28,6 +28,7 @@ export default function NewSurveyPage() {
 
   // 🚨 THIS is where we're allowed to call hooks like useClassProfiles
   const { private_profile_id } = useClassProfiles();
+  const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "create" },
@@ -50,6 +51,7 @@ export default function NewSurveyPage() {
 
     if (isReturningFromPreview && !hasLoadedDraft.current) {
       hasLoadedDraft.current = true; // Mark as loaded to prevent duplicate loading
+      setIsReturningFromPreview(true); // Set state for save functions to use
 
       const loadLatestDraft = async () => {
         try {
@@ -58,21 +60,37 @@ export default function NewSurveyPage() {
             .from("surveys" as any)
             .select("*")
             .eq("class_id", Number(course_id))
-            .eq("status", "draft")
+            .eq("created_by", private_profile_id)
             .order("created_at", { ascending: false })
             .limit(1)
             .single();
 
           if (data && !error) {
+            console.log("[loadLatestDraft] Raw data from DB:", data);
+            console.log("[loadLatestDraft] due_date:", (data as any).due_date);
+            console.log("[loadLatestDraft] allow_response_editing:", (data as any).allow_response_editing);
+            console.log("[loadLatestDraft] status:", (data as any).status);
+
+            // Convert due_date from ISO string to datetime-local format
+            let dueDateFormatted = "";
+            if ((data as any).due_date) {
+              const date = new Date((data as any).due_date);
+              // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
+              dueDateFormatted = date.toISOString().slice(0, 16);
+            }
+
             // Load the draft data into the form
-            reset({
+            const formData = {
               title: (data as any).title || "",
               description: (data as any).description || "",
               json: (data as any).json || "",
-              status: "draft",
-              due_date: (data as any).due_date || "",
-              allow_response_editing: (data as any).allow_response_editing || false
-            });
+              status: (data as any).status || "draft",
+              due_date: dueDateFormatted,
+              allow_response_editing: Boolean((data as any).allow_response_editing)
+            };
+
+            console.log("[loadLatestDraft] Form data being loaded:", formData);
+            reset(formData);
 
             toaster.create({
               title: "Draft Restored",
@@ -93,155 +111,185 @@ export default function NewSurveyPage() {
       url.searchParams.delete("from");
       window.history.replaceState({}, "", url.toString());
     }
-  }, [course_id, reset, searchParams]);
+  }, [course_id, reset, searchParams, private_profile_id]);
 
-  // -------- SAVE DRAFT ONLY --------
-  const saveDraftOnly = useCallback(
-    async (values: FieldValues, shouldRedirect: boolean = true) => {
+  // -------- CENTRALIZED SAVE FUNCTION --------
+  const saveSurvey = useCallback(
+    async (
+      values: FieldValues,
+      options: {
+        shouldRedirect?: boolean;
+        validateJson?: boolean;
+        showToast?: boolean;
+        toastTitle?: string;
+        toastDescription?: string;
+      } = {}
+    ) => {
+      const {
+        shouldRedirect = true,
+        validateJson = false,
+        showToast = true,
+        toastTitle = "Survey Saved",
+        toastDescription = "Your survey has been saved."
+      } = options;
+
+      console.log("[saveSurvey] Input values:", values);
+      console.log("[saveSurvey] due_date:", values.due_date);
+      console.log("[saveSurvey] allow_response_editing:", values.allow_response_editing);
+      console.log("[saveSurvey] status:", values.status);
+
       const supabase = createClient();
 
-      const survey_id = crypto.randomUUID();
-
-      // Accept possibly invalid JSON for drafts
+      // Process JSON based on validation requirement
       let jsonToStore = "";
+      let validationErrors: string | null = null;
+
       if (values.json && (values.json as string).trim()) {
         try {
-          JSON.parse(values.json as string); // just a check
-          jsonToStore = values.json as string;
-        } catch {
-          jsonToStore = values.json as string; // keep raw
-        }
-      }
-
-      const insertPayload = {
-        survey_id,
-        version: 1,
-        class_id: Number(course_id),
-        created_by: private_profile_id, // ✅ profile UUID, not auth.user.id
-        title: (values.title as string) || "Untitled Survey",
-        description: (values.description as string) || null,
-        json: jsonToStore,
-        status: "draft",
-        created_at: new Date().toISOString(),
-        allow_response_editing: values.allow_response_editing as boolean,
-        due_date: (values.due_date as string) || null,
-        validation_errors: null
-      };
-
-      console.log("[saveDraftOnly] inserting survey payload =", insertPayload);
-
-      const { data, error } = await supabase
-        .from("surveys" as any)
-        .insert(insertPayload)
-        .select("id, survey_id")
-        .single();
-
-      if (error || !data) {
-        console.error("[saveDraftOnly] insert error:", error);
-        toaster.error({
-          title: "Error saving draft",
-          description: error?.message || "Failed to save draft"
-        });
-        throw new Error(error?.message || "Failed to save draft");
-      }
-
-      trackEvent("survey_created" as any, {
-        course_id: Number(course_id),
-        survey_id: (data as any).survey_id,
-        status: "draft",
-        has_due_date: !!values.due_date,
-        allow_response_editing: values.allow_response_editing
-      });
-
-      // Only show success toast and redirect if shouldRedirect is true
-      if (shouldRedirect) {
-        toaster.create({
-          title: "Draft Saved",
-          description: "Your survey has been saved as a draft.",
-          type: "success"
-        });
-
-        router.push(`/course/${course_id}/manage/surveys`);
-      }
-      // If shouldRedirect is false, we don't show any toast (used for preview auto-save)
-    },
-    [course_id, private_profile_id, router, trackEvent]
-  );
-
-  // -------- FULL SUBMIT (PUBLISH OR DRAFT WITH VALIDATION) --------
-  const onSubmit = useCallback(
-    async (values: FieldValues) => {
-      const supabase = createClient();
-
-      // toast: loading
-      const loadingToast = toaster.create({
-        title: "Creating Survey",
-        description: "Saving your survey configuration...",
-        type: "loading"
-      });
-
-      try {
-        const survey_id = crypto.randomUUID();
-
-        // Validate JSON if they're trying to publish
-        let parsedJson: any;
-        let validationErrors: string | null = null;
-        try {
-          parsedJson = JSON.parse(values.json as string);
+          const parsedJson = JSON.parse(values.json as string);
+          jsonToStore = validateJson ? JSON.stringify(parsedJson) : (values.json as string);
         } catch (err) {
-          validationErrors = `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`;
-          parsedJson = values.json as string; // keep raw
+          validationErrors = validateJson
+            ? `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`
+            : null;
+          jsonToStore = values.json as string; // keep raw for drafts
         }
+      }
+
+      // Determine final status
+      const finalStatus = validationErrors ? "draft" : (values.status as string);
+
+      // Check if we're returning from preview (indicates continuing work on same survey)
+      console.log("[saveSurvey] isReturningFromPreview state:", isReturningFromPreview);
+
+      let data: any;
+      let error: any;
+
+      if (isReturningFromPreview) {
+        // Only update existing draft if returning from preview
+        const { data: existingSurvey, error: surveyError } = await supabase
+          .from("surveys" as any)
+          .select("id, survey_id")
+          .eq("class_id", Number(course_id))
+          .eq("created_by", private_profile_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (existingSurvey && !surveyError) {
+          // Update existing survey
+          console.log("[saveSurvey] updating existing survey:", (existingSurvey as any).id);
+
+          const updatePayload = {
+            title: (values.title as string) || "Untitled Survey",
+            description: (values.description as string) || null,
+            json: jsonToStore,
+            status: finalStatus,
+            allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
+            due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+            validation_errors: validationErrors,
+            updated_at: new Date().toISOString()
+          };
+
+          const result = await supabase
+            .from("surveys" as any)
+            .update(updatePayload)
+            .eq("id", (existingSurvey as any).id)
+            .select("id, survey_id")
+            .single();
+
+          data = result.data;
+          error = result.error;
+        } else {
+          // No existing survey found, create new one
+          const survey_id = crypto.randomUUID();
+
+          const insertPayload = {
+            survey_id,
+            version: 1,
+            class_id: Number(course_id),
+            created_by: private_profile_id,
+            title: (values.title as string) || "Untitled Survey",
+            description: (values.description as string) || null,
+            json: jsonToStore,
+            status: finalStatus,
+            created_at: new Date().toISOString(),
+            allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
+            due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+            validation_errors: validationErrors
+          };
+
+          console.log("[saveSurvey] creating new survey (returning from preview):", insertPayload);
+
+          const result = await supabase
+            .from("surveys" as any)
+            .insert(insertPayload)
+            .select("id, survey_id")
+            .single();
+
+          data = result.data;
+          error = result.error;
+        }
+      } else {
+        // Not returning from preview - always create new survey
+        const survey_id = crypto.randomUUID();
 
         const insertPayload = {
           survey_id,
           version: 1,
           class_id: Number(course_id),
-          created_by: private_profile_id, // ✅ correct identity
-          title: values.title as string,
+          created_by: private_profile_id,
+          title: (values.title as string) || "Untitled Survey",
           description: (values.description as string) || null,
-          json: parsedJson,
-          status: validationErrors ? "draft" : (values.status as string), // force draft on error
+          json: jsonToStore,
+          status: finalStatus,
           created_at: new Date().toISOString(),
-          allow_response_editing: values.allow_response_editing as boolean,
-          due_date: (values.due_date as string) || null,
+          allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
+          due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
           validation_errors: validationErrors
         };
 
-        console.log("[onSubmit] inserting survey payload =", insertPayload);
+        console.log("[saveSurvey] creating new survey:", insertPayload);
 
-        const { data, error } = await supabase
+        const result = await supabase
           .from("surveys" as any)
           .insert(insertPayload)
           .select("id, survey_id")
           .single();
 
-        if (error || !data) {
-          console.error("[onSubmit] insert error:", error);
-          throw new Error(error.message || "Failed to save survey");
-        }
+        data = result.data;
+        error = result.error;
+      }
 
-        // Track analytics
-        trackEvent("survey_created" as any, {
-          course_id: Number(course_id),
-          survey_id: (data as any).survey_id,
-          status: validationErrors ? "draft" : values.status,
-          has_due_date: !!values.due_date,
-          allow_response_editing: values.allow_response_editing,
-          has_validation_errors: !!validationErrors
+      if (error || !data) {
+        console.error("[saveSurvey] save error:", error);
+        toaster.error({
+          title: "Error saving survey",
+          description: error?.message || "Failed to save survey"
         });
+        throw new Error(error?.message || "Failed to save survey");
+      }
 
-        // Kill loading toast
-        toaster.dismiss(loadingToast);
+      // Track analytics
+      trackEvent("survey_created" as any, {
+        course_id: Number(course_id),
+        survey_id: (data as any).survey_id,
+        status: finalStatus,
+        has_due_date: !!values.due_date,
+        allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
+        has_validation_errors: !!validationErrors,
+        is_update: isReturningFromPreview
+      });
 
-        // Show user-facing toast
+      // Show toast if requested
+      if (showToast) {
         if (validationErrors) {
           toaster.create({
             title: "Survey Saved as Draft",
             description: "Your survey was saved as a draft due to validation issues. Please review and fix the errors.",
             type: "warning"
           });
-        } else if (values.status === "draft") {
+        } else if (finalStatus === "draft") {
           toaster.create({
             title: "Draft Saved",
             description: "Your survey has been saved as a draft.",
@@ -254,9 +302,53 @@ export default function NewSurveyPage() {
             type: "success"
           });
         }
+      }
 
-        // Redirect
+      // Redirect if requested
+      if (shouldRedirect) {
         router.push(`/course/${course_id}/manage/surveys`);
+      }
+
+      return { data, error };
+    },
+    [course_id, private_profile_id, router, trackEvent, isReturningFromPreview]
+  );
+
+  // -------- SAVE DRAFT ONLY (WRAPPER) --------
+  const saveDraftOnly = useCallback(
+    async (values: FieldValues, shouldRedirect: boolean = true) => {
+      return saveSurvey(values, {
+        shouldRedirect,
+        validateJson: false,
+        showToast: shouldRedirect,
+        toastTitle: "Draft Saved",
+        toastDescription: "Your survey has been saved as a draft."
+      });
+    },
+    [saveSurvey]
+  );
+
+  // -------- FULL SUBMIT (WRAPPER) --------
+  const onSubmit = useCallback(
+    async (values: FieldValues) => {
+      // Show loading toast
+      const loadingToast = toaster.create({
+        title: "Creating Survey",
+        description: "Saving your survey configuration...",
+        type: "loading"
+      });
+
+      try {
+        const result = await saveSurvey(values, {
+          shouldRedirect: true,
+          validateJson: true,
+          showToast: true
+        });
+
+        // Dismiss loading toast
+        toaster.dismiss(loadingToast);
+
+        return result;
       } catch (err: any) {
         console.error("[onSubmit] final error:", err);
         toaster.dismiss(loadingToast);
@@ -264,9 +356,10 @@ export default function NewSurveyPage() {
           title: "Error creating survey",
           description: err instanceof Error ? err.message : "An unexpected error occurred"
         });
+        throw err;
       }
     },
-    [course_id, private_profile_id, router, trackEvent]
+    [saveSurvey]
   );
 
   return (
