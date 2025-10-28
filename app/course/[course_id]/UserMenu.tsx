@@ -144,11 +144,8 @@ function SupportMenu() {
               </Link>
             </Menu.Item>
             <Menu.Item value="view-open-bugs">
-              <Link
-                href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen%20type%3ABug"}
-                target="_blank"
-              >
-                View open bugs
+              <Link href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen"} target="_blank">
+                View open issues
               </Link>
             </Menu.Item>
             <Menu.Item
