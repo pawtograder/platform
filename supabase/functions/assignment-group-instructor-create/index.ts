@@ -45,7 +45,7 @@ async function instructorCreateAutograderGroup(
   //Validate that the user is in the course
   const { data: profile } = await supabase
     .from("user_roles")
-    .select("*")
+    .select("*,classes(slug,github_org)")
     .eq("user_id", user.id)
     .eq("role", "instructor")
     .eq("class_id", course_id)
@@ -73,11 +73,6 @@ async function instructorCreateAutograderGroup(
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
   }
-  const groupFormationDeadline = assignment.group_formation_deadline;
-  if (groupFormationDeadline && new Date(groupFormationDeadline) < new Date()) {
-    //TODO timezones
-    throw new SecurityError("Group formation deadline has passed");
-  }
   //Create a new group
   const { data: newGroup, error: newGroupError } = await adminSupabase
     .from("assignment_groups")
@@ -91,6 +86,28 @@ async function instructorCreateAutograderGroup(
   if (newGroupError) {
     console.error(newGroupError);
     throw new UserVisibleError("Failed to create group");
+  }
+
+  //Enqueue async repo creation for the group
+  const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
+  // Enqueue the repo creation (this will create the repository record and enqueue the GitHub operations)
+  const { error: enqueueError } = await adminSupabase.rpc("enqueue_github_create_repo", {
+    p_class_id: assignment.class_id!,
+    p_org: profile.classes!.github_org!,
+    p_repo_name: repoName,
+    p_template_repo: assignment.template_repo!,
+    p_course_slug: profile.classes!.slug!,
+    p_github_usernames: [],
+    p_is_template_repo: false,
+    p_debug_id: `group-create-${newGroup.id}`,
+    p_assignment_id: assignment.id,
+    p_profile_id: undefined, // Group repos don't have a profile_id
+    p_assignment_group_id: newGroup.id,
+    p_latest_template_sha: assignment.latest_template_sha ?? undefined
+  });
+  if(enqueueError) {
+    Sentry.captureException(enqueueError, scope);
+    throw new UserVisibleError(`Error enqueueing repo creation: ${enqueueError.message}`);
   }
   return {
     message: `Group #${newGroup.id} created successfully`,

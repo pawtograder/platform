@@ -673,6 +673,16 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing repo permissions for ${repo} in org ${org}`, level: "info" });
+        //Make sure that the repo is ready. If not, we will requeue.
+        //Otherwise we might race against a createRepo, and end up overwriting to the wrong githubUsernames.
+        const { data: repository } = await adminSupabase
+          .from("repositories")
+          .select("is_github_ready")
+          .eq("repository", repo)
+          .maybeSingle();
+        if (!repository?.is_github_ready) {
+          return false;
+        }
         await github.syncRepoPermissions(org, repo, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
