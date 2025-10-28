@@ -45,10 +45,10 @@ import { LuCopy, LuCheck } from "react-icons/lu";
 function SupportMenu() {
   // Track whether the build number has been successfully copied
   const [isCopied, setIsCopied] = useState(false);
-  
+
   // Store timeout ID to enable cleanup and prevent memory leaks
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
+
   const buildNumber = useMemo(() => {
     const str =
       process.env.SENTRY_RELEASE ??
@@ -60,9 +60,9 @@ function SupportMenu() {
     }
     return "Unknown";
   }, []);
-  
+
   const { course_id } = useParams();
-  
+
   // Cleanup: Clear timeout when component unmounts to prevent memory leaks
   useEffect(() => {
     return () => {
@@ -71,7 +71,7 @@ function SupportMenu() {
       }
     };
   }, []);
-  
+
   /**
    * Copies the build number to clipboard and shows visual feedback.
    * Prevents menu from closing and displays error toast if copy fails.
@@ -79,17 +79,17 @@ function SupportMenu() {
   const handleCopyBuildNumber = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     // Clear any existing timeout to prevent multiple timers running
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
-    
+
     try {
       // Copy build number to clipboard using Clipboard API
       await navigator.clipboard.writeText(buildNumber);
       setIsCopied(true);
-      
+
       // Reset visual feedback after 2 seconds
       timeoutRef.current = setTimeout(() => {
         setIsCopied(false);
@@ -104,7 +104,7 @@ function SupportMenu() {
       });
     }
   };
-  
+
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
@@ -161,7 +161,13 @@ function SupportMenu() {
             >
               <HStack gap={2} width="100%" justifyContent="space-between">
                 <Text>Build: {buildNumber}</Text>
-                {isCopied ? <LuCheck size={16} color="green.500" /> : <LuCopy size={16} />}
+                {isCopied ? (
+                  <Box color="green.500">
+                    <LuCheck size={16} />
+                  </Box>
+                ) : (
+                  <LuCopy size={16} />
+                )}
               </HStack>
             </Menu.Item>
           </Menu.Content>
