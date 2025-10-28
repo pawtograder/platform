@@ -878,6 +878,9 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     condition: (value: GradebookColumnStudentWithMaxScore) => boolean
   ) => {
+    if (isDenseMatrix(value)) {
+      value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
+    }
     if (Array.isArray(value)) {
       const values = value.map((v) => {
         const ret = condition(v) ? 1 : 0;
@@ -897,6 +900,9 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     weighted: boolean = true
   ) => {
+    if (isDenseMatrix(value)) {
+      value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
+    }
     if (Array.isArray(value)) {
       const valuesToAverage = value.map((v) => {
         if (isGradebookColumnStudent(v)) {
@@ -944,6 +950,9 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     count: number
   ) => {
+    if (isDenseMatrix(value)) {
+      value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
+    }
     if (Array.isArray(value)) {
       const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
       const ret: GradebookColumnStudentWithMaxScore[] = [];
