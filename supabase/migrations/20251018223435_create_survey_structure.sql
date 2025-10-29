@@ -123,7 +123,16 @@ CREATE INDEX idx_survey_responses_survey_id_active
   --ON survey_responses (student_id)
   --WHERE deleted_at IS NULL;
 
+--
+
 -- TODO: ENABLE RLS
 -- ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE survey_responses ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE survey_templates ENABLE ROW LEVEL SECURITY;
+
+-- If survey is published or closed, only then students have access to a survey
+-- Instructors can view and create new surveys
+-- No one can ever delete a survey
+-- No user can directly update a survey, only use prev as template
+-- Survey responses can be viewed by instructor/course staff
+-- Survey responses can be edited as long as the profile who made an original response tries to and its allowed
