@@ -26,7 +26,7 @@ import { useInvalidate, useList, useShow } from "@refinedev/core";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { FaArrowRight, FaEdit, FaRegTimesCircle } from "react-icons/fa";
+import { FaArrowRight, FaEdit, FaRegTimesCircle, FaDownload } from "react-icons/fa";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
@@ -39,6 +39,21 @@ import {
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
+
+/**
+ * Helper function to download CSV data
+ */
+function downloadCSV(csvContent: string, filename: string) {
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  link.style.visibility = "hidden";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
 
 export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -509,6 +524,50 @@ function TableByGroups({
   const { modProfiles, movesToFulfill } = useGroupManagement();
 
   /**
+   * Export groups data to CSV
+   */
+  const exportToCSV = () => {
+    const headers = ["Group", "Members", "Status"];
+    const rows: string[][] = [];
+
+    groupsData.forEach((group) => {
+      const memberNames = group.assignment_groups_members
+        .map((member) => {
+          const profile = profiles?.find((p) => p.private_profile_id === member.profile_id);
+          return profile?.profiles.name || member.profile_id;
+        })
+        .join(", ");
+
+      let status = "OK";
+      if (assignment.min_group_size !== null && group.assignment_groups_members.length < assignment.min_group_size) {
+        status = `Too small (min: ${assignment.min_group_size})`;
+      } else if (
+        assignment.max_group_size !== null &&
+        group.assignment_groups_members.length > assignment.max_group_size
+      ) {
+        status = `Too large (max: ${assignment.max_group_size})`;
+      }
+
+      rows.push([group.name, memberNames, status]);
+    });
+
+    // Add ungrouped students
+    const ungroupedProfiles = profiles?.filter((profile) => profile.profiles.assignment_groups_members.length === 0);
+    ungroupedProfiles?.forEach((profile) => {
+      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "Not in a group"]);
+    });
+
+    // Convert to CSV format
+    const csvRows = [
+      headers.join(","),
+      ...rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
+    ];
+    const csvContent = csvRows.join("\n");
+
+    downloadCSV(csvContent, `groups_export_${new Date().toISOString().split("T")[0]}.csv`);
+  };
+
+  /**
    * Creates the list of profile names being added to an exisitng group in table preview
    */
   const newProfilesForGroup = (group_id: number) => {
@@ -548,7 +607,13 @@ function TableByGroups({
 
   return (
     <Flex gap="15px" flexDir={"column"} paddingTop={"10px"}>
-      <Heading size="md">Groups</Heading>
+      <Flex justifyContent="space-between" alignItems="center">
+        <Heading size="md">Groups</Heading>
+        <Button size="sm" variant="outline" onClick={exportToCSV}>
+          <Icon as={FaDownload} mr={2} />
+          Export as CSV
+        </Button>
+      </Flex>
       <Table.Root width="100%" striped>
         <Table.Header>
           <Table.Row>
@@ -662,6 +727,50 @@ function TableByStudents({
   const { modProfiles, groupsToCreate, movesToFulfill, addMovesToFulfill } = useGroupManagement();
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
 
+  /**
+   * Export students data to CSV
+   */
+  const exportToCSV = () => {
+    const headers = ["Student", "Group", "Status"];
+    const rows: string[][] = [];
+
+    profiles?.forEach((profile) => {
+      const groupID =
+        profile.profiles.assignment_groups_members.length > 0
+          ? profile.profiles.assignment_groups_members[0].assignment_group_id
+          : undefined;
+      const group = groupsData?.find((g) => g.id === groupID);
+
+      let status = "OK";
+      if (assignment.group_config === "groups" && !group) {
+        status = "Not in a group";
+      } else if (
+        group &&
+        assignment.min_group_size !== null &&
+        group.assignment_groups_members.length < assignment.min_group_size
+      ) {
+        status = `Group too small (min: ${assignment.min_group_size})`;
+      } else if (
+        group &&
+        assignment.max_group_size !== null &&
+        group.assignment_groups_members.length > assignment.max_group_size
+      ) {
+        status = `Group too large (max: ${assignment.max_group_size})`;
+      }
+
+      rows.push([profile.profiles.name || "Unknown", group ? group.name : "no group", status]);
+    });
+
+    // Convert to CSV format
+    const csvRows = [
+      headers.join(","),
+      ...rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
+    ];
+    const csvContent = csvRows.join("\n");
+
+    downloadCSV(csvContent, `students_export_${new Date().toISOString().split("T")[0]}.csv`);
+  };
+
   const getNewGroup = (profile_id: string) => {
     const move = movesToFulfill?.find((move) => {
       return move.profile_id == profile_id;
@@ -682,7 +791,13 @@ function TableByStudents({
   };
   return (
     <Flex gap="15px" flexDir={"column"} paddingTop={"10px"}>
-      <Heading size="md">Students</Heading>
+      <Flex justifyContent="space-between" alignItems="center">
+        <Heading size="md">Students</Heading>
+        <Button size="sm" variant="outline" onClick={exportToCSV}>
+          <Icon as={FaDownload} mr={2} />
+          Export as CSV
+        </Button>
+      </Flex>
       <Table.Root striped>
         <Table.Header>
           <Table.Row>

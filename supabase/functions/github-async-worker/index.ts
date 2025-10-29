@@ -678,7 +678,7 @@ export async function processEnvelope(
         const { data: repository } = await adminSupabase
           .from("repositories")
           .select("is_github_ready")
-          .eq("repository", repo)
+          .eq("repository", `${org}/${repo}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
           return false;

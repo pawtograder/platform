@@ -105,7 +105,7 @@ async function instructorCreateAutograderGroup(
     p_assignment_group_id: newGroup.id,
     p_latest_template_sha: assignment.latest_template_sha ?? undefined
   });
-  if(enqueueError) {
+  if (enqueueError) {
     Sentry.captureException(enqueueError, scope);
     throw new UserVisibleError(`Error enqueueing repo creation: ${enqueueError.message}`);
   }
