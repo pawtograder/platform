@@ -224,3 +224,6 @@ COMMENT ON FUNCTION "public"."update_review_assignments_on_submission_deactivati
 - If SHA matches (same content being regraded): moves review assignments AND all comments (submission_comments, submission_file_comments, submission_artifact_comments). If old review was completed, preserves completion status on both review_assignments and submission_reviews.
 - If SHA differs (new submission replacing old): moves review assignments only, NOT comments. Resets completion status on review_assignments but does not update submission_reviews completion.
 This ensures that comments follow submissions only when the same content is being regraded, and review assignments always follow to the new active submission.';
+
+ALTER TABLE "public"."gradebook_column_students" 
+  ALTER COLUMN "is_droppable" SET DEFAULT true;
