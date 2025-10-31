@@ -1136,11 +1136,17 @@ export async function syncRepoPermissions(
   }
   const orgMembers = await orgMembershipCache.get(org);
   const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
-  const existingAccess = await retryWithBackoff(() => octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-    owner: org,
-    repo,
-    per_page: 100
-  }), 5, 3000, scope);
+  const existingAccess = await retryWithBackoff(
+    () =>
+      octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+        owner: org,
+        repo,
+        per_page: 100
+      }),
+    5,
+    3000,
+    scope
+  );
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
     .map((c) => c.login.toLowerCase());
