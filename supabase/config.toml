@@ -528,6 +528,7 @@ entrypoint = "./functions/autograder-sync-staff-team/index.ts"
 enabled = true
 verify_jwt = false
 import_map = "./functions/assignment-group-instructor-create/deno.json"
+entrypoint = "./functions/assignment-group-instructor-create/index.ts"
 
 [functions.assignment-group-instructor-move-student]
 enabled = true
