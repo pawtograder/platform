@@ -1,29 +1,18 @@
 "use client";
 
-import {
-  Box,
-  Input,
-  Textarea,
-  Text,
-  HStack,
-  VStack,
-  Button,
-  Heading,
-  Fieldset,
-  Checkbox,
-} from "@chakra-ui/react";
+import { Box, Input, Textarea, Text, HStack, VStack, Button, Heading, Fieldset, Checkbox } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 import { Button as UIButton } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useCallback, useState } from "react";
-import { useRouter, useSearchParams, useParams } from "next/navigation";
+import { LuCheck } from "react-icons/lu";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import SurveyCreatorModal from "@/components/SurveyCreatorModal";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
-
-// NEW: modal wrapper around your SurveyBuilder
-import SurveyBuilderModal from "@/components/SurveyBuilderModal";
 
 type SurveyFormData = {
   title: string;
@@ -36,33 +25,38 @@ type SurveyFormData = {
 
 const sampleJsonTemplate = `{
 "pages": [
-  {
-    "name": "page1",
-    "elements": [
-      { "type": "text", "name": "question1", "title": "Name" },
-      {
-        "type": "rating",
-        "name": "satisfaction-numeric",
-        "title": "How satisfied are you with the course?",
-        "description": "Numeric rating scale",
-        "rateValues": [1,2,3,4,5,6,7,8,9,10]
-      }
-    ]
-  }
+    {
+      "name": "page1",
+      "elements": [
+        {
+          "type": "text",
+          "name": "question1",
+          "title": "Name"
+        },
+        {
+          "type": "rating",
+          "name": "satisfaction-numeric",
+          "title": "How satisfied are you with the course?",
+          "description": "Numeric rating scale",
+          "rateValues": [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
+        }
+      ]
+    }
 ]}`;
 
 export default function SurveyForm({
   form,
   onSubmit,
   saveDraftOnly,
-  isEdit = false,
+  isEdit = false
 }: {
   form: UseFormReturnType<SurveyFormData>;
   onSubmit: (values: FieldValues) => void;
   saveDraftOnly: (values: FieldValues, shouldRedirect?: boolean) => void;
   isEdit?: boolean;
 }) {
-  // Color tokens
+  // Color mode values where the first values correspond as follows:
+  // useColorModeValue(lightModeValue, darkModeValue)
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
@@ -72,6 +66,7 @@ export default function SurveyForm({
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const checkboxBgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
   const checkboxBorderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
+  const checkboxIconColor = useColorModeValue("#000000", "#FFFFFF");
   const previewButtonTextColor = useColorModeValue("#2D3748", "#A0AEC0");
   const previewButtonBorderColor = useColorModeValue("#4A5568", "#4A5568");
 
@@ -82,17 +77,17 @@ export default function SurveyForm({
     watch,
     getValues,
     setValue,
-    formState: { errors, isDirty },
+    formState: { errors, isDirty }
   } = form;
 
   const router = useRouter();
   const { course_id } = useParams();
   const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSurveyCreatorOpen, setIsSurveyCreatorOpen] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  // NEW: open/close state for the Visual Builder modal
-  const [isBuilderOpen, setIsBuilderOpen] = useState(false);
+  const status = watch("status");
 
   const validateJson = useCallback(() => {
     const jsonValue = getValues("json");
@@ -100,24 +95,23 @@ export default function SurveyForm({
       toaster.create({
         title: "JSON Validation Failed",
         description: "Please enter JSON configuration",
-        type: "error",
+        type: "error"
       });
       return;
     }
+
     try {
       JSON.parse(jsonValue);
       toaster.create({
         title: "JSON Valid",
         description: "JSON configuration is valid",
-        type: "success",
+        type: "success"
       });
     } catch (error) {
       toaster.create({
         title: "JSON Validation Failed",
-        description: `Invalid JSON: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-        type: "error",
+        description: `Invalid JSON: ${error instanceof Error ? error.message : "Unknown error"}`,
+        type: "error"
       });
     }
   }, [getValues]);
@@ -127,9 +121,21 @@ export default function SurveyForm({
     toaster.create({
       title: "Sample Template Loaded",
       description: "Sample JSON template has been loaded",
-      type: "success",
+      type: "success"
     });
   }, [setValue]);
+
+  const handleSurveyCreatorSave = useCallback(
+    (json: string) => {
+      setValue("json", json, { shouldDirty: true });
+      toaster.create({
+        title: "Survey Created",
+        description: "Your survey has been created using SurveyJS Creator.",
+        type: "success"
+      });
+    },
+    [setValue]
+  );
 
   const showPreview = useCallback(() => {
     const jsonValue = getValues("json");
@@ -137,44 +143,47 @@ export default function SurveyForm({
       toaster.create({
         title: "No Survey Configuration",
         description: "Please enter a JSON configuration before previewing",
-        type: "error",
+        type: "error"
       });
       return;
     }
+
     try {
       JSON.parse(jsonValue);
       setIsPreviewOpen(true);
-    } catch {
+    } catch (error) {
       toaster.create({
         title: "Invalid JSON",
         description: "Please fix the JSON configuration before previewing",
-        type: "error",
+        type: "error"
       });
     }
   }, [getValues]);
 
   const handleBackNavigation = useCallback(async () => {
     if (isDirty) {
+      // Auto-save as draft before navigating - no validation
       const currentValues = getValues();
+
       try {
         await saveDraftOnly(currentValues);
         toaster.create({
           title: "Draft Saved",
           description: "Your changes have been saved as a draft",
-          type: "success",
+          type: "success"
         });
       } catch (error) {
         console.error("Back navigation draft save error:", error);
         toaster.create({
           title: "Failed to Save Draft",
-          description:
-            error instanceof Error
-              ? error.message
-              : "Could not save draft before navigating",
-          type: "error",
+          description: error instanceof Error ? error.message : "Could not save draft before navigating",
+          type: "error"
         });
+        // Still navigate even if save failed - user can start over
+        // return; // Don't navigate if save failed
       }
     }
+
     router.push(`/course/${course_id}/manage/surveys`);
   }, [isDirty, getValues, saveDraftOnly, router, course_id]);
 
@@ -182,16 +191,17 @@ export default function SurveyForm({
     async (values: FieldValues) => {
       setIsSubmitting(true);
       try {
+        // Check if user selected "Save as Draft" - use saveDraftOnly for no validation
         if (values.status === "draft") {
           await saveDraftOnly(values);
         } else {
+          // User selected "Publish Now" - use full validation
           await onSubmit(values);
         }
       } catch (error) {
         toaster.error({
           title: "Changes not saved",
-          description:
-            "An error occurred while saving the survey. Please try again.",
+          description: "An error occurred while saving the survey. Please try again."
         });
       } finally {
         setIsSubmitting(false);
@@ -217,21 +227,14 @@ export default function SurveyForm({
           ← Back to Surveys
         </Button>
 
+        {/* Header */}
         <Heading size="xl" color={textColor} textAlign="left">
           {isEdit ? "Edit Survey" : "Create New Survey"}
         </Heading>
       </VStack>
 
       {/* Main Form Card */}
-      <Box
-        w="100%"
-        maxW="800px"
-        bg={cardBgColor}
-        border="1px solid"
-        borderColor={borderColor}
-        borderRadius="lg"
-        p={8}
-      >
+      <Box w="100%" maxW="800px" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
         <form onSubmit={handleSubmit(onSubmitWrapper)}>
           <Fieldset.Root>
             <VStack align="stretch" gap={6}>
@@ -240,8 +243,8 @@ export default function SurveyForm({
                 <Field
                   label="Survey Title"
                   errorText={errors.title?.message?.toString()}
-                  invalid={!!errors.title}
-                  required
+                  invalid={errors.title ? true : false}
+                  required={true}
                 >
                   <Input
                     placeholder="Enter survey title"
@@ -252,10 +255,7 @@ export default function SurveyForm({
                     _focus={{ borderColor: "blue.500" }}
                     {...register("title", {
                       required: "Survey title is required",
-                      maxLength: {
-                        value: 200,
-                        message: "Title must be less than 200 characters",
-                      },
+                      maxLength: { value: 200, message: "Title must be less than 200 characters" }
                     })}
                   />
                 </Field>
@@ -282,8 +282,8 @@ export default function SurveyForm({
                 <Field
                   label="Survey JSON Configuration"
                   errorText={errors.json?.message?.toString()}
-                  invalid={!!errors.json}
-                  required
+                  invalid={errors.json ? true : false}
+                  required={true}
                 >
                   <Textarea
                     placeholder={sampleJsonTemplate}
@@ -298,20 +298,17 @@ export default function SurveyForm({
                     {...register("json", {
                       required: "JSON configuration is required",
                       validate: (value) => {
-                        if (!value.trim())
-                          return "JSON configuration is required";
+                        if (!value.trim()) return "JSON configuration is required";
                         try {
                           JSON.parse(value);
                           return true;
-                        } catch {
+                        } catch (error) {
                           return "Invalid JSON format";
                         }
-                      },
+                      }
                     })}
                   />
-
                   <HStack justify="space-between" mt={2}>
-                    {/* Open the modal popup builder */}
                     <Button
                       size="sm"
                       variant="outline"
@@ -319,11 +316,10 @@ export default function SurveyForm({
                       borderColor={buttonBorderColor}
                       color={buttonTextColor}
                       _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-                      onClick={() => setIsBuilderOpen(true)}
+                      onClick={() => setIsSurveyCreatorOpen(true)}
                     >
-                      Open Visual Builder
+                      Create with SurveyJS
                     </Button>
-
                     <Button
                       size="sm"
                       variant="outline"
@@ -335,7 +331,6 @@ export default function SurveyForm({
                     >
                       Load Sample Template
                     </Button>
-
                     <Button
                       size="sm"
                       variant="outline"
@@ -356,8 +351,8 @@ export default function SurveyForm({
                 <Field
                   label="Status"
                   errorText={errors.status?.message?.toString()}
-                  invalid={!!errors.status}
-                  required
+                  invalid={errors.status ? true : false}
+                  required={true}
                 >
                   <Controller
                     name="status"
@@ -374,10 +369,7 @@ export default function SurveyForm({
                             onChange={() => field.onChange("draft")}
                             style={{ accentColor: "#3182ce" }}
                           />
-                          <label
-                            htmlFor="draft"
-                            style={{ color: textColor, cursor: "pointer" }}
-                          >
+                          <label htmlFor="draft" style={{ color: textColor, cursor: "pointer" }}>
                             Save as Draft
                           </label>
                         </HStack>
@@ -390,10 +382,7 @@ export default function SurveyForm({
                             onChange={() => field.onChange("published")}
                             style={{ accentColor: "#3182ce" }}
                           />
-                          <label
-                            htmlFor="published"
-                            style={{ color: textColor, cursor: "pointer" }}
-                          >
+                          <label htmlFor="published" style={{ color: textColor, cursor: "pointer" }}>
                             Publish Now
                           </label>
                         </HStack>
@@ -447,17 +436,13 @@ export default function SurveyForm({
                         />
                         <Checkbox.Root
                           checked={field.value}
-                          onCheckedChange={(details) =>
-                            field.onChange(details.checked)
-                          }
+                          onCheckedChange={(details) => field.onChange(details.checked)}
                         >
                           <Checkbox.HiddenInput />
-                          <Checkbox.Control />
+                          <Checkbox.Control></Checkbox.Control>
                         </Checkbox.Root>
                       </Box>
-                      <Text color={textColor}>
-                        Allow students to edit their responses after submission
-                      </Text>
+                      <Text color={textColor}>Allow students to edit their responses after submission</Text>
                     </HStack>
                   )}
                 />
@@ -477,8 +462,7 @@ export default function SurveyForm({
                   borderColor={borderColor}
                 >
                   <Text color={placeholderColor} mb={4}>
-                    Click 'Show Preview' to see how the survey will appear to
-                    students.
+                    Click 'Show Preview' to see how the survey will appear to students.
                   </Text>
                   <Button
                     variant="outline"
@@ -522,14 +506,13 @@ export default function SurveyForm({
         </form>
       </Box>
 
-      {/* Visual Builder Modal (popup) */}
-      <SurveyBuilderModal
-        isOpen={isBuilderOpen}
-        onClose={() => setIsBuilderOpen(false)}
-        initialJson={watch("json")}
-        onSave={(json) =>
-          setValue("json", json, { shouldDirty: true, shouldValidate: true })
-        }
+      {/* SurveyJS Creator Modal */}
+      <SurveyCreatorModal
+        isOpen={isSurveyCreatorOpen}
+        onClose={() => setIsSurveyCreatorOpen(false)}
+        onSave={handleSurveyCreatorSave}
+        initialJson={getValues("json")}
+        startFresh={!isEdit && searchParams.get("from") !== "preview"}
       />
 
       {/* Survey Preview Modal */}
