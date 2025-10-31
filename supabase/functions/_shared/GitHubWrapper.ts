@@ -657,6 +657,7 @@ export async function createRepo(
     scope?.setTag("head_sha", heads.data.object.sha);
     return heads.data.object.sha as string;
   } catch (e) {
+    console.error("Error creating repo", e);
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
         // Repo already exists, get the head SHA
@@ -1135,11 +1136,11 @@ export async function syncRepoPermissions(
   }
   const orgMembers = await orgMembershipCache.get(org);
   const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
-  const existingAccess = await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+  const existingAccess = await retryWithBackoff(() => octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
     owner: org,
     repo,
     per_page: 100
-  });
+  }), 5, 3000, scope);
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
     .map((c) => c.login.toLowerCase());
