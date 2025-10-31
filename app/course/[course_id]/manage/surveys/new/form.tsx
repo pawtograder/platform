@@ -24,16 +24,25 @@ type SurveyFormData = {
 };
 
 const sampleJsonTemplate = `{
-  "pages": [{
-    "name": "page1",
-    "elements": [{
-      "type": "rating",
-      "name": "satisfaction",
-      "title": "How satisfied are you with the course?",
-      "rateDescription": {"1": "Not Satisfied", "5": "Very Satisfied"}
-    }]
-  }]
-}`;
+"pages": [
+    {
+      "name": "page1",
+      "elements": [
+        {
+          "type": "text",
+          "name": "question1",
+          "title": "Name"
+        },
+        {
+          "type": "rating",
+          "name": "satisfaction-numeric",
+          "title": "How satisfied are you with the course?",
+          "description": "Numeric rating scale",
+          "rateValues": [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
+        }
+      ]
+    }
+]}`;
 
 export default function SurveyForm({
   form,
