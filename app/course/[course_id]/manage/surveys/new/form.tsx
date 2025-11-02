@@ -23,7 +23,8 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 
 // NEW: modal wrapper around your SurveyBuilder
-import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
+import SurveyBuilderModal from "@/components/SurveyBuilderModal";
+import { createClient } from "@/utils/supabase/client";
 
 type SurveyFormData = {
   title: string;
@@ -56,11 +57,13 @@ export default function SurveyForm({
   onSubmit,
   saveDraftOnly,
   isEdit = false,
+  privateProfileId
 }: {
   form: UseFormReturnType<SurveyFormData>;
   onSubmit: (values: FieldValues) => void;
   saveDraftOnly: (values: FieldValues, shouldRedirect?: boolean) => void;
   isEdit?: boolean;
+  privateProfileId: string;
 }) {
   // Color tokens
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -114,9 +117,8 @@ export default function SurveyForm({
     } catch (error) {
       toaster.create({
         title: "JSON Validation Failed",
-        description: `Invalid JSON: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
+        description: `Invalid JSON: ${error instanceof Error ? error.message : "Unknown error"
+          }`,
         type: "error",
       });
     }
@@ -177,6 +179,65 @@ export default function SurveyForm({
     }
     router.push(`/course/${course_id}/manage/surveys`);
   }, [isDirty, getValues, saveDraftOnly, router, course_id]);
+
+  // -------- ADD TO TEMPLATE LIBRARY --------
+  const handleAddToTemplate = useCallback(async () => {
+    const supabase = createClient();
+
+    const surveyData = {
+      title: getValues("title"),
+      description: getValues("description") || null,
+      json: getValues("json"),
+    };
+
+    const confirmed = window.confirm(
+      `Add "${surveyData.title}" to the Template Library?\n\nThis will make it reusable for future courses.`
+    );
+    if (!confirmed) return;
+
+    const loadingToast = toaster.create({
+      title: "Adding to Template Library",
+      description: "Saving survey as a reusable template...",
+      type: "loading",
+    });
+
+    try {
+      const { error } = await supabase.from("survey_templates").insert({
+        id: crypto.randomUUID(),
+        title: surveyData.title,
+        description: surveyData.description,
+        template: surveyData.json,
+        created_by: privateProfileId,
+        created_at: new Date().toISOString(),
+      });
+
+
+      toaster.dismiss(loadingToast);
+
+      if (error) {
+        toaster.create({
+          title: "Error Adding Template",
+          description: error.message,
+          type: "error",
+        });
+      } else {
+        toaster.create({
+          title: "Template Added",
+          description: `"${surveyData.title}" has been added successfully.`,
+          type: "success",
+        });
+      }
+    } catch (err: any) {
+      console.error("Error adding to template library:", err);
+      toaster.dismiss(loadingToast);
+      toaster.create({
+        title: "Unexpected Error",
+        description: "Something went wrong adding the template.",
+        type: "error",
+      });
+    }
+  }, [getValues]);
+
 
   const onSubmitWrapper = useCallback(
     async (values: FieldValues) => {
@@ -505,6 +566,16 @@ export default function SurveyForm({
                 >
                   Save Survey
                 </UIButton>
+                <Button
+                  variant="outline"
+                  borderColor={buttonBorderColor}
+                  color={buttonTextColor}
+                  _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                  onClick={handleAddToTemplate}
+                  size="md"
+                >
+                  Add to Template Library
+                </Button>
                 <Button
                   variant="outline"
                   bg="transparent"

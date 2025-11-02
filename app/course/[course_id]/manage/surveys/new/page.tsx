@@ -375,7 +375,7 @@ export default function NewSurveyPage() {
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
-      <SurveyForm form={form} onSubmit={onSubmit} saveDraftOnly={saveDraftOnly} />
+      <SurveyForm form={form} onSubmit={onSubmit} saveDraftOnly={saveDraftOnly} privateProfileId={private_profile_id} />
     </Box>
   );
 }
