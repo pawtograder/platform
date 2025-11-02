@@ -584,9 +584,27 @@ export class GradebookCellController {
 
   private _handleGradebookColumnStudentChange(message: BroadcastMessage): void {
     if (message.table !== "gradebook_column_students") return;
+    if (message.class_id !== this._class_id) return;
 
+    // Handle bulk operations
+    if (message.operation === "BULK_UPDATE" || ("requires_refetch" in message && message.requires_refetch)) {
+      // Trigger full refresh for bulk operations
+      this._refreshData();
+      return;
+    }
+
+    // Handle single-row operations with row_ids array (from small bulk operations)
+    if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+      // For bulk operations with IDs, we need to refetch those specific rows
+      // Since we don't have a method to refetch by IDs, trigger a full refresh
+      // This could be optimized later to only refetch specific rows
+      this._refreshData();
+      return;
+    }
+
+    // Handle single-row operations
     const data = message.data as GradebookColumnStudent | undefined;
-    if (!data || data.class_id !== this._class_id) return;
+    if (!data) return;
 
     switch (message.operation) {
       case "INSERT":
@@ -616,7 +634,15 @@ export class GradebookCellController {
 
   private _handleRowRecalcStateChange(message: BroadcastMessage): void {
     if (message.table !== "gradebook_row_recalc_state") return;
+    if (message.class_id !== this._class_id) return;
 
+    // Handle bulk operations - refresh data since we can't efficiently update individual rows
+    if (message.operation === "BULK_UPDATE" || ("requires_refetch" in message && message.requires_refetch)) {
+      this._refreshData();
+      return;
+    }
+
+    // Handle single-row operations
     const payload = (message.data || {}) as Record<string, unknown>;
     const classId = payload["class_id"] as number | undefined;
     const studentId = payload["student_id"] as string | undefined;
