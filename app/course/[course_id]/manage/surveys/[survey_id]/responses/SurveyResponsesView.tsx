@@ -7,7 +7,7 @@ import { TZDate } from "@date-fns/tz";
 import { differenceInMinutes } from "date-fns";
 import { useRouter } from "next/navigation";
 import { Model } from "survey-core";
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 
 type SurveyResponse = {
   id: string;
@@ -97,6 +97,21 @@ function formatResponseValue(value: any): string {
   return String(value);
 }
 
+function escapeCSVValue(value: string): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const stringValue = String(value);
+  
+  // if string value contains comma, quote, or newline, wrap in quotes and escape internal quotes
+  if (stringValue.includes(",") || stringValue.includes('"') || stringValue.includes("\n")) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  
+  return stringValue;
+}
+
 export default function SurveyResponsesView({
   courseId,
   surveyId,
@@ -151,6 +166,44 @@ export default function SurveyResponsesView({
     avgCompletionTime = `${avgHours > 0 ? `${avgHours}:` : ""}${remainingMinutes.toString().padStart(2, "0")}`;
   }
 
+  const exportToCSV = useCallback(() => {
+    if (responses.length === 0) {
+      return;
+    }
+
+    const headers = [
+      "Student Name",
+      "Submitted At",
+      ...allQuestionNames.map((questionName) => questionTitles[questionName] || questionName)
+    ];
+
+    const csvRows = responses.map((response) => {
+      const row = [
+        response.profiles?.name || "N/A",
+        response.submitted_at
+          ? formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")
+          : "—",
+        ...allQuestionNames.map((questionName) => {
+          const value = response.response?.[questionName];
+          return formatResponseValue(value);
+        })
+      ];
+      return row.map(escapeCSVValue).join(",");
+    });
+
+    const csvContent = [headers.map(escapeCSVValue).join(","), ...csvRows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `survey-responses-${surveyTitle.replace(/[^a-z0-9]/gi, "_")}-${new Date().toISOString().split("T")[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [responses, allQuestionNames, questionTitles, surveyTitle]);
+
   return (
     <Container py={8} maxW="1200px" my={2}>
       <VStack align="stretch" gap={4} w="100%">
@@ -172,7 +225,15 @@ export default function SurveyResponsesView({
           >
             ← Back to Surveys
           </Button>
-          <Button size="sm" variant="solid" bg="#22C55E" color="white" _hover={{ bg: "#16A34A" }}>
+          <Button
+            size="sm"
+            variant="solid"
+            bg="#22C55E"
+            color="white"
+            _hover={{ bg: "#16A34A" }}
+            onClick={exportToCSV}
+            disabled={responses.length === 0}
+          >
             Export to CSV
           </Button>
         </HStack>
