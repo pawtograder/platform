@@ -4,16 +4,19 @@ import { Box, Heading, Text, VStack, HStack, Badge, Button } from "@chakra-ui/re
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { SurveyWithResponse } from "@/types/survey";
 
+type FilterType = "all" | "not_started" | "completed";
+
 export default function StudentSurveysPage() {
   const { course_id } = useParams();
   const [surveys, setSurveys] = useState<SurveyWithResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -23,13 +26,13 @@ export default function StudentSurveysPage() {
   // Status badge colors for dark mode
   const statusColors = {
     not_started: {
-      bg: useColorModeValue("#F2F2F2", "#374151"),
-      color: useColorModeValue("#4B5563", "#9CA3AF"),
+      bg: useColorModeValue("#FEE2E2", "#7F1D1D"),
+      color: useColorModeValue("#991B1B", "#FCA5A5"),
       text: "Not Started"
     },
     in_progress: {
-      bg: useColorModeValue("#FEF3C7", "#451A03"),
-      color: useColorModeValue("#92400E", "#FCD34D"),
+      bg: useColorModeValue("#FEE2E2", "#7F1D1D"),
+      color: useColorModeValue("#991B1B", "#FCA5A5"),
       text: "In Progress"
     },
     completed: {
@@ -172,6 +175,30 @@ export default function StudentSurveysPage() {
     }
   };
 
+  const filterButtonActiveBg = useColorModeValue("#3B82F6", "#2563EB");
+  const filterButtonActiveColor = "#FFFFFF";
+  const filterButtonInactiveBg = useColorModeValue("#F2F2F2", "#374151");
+  const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
+  const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
+
+  const filteredSurveys = useMemo(() => {
+    switch (activeFilter) {
+      case "all":
+        return surveys;
+      case "not_started":
+        // Show surveys that are not started or in progress (still available to take)
+        return surveys.filter(
+          (survey) =>
+            survey.response_status === "not_started" || survey.response_status === "in_progress"
+        );
+      case "completed":
+        // Show completed surveys
+        return surveys.filter((survey) => survey.response_status === "completed");
+      default:
+        return surveys;
+    }
+  }, [surveys, activeFilter]);
+
   if (isLoading) {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
@@ -222,9 +249,71 @@ export default function StudentSurveysPage() {
           </Text>
         </VStack>
 
+        {/* Filter Buttons */}
+        <HStack gap={2} wrap="wrap">
+          <Button
+            size="sm"
+            variant="outline"
+            bg={activeFilter === "all" ? filterButtonActiveBg : filterButtonInactiveBg}
+            color={activeFilter === "all" ? filterButtonActiveColor : filterButtonInactiveColor}
+            borderColor={activeFilter === "all" ? filterButtonActiveBg : borderColor}
+            _hover={{
+              bg: activeFilter === "all" ? filterButtonActiveBg : filterButtonHoverBg
+            }}
+            onClick={() => setActiveFilter("all")}
+          >
+            All
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            bg={activeFilter === "not_started" ? filterButtonActiveBg : filterButtonInactiveBg}
+            color={activeFilter === "not_started" ? filterButtonActiveColor : filterButtonInactiveColor}
+            borderColor={activeFilter === "not_started" ? filterButtonActiveBg : borderColor}
+            _hover={{
+              bg: activeFilter === "not_started" ? filterButtonActiveBg : filterButtonHoverBg
+            }}
+            onClick={() => setActiveFilter("not_started")}
+          >
+            Not Started
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            bg={activeFilter === "completed" ? filterButtonActiveBg : filterButtonInactiveBg}
+            color={activeFilter === "completed" ? filterButtonActiveColor : filterButtonInactiveColor}
+            borderColor={activeFilter === "completed" ? filterButtonActiveBg : borderColor}
+            _hover={{
+              bg: activeFilter === "completed" ? filterButtonActiveBg : filterButtonHoverBg
+            }}
+            onClick={() => setActiveFilter("completed")}
+          >
+            Completed
+          </Button>
+        </HStack>
+
         {/* Surveys List */}
         <VStack align="stretch" gap={4}>
-          {surveys.map((survey) => (
+          {filteredSurveys.length === 0 ? (
+            <Box
+              w="100%"
+              bg={cardBgColor}
+              border="1px solid"
+              borderColor={borderColor}
+              borderRadius="lg"
+              p={8}
+            >
+              <VStack align="center" gap={2}>
+                <Text color={textColor} fontSize="md" fontWeight="medium">
+                  No surveys match the selected filter.
+                </Text>
+                <Text color={textColor} fontSize="sm" opacity={0.7}>
+                  Try selecting a different filter option.
+                </Text>
+              </VStack>
+            </Box>
+          ) : (
+            filteredSurveys.map((survey) => (
             <Box
               key={survey.id}
               w="100%"
@@ -246,22 +335,24 @@ export default function StudentSurveysPage() {
                       </Text>
                     )}
                   </VStack>
-                  {getStatusBadge(survey)}
                 </HStack>
 
                 <HStack justify="space-between" align="center">
-                  <VStack align="start" gap={1}>
-                    {survey.due_date && (
-                      <Text color={textColor} fontSize="sm" fontWeight="medium">
-                        Due: {formatDueDate(survey.due_date)}
-                      </Text>
-                    )}
-                    {survey.submitted_at && (
-                      <Text color={textColor} fontSize="sm" opacity={0.7}>
-                        Submitted: {formatDueDate(survey.submitted_at)}
-                      </Text>
-                    )}
-                  </VStack>
+                  <HStack gap={4} align="center">
+                    {getStatusBadge(survey)}
+                    <VStack align="start" gap={1}>
+                      {survey.due_date && (
+                        <Text color={textColor} fontSize="sm" fontWeight="medium">
+                          Due: {formatDueDate(survey.due_date)}
+                        </Text>
+                      )}
+                      {survey.submitted_at && (
+                        <Text color={textColor} fontSize="sm" opacity={0.7}>
+                          Submitted: {formatDueDate(survey.submitted_at)}
+                        </Text>
+                      )}
+                    </VStack>
+                  </HStack>
 
                   <Link href={`/course/${course_id}/surveys/${survey.id}`}>
                     <Button
@@ -273,7 +364,7 @@ export default function StudentSurveysPage() {
                       }}
                     >
                       {survey.response_status === "completed"
-                        ? "View Response"
+                        ? "View Submission"
                         : survey.response_status === "in_progress"
                           ? "Continue Survey"
                           : "Start Survey"}
@@ -282,7 +373,8 @@ export default function StudentSurveysPage() {
                 </HStack>
               </VStack>
             </Box>
-          ))}
+            ))
+          )}
         </VStack>
       </VStack>
     </Box>
