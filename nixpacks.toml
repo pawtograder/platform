@@ -2,6 +2,7 @@ providers = ["node"]
 
 [variables]
 NIXPACKS_NODE_VERSION = "22"
+NODE_OPTIONS = "--max-old-space-size=8192"
 
 [phases.build]
 cmds = ["npm install", "npm run build"]
