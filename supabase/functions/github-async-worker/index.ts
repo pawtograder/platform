@@ -668,22 +668,27 @@ export async function processEnvelope(
       }
       case "sync_repo_permissions": {
         const { org, repo, courseSlug, githubUsernames } = envelope.args as SyncRepoPermissionsArgs;
+        let repoName = repo;
+        if (repoName.startsWith(org + "/")) {
+          repoName = repoName.substring(org.length + 1);
+        }
         if (org === "pawtograder-playground" && courseSlug?.startsWith("e2e-ignore-")) {
           //No action, no metrics, no logging
           return true;
         }
-        Sentry.addBreadcrumb({ message: `Syncing repo permissions for ${repo} in org ${org}`, level: "info" });
+        Sentry.addBreadcrumb({ message: `Syncing repo permissions for ${repoName} in org ${org}`, level: "info" });
         //Make sure that the repo is ready. If not, we will requeue.
         //Otherwise we might race against a createRepo, and end up overwriting to the wrong githubUsernames.
         const { data: repository } = await adminSupabase
           .from("repositories")
           .select("is_github_ready")
-          .eq("repository", `${org}/${repo}`)
+          .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
+          console.log("repo is not ready", `${org}/${repoName}`);
           return false;
         }
-        await github.syncRepoPermissions(org, repo, courseSlug, githubUsernames, scope);
+        await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
           {
