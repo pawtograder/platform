@@ -71,7 +71,7 @@ export default function HelpQueuesDashboard() {
 
   const handleStartWorking = async (queueId: number) => {
     try {
-      const createdAssignment = await helpQueueAssignments.create({
+      await helpQueueAssignments.create({
         class_id: Number(course_id),
         help_queue_id: queueId,
         ta_profile_id: taProfileId,
@@ -95,8 +95,6 @@ export default function HelpQueuesDashboard() {
 
   const handleStopWorking = async (assignmentId: number) => {
     try {
-      const assignment = allQueueAssignments.find((a) => a.id === assignmentId);
-
       await helpQueueAssignments.update(assignmentId, {
         is_active: false,
         ended_at: new Date().toISOString()

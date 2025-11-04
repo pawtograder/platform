@@ -49,7 +49,6 @@ import VideoCallControls from "./video-call-controls";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import {
-  useHelpQueues,
   useHelpRequest,
   useHelpRequestFeedback,
   useHelpRequestFileReferences,
@@ -91,7 +90,6 @@ type EditingFileReference = HelpRequestFormFileReference & {
  */
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
   const { private_profile_id } = useClassProfiles();
-  const allHelpQueues = useHelpQueues();
 
   // Get student data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -872,7 +870,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const readOnly = request?.status === "resolved" || request?.status === "closed";
-  const allHelpQueues = useHelpQueues();
 
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";

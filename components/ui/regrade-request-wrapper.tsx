@@ -940,7 +940,7 @@ export default function RegradeRequestWrapper({
   children: React.ReactNode;
 }) {
   const regradeRequest = useRegradeRequest(regradeRequestId);
-  const { private_profile_id, role } = useClassProfiles();
+  const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const commentInputRef = useRef<HTMLTextAreaElement>(null);

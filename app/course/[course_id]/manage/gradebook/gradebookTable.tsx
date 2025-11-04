@@ -135,7 +135,6 @@ function ScoreExprDocs() {
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
-  const { course_id } = useParams();
 
   const [isLoading, setIsLoading] = useState(false);
   const onClose = useCallback(() => {
@@ -340,7 +339,6 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   });
   const [isLoading, setIsLoading] = useState(false);
   const column = useGradebookColumn(columnId);
-  const { course_id } = useParams();
 
   type FormValues = {
     name: string;

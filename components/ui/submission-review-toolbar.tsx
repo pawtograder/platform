@@ -5,11 +5,11 @@ import {
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
-  useRubricWithParts,
-  useRubricCriteriaByRubric,
   useRubricChecksByRubric,
+  useRubricCriteriaByRubric,
   useRubricParts,
   useRubrics,
+  useRubricWithParts,
   useSelfReviewSettings
 } from "@/hooks/useAssignment";
 import {
@@ -180,10 +180,7 @@ function CompleteReviewAssignmentDialog({
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
 }) {
-  const { private_profile_id, role } = useClassProfiles();
-  const submission = useSubmission();
-  const activeSubmissionReview = useActiveSubmissionReview();
-  const comments = useAllCommentsForReview(activeSubmissionReview?.id);
+  const { private_profile_id } = useClassProfiles();
 
   return (
     <Popover.Content>
@@ -335,12 +332,10 @@ export function CompleteReviewAssignmentButton() {
  */
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
-  const { private_profile_id, role } = useClassProfiles();
+  const { private_profile_id } = useClassProfiles();
   const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
     useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
-  const submission = useSubmission();
-  const comments = useAllCommentsForReview(activeSubmissionReview?.id);
   const [isLoading, setIsLoading] = useState(false);
 
   if (

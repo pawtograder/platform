@@ -48,7 +48,7 @@ export function DiscussionThreadReply({
       if (!thread) {
         return;
       }
-      const result = await tableController.create({
+      await tableController.create({
         subject: `Re: ${thread.subject}`,
         parent: thread.id,
         root: thread.root || thread.id,
