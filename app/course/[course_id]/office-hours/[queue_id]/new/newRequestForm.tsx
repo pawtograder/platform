@@ -5,7 +5,6 @@ import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import {
   useHelpRequests,
   useHelpRequestStudents,
@@ -105,7 +104,6 @@ export default function HelpRequestForm() {
   });
 
   const { private_profile_id } = useClassProfiles();
-  const trackEvent = useTrackEvent();
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -438,21 +436,6 @@ export default function HelpRequestForm() {
               }
             }
 
-            // Track help request creation
-            const queueData = helpQueues.find((q) => q.id === createdHelpRequest.help_queue);
-            const queueLength = allHelpRequests.filter(
-              (r) => r.help_queue === createdHelpRequest.help_queue && r.status !== "resolved" && r.status !== "closed"
-            ).length;
-
-            trackEvent("help_request_created", {
-              help_queue_id: createdHelpRequest.help_queue,
-              course_id: Number.parseInt(course_id as string),
-              queue_type: (queueData?.queue_type || "text") as "text" | "video" | "in_person",
-              queue_length: queueLength,
-              has_file_references: (fileReferences?.length ?? 0) > 0,
-              help_request_id: createdHelpRequest.id
-            });
-
             toaster.success({
               title: "Success",
               description: "Help request successfully created. Redirecting to queue view..."
@@ -508,7 +491,8 @@ export default function HelpRequestForm() {
       router,
       reset,
       submissions?.data,
-      studentHelpActivity
+      studentHelpActivity,
+      allHelpRequests
     ]
   );
 

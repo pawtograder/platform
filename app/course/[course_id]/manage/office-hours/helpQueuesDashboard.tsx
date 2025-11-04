@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useMemo } from "react";
@@ -32,7 +31,6 @@ export default function HelpQueuesDashboard() {
   const { course_id } = useParams();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
-  const trackEvent = useTrackEvent();
 
   // Get data using individual hooks
   const queues = useHelpQueues();
@@ -83,14 +81,6 @@ export default function HelpQueuesDashboard() {
         max_concurrent_students: 1
       });
 
-      // Track queue assignment started
-      trackEvent("queue_assignment_started", {
-        help_queue_id: queueId,
-        course_id: Number(course_id),
-        max_concurrent_students: 1,
-        queue_assignment_id: createdAssignment.id
-      });
-
       toaster.success({
         title: "Success",
         description: "Started working on queue"
@@ -111,20 +101,6 @@ export default function HelpQueuesDashboard() {
         is_active: false,
         ended_at: new Date().toISOString()
       });
-
-      // Track queue assignment ended
-      if (assignment) {
-        const durationMinutes = assignment.started_at
-          ? (new Date().getTime() - new Date(assignment.started_at).getTime()) / (1000 * 60)
-          : 0;
-
-        trackEvent("queue_assignment_ended", {
-          help_queue_id: assignment.help_queue_id,
-          course_id: Number(course_id),
-          queue_assignment_id: assignmentId,
-          duration_minutes: Math.round(durationMinutes)
-        });
-      }
 
       toaster.success({
         title: "Success",

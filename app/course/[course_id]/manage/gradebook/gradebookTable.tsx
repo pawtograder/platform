@@ -25,7 +25,6 @@ import {
   useStudentDetailView
 } from "@/hooks/useGradebook";
 import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import {
   ClassSection,
@@ -136,7 +135,6 @@ function ScoreExprDocs() {
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
-  const trackEvent = useTrackEvent();
   const { course_id } = useParams();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -191,22 +189,6 @@ function AddColumnDialog() {
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
         sort_order: gradebookController.gradebook_columns.rows.length
-      });
-
-      // Track gradebook column creation
-      const hasFormula = !!data.scoreExpression?.length;
-      const hasAssignmentDeps = dependencies?.assignments && dependencies.assignments.length > 0;
-      const columnType: "assignment" | "calculated" | "manual" = hasAssignmentDeps
-        ? "assignment"
-        : hasFormula
-          ? "calculated"
-          : "manual";
-
-      trackEvent("gradebook_column_created", {
-        course_id: Number(course_id),
-        gradebook_id: gradebookController.gradebook_id,
-        column_type: columnType,
-        has_formula: hasFormula
       });
 
       setIsLoading(false);
@@ -358,7 +340,6 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   });
   const [isLoading, setIsLoading] = useState(false);
   const column = useGradebookColumn(columnId);
-  const trackEvent = useTrackEvent();
   const { course_id } = useParams();
 
   type FormValues = {
@@ -445,16 +426,6 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           dependencies
         }
       });
-
-      // Track gradebook column settings edit
-      if (settingsChanged.length > 0 && course_id) {
-        trackEvent("gradebook_column_settings_edited", {
-          course_id: Number(course_id),
-          gradebook_id: gradebookController.gradebook_id,
-          column_id: columnId,
-          settings_changed: settingsChanged
-        });
-      }
 
       setIsLoading(false);
       toaster.dismiss();

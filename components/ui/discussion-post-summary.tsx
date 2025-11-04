@@ -4,7 +4,6 @@ import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   DiscussionThread as DiscussionThreadType,
@@ -24,7 +23,6 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
   const { private_profile_id } = useClassProfiles();
   const likeStatus = useDiscussionThreadLikes(thread.id);
   const { discussionThreadTeasers } = useCourseController();
-  const trackEvent = useTrackEvent();
   const [loading, setLoading] = useState(false);
   const { discussionThreadLikes } = useCourseController();
 
@@ -41,11 +39,6 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
           creator: private_profile_id!,
           emoji: "👍"
         });
-        // Track discussion thread like
-        trackEvent("discussion_thread_liked", {
-          thread_id: thread.id,
-          course_id: thread.class_id
-        });
       }
       await discussionThreadTeasers.refetchByIds([thread.id]);
     } catch (error) {
@@ -59,15 +52,7 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
     } finally {
       setLoading(false);
     }
-  }, [
-    thread.id,
-    likeStatus,
-    private_profile_id,
-    discussionThreadLikes,
-    thread.class_id,
-    trackEvent,
-    discussionThreadTeasers
-  ]);
+  }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers]);
 
   return (
     <Button variant="ghost" size="sm" onClick={toggleLike} loading={loading}>
