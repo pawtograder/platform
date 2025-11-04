@@ -491,8 +491,7 @@ export default function HelpRequestForm() {
       router,
       reset,
       submissions?.data,
-      studentHelpActivity,
-      allHelpRequests
+      studentHelpActivity
     ]
   );
 
