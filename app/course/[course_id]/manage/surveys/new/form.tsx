@@ -93,6 +93,7 @@ export default function SurveyForm({
   const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isScopeModalOpen, setIsScopeModalOpen] = useState(false);
 
   // NEW: open/close state for the Visual Builder modal
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
@@ -180,63 +181,62 @@ export default function SurveyForm({
     router.push(`/course/${course_id}/manage/surveys`);
   }, [isDirty, getValues, saveDraftOnly, router, course_id]);
 
-  // -------- ADD TO TEMPLATE LIBRARY --------
-  const handleAddToTemplate = useCallback(async () => {
-    const supabase = createClient();
+  const handleAddToTemplate = useCallback(
+    async (scope: "course" | "global") => {
+      setIsScopeModalOpen(false);
 
-    const surveyData = {
-      title: getValues("title"),
-      description: getValues("description") || null,
-      json: getValues("json"),
-    };
+      const supabase = createClient();
+      const surveyData = {
+        title: getValues("title"),
+        description: getValues("description") || null,
+        json: getValues("json"),
+      };
 
-    const confirmed = window.confirm(
-      `Add "${surveyData.title}" to the Template Library?\n\nThis will make it reusable for future courses.`
-    );
-    if (!confirmed) return;
-
-    const loadingToast = toaster.create({
-      title: "Adding to Template Library",
-      description: "Saving survey as a reusable template...",
-      type: "loading",
-    });
-
-    try {
-      const { error } = await supabase.from("survey_templates").insert({
-        id: crypto.randomUUID(),
-        title: surveyData.title,
-        description: surveyData.description,
-        template: surveyData.json,
-        created_by: privateProfileId,
-        created_at: new Date().toISOString(),
+      const loadingToast = toaster.create({
+        title: "Adding to Template Library",
+        description: `Saving as a ${scope} template...`,
+        type: "loading",
       });
 
+      try {
+        const { error } = await supabase.from("survey_templates").insert({
+          id: crypto.randomUUID(),
+          title: surveyData.title,
+          description: surveyData.description,
+          template: surveyData.json,
+          created_by: privateProfileId,
+          scope,
+          class_id: scope === "course" ? Number(course_id) : null,
+          created_at: new Date().toISOString(),
+        });
 
-      toaster.dismiss(loadingToast);
+        toaster.dismiss(loadingToast);
 
-      if (error) {
+        if (error) {
+          toaster.create({
+            title: "Error Adding Template",
+            description: error.message,
+            type: "error",
+          });
+        } else {
+          toaster.create({
+            title: "Template Added",
+            description: `"${surveyData.title}" saved as a ${scope} template.`,
+            type: "success",
+          });
+        }
+      } catch (err: any) {
+        console.error("Error adding to template library:", err);
+        toaster.dismiss(loadingToast);
         toaster.create({
-          title: "Error Adding Template",
-          description: error.message,
+          title: "Unexpected Error",
+          description: "Something went wrong adding the template.",
           type: "error",
         });
-      } else {
-        toaster.create({
-          title: "Template Added",
-          description: `"${surveyData.title}" has been added successfully.`,
-          type: "success",
-        });
       }
-    } catch (err: any) {
-      console.error("Error adding to template library:", err);
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Unexpected Error",
-        description: "Something went wrong adding the template.",
-        type: "error",
-      });
-    }
-  }, [getValues]);
+    },
+    [getValues, privateProfileId, course_id]
+  );
 
 
   const onSubmitWrapper = useCallback(
@@ -571,7 +571,7 @@ export default function SurveyForm({
                   borderColor={buttonBorderColor}
                   color={buttonTextColor}
                   _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-                  onClick={handleAddToTemplate}
+                  onClick={() => setIsScopeModalOpen(true)}
                   size="md"
                 >
                   Add to Template Library
@@ -592,6 +592,67 @@ export default function SurveyForm({
           </Fieldset.Root>
         </form>
       </Box>
+
+      {/* Choose Template Scope Modal */}
+      {isScopeModalOpen && (
+        <Box
+          position="fixed"
+          top="0"
+          left="0"
+          w="100vw"
+          h="100vh"
+          bg="rgba(0,0,0,0.5)"
+          zIndex={9999}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+        >
+          <Box
+            bg={cardBgColor}
+            p={8}
+            borderRadius="lg"
+            border="1px solid"
+            borderColor={borderColor}
+            maxW="400px"
+            textAlign="center"
+          >
+            <Text fontSize="lg" fontWeight="semibold" mb={2} color={textColor}>
+              Save Template Scope
+            </Text>
+            <Text mb={6} color={placeholderColor}>
+              Do you want to save this template for this course only or share it with all instructors?
+            </Text>
+            <HStack justify="center" gap={3}>
+              <Button
+                bg="#22C55E"
+                color="white"
+                _hover={{ bg: "#16A34A" }}
+                onClick={() => handleAddToTemplate("course")}
+              >
+                Course Only
+              </Button>
+              <Button
+                bg="#3B82F6"
+                color="white"
+                _hover={{ bg: "#2563EB" }}
+                onClick={() => handleAddToTemplate("global")}
+              >
+                Global
+              </Button>
+              <Button
+                variant="outline"
+                borderColor={buttonBorderColor}
+                color={buttonTextColor}
+                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                onClick={() => setIsScopeModalOpen(false)}
+              >
+                Cancel
+              </Button>
+            </HStack>
+          </Box>
+        </Box>
+      )}
+
 
       {/* Visual Builder Modal (popup) */}
       <SurveyBuilderModal
