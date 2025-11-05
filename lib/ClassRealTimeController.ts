@@ -502,18 +502,9 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     // Create the message filter subscription for gradebook tables
     const filterUnsubscriber = this.subscribe({ table: "gradebook_column_students" }, callback);
 
-    // Also subscribe to gradebook_row_recalc_state if staff
-    let rowStateUnsubscriber: (() => void) | undefined;
-    if (this._isStaff) {
-      rowStateUnsubscriber = this.subscribe({ table: "gradebook_row_recalc_state" }, callback);
-    }
-
     // Return unsubscriber that cleans up both filter subscription and gradebook channels
     return () => {
       filterUnsubscriber();
-      if (rowStateUnsubscriber) {
-        rowStateUnsubscriber();
-      }
       this._cleanupGradebookChannels();
     };
   }
@@ -584,7 +575,9 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
    * Subscribe to gradebook staff channel
    */
   private async _subscribeToGradebookStaffChannel() {
-    if (!this._isStaff) return;
+    if (!this._isStaff) {
+      return;
+    }
 
     const topic = `gradebook:${this._classId}:staff`;
     const unsubscriber = await this._channelManager.subscribe(
@@ -613,7 +606,9 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
    * Subscribe to gradebook student channel
    */
   private async _subscribeToGradebookStudentChannel() {
-    if (this._isStaff) return;
+    if (this._isStaff) {
+      return;
+    }
 
     const topic = `gradebook:${this._classId}:student:${this._profileId}`;
     const unsubscriber = await this._channelManager.subscribe(

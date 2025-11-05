@@ -529,7 +529,9 @@ export class GradebookCellController {
         await this._initializeGradebookForThisStudent();
       }
 
-      if (this._closed) return;
+      if (this._closed) {
+        return;
+      }
 
       // Set up real-time subscriptions for gradebook updates
       this._setupRealTimeSubscriptions();
@@ -554,32 +556,28 @@ export class GradebookCellController {
   }
 
   private _setupRealTimeSubscriptions(): void {
-    // Subscribe to gradebook_column_students changes
-    const unsubscribeColumnStudents = this._classRealTimeController.subscribeToTable(
-      "gradebook_column_students",
-      (message) => {
-        if (this._closed) return;
+    // Subscribe to gradebook-specific channels (gradebook_column_students)
+    // Note: gradebook_row_recalc_state broadcasts are handled directly by callers, not via triggers
+    const unsubscribeGradebook = this._classRealTimeController.subscribeToGradebookChannel((message) => {
+      if (this._closed) return;
+
+      // Route messages to appropriate handlers
+      if (message.table === "gradebook_column_students") {
         this._handleGradebookColumnStudentChange(message);
+      } else if (message.table === "gradebook_row_recalc_state") {
+        // Still handle these messages if callers broadcast them directly
+        this._handleRowRecalcStateChange(message);
       }
-    );
-    this._unsubscribes.push(unsubscribeColumnStudents);
+    });
+    this._unsubscribes.push(unsubscribeGradebook);
 
     // Subscribe to gradebook_columns changes (for column additions/deletions)
+    // This still uses subscribeToTable since it's not part of the gradebook-specific channels
     const unsubscribeColumns = this._classRealTimeController.subscribeToTable("gradebook_columns", (message) => {
       if (this._closed) return;
       this._handleGradebookColumnChange(message);
     });
     this._unsubscribes.push(unsubscribeColumns);
-
-    // Subscribe to row-level recalculation state changes
-    const unsubscribeRowState = this._classRealTimeController.subscribeToTable(
-      "gradebook_row_recalc_state",
-      (message) => {
-        if (this._closed) return;
-        this._handleRowRecalcStateChange(message);
-      }
-    );
-    this._unsubscribes.push(unsubscribeRowState);
   }
 
   private _handleGradebookColumnStudentChange(message: BroadcastMessage): void {

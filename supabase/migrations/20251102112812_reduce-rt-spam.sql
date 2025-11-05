@@ -241,7 +241,17 @@ For smaller bulk deletes (1-49 rows), sends a consolidated message with row IDs 
 -- ============================================================================
 -- GRADEBOOK_ROW_RECALC_STATE STATEMENT-LEVEL BROADCAST HANDLING
 -- ============================================================================
+-- Use statement-level triggers to batch broadcasts when multiple rows are updated
+-- Individual function calls still work, but bulk operations are batched efficiently
 
+-- Drop all existing triggers (row-level and statement-level)
+DROP TRIGGER IF EXISTS broadcast_gradebook_row_recalc_state ON public.gradebook_row_recalc_state;
+DROP TRIGGER IF EXISTS broadcast_gradebook_row_recalc_state_insert_trigger ON public.gradebook_row_recalc_state;
+DROP TRIGGER IF EXISTS broadcast_gradebook_row_recalc_state_update_trigger ON public.gradebook_row_recalc_state;
+DROP TRIGGER IF EXISTS broadcast_gradebook_row_recalc_state_delete_trigger ON public.gradebook_row_recalc_state;
+
+-- Statement-level broadcast function for gradebook_row_recalc_state
+-- Batches all changes in a single statement into one broadcast
 CREATE OR REPLACE FUNCTION public.broadcast_gradebook_row_recalc_state_statement()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -253,60 +263,69 @@ DECLARE
     class_id_value BIGINT;
     staff_payload JSONB;
     operation_type TEXT;
-    BULK_THRESHOLD CONSTANT INTEGER := 50;
+    class_ids BIGINT[];
 BEGIN
     operation_type := TG_OP;
     
-    -- Collect affected count (no id column - composite PK on class_id, gradebook_id, student_id, is_private)
+    -- Collect affected count and all unique class_ids
+    -- Use transition tables directly (old_table/new_table are statement-level trigger transition tables)
     IF operation_type = 'DELETE' THEN
-        SELECT COUNT(*)
-        INTO affected_count
-        FROM old_table;
-        
-        SELECT DISTINCT old_table.class_id INTO class_id_value
-        FROM old_table
-        LIMIT 1;
+        SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
+        INTO affected_count, class_ids
+        FROM old_table t;
+    ELSIF operation_type = 'UPDATE' THEN
+        -- For UPDATE, we can use either old_table or new_table - use new_table to get updated values
+        SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
+        INTO affected_count, class_ids
+        FROM new_table t;
     ELSE
-        SELECT COUNT(*)
-        INTO affected_count
-        FROM new_table;
-        
-        SELECT DISTINCT new_table.class_id INTO class_id_value
-        FROM new_table
-        LIMIT 1;
+        -- INSERT
+        SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
+        INTO affected_count, class_ids
+        FROM new_table t;
     END IF;
     
-    IF affected_count IS NULL OR affected_count = 0 OR class_id_value IS NULL THEN
+    -- Early return if no rows affected
+    IF affected_count IS NULL OR affected_count = 0 THEN
         RETURN NULL;
     END IF;
     
-    -- Build payload - always use refetch signal since we don't have simple row IDs
-    -- (composite key would be complex to handle, so refetch is simpler)
-    staff_payload := jsonb_build_object(
-        'type', 'table_change',
-        'operation', operation_type,
-        'table', 'gradebook_row_recalc_state',
-        'class_id', class_id_value,
-        'affected_count', affected_count,
-        'requires_refetch', true,
-        'timestamp', NOW()
-    );
+    -- Early return if no class_ids found
+    IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
+        RETURN NULL;
+    END IF;
     
-    -- Broadcast ONLY to gradebook staff channel
-    PERFORM public.safe_broadcast(
-        staff_payload,
-        'broadcast',
-        'gradebook:' || class_id_value || ':staff',
-        true
-    );
+    -- Broadcast to each affected class's gradebook staff channel
+    -- This handles cases where updates affect multiple classes
+    FOREACH class_id_value IN ARRAY class_ids
+    LOOP
+        -- Build payload - always use refetch signal since we have multiple rows with composite keys
+        -- This ensures the frontend refreshes all affected rows
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', operation_type,
+            'table', 'gradebook_row_recalc_state',
+            'class_id', class_id_value,
+            'affected_count', affected_count,
+            'requires_refetch', true,
+            'timestamp', NOW()
+        );
+        
+        -- Broadcast to gradebook staff channel for this class
+        -- Note: safe_broadcast checks for subscribers before sending, so if no one is subscribed, it won't send
+        PERFORM public.safe_broadcast(
+            staff_payload,
+            'broadcast',
+            'gradebook:' || class_id_value || ':staff',
+            true
+        );
+    END LOOP;
     
     RETURN NULL;
 END;
 $$;
 
--- Drop row-level trigger and create statement-level triggers
-DROP TRIGGER IF EXISTS broadcast_gradebook_row_recalc_state ON public.gradebook_row_recalc_state;
-
+-- Create statement-level triggers for INSERT, UPDATE, DELETE
 CREATE TRIGGER broadcast_gradebook_row_recalc_state_insert_trigger
     AFTER INSERT ON public.gradebook_row_recalc_state
     REFERENCING NEW TABLE AS new_table
@@ -324,6 +343,79 @@ CREATE TRIGGER broadcast_gradebook_row_recalc_state_delete_trigger
     REFERENCING OLD TABLE AS old_table
     FOR EACH STATEMENT
     EXECUTE FUNCTION public.broadcast_gradebook_row_recalc_state_statement();
+
+-- Update enqueue_gradebook_row_recalculation - remove individual broadcast since statement-level trigger handles it
+CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation(
+  p_class_id bigint,
+  p_gradebook_id bigint,
+  p_student_id uuid,
+  p_is_private boolean,
+  p_reason text DEFAULT 'row_recalc_request',
+  p_trigger_id bigint DEFAULT NULL
+) RETURNS void
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$
+DECLARE
+  row_message jsonb;
+BEGIN
+  -- Per-row advisory lock to avoid duplicate enqueues under concurrency
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended(
+      p_class_id::text || ':' || p_gradebook_id::text || ':' || p_student_id::text || ':' || p_is_private::text,
+      42
+    )::bigint
+  );
+
+  -- Gating rules against row-state table:
+  -- - If row is currently recalculating, allow re-enqueue (ensure newest deps are seen)
+  -- - Else if row is already dirty (and not recalculating), skip enqueue
+  IF NOT EXISTS (
+    SELECT 1 FROM public.gradebook_row_recalc_state s
+    WHERE s.class_id = p_class_id
+      AND s.gradebook_id = p_gradebook_id
+      AND s.student_id = p_student_id
+      AND s.is_private = p_is_private
+      AND s.is_recalculating = true
+  ) THEN
+    IF EXISTS (
+      SELECT 1 FROM public.gradebook_row_recalc_state s
+      WHERE s.class_id = p_class_id
+        AND s.gradebook_id = p_gradebook_id
+        AND s.student_id = p_student_id
+        AND s.is_private = p_is_private
+        AND s.dirty = true
+    ) THEN
+      RETURN;
+    END IF;
+  END IF;
+
+  -- Build a single row-level message
+  row_message := jsonb_build_object(
+    'class_id', p_class_id,
+    'gradebook_id', p_gradebook_id,
+    'student_id', p_student_id,
+    'is_private', p_is_private
+  );
+
+  -- Send a single message to the row queue
+  PERFORM pgmq_public.send(
+    queue_name := 'gradebook_row_recalculate',
+    message := row_message
+  );
+
+  -- Mark row-state dirty and set recalculating (upsert), bump version to invalidate older workers
+  -- The statement-level trigger will broadcast all changes in this statement at once
+  INSERT INTO public.gradebook_row_recalc_state (class_id, gradebook_id, student_id, is_private, dirty, is_recalculating, version)
+  VALUES (p_class_id, p_gradebook_id, p_student_id, p_is_private, true, true, 1)
+  ON CONFLICT (class_id, gradebook_id, student_id, is_private)
+  DO UPDATE SET dirty = true, is_recalculating = true, version = public.gradebook_row_recalc_state.version + 1, updated_at = now();
+END;
+$$;
+
+COMMENT ON FUNCTION public.enqueue_gradebook_row_recalculation(bigint, bigint, uuid, boolean, text, bigint)
+  IS 'Enqueues recalculation for all gradebook cells of a specific student in a class for the given privacy variant. State changes are broadcast via statement-level triggers, which batch multiple updates efficiently.';
 
 -- ============================================================================
 -- SUBMISSION_REVIEWS STATEMENT-LEVEL BROADCAST HANDLING
@@ -615,4 +707,85 @@ CREATE TRIGGER broadcast_review_assignments_delete_trigger
     REFERENCING OLD TABLE AS old_table
     FOR EACH STATEMENT
     EXECUTE FUNCTION public.broadcast_review_assignments_statement();
+
+-- ============================================================================
+-- UPDATE RLS AUTHORIZATION FUNCTION FOR GRADEBOOK CHANNELS
+-- ============================================================================
+
+-- Update the gradebook realtime authorization function to ensure it properly handles
+-- the new gradebook channels: gradebook:$class_id:staff and gradebook:$class_id:student:$student_id
+-- This function is called by check_unified_realtime_authorization for gradebook topics
+CREATE OR REPLACE FUNCTION public.check_gradebook_realtime_authorization(topic_text text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    topic_parts text[];
+    class_id_text text;
+    student_id_text text;
+    class_id_bigint bigint;
+    student_id_uuid uuid;
+    is_class_grader boolean;
+    is_student_owner boolean;
+BEGIN
+    -- Parse topic - should be gradebook:123:staff, gradebook:123:students, or gradebook:123:student:uuid
+    topic_parts := string_to_array(topic_text, ':');
+    
+    -- Must have at least 3 parts and start with 'gradebook'
+    IF array_length(topic_parts, 1) < 3 OR topic_parts[1] != 'gradebook' THEN
+        RETURN false;
+    END IF;
+    
+    class_id_text := topic_parts[2];
+    
+    -- Convert class_id to bigint
+    BEGIN
+        class_id_bigint := class_id_text::bigint;
+    EXCEPTION WHEN OTHERS THEN
+        RETURN false;
+    END;
+    
+    -- Handle different channel types
+    IF topic_parts[3] = 'staff' THEN
+        -- Staff channel - only graders/instructors
+        -- Format: gradebook:$class_id:staff
+        RETURN public.authorizeforclassgrader(class_id_bigint);
+        
+    ELSIF topic_parts[3] = 'students' THEN
+        -- General students channel - students and staff (legacy format)
+        -- Format: gradebook:$class_id:students
+        RETURN public.authorizeforclass(class_id_bigint);
+        
+    ELSIF topic_parts[3] = 'student' THEN
+        -- Individual student channel - must have 4 parts
+        -- Format: gradebook:$class_id:student:$student_id
+        IF array_length(topic_parts, 1) != 4 THEN
+            RETURN false;
+        END IF;
+        
+        student_id_text := topic_parts[4];
+        
+        -- Convert student_id to uuid
+        BEGIN
+            student_id_uuid := student_id_text::uuid;
+        EXCEPTION WHEN OTHERS THEN
+            RETURN false;
+        END;
+        
+        -- Check if user is grader/instructor OR is the specific student
+        is_class_grader := public.authorizeforclassgrader(class_id_bigint);
+        is_student_owner := public.authorizeforprofile(student_id_uuid);
+        
+        RETURN is_class_grader OR is_student_owner;
+        
+    ELSE
+        RETURN false;
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION public.check_gradebook_realtime_authorization(text) IS 
+'Authorizes access to gradebook broadcast channels. Supports gradebook:$class_id:staff (graders only), gradebook:$class_id:students (all class members, legacy), and gradebook:$class_id:student:$student_id (graders or specific student only).';
 
