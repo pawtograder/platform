@@ -1,13 +1,14 @@
 "use client";
 
-import { Box, Container, Heading, Text, VStack, HStack, Table, Button } from "@chakra-ui/react";
+import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Input, Badge, Icon } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
-import { differenceInMinutes } from "date-fns";
+import { differenceInMinutes, isWithinInterval, parseISO } from "date-fns";
 import { useRouter } from "next/navigation";
 import { Model } from "survey-core";
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState } from "react";
+import { FiX, FiFilter } from "react-icons/fi";
 
 type SurveyResponse = {
   id: string;
@@ -112,6 +113,11 @@ function escapeCSVValue(value: string): string {
   return stringValue;
 }
 
+type QuestionFilter = {
+  questionName: string;
+  value: string;
+};
+
 export default function SurveyResponsesView({
   courseId,
   surveyId,
@@ -123,6 +129,14 @@ export default function SurveyResponsesView({
   totalStudents
 }: SurveyResponsesViewProps) {
   const router = useRouter();
+  
+  // Filter state
+  const [dateRangeStart, setDateRangeStart] = useState<string>("");
+  const [dateRangeEnd, setDateRangeEnd] = useState<string>("");
+  const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]); // Questions to show in table
+  const [showFilters, setShowFilters] = useState(false);
+  const [anonymousMode, setAnonymousMode] = useState(false);
+  
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
@@ -130,9 +144,9 @@ export default function SurveyResponsesView({
   const headerTextColor = useColorModeValue("#1A202C", "#9CA3AF");
   const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
   const emptyStateTextColor = useColorModeValue("#6B7280", "#718096");
+  const filterBadgeBg = useColorModeValue("#3B82F6", "#2563EB");
 
   const totalResponses = responses.length;
-  const responseRate = totalStudents > 0 ? ((totalResponses / totalStudents) * 100).toFixed(0) : 0;
 
   // Get dynamic question columns from survey JSON
   const questionTitles = useMemo(() => {
@@ -152,22 +166,81 @@ export default function SurveyResponsesView({
     return Array.from(questionNames);
   }, [responses]);
 
-  // Calculate average completion time
+  // Filter responses based on active filters
+  const filteredResponses = useMemo(() => {
+    let filtered = responses;
+
+    // Date range filter
+    if (dateRangeStart && dateRangeEnd) {
+      try {
+        const startDate = parseISO(dateRangeStart);
+        const endDate = parseISO(dateRangeEnd);
+        filtered = filtered.filter((response) => {
+          const submittedDate = parseISO(response.submitted_at);
+          return isWithinInterval(submittedDate, { start: startDate, end: endDate });
+        });
+      } catch (error) {
+        console.warn("Error parsing date range:", error);
+      }
+    }
+
+    return filtered;
+  }, [responses, dateRangeStart, dateRangeEnd]);
+
+  // Determine which questions to show in table
+  const visibleQuestions = useMemo(() => {
+    if (selectedQuestions.length > 0) {
+      return selectedQuestions;
+    }
+    return allQuestionNames;
+  }, [selectedQuestions, allQuestionNames]);
+
+  // Count active filters
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (dateRangeStart && dateRangeEnd) count++;
+    if (selectedQuestions.length > 0) count++;
+    if (anonymousMode) count++;
+    return count;
+  }, [dateRangeStart, dateRangeEnd, selectedQuestions, anonymousMode]);
+
+  // Clear all filters
+  const clearAllFilters = useCallback(() => {
+    setDateRangeStart("");
+    setDateRangeEnd("");
+    setSelectedQuestions([]);
+    setAnonymousMode(false);
+  }, []);
+
+  // Toggle question selection
+  const toggleQuestion = useCallback((questionName: string) => {
+    setSelectedQuestions((prev) => {
+      if (prev.includes(questionName)) {
+        return prev.filter((q) => q !== questionName);
+      } else {
+        return [...prev, questionName];
+      }
+    });
+  }, []);
+
+  const responseRate = totalStudents > 0 ? ((filteredResponses.length / totalStudents) * 100).toFixed(0) : 0;
+
+  // Calculate average completion time using filtered responses
   let avgCompletionTime = "—";
-  if (totalResponses > 0) {
-    const totalMinutes = responses.reduce((sum, response) => {
+  if (filteredResponses.length > 0) {
+    const totalMinutes = filteredResponses.reduce((sum, response) => {
       const start = new Date(response.created_at);
       const end = new Date(response.submitted_at);
       return sum + differenceInMinutes(end, start);
     }, 0);
-    const avgMinutes = totalMinutes / totalResponses;
+    const avgMinutes = totalMinutes / filteredResponses.length;
     const avgHours = Math.floor(avgMinutes / 60);
     const remainingMinutes = Math.round(avgMinutes % 60);
     avgCompletionTime = `${avgHours > 0 ? `${avgHours}:` : ""}${remainingMinutes.toString().padStart(2, "0")}`;
   }
 
   const exportToCSV = useCallback(() => {
-    if (responses.length === 0) {
+    if (filteredResponses.length === 0) {
       return;
     }
 
@@ -177,7 +250,7 @@ export default function SurveyResponsesView({
       ...allQuestionNames.map((questionName) => questionTitles[questionName] || questionName)
     ];
 
-    const csvRows = responses.map((response) => {
+    const csvRows = filteredResponses.map((response) => {
       const row = [
         response.profiles?.name || "N/A",
         response.submitted_at
@@ -202,7 +275,7 @@ export default function SurveyResponsesView({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }, [responses, allQuestionNames, questionTitles, surveyTitle]);
+  }, [filteredResponses, allQuestionNames, questionTitles, surveyTitle]);
 
   return (
     <Container py={8} maxW="1200px" my={2}>
@@ -213,7 +286,7 @@ export default function SurveyResponsesView({
         </Heading>
 
         {/* Action Buttons */}
-        <HStack justify="space-between" mb={8}>
+        <HStack justify="space-between" mb={4}>
           <Button
             variant="outline"
             size="sm"
@@ -225,18 +298,159 @@ export default function SurveyResponsesView({
           >
             ← Back to Surveys
           </Button>
-          <Button
-            size="sm"
-            variant="solid"
-            bg="#22C55E"
-            color="white"
-            _hover={{ bg: "#16A34A" }}
-            onClick={exportToCSV}
-            disabled={responses.length === 0}
-          >
-            Export to CSV
-          </Button>
+          <HStack gap={2}>
+            <Button
+              size="sm"
+              variant="outline"
+              borderColor={borderColor}
+              color={textColor}
+              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+              onClick={() => setShowFilters(!showFilters)}
+            >
+              <Icon as={FiFilter} mr={2} />
+              Filters
+              {activeFilterCount > 0 && (
+                <Badge ml={2} bg={filterBadgeBg} color="white" borderRadius="full" px={2}>
+                  {activeFilterCount}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant="solid"
+              bg="#22C55E"
+              color="white"
+              _hover={{ bg: "#16A34A" }}
+              onClick={exportToCSV}
+              disabled={filteredResponses.length === 0}
+            >
+              Export to CSV
+            </Button>
+          </HStack>
         </HStack>
+
+        {/* Filter Panel */}
+        {showFilters && (
+          <Box
+            bg={cardBgColor}
+            border="1px solid"
+            borderColor={borderColor}
+            borderRadius="lg"
+            p={4}
+            mb={4}
+          >
+            <VStack align="stretch" gap={4}>
+              <HStack justify="space-between">
+                <Text fontWeight="bold" color={textColor}>
+                  Filter Responses
+                </Text>
+                {activeFilterCount > 0 && (
+                  <Button size="sm" variant="ghost" onClick={clearAllFilters}>
+                    Clear All
+                  </Button>
+                )}
+              </HStack>
+
+              {/* Date Range Filter */}
+              <Box>
+                <Text fontSize="sm" fontWeight="medium" color={textColor} mb={2}>
+                  Date Range
+                </Text>
+                <HStack gap={2}>
+                  <Input
+                    type="date"
+                    size="sm"
+                    value={dateRangeStart}
+                    onChange={(e) => setDateRangeStart(e.target.value)}
+                    placeholder="Start date"
+                  />
+                  <Text color={textColor}>to</Text>
+                  <Input
+                    type="date"
+                    size="sm"
+                    value={dateRangeEnd}
+                    onChange={(e) => setDateRangeEnd(e.target.value)}
+                    placeholder="End date"
+                  />
+                </HStack>
+              </Box>
+
+              {/* Anonymous Mode Toggle */}
+              <Box>
+                <Text fontSize="sm" fontWeight="medium" color={textColor} mb={2}>
+                  Anonymous Mode
+                </Text>
+                <HStack gap={2}>
+                  <input
+                    type="checkbox"
+                    checked={anonymousMode}
+                    onChange={() => setAnonymousMode(!anonymousMode)}
+                    style={{ cursor: "pointer" }}
+                  />
+                  <Text fontSize="sm" color={textColor}>
+                    Hide student names and submission times
+                  </Text>
+                </HStack>
+              </Box>
+
+              {/* Filter by Question Columns */}
+              {allQuestionNames.length > 0 && (
+                <Box>
+                  <Text fontSize="sm" fontWeight="medium" color={textColor} mb={2}>
+                    Show Specific Questions (leave empty to show all)
+                  </Text>
+                  <VStack align="stretch" gap={2}>
+                    {allQuestionNames.map((qName) => (
+                      <HStack key={qName} gap={2}>
+                        <input
+                          type="checkbox"
+                          checked={selectedQuestions.includes(qName)}
+                          onChange={() => toggleQuestion(qName)}
+                          style={{ cursor: "pointer" }}
+                        />
+                        <Text fontSize="sm" color={textColor}>
+                          {questionTitles[qName] || qName}
+                        </Text>
+                      </HStack>
+                    ))}
+                  </VStack>
+                </Box>
+              )}
+            </VStack>
+          </Box>
+        )}
+
+        {/* Active Filters Display */}
+        {activeFilterCount > 0 && (
+          <HStack gap={2} wrap="wrap" mb={4}>
+            {dateRangeStart && dateRangeEnd && (
+              <Badge bg={filterBadgeBg} color="white" px={3} py={1} borderRadius="full">
+                Date: {dateRangeStart} to {dateRangeEnd}
+                <Icon
+                  as={FiX}
+                  ml={2}
+                  cursor="pointer"
+                  onClick={() => {
+                    setDateRangeStart("");
+                    setDateRangeEnd("");
+                  }}
+                />
+              </Badge>
+            )}
+            {selectedQuestions.length > 0 && (
+              <Badge bg={filterBadgeBg} color="white" px={3} py={1} borderRadius="full">
+                Showing {selectedQuestions.length} question{selectedQuestions.length !== 1 ? "s" : ""}
+                <Icon as={FiX} ml={2} cursor="pointer" onClick={() => setSelectedQuestions([])} />
+              </Badge>
+            )}
+            {anonymousMode && (
+              <Badge bg={filterBadgeBg} color="white" px={3} py={1} borderRadius="full">
+                Anonymous Mode
+                <Icon as={FiX} ml={2} cursor="pointer" onClick={() => setAnonymousMode(false)} />
+              </Badge>
+            )}
+          </HStack>
+        )}
       </VStack>
 
       <Text color={textColor} mb={6}>
@@ -258,7 +472,12 @@ export default function SurveyResponsesView({
             TOTAL RESPONSES
           </Text>
           <Text fontSize="2xl" fontWeight="bold" color={textColor}>
-            {totalResponses}
+            {filteredResponses.length}
+            {activeFilterCount > 0 && (
+              <Text as="span" fontSize="sm" color={headerTextColor} ml={2}>
+                / {totalResponses}
+              </Text>
+            )}
           </Text>
         </Box>
         <Box
@@ -298,28 +517,32 @@ export default function SurveyResponsesView({
       {/* Responses Table */}
       <Box border="1px solid" borderColor={borderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
         <Table.Root variant="outline" size="md">
-          <Table.Header>
-            <Table.Row bg={headerBgColor}>
-              <Table.ColumnHeader
-                color={headerTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-                pl={6}
-              >
-                STUDENT NAME
-              </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={headerTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
-                SUBMITTED AT
-              </Table.ColumnHeader>
-              {allQuestionNames.map((questionName) => (
+        <Table.Header>
+          <Table.Row bg={headerBgColor}>
+            {!anonymousMode && (
+              <>
+                <Table.ColumnHeader
+                  color={headerTextColor}
+                  fontSize="xs"
+                  fontWeight="semibold"
+                  textTransform="uppercase"
+                  py={3}
+                  pl={6}
+                >
+                  STUDENT NAME
+                </Table.ColumnHeader>
+                <Table.ColumnHeader
+                  color={headerTextColor}
+                  fontSize="xs"
+                  fontWeight="semibold"
+                  textTransform="uppercase"
+                  py={3}
+                >
+                  SUBMITTED AT
+                </Table.ColumnHeader>
+              </>
+            )}
+            {visibleQuestions.map((questionName, index) => (
                 <Table.ColumnHeader
                   key={questionName}
                   color={headerTextColor}
@@ -327,7 +550,8 @@ export default function SurveyResponsesView({
                   fontWeight="semibold"
                   textTransform="uppercase"
                   py={3}
-                  pr={questionName === allQuestionNames[allQuestionNames.length - 1] ? 6 : undefined}
+                  pl={anonymousMode && index === 0 ? 6 : undefined}
+                  pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
                 >
                   {questionTitles[questionName] || questionName}
                 </Table.ColumnHeader>
@@ -335,28 +559,37 @@ export default function SurveyResponsesView({
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {totalResponses === 0 ? (
+            {filteredResponses.length === 0 ? (
               <Table.Row bg={tableRowBg} borderColor={borderColor}>
-                <Table.Cell colSpan={2 + allQuestionNames.length} py={4} textAlign="center">
-                  <Text color={emptyStateTextColor}>Students haven't submitted any responses to this survey.</Text>
+                <Table.Cell colSpan={(anonymousMode ? 0 : 2) + visibleQuestions.length} py={4} textAlign="center">
+                  <Text color={emptyStateTextColor}>
+                    {totalResponses === 0
+                      ? "Students haven't submitted any responses to this survey."
+                      : "No responses match the current filters."}
+                  </Text>
                 </Table.Cell>
               </Table.Row>
             ) : (
-              responses.map((response) => (
+              filteredResponses.map((response) => (
                 <Table.Row key={response.id} bg={tableRowBg} borderColor={borderColor}>
-                  <Table.Cell py={4} pl={6}>
-                    <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
-                  </Table.Cell>
-                  <Table.Cell py={4}>
-                    <Text color={textColor}>
-                      {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")}
-                    </Text>
-                  </Table.Cell>
-                  {allQuestionNames.map((questionName) => (
+                  {!anonymousMode && (
+                    <>
+                      <Table.Cell py={4} pl={6}>
+                        <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
+                      </Table.Cell>
+                      <Table.Cell py={4}>
+                        <Text color={textColor}>
+                          {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")}
+                        </Text>
+                      </Table.Cell>
+                    </>
+                  )}
+                  {visibleQuestions.map((questionName, index) => (
                     <Table.Cell
                       key={questionName}
                       py={4}
-                      pr={questionName === allQuestionNames[allQuestionNames.length - 1] ? 6 : undefined}
+                      pl={anonymousMode && index === 0 ? 6 : undefined}
+                      pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
                     >
                       <Text color={textColor}>{formatResponseValue(response.response?.[questionName])}</Text>
                     </Table.Cell>
