@@ -1469,18 +1469,36 @@ export class GradebookController {
     const roster = courseController.getRosterWithUserInfo().data;
     const columns = [...this.gradebook_columns.rows];
     columns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+    // Get class sections and lab sections for lookups
+    const classSections = courseController.classSections.list().data;
+    const labSections = courseController.listLabSections().data;
+
     const result = [];
-    result.push(["Name", "Email", "Canvas ID", "SID", ...columns.map((col) => col.name)]);
+    result.push(["Name", "Email", "SID", "Course Section", "Lab Section", "Tags", ...columns.map((col) => col.name)]);
     roster.forEach((student) => {
       if (student.disabled) return; //Skip dropped students
       const studentGradebookController = this.getStudentGradebookController(student.private_profile_id);
       const userProfile = courseController.profiles.getById(student.private_profile_id);
+
+      // Get section names
+      const classSection = classSections.find((s) => s.id === student.class_section_id);
+      const labSection = labSections.find((s) => s.id === student.lab_section_id);
+      const courseSectionName = classSection?.name ?? "";
+      const labSectionName = labSection?.name ?? "";
+
+      // Get tags for this student
+      const tags = courseController.getTagsForProfile(student.private_profile_id).data || [];
+      const tagNames = tags.map((tag) => tag.name).join(" ");
+
       const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
       const row = [
         userProfile.data.name ?? "Unknown",
         student.users.email ?? "Unknown",
-        student.canvas_id,
         student.users.sis_user_id,
+        courseSectionName,
+        labSectionName,
+        tagNames,
         ...gradesForStudent
       ];
       result.push(row);
