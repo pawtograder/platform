@@ -261,7 +261,7 @@ function IncompleteValuesAlert({
           <Accordion.ItemBody>
             <Alert variant="subtle" title="Incomplete Values" zIndex={1}>
               <Text fontSize="sm">This value can not be fully calculated right now.</Text>
-              {column.show_calculated_ranges && (
+              {false && column.show_calculated_ranges && (
                 <Text fontSize="sm">
                   The score <Code variant="surface">{report_only}</Code> only considers values that have been graded.
                   Assuming full marks for the missing items, the best possible value is{" "}
