@@ -4,10 +4,10 @@ import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Input, Ba
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
-import { differenceInMinutes, isWithinInterval, parseISO } from "date-fns";
+import { differenceInMinutes, isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
 import { useRouter } from "next/navigation";
 import { Model } from "survey-core";
-import { useMemo, useCallback, useState } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
 
 type SurveyResponse = {
@@ -31,6 +31,7 @@ type SurveyResponsesViewProps = {
   surveyVersion: number;
   surveyStatus: string;
   surveyJson: any; // The JSON configuration of the survey
+  surveyDueDate: string | null; // The deadline for the survey
   responses: SurveyResponse[];
   totalStudents: number;
 };
@@ -125,6 +126,7 @@ export default function SurveyResponsesView({
   surveyVersion,
   surveyStatus,
   surveyJson,
+  surveyDueDate,
   responses,
   totalStudents
 }: SurveyResponsesViewProps) {
@@ -136,6 +138,7 @@ export default function SurveyResponsesView({
   const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]); // Questions to show in table
   const [showFilters, setShowFilters] = useState(false);
   const [anonymousMode, setAnonymousMode] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
   
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
@@ -145,6 +148,14 @@ export default function SurveyResponsesView({
   const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
   const emptyStateTextColor = useColorModeValue("#6B7280", "#718096");
   const filterBadgeBg = useColorModeValue("#3B82F6", "#2563EB");
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, []);
 
   const totalResponses = responses.length;
 
@@ -225,18 +236,35 @@ export default function SurveyResponsesView({
 
   const responseRate = totalStudents > 0 ? ((filteredResponses.length / totalStudents) * 100).toFixed(0) : 0;
 
-  // Calculate average completion time using filtered responses
-  let avgCompletionTime = "—";
-  if (filteredResponses.length > 0) {
-    const totalMinutes = filteredResponses.reduce((sum, response) => {
-      const start = new Date(response.created_at);
-      const end = new Date(response.submitted_at);
-      return sum + differenceInMinutes(end, start);
-    }, 0);
-    const avgMinutes = totalMinutes / filteredResponses.length;
-    const avgHours = Math.floor(avgMinutes / 60);
-    const remainingMinutes = Math.round(avgMinutes % 60);
-    avgCompletionTime = `${avgHours > 0 ? `${avgHours}:` : ""}${remainingMinutes.toString().padStart(2, "0")}`;
+  // Calculate time remaining until deadline
+  let timeRemaining = "—";
+  let isOverdue = false;
+  let isLessThan24Hours = false;
+  if (surveyDueDate) {
+    const dueDate = new Date(surveyDueDate);
+    
+    if (isPast(dueDate)) {
+      timeRemaining = "Closed";
+      isOverdue = true;
+    } else {
+      const totalHoursLeft = differenceInHours(dueDate, currentTime);
+      const daysLeft = differenceInDays(dueDate, currentTime);
+      const hoursLeft = totalHoursLeft % 24;
+      
+      if (totalHoursLeft < 24) {
+        isLessThan24Hours = true;
+      }
+      
+      if (daysLeft > 0) {
+        timeRemaining = `${daysLeft} day${daysLeft !== 1 ? 's' : ''}${hoursLeft > 0 ? `, ${hoursLeft}h` : ''}`;
+      } else if (hoursLeft > 0) {
+        const minutesLeft = Math.floor((dueDate.getTime() - currentTime.getTime()) / (1000 * 60)) % 60;
+        timeRemaining = `${hoursLeft}h${minutesLeft > 0 ? ` ${minutesLeft}m` : ''}`;
+      } else {
+        const minutesLeft = Math.floor((dueDate.getTime() - currentTime.getTime()) / (1000 * 60));
+        timeRemaining = minutesLeft > 0 ? `${minutesLeft}m` : "Less than 1m";
+      }
+    }
   }
 
   const exportToCSV = useCallback(() => {
@@ -506,10 +534,20 @@ export default function SurveyResponsesView({
           flex="1"
         >
           <Text fontSize="sm" color={headerTextColor} mb={1}>
-            AVG. COMPLETION TIME
+            TIME REMAINING
           </Text>
-          <Text fontSize="2xl" fontWeight="bold" color={textColor}>
-            {avgCompletionTime}
+          <Text 
+            fontSize="2xl" 
+            fontWeight="bold" 
+            color={
+              isOverdue 
+                ? useColorModeValue("#DC2626", "#EF4444") 
+                : isLessThan24Hours 
+                ? useColorModeValue("#D97706", "#F59E0B") 
+                : textColor
+            }
+          >
+            {timeRemaining}
           </Text>
         </Box>
       </HStack>

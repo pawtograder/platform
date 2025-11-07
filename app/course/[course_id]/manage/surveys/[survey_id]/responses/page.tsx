@@ -10,10 +10,10 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   const { course_id, survey_id } = await params;
   const supabase = await createClient();
 
-  // Fetch survey data to get title, status, version, and JSON (latest version)
+  // Fetch survey data to get title, status, version, JSON, and due_date (latest version)
   const { data: survey, error: surveyError } = await supabase
     .from("surveys" as any)
-    .select("id, title, status, json")
+    .select("id, title, status, json, due_date")
     // .select("id, title, status, version, json") // Temporarily remove version to test
     .eq("survey_id", survey_id)
     .eq("class_id", Number(course_id))
@@ -99,6 +99,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       surveyVersion={1} // Temporarily hardcode since we're not selecting version
       surveyStatus={(survey as any).status}
       surveyJson={(survey as any).json}
+      surveyDueDate={(survey as any).due_date}
       responses={(responses as any) || []}
       totalStudents={totalStudents || 0}
     />
