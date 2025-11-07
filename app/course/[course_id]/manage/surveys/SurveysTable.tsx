@@ -11,7 +11,9 @@ import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/me
 import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
-import { useCallback } from "react";
+import { useCallback, useState, useMemo } from "react";
+
+type FilterType = "all" | "completed" | "awaiting";
 
 type Survey = {
   id: string;
@@ -37,6 +39,7 @@ type SurveysTableProps = {
 
 export default function SurveysTable({ surveys, totalStudents, courseId, timezone }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
+  const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   // Color mode values - same as the form
   const textColor = useColorModeValue("#1A202C", "#FFFFFF");
@@ -48,6 +51,30 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   const versionBadgeBorder = useColorModeValue("#D2D2D2", "#2D2D2D");
   const versionBadgeText = useColorModeValue("#1A202C", "#A0AEC0");
   const actionsButtonBorder = useColorModeValue("#D2D2D2", "#2D2D2D");
+  const filterButtonActiveBg = useColorModeValue("#3B82F6", "#2563EB");
+  const filterButtonActiveColor = "#FFFFFF";
+  const filterButtonInactiveBg = useColorModeValue("#F2F2F2", "#374151");
+  const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
+  const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
+
+  // Filter surveys based on completion status
+  const filteredSurveys = useMemo(() => {
+    if (activeFilter === "all") {
+      return surveys;
+    }
+    
+    return surveys.filter((survey) => {
+      const completionRate = totalStudents > 0 ? (survey.response_count / totalStudents) * 100 : 0;
+      
+      if (activeFilter === "completed") {
+        return completionRate === 100;
+      } else if (activeFilter === "awaiting") {
+        return completionRate < 100;
+      }
+      
+      return true;
+    });
+  }, [surveys, activeFilter, totalStudents]);
 
   const getStatusBadge = (status: string) => {
     const statusMap = {
@@ -303,8 +330,52 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   );
 
   return (
-    <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
-      <Table.Root variant="outline" size="md">
+    <>
+      {/* Filter Buttons */}
+      <HStack gap={2} mb={4}>
+        <Button
+          size="sm"
+          variant="outline"
+          bg={activeFilter === "all" ? filterButtonActiveBg : filterButtonInactiveBg}
+          color={activeFilter === "all" ? filterButtonActiveColor : filterButtonInactiveColor}
+          borderColor={activeFilter === "all" ? filterButtonActiveBg : tableBorderColor}
+          _hover={{
+            bg: activeFilter === "all" ? filterButtonActiveBg : filterButtonHoverBg
+          }}
+          onClick={() => setActiveFilter("all")}
+        >
+          All
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          bg={activeFilter === "completed" ? filterButtonActiveBg : filterButtonInactiveBg}
+          color={activeFilter === "completed" ? filterButtonActiveColor : filterButtonInactiveColor}
+          borderColor={activeFilter === "completed" ? filterButtonActiveBg : tableBorderColor}
+          _hover={{
+            bg: activeFilter === "completed" ? filterButtonActiveBg : filterButtonHoverBg
+          }}
+          onClick={() => setActiveFilter("completed")}
+        >
+          Completed
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          bg={activeFilter === "awaiting" ? filterButtonActiveBg : filterButtonInactiveBg}
+          color={activeFilter === "awaiting" ? filterButtonActiveColor : filterButtonInactiveColor}
+          borderColor={activeFilter === "awaiting" ? filterButtonActiveBg : tableBorderColor}
+          _hover={{
+            bg: activeFilter === "awaiting" ? filterButtonActiveBg : filterButtonHoverBg
+          }}
+          onClick={() => setActiveFilter("awaiting")}
+        >
+          Awaiting Responses
+        </Button>
+      </HStack>
+
+      <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
+        <Table.Root variant="outline" size="md">
         <Table.Header>
           <Table.Row bg={tableHeaderBg}>
             <Table.ColumnHeader
@@ -366,7 +437,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {surveys.map((survey) => (
+          {filteredSurveys.map((survey) => (
             <Table.Row key={survey.id} bg={tableRowBg} borderColor={tableBorderColor}>
               <Table.Cell py={4} pl={6}>
                 <Link href={getSurveyLink(survey)} style={{ color: "#3182CE" }}>
@@ -465,5 +536,6 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         </Table.Body>
       </Table.Root>
     </Box>
+    </>
   );
 }
