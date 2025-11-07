@@ -950,6 +950,7 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     count: number
   ) => {
+    console.log("Drop_lowest called with value:", value);
     if (isDenseMatrix(value)) {
       value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
     }
