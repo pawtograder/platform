@@ -57,6 +57,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
       reservoirRefreshInterval: 60_000,
       maxConcurrent: 50,
       datastore: "ioredis",
+      timeout: 600000, // 10 minutes
       clearDatastore: false,
       clientOptions: {
         host,
