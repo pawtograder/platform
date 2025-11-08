@@ -1,7 +1,11 @@
 "use client";
 
+import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
+import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
+import { Radio } from "@/components/ui/radio";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
+import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
@@ -9,20 +13,15 @@ import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
 import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useTableControllerValueById } from "@/lib/TableController";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { FaEye, FaEyeSlash, FaPencilAlt, FaReply, FaThumbtack } from "react-icons/fa";
-import Markdown from "@/components/ui/markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
-import { useTableControllerValueById } from "@/lib/TableController";
-import { Radio } from "@/components/ui/radio";
-import StudentSummaryTrigger from "@/components/ui/student-summary";
-import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -93,7 +92,6 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
-  const trackEvent = useTrackEvent();
   const canEdit =
     thread.author === public_profile_id ||
     thread.author === private_profile_id ||
@@ -107,14 +105,7 @@ function ThreadActions({
     await discussionThreadTeasers.update(thread.id, {
       pinned: newPinnedStatus
     });
-
-    // Track discussion thread pin
-    trackEvent("discussion_thread_pinned", {
-      thread_id: thread.id,
-      course_id: thread.class_id,
-      is_pinned: newPinnedStatus
-    });
-  }, [thread.id, thread.pinned, thread.class_id, discussionThreadTeasers, trackEvent]);
+  }, [thread.id, thread.pinned, thread.class_id, discussionThreadTeasers]);
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">

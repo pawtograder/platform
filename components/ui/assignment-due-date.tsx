@@ -8,7 +8,6 @@ import {
   useCourseController,
   useLateTokens
 } from "@/hooks/useCourseController";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -28,7 +27,6 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const [isLoading, setIsLoading] = useState(false);
   const { assignmentDueDateExceptions } = useCourseController();
   const assignment_group_id = useAssignmentGroupForUser({ assignment_id: assignment.id })?.id;
-  const trackEvent = useTrackEvent();
   const dueDate = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id,
     assignmentGroupId: assignment_group_id
@@ -145,16 +143,6 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                     hours: 24,
                     tokens_consumed: 1,
                     creator_id: private_profile_id
-                  });
-
-                  // Track late token consumption
-                  trackEvent("late_token_consumed", {
-                    assignment_id: assignment.id,
-                    course_id: course.id,
-                    tokens_remaining: course.late_tokens_per_student - lateTokensUsedByStudent - 1,
-                    tokens_on_this_assignment: lateTokensAppliedToAssignment + 1,
-                    is_group_assignment: !!assignment_group_id,
-                    assignment_slug: assignment.slug
                   });
 
                   setOpen(false);

@@ -5,11 +5,11 @@ import {
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
-  useRubricWithParts,
-  useRubricCriteriaByRubric,
   useRubricChecksByRubric,
+  useRubricCriteriaByRubric,
   useRubricParts,
   useRubrics,
+  useRubricWithParts,
   useSelfReviewSettings
 } from "@/hooks/useAssignment";
 import {
@@ -28,7 +28,6 @@ import {
 
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -181,11 +180,7 @@ function CompleteReviewAssignmentDialog({
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
 }) {
-  const { private_profile_id, role } = useClassProfiles();
-  const submission = useSubmission();
-  const activeSubmissionReview = useActiveSubmissionReview();
-  const comments = useAllCommentsForReview(activeSubmissionReview?.id);
-  const trackEvent = useTrackEvent();
+  const { private_profile_id } = useClassProfiles();
 
   return (
     <Popover.Content>
@@ -257,23 +252,6 @@ function CompleteReviewAssignmentDialog({
 
                   if (error) {
                     throw error;
-                  }
-
-                  // Track review assignment completion
-                  if (activeSubmissionReview && submission) {
-                    const fileComments = comments.filter((c) => "submission_file_id" in c);
-                    const graderRole = role.role === "instructor" ? "instructor" : "grader";
-
-                    trackEvent("grading_completed", {
-                      submission_id: submission.id,
-                      assignment_id: submission.assignment_id,
-                      course_id: submission.class_id,
-                      num_comments_added: comments.length,
-                      num_file_comments: fileComments.length,
-                      grader_role: graderRole as "instructor" | "grader",
-                      submission_review_id: activeSubmissionReview.id,
-                      total_score: activeSubmissionReview.total_score
-                    });
                   }
 
                   toaster.success({
@@ -354,13 +332,10 @@ export function CompleteReviewAssignmentButton() {
  */
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
-  const { private_profile_id, role } = useClassProfiles();
+  const { private_profile_id } = useClassProfiles();
   const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
     useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
-  const submission = useSubmission();
-  const comments = useAllCommentsForReview(activeSubmissionReview?.id);
-  const trackEvent = useTrackEvent();
   const [isLoading, setIsLoading] = useState(false);
 
   if (
@@ -467,21 +442,6 @@ export function CompleteReviewButton() {
                       await submissionController.submission_reviews.update(activeSubmissionReview.id, {
                         completed_at: new Date().toISOString(),
                         completed_by: private_profile_id
-                      });
-
-                      // Track grading completion
-                      const fileComments = comments.filter((c) => "submission_file_id" in c);
-                      const graderRole = role.role === "instructor" ? "instructor" : "grader";
-
-                      trackEvent("grading_completed", {
-                        submission_id: submission.id,
-                        assignment_id: submission.assignment_id,
-                        course_id: submission.class_id,
-                        num_comments_added: comments.length,
-                        num_file_comments: fileComments.length,
-                        grader_role: graderRole as "instructor" | "grader",
-                        submission_review_id: activeSubmissionReview.id,
-                        total_score: activeSubmissionReview.total_score
                       });
 
                       toaster.success({
