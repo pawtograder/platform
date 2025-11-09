@@ -153,7 +153,6 @@ export function normalizeForEditor(survey: BuilderSurvey): BuilderSurvey {
     elements: (p.elements ?? []).map((el) => {
       if (el.type === "radiogroup" || el.type === "checkbox") {
         const normalizedChoices = safeArray(el.choices).map((c) =>
-          // cloneChoice preferred if it does deep immutability; otherwise fallback
           cloneChoice ? cloneChoice(toChoiceObject(c)) : toChoiceObject(c)
         );
         return { ...el, choices: normalizedChoices };
@@ -185,6 +184,7 @@ function importElement(src: any): BuilderElement {
         inputType: isNonEmptyString(src?.inputType) ? src.inputType : "text",
         config: restWithoutKeys(src, [
           "type",
+          "id",
           "name",
           "title",
           "description",
@@ -203,6 +203,7 @@ function importElement(src: any): BuilderElement {
         isRequired: !!src?.isRequired,
         validators: safeArray(src?.validators),
         config: restWithoutKeys(src, [
+          "id",
           "type",
           "name",
           "title",
@@ -222,6 +223,7 @@ function importElement(src: any): BuilderElement {
         validators: safeArray(src?.validators),
         choices: safeArray(src?.choices).map(toChoiceObject),
         config: restWithoutKeys(src, [
+          "id",
           "type",
           "name",
           "title",
@@ -242,6 +244,7 @@ function importElement(src: any): BuilderElement {
         validators: safeArray(src?.validators),
         choices: safeArray(src?.choices).map(toChoiceObject),
         config: restWithoutKeys(src, [
+          "id",
           "type",
           "name",
           "title",
@@ -263,6 +266,7 @@ function importElement(src: any): BuilderElement {
         labelTrue: src?.labelTrue,
         labelFalse: src?.labelFalse,
         config: restWithoutKeys(src, [
+          "id",
           "type",
           "name",
           "title",
@@ -273,26 +277,31 @@ function importElement(src: any): BuilderElement {
           "labelFalse",
         ]),
       };
-    default:
-      // Unknown/custom element—preserve fields but ensure name/type exist
-      return {
-        type: isNonEmptyString(src?.type) ? src.type : "custom",
-        name: fallbackName(src?.name, "custom"),
-        title: src?.title,
-        description: src?.description,
-        isRequired: !!src?.isRequired,
-        validators: safeArray(src?.validators),
-        config: restWithoutKeys(src, [
-          "type",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-        ]),
-      } as BuilderElement;
+    default: {
+  const base = makeElement("text", src?.name); 
+  return {
+    ...base, 
+    name: isNonEmptyString(src?.name) ? src.name : base.name,
+    title: src?.title ?? base.title,
+    description: src?.description ?? base.description,
+    isRequired: src?.isRequired ?? base.isRequired,
+    validators: Array.isArray(src?.validators) ? src.validators : (base.validators ?? []),
+    inputType: "text",
+    config: restWithoutKeys(src, [
+      "id",
+      "type",
+      "name",
+      "title",
+      "description",
+      "isRequired",
+      "validators",
+      "inputType",
+    ]),
+  };
+}
   }
 }
+
 
 function isNonEmptyString(s: any): s is string {
   return typeof s === "string" && s.trim().length > 0;
