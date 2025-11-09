@@ -58,6 +58,7 @@ export function makeElement(type: "comment", nameHint?: string): CommentElement;
 export function makeElement(type: "radiogroup", nameHint?: string): RadioGroupElement;
 export function makeElement(type: "checkbox", nameHint?: string): ChoiceMultiElement;
 export function makeElement(type: "boolean", nameHint?: string): BooleanElement;
+export function makeElement(type: ElementType,  nameHint?: string): BuilderElement;
 
 export function makeElement(type: ElementType, nameHint?: string): BuilderElement {
     const id = uid();
