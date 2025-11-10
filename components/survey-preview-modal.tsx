@@ -10,10 +10,17 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { Survey } from "survey-react-ui";
-import { Model } from "survey-core";
-import { useCallback, useEffect, useState } from "react";
-import { DefaultDark, DefaultLight } from "survey-core/themes";
+import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
+
+const SurveyComponent = dynamic(() => import("@/components/Survey"), {
+  ssr: false,
+  loading: () => (
+    <div className="text-center py-8">
+      <p className="text-gray-500">Loading survey preview...</p>
+    </div>
+  )
+});
 
 interface SurveyPreviewModalProps {
   isOpen: boolean;
@@ -23,77 +30,34 @@ interface SurveyPreviewModalProps {
 }
 
 export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }: SurveyPreviewModalProps) {
-  const [surveyModel, setSurveyModel] = useState<Model | null>(null);
   const [isValidJson, setIsValidJson] = useState(true);
+  const [parsedJson, setParsedJson] = useState<any>(null);
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
-  const isDarkMode = useColorModeValue(false, true);
 
-  const initializeSurvey = useCallback(() => {
+  useEffect(() => {
+    if (!isOpen || !surveyJson) return;
+
     if (!surveyJson.trim()) {
       setIsValidJson(false);
+      setParsedJson(null);
       return;
     }
 
     try {
-      const surveyConfig = JSON.parse(surveyJson);
-      const model = new Model(surveyConfig);
-
-      // Configure the survey for preview mode
-      model.mode = "display"; // Set to display mode for preview
-      model.showProgressBar = "top";
-      model.showQuestionNumbers = "on";
-      model.showCompletedPage = false; // Don't show completion page in preview
-      model.showTitle = false; // Hide title since we show it in modal header
-      model.showPageTitles = true;
-      model.showPageNumbers = true;
-
-      // Apply SurveyJS theme based on color mode
-      if (isDarkMode) {
-        model.applyTheme(DefaultDark);
-      } else {
-        model.applyTheme(DefaultLight);
-      }
-
-      setSurveyModel(model);
+      const parsed = JSON.parse(surveyJson);
+      setParsedJson(parsed);
       setIsValidJson(true);
     } catch (error) {
       console.error("Invalid survey JSON:", error);
       setIsValidJson(false);
+      setParsedJson(null);
     }
-  }, [surveyJson, isDarkMode]);
-
-  useEffect(() => {
-    if (isOpen && surveyJson) {
-      initializeSurvey();
-    }
-  }, [isOpen, surveyJson, initializeSurvey]);
-
-  const handleSurveyComplete = useCallback((sender: Model) => {
-    // In preview mode, we don't actually submit the survey
-    console.log("Survey completed in preview mode");
-  }, []);
-
-  const handleSurveyValueChanged = useCallback((sender: Model, options: any) => {
-    // Handle value changes if needed
-    console.log("Survey value changed:", options.name, options.value);
-  }, []);
-
-  useEffect(() => {
-    if (surveyModel) {
-      surveyModel.onComplete.add(handleSurveyComplete);
-      surveyModel.onValueChanged.add(handleSurveyValueChanged);
-
-      return () => {
-        surveyModel.onComplete.remove(handleSurveyComplete);
-        surveyModel.onValueChanged.remove(handleSurveyValueChanged);
-      };
-    }
-  }, [surveyModel, handleSurveyComplete, handleSurveyValueChanged]);
+  }, [isOpen, surveyJson]);
 
   return (
     <DialogRoot open={isOpen} onOpenChange={onClose}>
@@ -119,9 +83,13 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
               <p className="text-red-500 mb-4">Invalid JSON configuration</p>
               <p className="text-gray-500">Please check your survey JSON and try again.</p>
             </div>
-          ) : surveyModel ? (
+          ) : parsedJson ? (
             <div className="survey-preview-container">
-              <Survey model={surveyModel} />
+              <SurveyComponent
+                surveyJson={parsedJson}
+                isPopup={false}
+                readOnly={false}
+              />
             </div>
           ) : (
             <div className="text-center py-8">
