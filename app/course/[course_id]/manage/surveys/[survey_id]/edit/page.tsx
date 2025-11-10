@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
 import { Box, Heading, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 type SurveyFormData = {
   title: string;
@@ -25,6 +26,7 @@ export default function EditSurveyPage() {
   const trackEvent = useTrackEvent();
   const [isLoading, setIsLoading] = useState(true);
   const [surveyData, setSurveyData] = useState<any>(null);
+  const { role } = useClassProfiles();
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "edit", id: survey_id as string },
@@ -41,6 +43,17 @@ export default function EditSurveyPage() {
   const { getValues, setValue, reset } = form;
   const hasLoadedSurvey = useRef(false);
   const loadingPromise = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    if (role.role === "grader") {
+      toaster.create({
+        title: "Access Denied",
+        description: "Graders cannot edit surveys. Only instructors have this permission.",
+        type: "error"
+      });
+      router.push(`/course/${course_id}/manage/surveys`);
+    }
+  }, [role, router, course_id]);
 
   // Load the survey data when component mounts
   useEffect(() => {
