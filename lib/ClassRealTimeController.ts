@@ -340,6 +340,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
 
     // Log summary every 100 broadcasts
     const total = Array.from(ClassRealTimeController.broadcastCounter.values()).reduce((sum, count) => sum + count, 0);
+    console.log("handleBroadcastMessage", message);
 
     if (total % 100 === 0) {
       console.log("Broadcast Summary:", Object.fromEntries(ClassRealTimeController.broadcastCounter));
@@ -499,12 +500,14 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     // Ensure gradebook channels are created and increment ref count
     this._ensureGradebookChannels();
 
-    // Create the message filter subscription for gradebook tables
-    const filterUnsubscriber = this.subscribe({ table: "gradebook_column_students" }, callback);
+    // Create the message filter subscriptions for gradebook tables
+    const filterUnsubscriber1 = this.subscribe({ table: "gradebook_column_students" }, callback);
+    const filterUnsubscriber2 = this.subscribe({ table: "gradebook_row_recalc_state" }, callback);
 
-    // Return unsubscriber that cleans up both filter subscription and gradebook channels
+    // Return unsubscriber that cleans up both filter subscriptions and gradebook channels
     return () => {
-      filterUnsubscriber();
+      filterUnsubscriber1();
+      filterUnsubscriber2();
       this._cleanupGradebookChannels();
     };
   }

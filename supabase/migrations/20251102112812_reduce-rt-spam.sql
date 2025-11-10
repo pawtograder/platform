@@ -269,28 +269,32 @@ BEGIN
     
     -- Collect affected count and all unique class_ids
     -- Use transition tables directly (old_table/new_table are statement-level trigger transition tables)
+    -- Note: For INSERT ... ON CONFLICT DO UPDATE, PostgreSQL fires UPDATE trigger when conflict occurs
+    -- so we need to handle both INSERT and UPDATE cases properly
     IF operation_type = 'DELETE' THEN
         SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
         INTO affected_count, class_ids
         FROM old_table t;
     ELSIF operation_type = 'UPDATE' THEN
-        -- For UPDATE, we can use either old_table or new_table - use new_table to get updated values
+        -- For UPDATE (including INSERT ... ON CONFLICT DO UPDATE), use new_table to get updated values
         SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
         INTO affected_count, class_ids
         FROM new_table t;
     ELSE
-        -- INSERT
+        -- INSERT (including INSERT ... ON CONFLICT DO UPDATE when no conflict)
         SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
         INTO affected_count, class_ids
         FROM new_table t;
     END IF;
     
     -- Early return if no rows affected
+    -- Note: COUNT(*) should never return NULL, but check for 0
     IF affected_count IS NULL OR affected_count = 0 THEN
         RETURN NULL;
     END IF;
     
     -- Early return if no class_ids found
+    -- Note: ARRAY_AGG returns NULL if no rows, so check for NULL or empty array
     IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
         RETURN NULL;
     END IF;
@@ -386,6 +390,7 @@ BEGIN
         AND s.student_id = p_student_id
         AND s.is_private = p_is_private
         AND s.dirty = true
+        AND s.is_recalculating = false
     ) THEN
       RETURN;
     END IF;
@@ -407,6 +412,8 @@ BEGIN
 
   -- Mark row-state dirty and set recalculating (upsert), bump version to invalidate older workers
   -- The statement-level trigger will broadcast all changes in this statement at once
+  -- Note: This INSERT ... ON CONFLICT DO UPDATE will fire either the INSERT or UPDATE trigger
+  -- depending on whether a conflict occurs. Both triggers use the same function which handles both cases.
   INSERT INTO public.gradebook_row_recalc_state (class_id, gradebook_id, student_id, is_private, dirty, is_recalculating, version)
   VALUES (p_class_id, p_gradebook_id, p_student_id, p_is_private, true, true, 1)
   ON CONFLICT (class_id, gradebook_id, student_id, is_private)
