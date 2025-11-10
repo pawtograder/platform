@@ -12,6 +12,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 
 type FilterType = "all" | "completed" | "awaiting";
 
@@ -40,6 +41,7 @@ type SurveysTableProps = {
 export default function SurveysTable({ surveys, totalStudents, courseId, timezone }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
+  const isInstructor = useIsInstructor();
 
   // Color mode values - same as the form
   const textColor = useColorModeValue("#1A202C", "#FFFFFF");
@@ -102,6 +104,10 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   };
 
   const getSurveyLink = (survey: Survey) => {
+    if (!isInstructor && (survey.status === "published" || survey.status === "closed")) {
+      return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
+    }
+  
     if (survey.status === "draft") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
@@ -440,9 +446,13 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
           {filteredSurveys.map((survey) => (
             <Table.Row key={survey.id} bg={tableRowBg} borderColor={tableBorderColor}>
               <Table.Cell py={4} pl={6}>
-                <Link href={getSurveyLink(survey)} style={{ color: "#3182CE" }}>
-                  {survey.title}
-                </Link>
+                {!isInstructor && survey.status === "draft" ? (
+                  <Text color={textColor}>{survey.title}</Text>
+                ) : (
+                  <Link href={getSurveyLink(survey)} style={{ color: "#3182CE" }}>
+                    {survey.title}
+                  </Link>
+                )}
               </Table.Cell>
               <Table.Cell py={4}>{getStatusBadge(survey.status)}</Table.Cell>
               <Table.Cell py={4}>
@@ -484,7 +494,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                     </Button>
                   </MenuTrigger>
                   <MenuContent>
-                    {survey.status === "draft" && (
+                    {survey.status === "draft" && isInstructor && (
                       <>
                         <MenuItem value="edit" asChild>
                           <Link href={getSurveyLink(survey)}>Edit</Link>
@@ -497,6 +507,11 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                         </MenuItem>
                       </>
                     )}
+                    {survey.status === "draft" && !isInstructor && (
+                      <MenuItem value="no-access" disabled>
+                        No Actions Available
+                      </MenuItem>
+                    )}
                     {survey.status === "published" && (
                       <>
                         <MenuItem value="responses" asChild>
@@ -504,15 +519,19 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                             View Responses
                           </Link>
                         </MenuItem>
-                        <MenuItem value="edit" asChild>
-                          <Link href={getSurveyLink(survey)}>Edit (New Version)</Link>
-                        </MenuItem>
-                        <MenuItem value="close" onClick={() => handleClose(survey)}>
-                          Close
-                        </MenuItem>
-                        <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
-                          Delete
-                        </MenuItem>
+                        {isInstructor && (
+                          <>
+                            <MenuItem value="edit" asChild>
+                              <Link href={getSurveyLink(survey)}>Edit (New Version)</Link>
+                            </MenuItem>
+                            <MenuItem value="close" onClick={() => handleClose(survey)}>
+                              Close
+                            </MenuItem>
+                            <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
+                              Delete
+                            </MenuItem>
+                          </>
+                        )}
                       </>
                     )}
                     {survey.status === "closed" && (
@@ -522,10 +541,14 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                             View Responses
                           </Link>
                         </MenuItem>
-                        <MenuItem value="reopen">Re-open</MenuItem>
-                        <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
-                          Delete
-                        </MenuItem>
+                        {isInstructor && (
+                          <>
+                            <MenuItem value="reopen">Re-open</MenuItem>
+                            <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
+                              Delete
+                            </MenuItem>
+                          </>
+                        )}
                       </>
                     )}
                   </MenuContent>

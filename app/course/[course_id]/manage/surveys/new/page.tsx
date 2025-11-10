@@ -27,8 +27,19 @@ export default function NewSurveyPage() {
   const trackEvent = useTrackEvent();
 
   // 🚨 THIS is where we're allowed to call hooks like useClassProfiles
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
   const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
+
+  useEffect(() => {
+    if (role.role === "grader") {
+      toaster.create({
+        title: "Access Denied",
+        description: "Graders cannot create surveys. Only instructors have this permission.",
+        type: "error"
+      });
+      router.push(`/course/${course_id}/manage/surveys`);
+    }
+  }, [role, router, course_id]);
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "create" },
