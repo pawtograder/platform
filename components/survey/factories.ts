@@ -49,7 +49,7 @@ export function makePage(name?: string, dummyElFlag: boolean = false): BuilderPa
   return {
     id: id,
     name: pageName,
-    elements: dummyElFlag ? [defaultElement]: [],
+    elements: dummyElFlag ? [defaultElement]: ([] as BuilderElement[]),
   };
 }
 

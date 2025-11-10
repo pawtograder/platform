@@ -23,7 +23,7 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 
 // NEW: modal wrapper around your SurveyBuilder
-import SurveyBuilderModal from "@/components/SurveyBuilderModal";
+import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
 
 type SurveyFormData = {
   title: string;
