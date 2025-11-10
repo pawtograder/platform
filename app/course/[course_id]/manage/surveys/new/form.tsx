@@ -90,6 +90,8 @@ export default function SurveyForm({
   // Template Library modal state
   const [isTemplateLibraryOpen, setIsTemplateLibraryOpen] = useState(false);
 
+  const currentJson = watch("json");
+
   const validateJson = useCallback(() => {
     const jsonValue = getValues("json");
     if (!jsonValue.trim()) {
@@ -367,7 +369,7 @@ export default function SurveyForm({
                       _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
                       onClick={loadSampleTemplate}
                     >
-                      Load Sample Template
+                      Load Template
                     </Button>
 
                     <Button
@@ -612,9 +614,10 @@ export default function SurveyForm({
 
       {/* Visual Builder Modal (popup) */}
       <SurveyBuilderModal
+        key={currentJson}
         isOpen={isBuilderOpen}
         onClose={() => setIsBuilderOpen(false)}
-        initialJson={watch("json")}
+        initialJson={currentJson}
         onSave={(json) => setValue("json", json, { shouldDirty: true, shouldValidate: true })}
       />
 
