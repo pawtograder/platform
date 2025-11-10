@@ -55,6 +55,68 @@ export default function NewSurveyPage() {
 
   const { getValues, setValue, reset } = form;
   const hasLoadedDraft = useRef(false);
+  const hasLoadedTemplate = useRef(false);
+
+  // Load template if template_id query parameter is present
+  useEffect(() => {
+    const templateId = searchParams.get("template_id");
+
+    if (templateId && !hasLoadedTemplate.current) {
+      hasLoadedTemplate.current = true; // Mark as loaded to prevent duplicate loading
+
+      const loadTemplate = async () => {
+        try {
+          const supabase = createClient();
+          const { data, error } = await supabase
+            .from("survey_templates" as any)
+            .select("*")
+            .eq("id", templateId)
+            .single();
+
+          if (data && !error) {
+            // Load the template JSON into the form
+            const templateJson = typeof data.template === "string" ? data.template : JSON.stringify(data.template);
+            
+            setValue("json", templateJson, { shouldDirty: true });
+            
+            // Optionally set title and description from template
+            if (data.title) {
+              setValue("title", `${data.title} (Copy)`, { shouldDirty: true });
+            }
+            if (data.description) {
+              setValue("description", data.description, { shouldDirty: true });
+            }
+
+            toaster.create({
+              title: "Template Loaded",
+              description: `Template "${data.title}" has been loaded.`,
+              type: "success"
+            });
+
+            // Clean up the URL parameter
+            const url = new URL(window.location.href);
+            url.searchParams.delete("template_id");
+            window.history.replaceState({}, "", url.toString());
+          } else {
+            toaster.create({
+              title: "Template Not Found",
+              description: "The requested template could not be found.",
+              type: "error"
+            });
+          }
+        } catch (error) {
+          console.error("Error loading template:", error);
+          toaster.create({
+            title: "Error Loading Template",
+            description: "An error occurred while loading the template.",
+            type: "error"
+          });
+        }
+      };
+
+      loadTemplate();
+    }
+  }, [searchParams, setValue]);
 
   // Only load draft if returning from preview (indicated by URL parameter)
   useEffect(() => {

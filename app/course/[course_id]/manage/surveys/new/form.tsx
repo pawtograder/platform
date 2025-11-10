@@ -1,17 +1,6 @@
 "use client";
 
-import {
-  Box,
-  Input,
-  Textarea,
-  Text,
-  HStack,
-  VStack,
-  Button,
-  Heading,
-  Fieldset,
-  Checkbox,
-} from "@chakra-ui/react";
+import { Box, Input, Textarea, Text, HStack, VStack, Button, Heading, Fieldset, Checkbox } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 import { Button as UIButton } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -21,6 +10,7 @@ import { useCallback, useState } from "react";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
+import { SurveyTemplateLibraryModal } from "@/components/SurveyTemplateLibraryModal";
 
 // NEW: modal wrapper around your SurveyBuilder
 import SurveyBuilderModal from "@/components/SurveyBuilderModal";
@@ -85,7 +75,7 @@ export default function SurveyForm({
     watch,
     getValues,
     setValue,
-    formState: { errors, isDirty },
+    formState: { errors, isDirty }
   } = form;
 
   const router = useRouter();
@@ -97,6 +87,8 @@ export default function SurveyForm({
 
   // NEW: open/close state for the Visual Builder modal
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
+  // Template Library modal state
+  const [isTemplateLibraryOpen, setIsTemplateLibraryOpen] = useState(false);
 
   const validateJson = useCallback(() => {
     const jsonValue = getValues("json");
@@ -104,7 +96,7 @@ export default function SurveyForm({
       toaster.create({
         title: "JSON Validation Failed",
         description: "Please enter JSON configuration",
-        type: "error",
+        type: "error"
       });
       return;
     }
@@ -113,26 +105,21 @@ export default function SurveyForm({
       toaster.create({
         title: "JSON Valid",
         description: "JSON configuration is valid",
-        type: "success",
+        type: "success"
       });
     } catch (error) {
       toaster.create({
         title: "JSON Validation Failed",
-        description: `Invalid JSON: ${error instanceof Error ? error.message : "Unknown error"
-          }`,
-        type: "error",
+        description: `Invalid JSON: ${error instanceof Error ? error.message : "Unknown error"}`,
+        type: "error"
       });
     }
   }, [getValues]);
 
   const loadSampleTemplate = useCallback(() => {
-    setValue("json", sampleJsonTemplate, { shouldDirty: true });
-    toaster.create({
-      title: "Sample Template Loaded",
-      description: "Sample JSON template has been loaded",
-      type: "success",
-    });
-  }, [setValue]);
+    // Open Template Library modal instead of loading hardcoded sample
+    setIsTemplateLibraryOpen(true);
+  }, []);
 
   const showPreview = useCallback(() => {
     const jsonValue = getValues("json");
@@ -140,7 +127,7 @@ export default function SurveyForm({
       toaster.create({
         title: "No Survey Configuration",
         description: "Please enter a JSON configuration before previewing",
-        type: "error",
+        type: "error"
       });
       return;
     }
@@ -151,7 +138,7 @@ export default function SurveyForm({
       toaster.create({
         title: "Invalid JSON",
         description: "Please fix the JSON configuration before previewing",
-        type: "error",
+        type: "error"
       });
     }
   }, [getValues]);
@@ -164,17 +151,14 @@ export default function SurveyForm({
         toaster.create({
           title: "Draft Saved",
           description: "Your changes have been saved as a draft",
-          type: "success",
+          type: "success"
         });
       } catch (error) {
         console.error("Back navigation draft save error:", error);
         toaster.create({
           title: "Failed to Save Draft",
-          description:
-            error instanceof Error
-              ? error.message
-              : "Could not save draft before navigating",
-          type: "error",
+          description: error instanceof Error ? error.message : "Could not save draft before navigating",
+          type: "error"
         });
       }
     }
@@ -189,17 +173,17 @@ export default function SurveyForm({
       const surveyData = {
         title: getValues("title"),
         description: getValues("description") || null,
-        json: getValues("json"),
+        json: getValues("json")
       };
 
       const loadingToast = toaster.create({
         title: "Adding to Template Library",
         description: `Saving as a ${scope} template...`,
-        type: "loading",
+        type: "loading"
       });
 
       try {
-        const { error } = await supabase.from("survey_templates").insert({
+        const { error } = await supabase.from("survey_templates" as any).insert({
           id: crypto.randomUUID(),
           title: surveyData.title,
           description: surveyData.description,
@@ -207,7 +191,7 @@ export default function SurveyForm({
           created_by: privateProfileId,
           scope,
           class_id: scope === "course" ? Number(course_id) : null,
-          created_at: new Date().toISOString(),
+          created_at: new Date().toISOString()
         });
 
         toaster.dismiss(loadingToast);
@@ -216,13 +200,13 @@ export default function SurveyForm({
           toaster.create({
             title: "Error Adding Template",
             description: error.message,
-            type: "error",
+            type: "error"
           });
         } else {
           toaster.create({
             title: "Template Added",
             description: `"${surveyData.title}" saved as a ${scope} template.`,
-            type: "success",
+            type: "success"
           });
         }
       } catch (err: any) {
@@ -231,13 +215,12 @@ export default function SurveyForm({
         toaster.create({
           title: "Unexpected Error",
           description: "Something went wrong adding the template.",
-          type: "error",
+          type: "error"
         });
       }
     },
     [getValues, privateProfileId, course_id]
   );
-
 
   const onSubmitWrapper = useCallback(
     async (values: FieldValues) => {
@@ -251,8 +234,7 @@ export default function SurveyForm({
       } catch (error) {
         toaster.error({
           title: "Changes not saved",
-          description:
-            "An error occurred while saving the survey. Please try again.",
+          description: "An error occurred while saving the survey. Please try again."
         });
       } finally {
         setIsSubmitting(false);
@@ -284,15 +266,7 @@ export default function SurveyForm({
       </VStack>
 
       {/* Main Form Card */}
-      <Box
-        w="100%"
-        maxW="800px"
-        bg={cardBgColor}
-        border="1px solid"
-        borderColor={borderColor}
-        borderRadius="lg"
-        p={8}
-      >
+      <Box w="100%" maxW="800px" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
         <form onSubmit={handleSubmit(onSubmitWrapper)}>
           <Fieldset.Root>
             <VStack align="stretch" gap={6}>
@@ -315,8 +289,8 @@ export default function SurveyForm({
                       required: "Survey title is required",
                       maxLength: {
                         value: 200,
-                        message: "Title must be less than 200 characters",
-                      },
+                        message: "Title must be less than 200 characters"
+                      }
                     })}
                   />
                 </Field>
@@ -359,15 +333,14 @@ export default function SurveyForm({
                     {...register("json", {
                       required: "JSON configuration is required",
                       validate: (value) => {
-                        if (!value.trim())
-                          return "JSON configuration is required";
+                        if (!value.trim()) return "JSON configuration is required";
                         try {
                           JSON.parse(value);
                           return true;
                         } catch {
                           return "Invalid JSON format";
                         }
-                      },
+                      }
                     })}
                   />
 
@@ -414,12 +387,7 @@ export default function SurveyForm({
 
               {/* Status */}
               <Fieldset.Content>
-                <Field
-                  label="Status"
-                  errorText={errors.status?.message?.toString()}
-                  invalid={!!errors.status}
-                  required
-                >
+                <Field label="Status" errorText={errors.status?.message?.toString()} invalid={!!errors.status} required>
                   <Controller
                     name="status"
                     control={control}
@@ -435,10 +403,7 @@ export default function SurveyForm({
                             onChange={() => field.onChange("draft")}
                             style={{ accentColor: "#3182ce" }}
                           />
-                          <label
-                            htmlFor="draft"
-                            style={{ color: textColor, cursor: "pointer" }}
-                          >
+                          <label htmlFor="draft" style={{ color: textColor, cursor: "pointer" }}>
                             Save as Draft
                           </label>
                         </HStack>
@@ -451,10 +416,7 @@ export default function SurveyForm({
                             onChange={() => field.onChange("published")}
                             style={{ accentColor: "#3182ce" }}
                           />
-                          <label
-                            htmlFor="published"
-                            style={{ color: textColor, cursor: "pointer" }}
-                          >
+                          <label htmlFor="published" style={{ color: textColor, cursor: "pointer" }}>
                             Publish Now
                           </label>
                         </HStack>
@@ -508,17 +470,13 @@ export default function SurveyForm({
                         />
                         <Checkbox.Root
                           checked={field.value}
-                          onCheckedChange={(details) =>
-                            field.onChange(details.checked)
-                          }
+                          onCheckedChange={(details) => field.onChange(details.checked)}
                         >
                           <Checkbox.HiddenInput />
                           <Checkbox.Control />
                         </Checkbox.Root>
                       </Box>
-                      <Text color={textColor}>
-                        Allow students to edit their responses after submission
-                      </Text>
+                      <Text color={textColor}>Allow students to edit their responses after submission</Text>
                     </HStack>
                   )}
                 />
@@ -538,8 +496,7 @@ export default function SurveyForm({
                   borderColor={borderColor}
                 >
                   <Text color={placeholderColor} mb={4}>
-                    Click 'Show Preview' to see how the survey will appear to
-                    students.
+                    Click 'Show Preview' to see how the survey will appear to students.
                   </Text>
                   <Button
                     variant="outline"
@@ -653,15 +610,12 @@ export default function SurveyForm({
         </Box>
       )}
 
-
       {/* Visual Builder Modal (popup) */}
       <SurveyBuilderModal
         isOpen={isBuilderOpen}
         onClose={() => setIsBuilderOpen(false)}
         initialJson={watch("json")}
-        onSave={(json) =>
-          setValue("json", json, { shouldDirty: true, shouldValidate: true })
-        }
+        onSave={(json) => setValue("json", json, { shouldDirty: true, shouldValidate: true })}
       />
 
       {/* Survey Preview Modal */}
@@ -670,6 +624,28 @@ export default function SurveyForm({
         onClose={() => setIsPreviewOpen(false)}
         surveyJson={watch("json")}
         surveyTitle={watch("title")}
+      />
+
+      {/* Template Library Modal */}
+      <SurveyTemplateLibraryModal
+        isOpen={isTemplateLibraryOpen}
+        onClose={() => setIsTemplateLibraryOpen(false)}
+        courseId={course_id as string}
+        isEditMode={isEdit}
+        onTemplateLoad={(templateJson, templateTitle, templateDescription) => {
+          setValue("json", templateJson, { shouldDirty: true });
+          if (templateTitle && !getValues("title")) {
+            setValue("title", templateTitle, { shouldDirty: true });
+          }
+          if (templateDescription && !getValues("description")) {
+            setValue("description", templateDescription, { shouldDirty: true });
+          }
+          toaster.create({
+            title: "Template Loaded",
+            description: "Template has been loaded into this survey.",
+            type: "success"
+          });
+        }}
       />
     </VStack>
   );

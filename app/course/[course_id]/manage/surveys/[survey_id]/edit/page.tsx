@@ -24,6 +24,7 @@ export default function EditSurveyPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
   const trackEvent = useTrackEvent();
+  const { private_profile_id } = useClassProfiles();
   const [isLoading, setIsLoading] = useState(true);
   const [surveyData, setSurveyData] = useState<any>(null);
   const { role } = useClassProfiles();
@@ -349,7 +350,13 @@ export default function EditSurveyPage() {
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
-      <SurveyForm form={form} onSubmit={onSubmit} saveDraftOnly={saveDraftOnly} isEdit={true} />
+      <SurveyForm 
+        form={form} 
+        onSubmit={onSubmit} 
+        saveDraftOnly={saveDraftOnly} 
+        isEdit={true} 
+        privateProfileId={private_profile_id}
+      />
     </Box>
   );
 }
