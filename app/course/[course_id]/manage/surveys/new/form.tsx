@@ -10,10 +10,10 @@ import { useCallback, useState } from "react";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
-import { SurveyTemplateLibraryModal } from "@/components/SurveyTemplateLibraryModal";
+import { SurveyTemplateLibraryModal } from "@/components/survey/SurveyTemplateLibraryModal";
 
 // NEW: modal wrapper around your SurveyBuilder
-import SurveyBuilderModal from "@/components/SurveyBuilderModal";
+import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
 import { createClient } from "@/utils/supabase/client";
 
 type SurveyFormData = {
