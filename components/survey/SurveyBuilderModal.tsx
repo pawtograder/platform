@@ -98,6 +98,7 @@ export default function SurveyBuilderModal({
         {/* Body: the builder */}
         <Box flex="1" overflow="auto" p={4}>
           <SurveyBuilder
+            initialJson={initialJson}
             value={draftJson}
             onChange={setDraftJson}
           />

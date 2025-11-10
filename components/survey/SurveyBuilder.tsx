@@ -28,7 +28,7 @@ import type {
   ElementType,
 } from "./SurveyDataTypes";
 import { makeEmptySurvey } from "./factories";
-import { toJSON, fromJSON } from "./serde";
+import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
 
 import {
   addPage as addPageOp,
@@ -41,6 +41,7 @@ import {
   moveElement as moveElementOp,
   updateElementPatch as updateElementPatchOp,
 } from "./helpers";
+
 
 import {
   addChoice as addChoiceOp,
@@ -81,41 +82,30 @@ const isPlainEmptyObject = (v: unknown) =>
   typeof v === "object" && v != null && Object.keys(v as Record<string, unknown>).length === 0;
 
 const safeFromJSON = (raw?: unknown): BuilderSurvey => {
-  let source: string;
-  if (raw == null) {
-    source = MOCK_JSON;
-  } else if (typeof raw === "string") {
-    const s = raw.trim();
-    source = s.length === 0 ? MOCK_JSON : s;
-  } else if (isPlainEmptyObject(raw)) {
-    source = MOCK_JSON;
-  } else {
-    try {
-      source = JSON.stringify(raw);
-    } catch {
-      source = MOCK_JSON;
-    }
+  // choose a source
+  if (raw == null || (typeof raw === "object" && isPlainEmptyObject(raw))) {
+    return makeEmptySurvey(); // or seed with your MOCK_JSON if you prefer
   }
 
-  const parsed = fromJSON(source);
-  if (parsed && Array.isArray(parsed.pages)) {
-    parsed.pages = parsed.pages.map((p: any, i: number) => ({
-      ...p,
-      name: p?.name || `page${i + 1}`,
-    }));
-    return parsed;
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    return s.length === 0 ? makeEmptySurvey() : fromJSONString(s); 
   }
-  return makeEmptySurvey();
+
+  return fromJSON(raw); 
 };
+
 
 type Props = {
   value?: string; // JSON string
   onChange: (json: string) => void;
+  initialJson?: string;
 };
 
-const SurveyBuilder = ({ value, onChange }: Props) => {
+const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
   // Object-form source of truth
-  const [survey, setSurvey] = useState<BuilderSurvey>(() => safeFromJSON(value));
+  const [survey, setSurvey] = useState<BuilderSurvey>(() => safeFromJSON(value ?? initialJson));
+  
   const [pageIdx, setPageIdx] = useState(0);
 
   // For the page title input (to avoid reserializing while typing)
@@ -129,10 +119,10 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
   );
   const [openItems, setOpenItems] = useState<string[]>(allIdsOnPage);
 
-  // Track the last JSON we emitted to avoid echo overwrite
   const lastEmittedJSONRef = useRef<string>(normalizeJSON(toJSON(survey) as any));
-  // Track the last JSON we accepted from props
-  const lastAcceptedPropJSONRef = useRef<string>(normalizeJSON(value ?? ""));
+  const lastAcceptedPropJSONRef = useRef<string>(
+    normalizeJSON(value ?? initialJson ?? "")
+  );
 
   // Sync page title draft when changing pages/survey
   useEffect(() => {
@@ -153,12 +143,12 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
   }, [value]);
 
   // Serialize upward whenever local object state changes
-  useEffect(() => {
-    const maybe = toJSON(survey) as unknown;
-    const json = typeof maybe === "string" ? maybe : JSON.stringify(maybe ?? {}, null, 2);
-    lastEmittedJSONRef.current = normalizeJSON(json);
-    onChange(json);
-  }, [survey, onChange]);
+useEffect(() => {
+  const json = toJSONString(survey, 2);
+  lastEmittedJSONRef.current = normalizeJSON(json);
+  onChange(json);
+}, [survey, onChange]);
+
 
   // Open all accordions by default on page switch
   useEffect(() => {
