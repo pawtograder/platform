@@ -217,15 +217,22 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
   const currentPageId = currentPage?.id;
 
   function addElementToCurrentPage(type: ElementType, nameHint?: string) {
-    if (!currentPageId) return;
-    setSurvey((prev) => {
-      const next = addElementToPageOp(prev, currentPageId, type, nameHint);
-      // expand the newest one
-      const added = next.pages.find((p) => p.id === currentPageId)!.elements.at(-1);
-      if (added) setOpenItems((ids) => Array.from(new Set([...ids, added.id])));
-      return next;
-    });
-  }
+  if (!currentPageId) return;
+  setSurvey((prev) => {
+    const next = addElementToPageOp(prev, currentPageId, type, nameHint);
+    const page = next.pages.find((p) => p.id === currentPageId)!;
+    const added = page.elements.at(-1);
+    if (added) {
+      setOpenItems((ids) => Array.from(new Set([...ids, added.id])));
+      const safeName = nameHint ?? added.name ?? `${type}_${page.elements.length}`;
+      const withName = updateElementOp(next, currentPageId, added.id, "name" as any, safeName);
+      const withTitle = updateElementOp(withName, currentPageId, added.id, "title" as any, safeName);
+      return withTitle;
+    }
+    return next;
+  });
+}
+
 
   function updateElementField(elId: string, key: keyof BuilderElement, value: any) {
     if (!currentPageId) return;
@@ -241,6 +248,16 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
     if (!currentPageId) return;
     setSurvey((prev) => removeElementOp(prev, currentPageId, elId));
   }
+
+  function updateQuestionName(elId: string, value: string) {
+  if (!currentPageId) return;
+  setSurvey((prev) => {
+    const afterName = updateElementOp(prev, currentPageId, elId, "name" as keyof BuilderElement, value as any);
+    const afterTitle = updateElementOp(afterName, currentPageId, elId, "title" as keyof BuilderElement, value as any);
+    return afterTitle;
+  });
+}
+
 
   // Type label for each element type
   const typeLabel = (t: BuilderElement["type"]) =>
@@ -458,8 +475,8 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
                               </Text>
                               <Input
                                 size="sm"
-                                value={el.title ?? ""}
-                                onChange={(e) => updateElementField(el.id, "title", e.target.value)}
+                                value={el.name ?? ""}
+                                onChange={(e) => updateQuestionName(el.id, e.target.value)}
                                 placeholder={`${label} question`}
                               />
                             </Box>
@@ -511,19 +528,19 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
             <HStack justify="flex-start" wrap="wrap" gap="2" position="sticky"
             bottom="0" bg="white" _dark={{ bg: "gray.900" }} zIndex="1"
             pt="2" pb="2" borderTopWidth="1px" >
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("text")}>
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("text", `question_${elements.length + 1}`)}>
                 + Short Text
               </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("comment")}>
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("comment", `question_${elements.length + 1}`)}>
                 + Long Text
               </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("radiogroup")}>
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("radiogroup", `question_${elements.length + 1}`)}>
                 + Single Choice
               </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("checkbox")}>
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("checkbox", `question_${elements.length + 1}`)}>
                 + Checkboxes
               </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("boolean")}>
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("boolean", `question_${elements.length + 1}`)}>
                 + Yes / No
               </Button>
             </HStack>

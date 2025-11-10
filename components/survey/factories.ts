@@ -61,67 +61,64 @@ export function makeElement(type: "boolean", nameHint?: string): BooleanElement;
 export function makeElement(type: ElementType,  nameHint?: string): BuilderElement;
 
 export function makeElement(type: ElementType, nameHint?: string): BuilderElement {
-    const id = uid();
-    const defaultName = `${type}-${id.slice(0, 6)}`;
-    const name = nameHint || defaultName;
+  const id = uid();
+  const defaultLabel = nameHint ?? `${type}-${id.slice(0, 6)}`;
 
-    switch (type) {
-        case "text":
-            return {
-                id,
-                type: "text",
-                name,
-                title: "",
-                isRequired: false,
-                inputType: DEFAULT_TEXT_INPUT_TYPE,
-            } satisfies TextElement;
+  switch (type) {
+    case "text":
+      return {
+        id,
+        type: "text",
+        name: defaultLabel,        
+        title: defaultLabel,      
+        isRequired: false,
+        inputType: DEFAULT_TEXT_INPUT_TYPE,
+      } satisfies TextElement;
 
-        case "comment":
-        return {
-            id,
-            type: "comment",
-            name,
-            title: "",
-            isRequired: false,
-        } satisfies CommentElement;
+    case "comment":
+      return {
+        id,
+        type: "comment",
+        name: defaultLabel,
+        title: defaultLabel,
+        isRequired: false,
+      } satisfies CommentElement;
 
-        case "radiogroup":
-        return {
-            id,
-            type: "radiogroup",
-            name,
-            title: "",
-            isRequired: false,
-            choices: DEFAULT_CHOICES.map(cloneChoice),
-        } satisfies RadioGroupElement;
+    case "radiogroup":
+      return {
+        id,
+        type: "radiogroup",
+        name: defaultLabel,
+        title: defaultLabel,
+        isRequired: false,
+        choices: DEFAULT_CHOICES.map(cloneChoice),
+      } satisfies RadioGroupElement;
 
-        case "checkbox":
-        return {
-            id,
-            type: "checkbox",
-            name,
-            title: "",
-            isRequired: false,
-            choices: DEFAULT_CHOICES.map(cloneChoice),
-        } satisfies ChoiceMultiElement;
+    case "checkbox":
+      return {
+        id,
+        type: "checkbox",
+        name: defaultLabel,
+        title: defaultLabel,
+        isRequired: false,
+        choices: DEFAULT_CHOICES.map(cloneChoice),
+      } satisfies ChoiceMultiElement;
 
-        case "boolean":
-        return {
-            id,
-            type: "boolean",
-            name,
-            title: "",
-            isRequired: false,
-            labelTrue: DEFAULT_BOOL_TRUE,
-            labelFalse: DEFAULT_BOOL_FALSE,
-        } satisfies BooleanElement;
+    case "boolean":
+      return {
+        id,
+        type: "boolean",
+        name: defaultLabel,
+        title: defaultLabel,
+        isRequired: false,
+        labelTrue: DEFAULT_BOOL_TRUE,
+        labelFalse: DEFAULT_BOOL_FALSE,
+      } satisfies BooleanElement;
 
-        default: {
-        const _exhaustive: never = type;
-        throw new Error(`Unsupported element type: ${_exhaustive}`);
+    default: {
+      const _exhaustive: never = type;
+      throw new Error(`Unsupported element type: ${_exhaustive}`);
     }
-
-    }
-
+  }
 }
 
