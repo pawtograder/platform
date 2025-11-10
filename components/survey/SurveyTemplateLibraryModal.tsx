@@ -29,9 +29,6 @@ type SurveyTemplate = {
   class_id: number | null;
   created_at: string;
   updated_at: string;
-  profiles: {
-    name: string | null;
-  } | null;
 };
 
 interface SurveyTemplateLibraryModalProps {
@@ -153,8 +150,7 @@ export function SurveyTemplateLibraryModal({
       filtered = filtered.filter(
         (t) =>
           t.title.toLowerCase().includes(query) ||
-          t.description?.toLowerCase().includes(query) ||
-          t.profiles?.name?.toLowerCase().includes(query)
+          t.description?.toLowerCase().includes(query)
       );
     }
 
@@ -228,7 +224,7 @@ export function SurveyTemplateLibraryModal({
             <VStack align="stretch" gap={4} mb={6}>
               <HStack gap={4}>
                 <Input
-                  placeholder="Search by name, description, or creator..."
+                  placeholder="Search by name, or description"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   bg={cardBgColor}
@@ -328,9 +324,6 @@ export function SurveyTemplateLibraryModal({
 
                       {/* Creator and Date */}
                       <VStack align="start" gap={1}>
-                        <Text fontSize="xs" color={textColor} opacity={0.7}>
-                          Created by: {template.profiles?.name || "Unknown"}
-                        </Text>
                         <Text fontSize="xs" color={textColor} opacity={0.7}>
                           Last modified: {formatDate(template.updated_at)}
                         </Text>
