@@ -16,6 +16,7 @@ import {
   Accordion,
   Textarea,
   Switch,
+  Stack,
 } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { LuChevronUp, LuChevronDown, LuTrash2 } from "react-icons/lu";
@@ -38,7 +39,17 @@ import {
   updateElement as updateElementOp,
   removeElement as removeElementOp,
   moveElement as moveElementOp,
+  updateElementPatch as updateElementPatchOp,
 } from "./helpers";
+
+import {
+  addChoice as addChoiceOp,
+  setChoice as setChoiceOp,
+  removeChoice as removeChoiceOp,
+  moveChoice as moveChoiceOp,
+} from "./helpers";
+
+
 
 /** Fallback sample so the component is always usable in isolation */
 const MOCK_JSON = JSON.stringify({
@@ -239,6 +250,12 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
     setSurvey((prev) => updateElementOp(prev, currentPageId, elId, key as any, value));
   }
 
+  function updateElementFields(elId: string, patch: Partial<BuilderElement>) {
+  if (!currentPageId) return;
+  setSurvey((prev) => updateElementPatchOp(prev, currentPageId, elId, patch));
+}
+
+
   function moveElementById(elId: string, dir: -1 | 1) {
     if (!currentPageId) return;
     setSurvey((prev) => moveElementOp(prev, currentPageId, elId, dir));
@@ -268,206 +285,212 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
     : t === "boolean" ? "Yes / No"
     : t;
 
-  return (
-    <Flex height="100vh">
-      {/* Left rail: pages */}
-      <Box
-        width="300px"
-        overflow="auto"
-        height="100%"
-        borderRight="1px solid"
-        borderColor="gray.200"
-        p="4"
-      >
-        <Flex direction="column" gap="6">
-          <Heading size="md">Pages</Heading>
-          <Flex direction="column" gap="2">
-            {survey.pages.map((p, idx) => {
-              const isActive = idx === pageIdx;
-              const atTop = idx === 0;
-              const atBottom = idx === survey.pages.length - 1;
-              return (
-                <Flex
-                  key={p.id}
-                  align="center"
-                  justify="space-between"
-                  borderWidth={isActive ? "2px" : "1px"}
-                  borderColor={isActive ? "blue.400" : "gray.200"}
-                  borderRadius="md"
-                  px="2"
-                  py="1"
-                  gap="2"
+return (
+  <Flex height="100vh">
+    {/* Left rail: pages */}
+    <Box
+      width="300px"
+      overflow="auto"
+      height="100%"
+      borderRight="1px solid"
+      borderColor="gray.200"
+      p="4"
+    >
+      <Flex direction="column" gap="6">
+        <Heading size="md">Pages</Heading>
+        <Flex direction="column" gap="2">
+          {survey.pages.map((p, idx) => {
+            const isActive = idx === pageIdx;
+            const atTop = idx === 0;
+            const atBottom = idx === survey.pages.length - 1;
+            return (
+              <Flex
+                key={p.id}
+                align="center"
+                justify="space-between"
+                borderWidth={isActive ? "2px" : "1px"}
+                borderColor={isActive ? "blue.400" : "gray.200"}
+                borderRadius="md"
+                px="2"
+                py="1"
+                gap="2"
+              >
+                <Text textStyle="xs" fontWeight="bold">
+                  {idx + 1}.
+                </Text>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPageIdx(idx)}
+                  flex="1"
+                  justifyContent="flex-start"
                 >
-                  <Text textStyle="xs" fontWeight="bold">
-                    {idx + 1}.
-                  </Text>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setPageIdx(idx)}
-                    flex="1"
-                    justifyContent="flex-start"
-                  >
-                    <Text lineClamp={1}>{p.name || `Page ${idx + 1}`}</Text>
-                  </Button>
-                  <HStack gap="1">
-                    <Tooltip content="Move up">
-                      <IconButton
-                        aria-label="Move page up"
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => movePageUpById(p.id)}
-                      >
-                        <LuChevronUp />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip content="Move down">
-                      <IconButton
-                        aria-label="Move page down"
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => movePageDownById(p.id)}
-                      >
-                        <LuChevronDown />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip
-                      content={survey.pages.length <= 1 ? "Cannot delete last page" : "Delete page"}
+                  <Text lineClamp={1}>{p.name || `Page ${idx + 1}`}</Text>
+                </Button>
+                <HStack gap="1">
+                  <Tooltip content="Move up">
+                    <IconButton
+                      aria-label="Move page up"
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => movePageUpById(p.id)}
                     >
-                      <IconButton
-                        aria-label="Delete page"
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => deletePageById(p.id)}
-                      >
-                        <LuTrash2 />
-                      </IconButton>
-                    </Tooltip>
-                  </HStack>
-                </Flex>
-              );
-            })}
-          </Flex>
-
-          <Button type="button" onClick={addPage}>
-            Add Page
-          </Button>
+                      <LuChevronUp />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip content="Move down">
+                    <IconButton
+                      aria-label="Move page down"
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => movePageDownById(p.id)}
+                    >
+                      <LuChevronDown />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip
+                    content={
+                      survey.pages.length <= 1
+                        ? "Cannot delete last page"
+                        : "Delete page"
+                    }
+                  >
+                    <IconButton
+                      aria-label="Delete page"
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => deletePageById(p.id)}
+                    >
+                      <LuTrash2 />
+                    </IconButton>
+                  </Tooltip>
+                </HStack>
+              </Flex>
+            );
+          })}
         </Flex>
-      </Box>
 
-      {/* Main area (page header + editor box) */}
-      <Box flex="1" overflow="auto" height="100%" p="4">
-        {/* Header */}
-        <Flex direction="column" gap="1" mb="4">
-          <Text fontSize="xl" fontWeight="semibold">
-            {currentPage?.name ?? ""}
-          </Text>
-          <Text fontSize="sm" color="gray.500">
-            Page {pageIdx + 1} of {survey.pages.length}
-          </Text>
-        </Flex>
+        <Button type="button" onClick={addPage}>
+          Add Page
+        </Button>
+      </Flex>
+    </Box>
 
-        {/* Page editor box */}
-        {currentPage && (
-          <Flex
-            direction="column"
-            borderWidth="1px"
-            borderRadius="md"
-            p="3"
-            gap="3"
-            overflow="hidden"
-          >
-            {/* Top: page name input */}
-            <Box>
-              <Text fontSize="sm" color="gray.600" mb="1">
-                Page name
-              </Text>
-              <Input
-                size="sm"
-                value={pageNameDraft}
-                onChange={(e) => setPageNameDraft(e.target.value)}
-                onBlur={() => commitRenamePageById(currentPage.id, pageNameDraft)}
-                onKeyDown={handlePageNameKeyDown}
-                placeholder={`page${pageIdx + 1}`}
-              />
-            </Box>
+    {/* Main area (page header + editor box) */}
+    <Box flex="1" overflow="auto" height="100%" p="4">
+      {/* Header */}
+      <Flex direction="column" gap="1" mb="4">
+        <Text fontSize="xl" fontWeight="semibold">
+          {currentPage?.name ?? ""}
+        </Text>
+        <Text fontSize="sm" color="gray.500">
+          Page {pageIdx + 1} of {survey.pages.length}
+        </Text>
+      </Flex>
 
-            <Separator />
+      {/* Page editor box */}
+      {currentPage && (
+        <Flex
+          direction="column"
+          borderWidth="1px"
+          borderRadius="md"
+          p="3"
+          gap="3"
+          overflow="hidden"
+        >
+          {/* Top: page name input */}
+          <Box>
+            <Text fontSize="sm" color="gray.600" mb="1">
+              Page name
+            </Text>
+            <Input
+              size="sm"
+              value={pageNameDraft}
+              onChange={(e) => setPageNameDraft(e.target.value)}
+              onBlur={() =>
+                commitRenamePageById(currentPage.id, pageNameDraft)
+              }
+              onKeyDown={handlePageNameKeyDown}
+              placeholder={`page${pageIdx + 1}`}
+            />
+          </Box>
 
-            {/* Center: elements (all types) */}
-            {elements.length > 0 && (
-              <Box flex="1" overflow="auto" p="1">
-                <Accordion.Root
-                  multiple
-                  collapsible
-                  value={openItems}
-                  onValueChange={(e) => setOpenItems(e.value)}
-                >
-                  {elements.map((el, idxEl) => {
-                    const atTop = idxEl === 0;
-                    const atBottom = idxEl === elements.length - 1;
-                    const label = typeLabel(el.type);
+          <Separator />
 
-                    return (
-                      <Accordion.Item key={el.id} value={el.id}>
-                        <Accordion.ItemTrigger>
-                          <Span flex="1">
-                            {el.title?.trim() || `${label} Question`}
-                          </Span>
-                          <Badge variant="subtle" mr="2">
-                            {label}
-                          </Badge>
+          {/* Center: elements (all types) */}
+          {elements.length > 0 && (
+            <Box flex="1" overflow="auto" p="1">
+              <Accordion.Root
+                multiple
+                collapsible
+                value={openItems}
+                onValueChange={(e) => setOpenItems(e.value)}
+              >
+                {elements.map((el, idxEl) => {
+                  const atTop = idxEl === 0;
+                  const atBottom = idxEl === elements.length - 1;
+                  const label = typeLabel(el.type);
 
-                          <HStack gap="1" mr="1">
-                            <Tooltip content="Move up">
-                              <IconButton
-                                aria-label="Move question up"
-                                size="xs"
-                                variant="ghost"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  moveElementById(el.id, -1);
-                                }}
-                              >
-                                <LuChevronUp />
-                              </IconButton>
-                            </Tooltip>
+                  return (
+                    <Accordion.Item key={el.id} value={el.id}>
+                      <Accordion.ItemTrigger>
+                        <Span flex="1">
+                          {el.title?.trim() || `${label} Question`}
+                        </Span>
+                        <Badge variant="subtle" mr="2">
+                          {label}
+                        </Badge>
 
-                            <Tooltip content="Move down">
-                              <IconButton
-                                aria-label="Move question down"
-                                size="xs"
-                                variant="ghost"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  moveElementById(el.id, +1);
-                                }}
-                              >
-                                <LuChevronDown />
-                              </IconButton>
-                            </Tooltip>
+                        <HStack gap="1" mr="1">
+                          <Tooltip content="Move up">
+                            <IconButton
+                              aria-label="Move question up"
+                              size="xs"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveElementById(el.id, -1);
+                              }}
+                            >
+                              <LuChevronUp />
+                            </IconButton>
+                          </Tooltip>
 
-                            <Tooltip content="Delete question">
-                              <IconButton
-                                aria-label="Delete question"
-                                size="xs"
-                                variant="ghost"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteElementById(el.id);
-                                }}
-                              >
-                                <LuTrash2 />
-                              </IconButton>
-                            </Tooltip>
-                          </HStack>
+                          <Tooltip content="Move down">
+                            <IconButton
+                              aria-label="Move question down"
+                              size="xs"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveElementById(el.id, +1);
+                              }}
+                            >
+                              <LuChevronDown />
+                            </IconButton>
+                          </Tooltip>
 
-                          <Accordion.ItemIndicator />
-                        </Accordion.ItemTrigger>
-                        <Accordion.ItemContent>
+                          <Tooltip content="Delete question">
+                            <IconButton
+                              aria-label="Delete question"
+                              size="xs"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteElementById(el.id);
+                              }}
+                            >
+                              <LuTrash2 />
+                            </IconButton>
+                          </Tooltip>
+                        </HStack>
+
+                        <Accordion.ItemIndicator />
+                      </Accordion.ItemTrigger>
+
+                      <Accordion.ItemContent>
                         <Accordion.ItemBody>
                           <Box display="grid" gap="3">
-
                             {/* Question name */}
                             <Box>
                               <Text fontSize="sm" color="gray.600" mb="1">
@@ -476,7 +499,9 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
                               <Input
                                 size="sm"
                                 value={el.name ?? ""}
-                                onChange={(e) => updateQuestionName(el.id, e.target.value)}
+                                onChange={(e) =>
+                                  updateQuestionName(el.id, e.target.value)
+                                }
                                 placeholder={`${label} question`}
                               />
                             </Box>
@@ -489,7 +514,13 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
                               <Textarea
                                 size="sm"
                                 value={el.description ?? ""}
-                                onChange={(e) => updateElementField(el.id, "description", e.target.value)}
+                                onChange={(e) =>
+                                  updateElementField(
+                                    el.id,
+                                    "description",
+                                    e.target.value
+                                  )
+                                }
                                 placeholder="Optional helper text"
                               />
                             </Box>
@@ -499,7 +530,11 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
                               <Switch.Root
                                 checked={!!el.isRequired}
                                 onCheckedChange={(detail) =>
-                                  updateElementField(el.id, "isRequired", detail.checked)
+                                  updateElementField(
+                                    el.id,
+                                    "isRequired",
+                                    detail.checked
+                                  )
                                 }
                                 display="flex"
                                 alignItems="center"
@@ -511,44 +546,241 @@ const SurveyBuilder = ({ value, onChange }: Props) => {
                               </Switch.Root>
                             </Box>
 
+                            {/* ======= NEW: Choices/Options blocks ======= */}
+
+                            {/* RadioGroup / Checkbox: Choices editor */}
+                            {(el.type === "radiogroup" ||
+                              el.type === "checkbox") && (
+                              <Box mt="2" p="3" borderWidth="1px" rounded="md">
+                                <Heading as="h4" size="sm" mb="3">
+                                  Choices
+                                </Heading>
+
+                                <Stack gap="2">
+                                  {(el.choices ?? []).map((c, i) => (
+                                    <HStack key={i} align="start">
+                                      <Input
+                                        size="sm"
+                                        flex="1"
+                                        value={c.value}
+                                        placeholder={`Value ${i + 1}`}
+                                        onChange={(e) => {
+                                          const list = [...(el.choices ?? [])];
+                                          const curr = list[i] ?? { value: "" };
+                                          list[i] = {
+                                            ...curr,
+                                            value: e.target.value,
+                                          };
+                                          updateElementFields(el.id, { choices: list })
+                                        }}
+                                      />
+                                      <HStack>
+                                        <IconButton
+                                          aria-label="Move up"
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            const list = [...(el.choices ?? [])];
+                                            if (i > 0) {
+                                              const [item] = list.splice(i, 1);
+                                              list.splice(i - 1, 0, item);
+                                              updateElementFields(el.id, { choices: list })
+                                            }
+                                          }}
+                                        >
+                                          <Span>↑</Span>
+                                        </IconButton>
+                                        <IconButton
+                                          aria-label="Move down"
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            const list = [...(el.choices ?? [])];
+                                            if (i < list.length - 1) {
+                                              const [item] = list.splice(i, 1);
+                                              list.splice(i + 1, 0, item);
+                                              updateElementFields(el.id, { choices: list })
+                                            }
+                                          }}
+                                        >
+                                          <Span>↓</Span>
+                                        </IconButton>
+                                        <IconButton
+                                          aria-label="Remove"
+                                          size="sm"
+                                          colorScheme="red"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            const list = [
+                                              ...(el.choices ?? []),
+                                            ].filter((_, j) => j !== i);
+                                            const safe =
+                                              list.length > 0
+                                                ? list
+                                                : [{ value: "Item 1" }];
+                                            updateElementFields(el.id, { choices: safe })
+                                          }}
+                                        >
+                                          <Span>✕</Span>
+                                        </IconButton>
+                                      </HStack>
+                                    </HStack>
+                                  ))}
+
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      const curr = el.choices ?? [];
+                                      const n = curr.length + 1;
+                                      const next = [
+                                        ...curr,
+                                        { value: `Item ${n}` },
+                                      ];
+                                      updateElementFields(el.id, { choices: next })
+                                    }}
+                                  >
+                                    Add choice
+                                  </Button>
+                                </Stack>
+                              </Box>
+                            )}
+
+                            {/* Boolean: True/False labels */}
+                            {el.type === "boolean" && (
+                              <Box mt="2" p="3" borderWidth="1px" rounded="md">
+                                <Heading as="h4" size="sm" mb="3">
+                                  Options
+                                </Heading>
+                                <HStack>
+                                  <Box flex="1">
+                                    <Text
+                                      fontSize="sm"
+                                      color="gray.600"
+                                      mb="1"
+                                    >
+                                      True label
+                                    </Text>
+                                    <Input
+                                      size="sm"
+                                      value={el.labelTrue}
+                                      onChange={(e) =>
+                                        updateElementFields(el.id, { labelTrue: e.target.value })
+                                      }
+                                    />
+                                  </Box>
+                                  <Box flex="1">
+                                    <Text
+                                      fontSize="sm"
+                                      color="gray.600"
+                                      mb="1"
+                                    >
+                                      False label
+                                    </Text>
+                                    <Input
+                                      size="sm"
+                                      value={el.labelFalse}
+                                      onChange={(e) =>
+                                        updateElementFields(el.id, { labelFalse: e.target.value })
+                                      }
+                                    />
+                                  </Box>
+                                </HStack>
+                              </Box>
+                            )}
+                            {/* ======= /NEW ======= */}
                           </Box>
                         </Accordion.ItemBody>
                       </Accordion.ItemContent>
+                    </Accordion.Item>
+                  );
+                })}
+              </Accordion.Root>
+            </Box>
+          )}
 
-                      </Accordion.Item>
-                    );
-                  })}
-                </Accordion.Root>
-              </Box>
-            )}
+          <Separator />
 
-            <Separator />
-
-            {/* Bottom: add question buttons */}
-            <HStack justify="flex-start" wrap="wrap" gap="2" position="sticky"
-            bottom="0" bg="white" _dark={{ bg: "gray.900" }} zIndex="1"
-            pt="2" pb="2" borderTopWidth="1px" >
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("text", `question_${elements.length + 1}`)}>
-                + Short Text
-              </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("comment", `question_${elements.length + 1}`)}>
-                + Long Text
-              </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("radiogroup", `question_${elements.length + 1}`)}>
-                + Single Choice
-              </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("checkbox", `question_${elements.length + 1}`)}>
-                + Checkboxes
-              </Button>
-              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("boolean", `question_${elements.length + 1}`)}>
-                + Yes / No
-              </Button>
-            </HStack>
-          </Flex>
-        )}
-      </Box>
-    </Flex>
-  );
+          {/* Bottom: add question buttons */}
+          <HStack
+            justify="flex-start"
+            wrap="wrap"
+            gap="2"
+            position="sticky"
+            bottom="0"
+            bg="white"
+            _dark={{ bg: "gray.900" }}
+            zIndex="1"
+            pt="2"
+            pb="2"
+            borderTopWidth="1px"
+          >
+            <Button
+              size="sm"
+              type="button"
+              onClick={() =>
+                addElementToCurrentPage(
+                  "text",
+                  `question_${elements.length + 1}`
+                )
+              }
+            >
+              + Short Text
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              onClick={() =>
+                addElementToCurrentPage(
+                  "comment",
+                  `question_${elements.length + 1}`
+                )
+              }
+            >
+              + Long Text
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              onClick={() =>
+                addElementToCurrentPage(
+                  "radiogroup",
+                  `question_${elements.length + 1}`
+                )
+              }
+            >
+              + Single Choice
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              onClick={() =>
+                addElementToCurrentPage(
+                  "checkbox",
+                  `question_${elements.length + 1}`
+                )
+              }
+            >
+              + Checkboxes
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              onClick={() =>
+                addElementToCurrentPage(
+                  "boolean",
+                  `question_${elements.length + 1}`
+                )
+              }
+            >
+              + Yes / No
+            </Button>
+          </HStack>
+        </Flex>
+      )}
+    </Box>
+  </Flex>
+);
 };
 
 export default SurveyBuilder;

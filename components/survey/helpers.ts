@@ -172,6 +172,30 @@ export function updateElement<K extends keyof BuilderElement>(
   };
 }
 
+export function updateElementPatch(
+  survey: BuilderSurvey,
+  pageId: string,
+  elId: string,
+  patch: Partial<BuilderElement>
+): BuilderSurvey {
+  return {
+    ...survey,
+    pages: survey.pages.map((p) =>
+      p.id === pageId
+        ? {
+            ...p,
+            elements: p.elements.map((el) => {
+              if (el.id !== elId) return el;
+              const next = { ...el, ...patch } as BuilderElement;
+              return normalizeElement(next);
+            }),
+          }
+        : p
+    ),
+  };
+}
+
+
 export function removeElement(
   survey: BuilderSurvey,
   pageId: string,
@@ -227,6 +251,34 @@ export function addChoice(
           const n = next.length + 1;
           next.push(text ? { value: value ?? `Item ${n}`, text } : { value: value ?? `Item ${n}` });
           return { ...el, choices: next };
+        }),
+      };
+    }),
+  };
+}
+
+export function moveChoice(
+  survey: BuilderSurvey,
+  pageId: string,
+  elId: string,
+  from: number,
+  to: number
+): BuilderSurvey {
+  return {
+    ...survey,
+    pages: survey.pages.map((p) => {
+      if (p.id !== pageId) return p;
+      return {
+        ...p,
+        elements: p.elements.map((el) => {
+          if (el.id !== elId) return el;
+          if (el.type !== "radiogroup" && el.type !== "checkbox") return el;
+
+          const list = el.choices ?? [];
+          if (from < 0 || from >= list.length) return el;
+          if (to < 0 || to >= list.length) return el;
+
+          return { ...el, choices: arrayMove(list, from, to) };
         }),
       };
     }),
