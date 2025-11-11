@@ -19,9 +19,7 @@ const customJestConfig = {
   // Handle module resolution for TypeScript
   moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json"],
   // Transform ESM modules from Supabase dependencies
-  transformIgnorePatterns: [
-    "node_modules/(?!(isows|@supabase/realtime-js|@supabase/supabase-js|ws|@supabase)/)"
-  ],
+  transformIgnorePatterns: ["node_modules/(?!(isows|@supabase/realtime-js|@supabase/supabase-js|ws|@supabase)/)"],
   collectCoverageFrom: [
     "app/**/*.{ts,tsx}",
     "components/**/*.{ts,tsx}",
