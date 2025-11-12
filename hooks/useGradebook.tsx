@@ -634,52 +634,50 @@ export class GradebookCellController {
     if (message.table !== "gradebook_row_recalc_state") return;
     if (message.class_id !== this._class_id) return;
 
-    // Handle bulk operations - refresh data since we can't efficiently update individual rows
-    if (message.operation === "BULK_UPDATE" || ("requires_refetch" in message && message.requires_refetch)) {
-      this._refreshData();
-      return;
-    }
+    // Handle specialized gradebook_row_recalc_state message type
+    if (message.type === "gradebook_row_recalc_state") {
+      // TypeScript now knows this is GradebookRowRecalcStateBroadcastMessage
+      let anyChanged = false;
+      
+      for (const row of message.affected_rows) {
+        const studentId = row.student_id;
+        const isRecalculating = row.is_recalculating;
+        
+        if (!studentId || typeof isRecalculating !== "boolean") {
+          continue;
+        }
 
-    // Handle single-row operations
-    const payload = (message.data || {}) as Record<string, unknown>;
-    const classId = payload["class_id"] as number | undefined;
-    const studentId = payload["student_id"] as string | undefined;
-    const isPrivate = payload["is_private"] as boolean | undefined;
-    const isRecalculating = payload["is_recalculating"] as boolean | undefined;
+        // Find the student record
+        const studentRecord = this._data.find((s) => s.private_profile_id === studentId);
+        if (!studentRecord) continue;
 
-    if (classId !== this._class_id || !studentId || typeof isPrivate !== "boolean") {
-      return;
-    }
+        // Update all entries for this student (only private entries since only private rows are broadcast)
+        let changed = false;
+        for (let i = 0; i < studentRecord.entries.length; i++) {
+          const entry = studentRecord.entries[i];
+          if (entry.is_private === true && entry.is_recalculating !== isRecalculating) {
+            studentRecord.entries[i] = { ...entry, is_recalculating: isRecalculating };
+            changed = true;
+          }
+        }
 
-    // Determine new recalculating state based on operation
-    let newState: boolean | undefined = isRecalculating;
-    if (message.operation === "DELETE") {
-      // Treat deletion as recalculation finished
-      newState = false;
-    }
-
-    if (typeof newState !== "boolean") return;
-
-    // Update all entries for this student and privacy
-    const studentRecord = this._data.find((s) => s.private_profile_id === studentId);
-    if (!studentRecord) return;
-
-    let changed = false;
-    for (let i = 0; i < studentRecord.entries.length; i++) {
-      const entry = studentRecord.entries[i];
-      if (entry.is_private === isPrivate && entry.is_recalculating !== newState) {
-        studentRecord.entries[i] = { ...entry, is_recalculating: newState };
-        changed = true;
+        if (changed) {
+          anyChanged = true;
+          // Notify listeners for the specific student
+          const studentListeners = this._studentListeners.get(studentId);
+          if (studentListeners) {
+            studentListeners.forEach((listener) => listener(studentRecord));
+          }
+        }
       }
-    }
 
-    if (changed) {
-      // Notify listeners for overall data and the specific student
-      this._dataListeners.forEach((listener) => listener(this._data));
-      const studentListeners = this._studentListeners.get(studentId);
-      if (studentListeners) {
-        studentListeners.forEach((listener) => listener(studentRecord));
+      if (anyChanged) {
+        // Notify listeners for overall data
+        this._dataListeners.forEach((listener) => listener(this._data));
       }
+      return;
+    } else {
+      throw new Error(`Invalid gradebook_row_recalc_state message: ${JSON.stringify(message)}`);
     }
   }
 
@@ -880,6 +878,7 @@ export class GradebookCellController {
 
   /**
    * Update a gradebook cell entry
+   * Uses the RPC function to update and enqueue dependent recalculations
    */
   async updateGradebookEntry(
     gcs_id: number,
@@ -894,7 +893,21 @@ export class GradebookCellController {
       incomplete_values: Json;
     }>
   ): Promise<void> {
-    const { error } = await this._client.from("gradebook_column_students").update(updates).eq("id", gcs_id);
+    // Build JSONB payload for the RPC function
+    const updatesJsonb: Record<string, unknown> = {};
+    
+    if (updates.score !== undefined) updatesJsonb.score = updates.score;
+    if (updates.score_override !== undefined) updatesJsonb.score_override = updates.score_override;
+    if (updates.is_missing !== undefined) updatesJsonb.is_missing = updates.is_missing;
+    if (updates.is_excused !== undefined) updatesJsonb.is_excused = updates.is_excused;
+    if (updates.is_droppable !== undefined) updatesJsonb.is_droppable = updates.is_droppable;
+    if (updates.score_override_note !== undefined) updatesJsonb.score_override_note = updates.score_override_note;
+    if (updates.incomplete_values !== undefined) updatesJsonb.incomplete_values = updates.incomplete_values;
+
+    const { error } = await this._client.rpc("update_gradebook_column_student_with_recalc", {
+      p_id: gcs_id,
+      p_updates: updatesJsonb as unknown as Json
+    });
 
     if (error) {
       throw error;

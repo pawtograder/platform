@@ -49,6 +49,7 @@ DECLARE
     MAX_IDS CONSTANT INTEGER := 49;
 BEGIN
     operation_type := TG_OP;
+    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Trigger fired: operation=%, table=gradebook_column_students', operation_type;
     
     -- Determine which transition table to use
     IF operation_type = 'DELETE' THEN
@@ -84,18 +85,26 @@ BEGIN
         LIMIT 1;
     END IF;
     
+    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Collected: affected_count=%, class_id=%, private_students=%, public_students=%', 
+        affected_count, class_id_value, 
+        COALESCE(array_length(private_student_ids, 1), 0), 
+        COALESCE(array_length(public_student_ids, 1), 0);
+    
     -- If no rows affected, exit early
     IF affected_count IS NULL OR affected_count = 0 THEN
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Early return: no rows affected';
         RETURN NULL;
     END IF;
     
     IF class_id_value IS NULL THEN
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Early return: no class_id found';
         RETURN NULL;
     END IF;
     
     -- Build payload based on affected count
     IF affected_count >= BULK_THRESHOLD THEN
         -- Large bulk: refetch signal
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Using bulk mode (>=% rows): refetch signal', BULK_THRESHOLD;
         staff_payload := jsonb_build_object(
             'type', 'table_change',
             'operation', operation_type,
@@ -111,8 +120,10 @@ BEGIN
         -- Small bulk: include IDs (up to MAX_IDS)
         IF array_length(affected_row_ids, 1) > MAX_IDS THEN
             affected_row_ids := affected_row_ids[1:MAX_IDS];
+            RAISE NOTICE '[broadcast_gradebook_column_students_statement] Truncated row_ids to first %', MAX_IDS;
         END IF;
         
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Using small bulk mode (<% rows): including row_ids', BULK_THRESHOLD;
         staff_payload := jsonb_build_object(
             'type', 'table_change',
             'operation', operation_type,
@@ -133,6 +144,8 @@ BEGIN
     
     -- Broadcast private records to staff channel only
     IF private_student_ids IS NOT NULL AND array_length(private_student_ids, 1) > 0 THEN
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Broadcasting % private records to staff channel: gradebook:%:staff', 
+            array_length(private_student_ids, 1), class_id_value;
         -- Only private records: broadcast to staff channel
         PERFORM public.safe_broadcast(
             staff_payload,
@@ -145,6 +158,8 @@ BEGIN
     -- Broadcast non-private records to individual student channels only
     -- Each student gets their own gradebook channel: gradebook:$class_id:student:$student_id
     IF public_student_ids IS NOT NULL AND array_length(public_student_ids, 1) > 0 THEN
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Broadcasting % public records to individual student channels', 
+            array_length(public_student_ids, 1);
         FOREACH student_id IN ARRAY public_student_ids
         LOOP
             PERFORM public.safe_broadcast(
@@ -154,8 +169,10 @@ BEGIN
                 true
             );
         END LOOP;
+        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Completed broadcasting to % student channels', array_length(public_student_ids, 1);
     END IF;
     
+    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Function completed';
     RETURN NULL;
 END;
 $$;
@@ -266,41 +283,60 @@ DECLARE
     class_ids BIGINT[];
 BEGIN
     operation_type := TG_OP;
+    RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Trigger fired: operation=%, table=gradebook_row_recalc_state', operation_type;
     
     -- Collect affected count and all unique class_ids
     -- Use transition tables directly (old_table/new_table are statement-level trigger transition tables)
     -- Note: For INSERT ... ON CONFLICT DO UPDATE, PostgreSQL fires UPDATE trigger when conflict occurs
     -- so we need to handle both INSERT and UPDATE cases properly
+    -- IMPORTANT: Only broadcast is_private = true rows to staff channel
     IF operation_type = 'DELETE' THEN
         SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
         INTO affected_count, class_ids
-        FROM old_table t;
+        FROM old_table t
+        WHERE t.is_private = true;
     ELSIF operation_type = 'UPDATE' THEN
         -- For UPDATE (including INSERT ... ON CONFLICT DO UPDATE), use new_table to get updated values
         SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
         INTO affected_count, class_ids
-        FROM new_table t;
+        FROM new_table t
+        WHERE t.is_private = true;
     ELSE
         -- INSERT (including INSERT ... ON CONFLICT DO UPDATE when no conflict)
+        -- Optimization: When INSERT ... ON CONFLICT DO UPDATE has a conflict, PostgreSQL fires both
+        -- INSERT and UPDATE triggers. The INSERT trigger will have an empty new_table (because the INSERT
+        -- didn't happen, the UPDATE did). We check for this and return early.
         SELECT COUNT(*), ARRAY_AGG(DISTINCT t.class_id ORDER BY t.class_id)
         INTO affected_count, class_ids
-        FROM new_table t;
+        FROM new_table t
+        WHERE t.is_private = true;
+        
+        -- Early return for INSERT triggers with empty new_table (INSERT ... ON CONFLICT DO UPDATE conflict case)
+        IF affected_count = 0 THEN
+            RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Early return: INSERT trigger with empty new_table (likely INSERT ... ON CONFLICT DO UPDATE conflict) or no private rows';
+            RETURN NULL;
+        END IF;
     END IF;
     
-    -- Early return if no rows affected
+    RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Collected: affected_count=%, class_ids=% (private rows only)', affected_count, class_ids;
+    
+    -- Early return if no private rows affected
     -- Note: COUNT(*) should never return NULL, but check for 0
     IF affected_count IS NULL OR affected_count = 0 THEN
+        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Early return: no private rows affected (only public rows or no rows)';
         RETURN NULL;
     END IF;
     
     -- Early return if no class_ids found
     -- Note: ARRAY_AGG returns NULL if no rows, so check for NULL or empty array
     IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
+        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Early return: no class_ids found for private rows';
         RETURN NULL;
     END IF;
     
     -- Broadcast to each affected class's gradebook staff channel
     -- This handles cases where updates affect multiple classes
+    -- IMPORTANT: Only private rows (is_private = true) are broadcast to staff channel
     FOREACH class_id_value IN ARRAY class_ids
     LOOP
         -- Build payload - always use refetch signal since we have multiple rows with composite keys
@@ -315,6 +351,8 @@ BEGIN
             'timestamp', NOW()
         );
         
+        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Broadcasting to class_id=%, channel=gradebook:%:staff, affected_count=% (private rows only)', class_id_value, class_id_value, affected_count;
+        
         -- Broadcast to gradebook staff channel for this class
         -- Note: safe_broadcast checks for subscribers before sending, so if no one is subscribed, it won't send
         PERFORM public.safe_broadcast(
@@ -323,8 +361,11 @@ BEGIN
             'gradebook:' || class_id_value || ':staff',
             true
         );
+        
+        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Broadcast completed for class_id=%', class_id_value;
     END LOOP;
     
+    RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Function completed: total broadcasts=%', array_length(class_ids, 1);
     RETURN NULL;
 END;
 $$;
@@ -364,6 +405,9 @@ CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation(
 DECLARE
   row_message jsonb;
 BEGIN
+  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Called: class_id=%, gradebook_id=%, student_id=%, is_private=%, reason=%', 
+    p_class_id, p_gradebook_id, p_student_id, p_is_private, p_reason;
+  
   -- Per-row advisory lock to avoid duplicate enqueues under concurrency
   PERFORM pg_advisory_xact_lock(
     hashtextextended(
@@ -392,6 +436,7 @@ BEGIN
         AND s.dirty = true
         AND s.is_recalculating = false
     ) THEN
+      RAISE NOTICE '[enqueue_gradebook_row_recalculation] Skipped: row already dirty and not recalculating';
       RETURN;
     END IF;
   END IF;
@@ -405,6 +450,7 @@ BEGIN
   );
 
   -- Send a single message to the row queue
+  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Sending message to queue: gradebook_row_recalculate';
   PERFORM pgmq_public.send(
     queue_name := 'gradebook_row_recalculate',
     message := row_message
@@ -414,10 +460,13 @@ BEGIN
   -- The statement-level trigger will broadcast all changes in this statement at once
   -- Note: This INSERT ... ON CONFLICT DO UPDATE will fire either the INSERT or UPDATE trigger
   -- depending on whether a conflict occurs. Both triggers use the same function which handles both cases.
+  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Upserting gradebook_row_recalc_state (this will trigger statement-level broadcast)';
   INSERT INTO public.gradebook_row_recalc_state (class_id, gradebook_id, student_id, is_private, dirty, is_recalculating, version)
   VALUES (p_class_id, p_gradebook_id, p_student_id, p_is_private, true, true, 1)
   ON CONFLICT (class_id, gradebook_id, student_id, is_private)
   DO UPDATE SET dirty = true, is_recalculating = true, version = public.gradebook_row_recalc_state.version + 1, updated_at = now();
+  
+  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Completed upsert';
 END;
 $$;
 

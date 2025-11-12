@@ -525,6 +525,23 @@ export type PossiblyTentativeResult<T> = T & {
 };
 
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
+export type GradebookRowRecalcStateBroadcastMessage = {
+  type: "gradebook_row_recalc_state";
+  operation: "INSERT" | "UPDATE" | "DELETE";
+  table: "gradebook_row_recalc_state";
+  class_id: number;
+  row_id: null;
+  data: null;
+  timestamp: string;
+  affected_count: number;
+  affected_rows: Array<{
+    student_id: string;
+    dirty: boolean;
+    is_recalculating: boolean;
+  }>; // Array of affected rows with their state (only private rows included)
+  requires_refetch: false; // Always false since we include the data
+};
+
 export type BroadcastMessage =
   | {
       type: "table_change" | "channel_created" | "system" | "staff_data_change";
@@ -543,6 +560,7 @@ export type BroadcastMessage =
       affected_count?: number; // Number of rows affected in bulk operation
       requires_refetch?: boolean; // If true, trigger full refetch instead of refetching by IDs
     }
+  | GradebookRowRecalcStateBroadcastMessage
   | OfficeHoursBroadcastMessage;
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
@@ -1428,7 +1446,7 @@ export default class TableController<
       try {
         const messageHandler = (message: BroadcastMessage) => {
           this.enqueueBroadcast(message);
-          if (message.data) {
+          if (message.type !== "gradebook_row_recalc_state" && message.data) {
             this._bumpMaxUpdatedAtFrom(message.data);
           }
         };
@@ -1605,10 +1623,12 @@ export default class TableController<
 
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
-      if (message.data) {
-        messagesWithData.push(message);
-      } else if (message.row_id) {
-        idsToRefetch.push(message.row_id as IDType);
+      if (message.type !== "gradebook_row_recalc_state") {
+        if (message.data) {
+          messagesWithData.push(message);
+        } else if (message.row_id) {
+          idsToRefetch.push(message.row_id as IDType);
+        }
       }
     }
 
@@ -1662,10 +1682,12 @@ export default class TableController<
 
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
-      if (message.data) {
-        messagesWithData.push(message);
-      } else if (message.row_id) {
-        idsToRefetch.push(message.row_id as IDType);
+      if (message.type !== "gradebook_row_recalc_state") {
+        if (message.data) {
+          messagesWithData.push(message);
+        } else if (message.row_id) {
+          idsToRefetch.push(message.row_id as IDType);
+        }
       }
     }
 
@@ -1709,11 +1731,13 @@ export default class TableController<
 
     // Collect all IDs to delete
     for (const message of messages) {
-      if (message.data) {
-        const data = message.data as Record<string, unknown>;
-        idsToDelete.add(data.id as IDType);
-      } else if (message.row_id) {
-        idsToDelete.add(message.row_id as IDType);
+      if (message.type !== "gradebook_row_recalc_state") {
+        if (message.data) {
+          const data = message.data as Record<string, unknown>;
+          idsToDelete.add(data.id as IDType);
+        } else if (message.row_id) {
+          idsToDelete.add(message.row_id as IDType);
+        }
       }
     }
 
@@ -1725,6 +1749,7 @@ export default class TableController<
 
   private _handleInsert(message: BroadcastMessage) {
     if (this._closed) return;
+    if (message.type === "gradebook_row_recalc_state") return; // Handled elsewhere
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -2038,6 +2063,7 @@ export default class TableController<
 
   private _handleUpdate(message: BroadcastMessage) {
     if (this._closed) return;
+    if (message.type === "gradebook_row_recalc_state") return; // Handled elsewhere
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -2115,6 +2141,7 @@ export default class TableController<
 
   private _handleDelete(message: BroadcastMessage) {
     if (this._closed) return;
+    if (message.type === "gradebook_row_recalc_state") return; // Handled elsewhere
     if (message.data) {
       const data = message.data as Record<string, unknown>;
       this._removeRow(data.id as IDType);
@@ -2148,7 +2175,7 @@ export default class TableController<
     }
 
     // Handle INSERT/UPDATE operations - refetch specified row IDs
-    if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+    if (message.type !== "gradebook_row_recalc_state" && "row_ids" in message && message.row_ids && message.row_ids.length > 0) {
       const idsToRefetch = message.row_ids.map((id) => id as IDType);
       try {
         const refetchedRows = await this._refetchRowsByIds(idsToRefetch);

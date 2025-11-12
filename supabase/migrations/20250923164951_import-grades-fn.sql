@@ -25,6 +25,7 @@ SET search_path = public
 AS $$
 DECLARE
   v_invalid_column_id bigint;
+  rows_to_enqueue_jsonb jsonb;
 BEGIN
   -- Authorization: only instructors for the class may import
   IF NOT public.authorizeforclassinstructor(p_class_id) THEN
@@ -96,21 +97,59 @@ BEGIN
     FROM public.gradebook_columns
     WHERE class_id = p_class_id
       AND id IN (SELECT DISTINCT gradebook_column_id FROM parsed)
+  ),
+  updated_rows AS (
+    UPDATE public.gradebook_column_students g
+    SET 
+      score = CASE 
+        WHEN c.score_expression IS NULL THEN p.new_score 
+        ELSE g.score 
+      END,
+      score_override = CASE 
+        WHEN c.score_expression IS NOT NULL THEN p.new_score 
+        ELSE g.score_override 
+      END
+    FROM target_rows tr
+    JOIN cols c ON c.id = tr.gradebook_column_id
+    JOIN parsed p ON p.gradebook_column_id = tr.gradebook_column_id AND p.student_id = tr.student_id
+    WHERE g.id = tr.id
+    RETURNING 
+      g.class_id,
+      g.gradebook_id,
+      g.student_id,
+      g.is_private
+  ),
+  -- Collect unique student rows that need recalculation
+  rows_to_enqueue AS (
+    SELECT DISTINCT
+      ur.class_id,
+      ur.gradebook_id,
+      ur.student_id,
+      ur.is_private
+    FROM updated_rows ur
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.gradebook_row_recalc_state rs
+      WHERE rs.class_id = ur.class_id
+        AND rs.gradebook_id = ur.gradebook_id
+        AND rs.student_id = ur.student_id
+        AND rs.is_private = ur.is_private
+        AND rs.is_recalculating = true
+    )
   )
-  UPDATE public.gradebook_column_students g
-  SET 
-    score = CASE 
-      WHEN c.score_expression IS NULL THEN p.new_score 
-      ELSE g.score 
-    END,
-    score_override = CASE 
-      WHEN c.score_expression IS NOT NULL THEN p.new_score 
-      ELSE g.score_override 
-    END
-  FROM target_rows tr
-  JOIN cols c ON c.id = tr.gradebook_column_id
-  JOIN parsed p ON p.gradebook_column_id = tr.gradebook_column_id AND p.student_id = tr.student_id
-  WHERE g.id = tr.id;
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'class_id', class_id,
+      'gradebook_id', gradebook_id,
+      'student_id', student_id,
+      'is_private', is_private
+    )
+  ) INTO rows_to_enqueue_jsonb
+  FROM rows_to_enqueue;
+
+  -- Batch enqueue recalculation for all affected student rows
+  IF rows_to_enqueue_jsonb IS NOT NULL AND jsonb_array_length(rows_to_enqueue_jsonb) > 0 THEN
+    PERFORM public.enqueue_gradebook_row_recalculation_batch(rows_to_enqueue_jsonb);
+  END IF;
 
   RETURN true;
 END;

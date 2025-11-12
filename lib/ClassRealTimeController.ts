@@ -13,20 +13,38 @@ type TablesThatHaveAnIDField = {
 // Extend known broadcast tables to include row-level recalculation state
 type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
 
-export type BroadcastMessage = {
-  type: "table_change" | "channel_created" | "system" | "staff_data_change";
-  operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
-  table?: KnownBroadcastTables;
-  row_id?: number | string;
-  row_ids?: (number | string)[]; // Array of IDs for bulk operations
-  data?: Record<string, unknown>;
-  submission_id?: number;
+export type GradebookRowRecalcStateBroadcastMessage = {
+  type: "gradebook_row_recalc_state";
+  operation: "INSERT" | "UPDATE" | "DELETE";
+  table: "gradebook_row_recalc_state";
   class_id: number;
-  target_audience?: "user" | "staff";
+  row_id: null;
   timestamp: string;
-  affected_count?: number; // Number of rows affected in bulk operation
-  requires_refetch?: boolean; // If true, trigger full refetch instead of refetching by IDs
+  data: null;
+  affected_count: number;
+  affected_rows: Array<{
+    student_id: string;
+    dirty: boolean;
+    is_recalculating: boolean;
+  }>; // Array of affected rows with their state (only private rows included)
+  requires_refetch: false; // Always false since we include the data
 };
+
+export type BroadcastMessage = {
+      type: "table_change" | "channel_created" | "system" | "staff_data_change";
+      operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
+      table?: KnownBroadcastTables;
+      row_id?: number | string;
+      row_ids?: (number | string)[]; // Array of IDs for bulk operations
+      data?: Record<string, unknown>;
+      submission_id?: number;
+      class_id: number;
+      target_audience?: "user" | "staff";
+      timestamp: string;
+      affected_count?: number; // Number of rows affected in bulk operation
+      requires_refetch?: boolean; // If true, trigger full refetch instead of refetching by IDs
+    }
+  | GradebookRowRecalcStateBroadcastMessage;
 
 type MessageFilter = {
   table?: KnownBroadcastTables;
