@@ -249,6 +249,100 @@ async function requeueWithDelay(
   }
 }
 
+async function sendToDeadLetterQueue(
+  adminSupabase: SupabaseClient<Database>,
+  envelope: GitHubAsyncEnvelope,
+  meta: { msg_id: number; enqueued_at: string },
+  error: unknown,
+  scope: Sentry.Scope
+) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorType = error instanceof Error ? error.constructor.name : "Unknown";
+  const retryCount = envelope.retry_count ?? 0;
+
+  // Send to DLQ queue
+  try {
+    const dlqResult = await adminSupabase.schema("pgmq_public").rpc("send", {
+      queue_name: "async_calls_dlq",
+      message: envelope as unknown as Json,
+      sleep_seconds: 0
+    });
+    if (dlqResult.error) {
+      scope.setContext("dlq_send_error", {
+        error_message: dlqResult.error.message,
+        original_msg_id: meta.msg_id
+      });
+      Sentry.captureException(dlqResult.error, scope);
+    }
+  } catch (e) {
+    scope.setContext("dlq_send_exception", {
+      error_message: e instanceof Error ? e.message : String(e),
+      original_msg_id: meta.msg_id
+    });
+    Sentry.captureException(e, scope);
+  }
+
+  // Record in DLQ tracking table
+  try {
+    const queryBuilder = adminSupabase.from("async_worker_dlq_messages" as never);
+    const { error: insertError } = await queryBuilder.insert({
+      original_msg_id: meta.msg_id,
+      method: envelope.method,
+      envelope: envelope as unknown as Json,
+      error_message: errorMessage,
+      error_type: errorType,
+      retry_count: retryCount,
+      last_error_context: {
+        error_message: errorMessage,
+        error_type: errorType,
+        enqueued_at: meta.enqueued_at,
+        failed_at: new Date().toISOString()
+      } as unknown as Json,
+      class_id: envelope.class_id,
+      debug_id: envelope.debug_id,
+      log_id: envelope.log_id
+    });
+
+    if (insertError) {
+      scope.setContext("dlq_table_insert_error", {
+        error_message: insertError.message,
+        original_msg_id: meta.msg_id
+      });
+      Sentry.captureException(insertError, scope);
+    }
+  } catch (e) {
+    scope.setContext("dlq_table_insert_exception", {
+      error_message: e instanceof Error ? e.message : String(e),
+      original_msg_id: meta.msg_id
+    });
+    Sentry.captureException(e, scope);
+  }
+
+  // Log to Sentry with comprehensive context
+  scope.setTag("dlq", "true");
+  scope.setTag("retry_count", String(retryCount));
+  scope.setContext("dead_letter_queue", {
+    original_msg_id: meta.msg_id,
+    method: envelope.method,
+    retry_count: retryCount,
+    error_message: errorMessage,
+    error_type: errorType,
+    enqueued_at: meta.enqueued_at,
+    class_id: envelope.class_id,
+    debug_id: envelope.debug_id,
+    log_id: envelope.log_id
+  });
+
+  Sentry.captureMessage(`Message sent to dead letter queue after ${retryCount} retries: ${envelope.method}`, {
+    level: "error",
+    tags: {
+      dlq: "true",
+      method: envelope.method,
+      retry_count: String(retryCount)
+    }
+  });
+}
+
 async function recordGitHubAsyncError(
   adminSupabase: SupabaseClient<Database>,
   org: string,
@@ -382,6 +476,14 @@ export async function processEnvelope(
       if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
         const row = orgCirc.data[0] as { state?: string; open_until?: string };
         if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          // Check retry count - if >= 5, send to DLQ instead of requeuing
+          const currentRetryCount = envelope.retry_count ?? 0;
+          if (currentRetryCount >= 5) {
+            const error = new Error(`Circuit breaker open for org ${org} after ${currentRetryCount} retries`);
+            await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            return false;
+          }
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org");
@@ -400,6 +502,14 @@ export async function processEnvelope(
       if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
         const row = methodCirc.data[0] as { state?: string; open_until?: string };
         if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          // Check retry count - if >= 5, send to DLQ instead of requeuing
+          const currentRetryCount = envelope.retry_count ?? 0;
+          if (currentRetryCount >= 5) {
+            const error = new Error(`Circuit breaker open for ${envelope.method} after ${currentRetryCount} retries`);
+            await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            return false;
+          }
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org_method");
@@ -1003,6 +1113,14 @@ export async function processEnvelope(
           console.error("error", e);
           Sentry.captureException(e, scope);
         }
+        // Check retry count - if >= 5, send to DLQ instead of requeuing
+        const currentRetryCount = envelope.retry_count ?? 0;
+        if (currentRetryCount >= 5) {
+          await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          return false;
+        }
+
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
         const circuitTripped = org
           ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope)
@@ -1050,6 +1168,14 @@ export async function processEnvelope(
           Sentry.captureException(e, scope);
         }
 
+        // Check retry count - if >= 5, send to DLQ instead of requeuing
+        const currentRetryCount = envelope.retry_count ?? 0;
+        if (currentRetryCount >= 5) {
+          await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          return false;
+        }
+
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
         const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
@@ -1084,6 +1210,14 @@ export async function processEnvelope(
         },
         scope
       );
+
+      // Check retry count - if >= 5, send to DLQ instead of requeuing
+      const currentRetryCount = envelope.retry_count ?? 0;
+      if (currentRetryCount >= 5) {
+        await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        return false;
+      }
 
       // For any error, requeue with 2-minute delay to prevent immediate retry
       scope.setContext("async_error", {
