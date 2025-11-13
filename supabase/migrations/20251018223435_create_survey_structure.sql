@@ -11,6 +11,8 @@ DROP TYPE IF EXISTS survey_status CASCADE;
 -- Create ENUM type for survey status
 CREATE TYPE survey_status AS ENUM ('draft', 'published', 'closed');
 
+CREATE TYPE template_scope AS ENUM ('global', 'course');
+
 -- Create surveys table
 CREATE TABLE surveys (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,7 +42,9 @@ CREATE TABLE survey_templates (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    version INTEGER NOT NULL DEFAULT 1
+    version INTEGER NOT NULL DEFAULT 1,
+    scope template_scope NOT NULL DEFAULT 'course',
+    class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE
 );
 
 -- Create survey_responses table
