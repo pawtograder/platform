@@ -11,6 +11,15 @@ import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 import { SurveyTemplateLibraryModal } from "@/components/survey/SurveyTemplateLibraryModal";
+import {
+  DialogRoot,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogBody,
+  DialogFooter,
+  DialogCloseTrigger
+} from "@/components/ui/dialog";
 
 // NEW: modal wrapper around your SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
@@ -89,6 +98,8 @@ export default function SurveyForm({
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   // Template Library modal state
   const [isTemplateLibraryOpen, setIsTemplateLibraryOpen] = useState(false);
+  // Cancel confirmation dialog state
+  const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
 
   const currentJson = watch("json");
 
@@ -145,27 +156,18 @@ export default function SurveyForm({
     }
   }, [getValues]);
 
-  const handleBackNavigation = useCallback(async () => {
-    if (isDirty) {
-      const currentValues = getValues();
-      try {
-        await saveDraftOnly(currentValues);
-        toaster.create({
-          title: "Draft Saved",
-          description: "Your changes have been saved as a draft",
-          type: "success"
-        });
-      } catch (error) {
-        console.error("Back navigation draft save error:", error);
-        toaster.create({
-          title: "Failed to Save Draft",
-          description: error instanceof Error ? error.message : "Could not save draft before navigating",
-          type: "error"
-        });
-      }
-    }
+  const handleCancelClick = useCallback(() => {
+    setIsCancelConfirmOpen(true);
+  }, []);
+
+  const handleKeepEditing = useCallback(() => {
+    setIsCancelConfirmOpen(false);
+  }, []);
+
+  const handleDiscard = useCallback(() => {
+    setIsCancelConfirmOpen(false);
     router.push(`/course/${course_id}/manage/surveys`);
-  }, [isDirty, getValues, saveDraftOnly, router, course_id]);
+  }, [router, course_id]);
 
   const handleAddToTemplate = useCallback(
     async (scope: "course" | "global") => {
@@ -256,7 +258,7 @@ export default function SurveyForm({
           borderColor={buttonBorderColor}
           color={buttonTextColor}
           _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-          onClick={() => router.push(`/course/${course_id}/manage/surveys`)}
+          onClick={handleCancelClick}
           alignSelf="flex-start"
         >
           ← Back to Surveys
@@ -541,7 +543,7 @@ export default function SurveyForm({
                   borderColor={buttonBorderColor}
                   color={buttonTextColor}
                   _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-                  onClick={handleBackNavigation}
+                  onClick={handleCancelClick}
                   size="md"
                 >
                   Cancel
@@ -650,6 +652,41 @@ export default function SurveyForm({
           });
         }}
       />
+
+      <DialogRoot open={isCancelConfirmOpen} onOpenChange={(e) => setIsCancelConfirmOpen(e.open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{isEdit ? "Cancel Survey Editing" : "Cancel Survey Creation"}</DialogTitle>
+            <DialogCloseTrigger />
+          </DialogHeader>
+          <DialogBody>
+            <Text color={textColor}>
+              Are you sure you want to cancel? Any unsaved changes will be lost.
+            </Text>
+          </DialogBody>
+          <DialogFooter>
+            <HStack gap={3} justify="flex-end">
+              <Button
+                variant="outline"
+                borderColor={buttonBorderColor}
+                color={buttonTextColor}
+                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                onClick={handleKeepEditing}
+              >
+                Keep Editing
+              </Button>
+              <Button
+                bg="#EF4444"
+                color="white"
+                _hover={{ bg: "#DC2626" }}
+                onClick={handleDiscard}
+              >
+                Discard
+              </Button>
+            </HStack>
+          </DialogFooter>
+        </DialogContent>
+      </DialogRoot>
     </VStack>
   );
 }
