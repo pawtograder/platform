@@ -1611,6 +1611,11 @@ BEGIN
         RETURN NULL;
     END IF;
     
+    -- Skip broadcasting for large INSERT operations (>300 rows) - too slow
+    IF operation_type = 'INSERT' AND affected_count > 300 THEN
+        RETURN NULL;
+    END IF;
+    
     -- Build payload based on affected count
     IF affected_count >= BULK_THRESHOLD THEN
         staff_payload := jsonb_build_object(
