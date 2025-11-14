@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useAssignmentController,
   useMyReviewAssignments,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
@@ -45,7 +46,6 @@ import {
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
 import { formatDueDateInTimezone } from "@/lib/utils";
-import { createClient } from "@/utils/supabase/client";
 import { formatDate } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
@@ -181,6 +181,7 @@ function CompleteReviewAssignmentDialog({
   setIsLoading: (loading: boolean) => void;
 }) {
   const { private_profile_id } = useClassProfiles();
+  const { reviewAssignments } = useAssignmentController();
 
   return (
     <Popover.Content>
@@ -241,18 +242,10 @@ function CompleteReviewAssignmentDialog({
               onClick={async () => {
                 try {
                   setIsLoading(true);
-                  const supabase = createClient();
-                  const { error } = await supabase
-                    .from("review_assignments")
-                    .update({
-                      completed_at: new Date().toISOString(),
-                      completed_by: private_profile_id
-                    })
-                    .eq("id", reviewAssignment.id);
-
-                  if (error) {
-                    throw error;
-                  }
+                  await reviewAssignments.update(reviewAssignment.id, {
+                    completed_at: new Date().toISOString(),
+                    completed_by: private_profile_id
+                  });
 
                   toaster.success({
                     title: "Review assignment marked as complete",
@@ -506,9 +499,21 @@ function ReviewAssignmentActions() {
     return <></>;
   }
 
-  // If the review assignment is already completed, don't show actions
+  // If the review assignment is completed, show completion message instead of actions
   if (isStudent && activeReviewAssignment && activeReviewAssignment.completed_at) {
-    return <></>;
+    return (
+      <HStack w="100%" alignItems="center" justifyContent="space-between">
+        {activeReviewAssignment.completed_by && rubric && (
+          <Text>
+            {rubric.name} completed on{" "}
+            <span data-visual-test="blackout">
+              {formatDate(activeReviewAssignment.completed_at, "MM/dd/yyyy hh:mm a")}
+            </span>{" "}
+            by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
+          </Text>
+        )}
+      </HStack>
+    );
   }
 
   return (

@@ -64,7 +64,7 @@ $$;
 GRANT EXECUTE ON FUNCTION "public"."release_all_grading_reviews_for_assignment"(bigint) TO "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."unrelease_all_grading_reviews_for_assignment"(bigint) TO "authenticated";
 
--- Add audit trigger for rubric_criteria table to track all changes
+-- Add audit trigger for rurelease_all_grading_reviews_for_assignmentbric_criteria table to track all changes
 -- Drop existing trigger if it exists to ensure we have the correct configuration
 DROP TRIGGER IF EXISTS audit_rubric_criteria_insert_update ON public.rubric_criteria;
 
