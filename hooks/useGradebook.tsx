@@ -102,13 +102,14 @@ export function useGradebookColumnGrades(column_id: number) {
 
 export function useGradebookColumnStudent(column_id: number, student_id: string) {
   const gradebookController = useGradebookController();
-  const [columnStudent, setColumnStudent] = useState<GradebookColumnStudent | undefined>(
-    gradebookController.getGradebookColumnStudent(column_id, student_id)
-  );
+  const initialValue = gradebookController.getGradebookColumnStudent(column_id, student_id);
+  const [columnStudent, setColumnStudent] = useState<GradebookColumnStudent | undefined>(initialValue);
 
   useEffect(() => {
     // Use the specialized index for direct access to student/column pair
-    const unsubscribe = gradebookController.subscribeStudentColumnPair(student_id, column_id, setColumnStudent);
+    const unsubscribe = gradebookController.subscribeStudentColumnPair(student_id, column_id, (newValue) => {
+      setColumnStudent(newValue);
+    });
     return () => unsubscribe();
   }, [column_id, student_id, gradebookController]);
 
@@ -454,6 +455,11 @@ export class GradebookCellController {
   private _refreshDataDebounceDelay: number = 3000; // 3 seconds
   private _lastRefreshCallTime: number = 0;
 
+  // Rate limiting tracking for Sentry alerts
+  private _reloadTimestamps: number[] = [];
+  private readonly _rateLimitWindow = 5 * 60 * 1000; // 5 minutes
+  private readonly _rateLimitThreshold = 100; // 100 reloads in 5 minutes
+
   // Subscriber management
   private _dataListeners: ((data: GradebookRecordsForStudent[]) => void)[] = [];
   private _studentListeners: Map<string, ((data: GradebookRecordsForStudent | undefined) => void)[]> = new Map();
@@ -466,27 +472,23 @@ export class GradebookCellController {
     this._readyPromise = this._initialize();
   }
 
-  private _lastLoadTimestamp: number = 0;
   private async _initializeEntireGradebookForAllStudents(): Promise<void> {
     const now = Date.now();
-    Sentry.addBreadcrumb({
-      category: "Gradebook",
-      message: "Gradebook data load throttled"
-    });
-    if (now - this._lastLoadTimestamp < 1000) {
-      Sentry.captureMessage("Gradebook data load throttled");
-      return;
-    }
-    this._lastLoadTimestamp = now;
+
+    // Track reload for rate limiting
+    this._trackReload(now);
     const { data, error } = await this._client.rpc("get_gradebook_records_for_all_students", {
       p_class_id: this._class_id
     });
 
-    if (this._closed) return;
+    if (this._closed) {
+      return;
+    }
     if (error) {
       throw new Error(`Failed to load gradebook data: ${error.message}`);
     }
-    this._data = (data as GradebookRecordsForStudent[]) || [];
+    const dataArray = (data as GradebookRecordsForStudent[]) || [];
+    this._data = dataArray;
   }
   private async _initializeGradebookForThisStudent(): Promise<void> {
     const { data, error } = await this._client
@@ -638,11 +640,11 @@ export class GradebookCellController {
     if (message.type === "gradebook_row_recalc_state") {
       // TypeScript now knows this is GradebookRowRecalcStateBroadcastMessage
       let anyChanged = false;
-      
+
       for (const row of message.affected_rows) {
         const studentId = row.student_id;
         const isRecalculating = row.is_recalculating;
-        
+
         if (!studentId || typeof isRecalculating !== "boolean") {
           continue;
         }
@@ -772,6 +774,11 @@ export class GradebookCellController {
 
   private async _refreshDataImmediate(): Promise<void> {
     try {
+      const now = Date.now();
+
+      // Track reload for rate limiting
+      this._trackReload(now);
+
       // Reset streaming state for full refresh
       this._data = [];
 
@@ -794,6 +801,49 @@ export class GradebookCellController {
       });
     } catch {
       // Silent failure for refresh operations to avoid disrupting the UI
+    }
+  }
+
+  /**
+   * Track reload timestamps for rate limiting detection
+   * Logs to Sentry if more than threshold reloads occur within the time window
+   */
+  private _trackReload(timestamp: number): void {
+    // Remove timestamps outside the window
+    this._reloadTimestamps = this._reloadTimestamps.filter((ts) => timestamp - ts < this._rateLimitWindow);
+
+    // Add current timestamp
+    this._reloadTimestamps.push(timestamp);
+
+    // Check if we've exceeded the threshold
+    if (this._reloadTimestamps.length > this._rateLimitThreshold) {
+      const reloadsInWindow = this._reloadTimestamps.length;
+      const windowStart = timestamp - this._rateLimitWindow;
+      const windowEnd = timestamp;
+
+      Sentry.captureMessage(
+        `Gradebook excessive reloads detected: ${reloadsInWindow} reloads in ${this._rateLimitWindow / 1000}s window`,
+        {
+          level: "warning",
+          tags: {
+            category: "Gradebook",
+            issue: "excessive_reloads"
+          },
+          extra: {
+            reloadCount: reloadsInWindow,
+            windowMs: this._rateLimitWindow,
+            threshold: this._rateLimitThreshold,
+            windowStart: new Date(windowStart).toISOString(),
+            windowEnd: new Date(windowEnd).toISOString(),
+            class_id: this._class_id
+          }
+        }
+      );
+
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[Gradebook] Excessive reloads detected: ${reloadsInWindow} reloads in ${this._rateLimitWindow / 1000}s (threshold: ${this._rateLimitThreshold})`
+      );
     }
   }
 
@@ -895,7 +945,7 @@ export class GradebookCellController {
   ): Promise<void> {
     // Build JSONB payload for the RPC function
     const updatesJsonb: Record<string, unknown> = {};
-    
+
     if (updates.score !== undefined) updatesJsonb.score = updates.score;
     if (updates.score_override !== undefined) updatesJsonb.score_override = updates.score_override;
     if (updates.is_missing !== undefined) updatesJsonb.is_missing = updates.is_missing;
@@ -1603,10 +1653,34 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // Recreate controller if class_id or gradebook_id changes (in useEffect to avoid render issues)
+  useEffect(() => {
+    if (!gradebook_id || isNaN(Number(gradebook_id))) return;
+
+    // If controller exists but class_id or gradebook_id changed, recreate it
+    if (
+      controller.current &&
+      (controller.current.class_id !== class_id || controller.current.gradebook_id !== gradebook_id)
+    ) {
+      controller.current.close();
+      controller.current = null;
+      setReady(false);
+
+      // Create new controller immediately
+      controller.current = new GradebookController(
+        isInstructorOrGrader,
+        class_id,
+        gradebook_id,
+        courseController.classRealTimeController
+      );
+    }
+  }, [class_id, gradebook_id, isInstructorOrGrader, courseController.classRealTimeController]);
+
   if (!gradebook_id || isNaN(Number(gradebook_id))) {
     return <Text>Error: Gradebook is not enabled for this course.</Text>;
   }
 
+  // Create controller synchronously on first render (before useEffect runs)
   if (controller.current === null) {
     controller.current = new GradebookController(
       isInstructorOrGrader,

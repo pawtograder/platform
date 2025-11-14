@@ -2175,7 +2175,12 @@ export default class TableController<
     }
 
     // Handle INSERT/UPDATE operations - refetch specified row IDs
-    if (message.type !== "gradebook_row_recalc_state" && "row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+    if (
+      message.type !== "gradebook_row_recalc_state" &&
+      "row_ids" in message &&
+      message.row_ids &&
+      message.row_ids.length > 0
+    ) {
       const idsToRefetch = message.row_ids.map((id) => id as IDType);
       try {
         const refetchedRows = await this._refetchRowsByIds(idsToRefetch);

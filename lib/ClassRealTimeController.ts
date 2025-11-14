@@ -30,7 +30,8 @@ export type GradebookRowRecalcStateBroadcastMessage = {
   requires_refetch: false; // Always false since we include the data
 };
 
-export type BroadcastMessage = {
+export type BroadcastMessage =
+  | {
       type: "table_change" | "channel_created" | "system" | "staff_data_change";
       operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
       table?: KnownBroadcastTables;
@@ -358,7 +359,6 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
 
     // Log summary every 100 broadcasts
     const total = Array.from(ClassRealTimeController.broadcastCounter.values()).reduce((sum, count) => sum + count, 0);
-    console.log("handleBroadcastMessage", message);
 
     if (total % 100 === 0) {
       console.log("Broadcast Summary:", Object.fromEntries(ClassRealTimeController.broadcastCounter));
