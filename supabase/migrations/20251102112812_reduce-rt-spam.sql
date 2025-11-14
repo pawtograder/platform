@@ -38,6 +38,7 @@ DECLARE
     affected_row_ids BIGINT[];
     affected_count INTEGER;
     class_id_value BIGINT;
+    class_ids BIGINT[];
     private_student_ids UUID[];
     public_student_ids UUID[];
     student_id UUID;
@@ -64,29 +65,23 @@ BEGIN
             ARRAY_AGG(old_table.id ORDER BY old_table.id),
             COUNT(*),
             ARRAY_AGG(DISTINCT old_table.student_id ORDER BY old_table.student_id) FILTER (WHERE old_table.is_private = true),
-            ARRAY_AGG(DISTINCT old_table.student_id ORDER BY old_table.student_id) FILTER (WHERE old_table.is_private = false)
-        INTO affected_row_ids, affected_count, private_student_ids, public_student_ids
+            ARRAY_AGG(DISTINCT old_table.student_id ORDER BY old_table.student_id) FILTER (WHERE old_table.is_private = false),
+            ARRAY_AGG(DISTINCT old_table.class_id ORDER BY old_table.class_id)
+        INTO affected_row_ids, affected_count, private_student_ids, public_student_ids, class_ids
         FROM old_table;
-        
-        SELECT DISTINCT old_table.class_id INTO class_id_value
-        FROM old_table
-        LIMIT 1;
     ELSE
         SELECT 
             ARRAY_AGG(new_table.id ORDER BY new_table.id),
             COUNT(*),
             ARRAY_AGG(DISTINCT new_table.student_id ORDER BY new_table.student_id) FILTER (WHERE new_table.is_private = true),
-            ARRAY_AGG(DISTINCT new_table.student_id ORDER BY new_table.student_id) FILTER (WHERE new_table.is_private = false)
-        INTO affected_row_ids, affected_count, private_student_ids, public_student_ids
+            ARRAY_AGG(DISTINCT new_table.student_id ORDER BY new_table.student_id) FILTER (WHERE new_table.is_private = false),
+            ARRAY_AGG(DISTINCT new_table.class_id ORDER BY new_table.class_id)
+        INTO affected_row_ids, affected_count, private_student_ids, public_student_ids, class_ids
         FROM new_table;
-        
-        SELECT DISTINCT new_table.class_id INTO class_id_value
-        FROM new_table
-        LIMIT 1;
     END IF;
     
-    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Collected: affected_count=%, class_id=%, private_students=%, public_students=%', 
-        affected_count, class_id_value, 
+    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Collected: affected_count=%, class_ids=%, private_students=%, public_students=%', 
+        affected_count, class_ids, 
         COALESCE(array_length(private_student_ids, 1), 0), 
         COALESCE(array_length(public_student_ids, 1), 0);
     
@@ -96,10 +91,18 @@ BEGIN
         RETURN NULL;
     END IF;
     
-    IF class_id_value IS NULL THEN
+    -- Enforce single-class constraint
+    IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
         RAISE NOTICE '[broadcast_gradebook_column_students_statement] Early return: no class_id found';
         RETURN NULL;
     END IF;
+    
+    IF array_length(class_ids, 1) > 1 THEN
+        RAISE EXCEPTION 'broadcast_gradebook_column_students_statement: Operation affects multiple classes (%), but single-class constraint is enforced. class_ids: %', 
+            array_length(class_ids, 1), class_ids;
+    END IF;
+    
+    class_id_value := class_ids[1];
     
     -- Build payload based on affected count
     IF affected_count >= BULK_THRESHOLD THEN
@@ -1434,10 +1437,6 @@ BEGIN
             ARRAY_AGG(DISTINCT old_table.class_id ORDER BY old_table.class_id)
         INTO affected_row_ids, affected_count, submission_ids, class_ids
         FROM old_table;
-        
-        SELECT DISTINCT old_table.class_id INTO class_id_value
-        FROM old_table
-        LIMIT 1;
     ELSE
         SELECT 
             ARRAY_AGG(new_table.id ORDER BY new_table.id),
@@ -1446,15 +1445,23 @@ BEGIN
             ARRAY_AGG(DISTINCT new_table.class_id ORDER BY new_table.class_id)
         INTO affected_row_ids, affected_count, submission_ids, class_ids
         FROM new_table;
-        
-        SELECT DISTINCT new_table.class_id INTO class_id_value
-        FROM new_table
-        LIMIT 1;
     END IF;
     
-    IF affected_count IS NULL OR affected_count = 0 OR class_id_value IS NULL THEN
+    IF affected_count IS NULL OR affected_count = 0 THEN
         RETURN NULL;
     END IF;
+    
+    -- Enforce single-class constraint
+    IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
+        RETURN NULL;
+    END IF;
+    
+    IF array_length(class_ids, 1) > 1 THEN
+        RAISE EXCEPTION 'broadcast_submission_reviews_statement: Operation affects multiple classes (%), but single-class constraint is enforced. class_ids: %', 
+            array_length(class_ids, 1), class_ids;
+    END IF;
+    
+    class_id_value := class_ids[1];
     
     -- Build payload based on affected count
     IF affected_count >= BULK_THRESHOLD THEN
@@ -1570,6 +1577,7 @@ DECLARE
     affected_row_ids BIGINT[];
     affected_count INTEGER;
     class_id_value BIGINT;
+    class_ids BIGINT[];
     affected_assignees UUID[];
     assignee_id UUID;
     staff_payload JSONB;
@@ -1590,9 +1598,10 @@ BEGIN
         FROM old_table
         WHERE old_table.assignee_profile_id IS NOT NULL;
         
-        SELECT DISTINCT old_table.class_id INTO class_id_value
-        FROM old_table
-        LIMIT 1;
+        -- Collect class_ids from all affected rows (not just those with assignees) to enforce single-class constraint
+        SELECT ARRAY_AGG(DISTINCT old_table.class_id ORDER BY old_table.class_id)
+        INTO class_ids
+        FROM old_table;
     ELSE
         SELECT 
             ARRAY_AGG(new_table.id ORDER BY new_table.id),
@@ -1602,14 +1611,27 @@ BEGIN
         FROM new_table
         WHERE new_table.assignee_profile_id IS NOT NULL;
         
-        SELECT DISTINCT new_table.class_id INTO class_id_value
-        FROM new_table
-        LIMIT 1;
+        -- Collect class_ids from all affected rows (not just those with assignees) to enforce single-class constraint
+        SELECT ARRAY_AGG(DISTINCT new_table.class_id ORDER BY new_table.class_id)
+        INTO class_ids
+        FROM new_table;
     END IF;
     
-    IF affected_count IS NULL OR affected_count = 0 OR class_id_value IS NULL THEN
+    IF affected_count IS NULL OR affected_count = 0 THEN
         RETURN NULL;
     END IF;
+    
+    -- Enforce single-class constraint
+    IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
+        RETURN NULL;
+    END IF;
+    
+    IF array_length(class_ids, 1) > 1 THEN
+        RAISE EXCEPTION 'broadcast_review_assignments_statement: Operation affects multiple classes (%), but single-class constraint is enforced. class_ids: %', 
+            array_length(class_ids, 1), class_ids;
+    END IF;
+    
+    class_id_value := class_ids[1];
     
     -- Skip broadcasting for large INSERT operations (>300 rows) - too slow
     IF operation_type = 'INSERT' AND affected_count > 300 THEN
@@ -1693,6 +1715,18 @@ CREATE TRIGGER broadcast_review_assignments_delete_trigger
     REFERENCING OLD TABLE AS old_table
     FOR EACH STATEMENT
     EXECUTE FUNCTION public.broadcast_review_assignments_statement();
+
+-- ============================================================================
+-- UPDATE REVIEW_ASSIGNMENT_RUBRIC_PARTS TRIGGER TO EXCLUDE INSERT
+-- ============================================================================
+
+-- Update trigger to only fire on UPDATE and DELETE, not INSERT
+DROP TRIGGER IF EXISTS broadcast_review_assignment_rubric_parts_unified ON public.review_assignment_rubric_parts;
+
+CREATE TRIGGER broadcast_review_assignment_rubric_parts_unified
+    AFTER UPDATE OR DELETE ON public.review_assignment_rubric_parts
+    FOR EACH ROW
+    EXECUTE FUNCTION public.broadcast_review_assignment_rubric_part_data_change();
 
 -- ============================================================================
 -- UPDATE RLS AUTHORIZATION FUNCTION FOR GRADEBOOK CHANNELS
@@ -1916,3 +1950,4 @@ BEGIN
   RETURN true;
 END;
 $$;
+
