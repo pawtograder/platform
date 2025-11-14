@@ -911,12 +911,26 @@ export default function ImportGradebookColumns() {
                                   );
                                 }
 
-                                if (
-                                  col.isNew ||
+                                // Check if this is a new entry (has new value but no old value)
+                                const isNewEntry = !hasOldValue && hasNewValue;
+
+                                // Check if values are unchanged
+                                const isUnchanged =
                                   s.oldValue === null ||
                                   s.oldValue === undefined ||
-                                  String(s.oldValue).trim() === String(s.newValue).trim()
-                                ) {
+                                  String(s.oldValue).trim() === String(s.newValue).trim();
+
+                                if (isNewEntry) {
+                                  // New entry - highlight in green/bold
+                                  return (
+                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
+                                      <Text as="b" color="fg.success">
+                                        {s.newValue}
+                                      </Text>
+                                    </Table.Cell>
+                                  );
+                                } else if (isUnchanged) {
+                                  // Unchanged or no value
                                   return (
                                     <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
                                       {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
@@ -925,6 +939,7 @@ export default function ImportGradebookColumns() {
                                     </Table.Cell>
                                   );
                                 } else {
+                                  // Updated value - show old value struck through and new value in green/bold
                                   return (
                                     <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
                                       <s>{s.oldValue}</s>{" "}
