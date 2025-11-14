@@ -22,7 +22,8 @@ declare
 begin
 
   -- Validate that the declared number of tokens consumed is correct
-  tokens_needed := ceil(_hours_to_extend/24);
+  -- Use numeric division to avoid integer division truncation before ceil()
+  tokens_needed := ceil(_hours_to_extend::numeric / 24);
   if tokens_needed != _tokens_consumed then
     return false;
   end if;
@@ -79,7 +80,13 @@ begin
     return false;
   end if;
 
-  select max_late_tokens from public.assignments where id=_assignment_id into max_tokens_for_assignment;
+  -- Verify assignment exists and belongs to the specified class before checking max_late_tokens
+  select max_late_tokens from public.assignments where id=_assignment_id and class_id=_class_id into max_tokens_for_assignment;
+  
+  -- If assignment doesn't exist or class_id doesn't match, reject the request
+  if max_tokens_for_assignment IS NULL then
+    return false;
+  end if;
 
   -- FIX: Include tokens_needed in the check to prevent exceeding per-assignment token limit
   if tokens_used_this_assignment + tokens_needed > max_tokens_for_assignment then
