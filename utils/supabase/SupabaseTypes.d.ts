@@ -4940,6 +4940,7 @@ export type Database = {
           completed_by: string | null;
           created_at: string;
           due_date: string;
+          hard_deadline: boolean;
           id: number;
           max_allowable_late_tokens: number;
           release_date: string | null;
@@ -4956,6 +4957,7 @@ export type Database = {
           completed_by?: string | null;
           created_at?: string;
           due_date: string;
+          hard_deadline?: boolean;
           id?: number;
           max_allowable_late_tokens?: number;
           release_date?: string | null;
@@ -4972,6 +4974,7 @@ export type Database = {
           completed_by?: string | null;
           created_at?: string;
           due_date?: string;
+          hard_deadline?: boolean;
           id?: number;
           max_allowable_late_tokens?: number;
           release_date?: string | null;
@@ -9242,6 +9245,23 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      check_can_add_to_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
+      check_can_remove_from_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_profile_id_to_remove: string;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
       check_github_error_threshold: {
         Args: { p_org: string; p_threshold: number; p_window_minutes: number };
         Returns: number;
@@ -9490,6 +9510,10 @@ export type Database = {
           p_student_id: string;
           p_trigger_id?: number;
         };
+        Returns: undefined;
+      };
+      enqueue_gradebook_row_recalculation_batch: {
+        Args: { p_rows: Json[] };
         Returns: undefined;
       };
       finalize_submission_early: {
@@ -9900,6 +9924,14 @@ export type Database = {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
+      update_gradebook_column_student_with_recalc: {
+        Args: { p_id: number; p_updates: Json };
+        Returns: undefined;
+      };
+      update_gradebook_column_students_batch_with_recalc: {
+        Args: { p_updates: Json[] };
+        Returns: Json;
+      };
       update_gradebook_row: {
         Args: {
           p_class_id: number;
@@ -9910,6 +9942,10 @@ export type Database = {
           p_updates: Json[];
         };
         Returns: number;
+      };
+      update_gradebook_rows_batch: {
+        Args: { p_batch_updates: Json[] };
+        Returns: Json;
       };
       update_regrade_request_points: {
         Args: {
