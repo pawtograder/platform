@@ -591,14 +591,16 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   );
 }
 
-function CompletedReviewHistory() {
+function CompletedReviewHistory({ excludeReviewAssignmentId }: { excludeReviewAssignmentId?: number }) {
   const submission = useSubmission();
   const myAssignedReviews = useMyReviewAssignments(submission?.id);
   return (
     <>
-      {myAssignedReviews.map((ra) => {
-        return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
-      })}
+      {myAssignedReviews
+        .filter((ra) => ra.id !== excludeReviewAssignmentId)
+        .map((ra) => {
+          return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
+        })}
     </>
   );
 }
@@ -632,7 +634,13 @@ export default function SubmissionReviewToolbar() {
         <ReviewAssignmentActions />
       </VStack>
       {/* Only show completed history when NOT actively working on another review */}
-      {!hasActiveIncompleteReview && <CompletedReviewHistory />}
+      {!hasActiveIncompleteReview && (
+        <CompletedReviewHistory
+          excludeReviewAssignmentId={
+            activeReviewAssignment && activeReviewAssignment.completed_at ? activeReviewAssignmentId : undefined
+          }
+        />
+      )}
     </Box>
   );
 }
