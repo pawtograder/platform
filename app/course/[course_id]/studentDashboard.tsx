@@ -48,6 +48,14 @@ export default async function StudentDashboard({
     .order("created_at", { ascending: false })
     .limit(5);
 
+  const { data: surveys } = await supabase
+    .from("surveys")
+    .select("*")
+    .eq("class_id", course_id)
+    .eq()
+    .order("created_at", { ascending: false })
+    .limit(5);
+
   const { data: helpRequests } = await supabase
     .from("help_requests")
     .select("*")
@@ -140,6 +148,25 @@ export default async function StudentDashboard({
       <Box>
         <Heading size="lg" mb={4}>
           Recent Discussions
+        </Heading>
+        <Stack spaceY={4}>
+          {discussions?.map((thread) => {
+            const topic = topics?.find((t) => t.id === thread.topic_id);
+            if (!topic) {
+              return <Skeleton key={thread.id} height="100px" />;
+            }
+            return (
+              <Link href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
+                <DiscussionPostSummary thread={thread} topic={topic} />
+              </Link>
+            );
+          })}
+        </Stack>
+      </Box>
+
+      <Box>
+        <Heading size="lg" mb={4}>
+          Active Surveys
         </Heading>
         <Stack spaceY={4}>
           {discussions?.map((thread) => {
