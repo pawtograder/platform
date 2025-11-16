@@ -213,6 +213,21 @@ export default function EditSurveyPage() {
   const onSubmit = useCallback(
     async (values: FieldValues) => {
       async function update() {
+        // Validate due date if trying to publish
+        if (values.status === "published" && values.due_date) {
+          const dueDate = new Date(values.due_date as string);
+          const now = new Date();
+          
+          if (dueDate < now) {
+            toaster.create({
+              title: "Cannot Publish Survey",
+              description: "The due date must be in the future. Please update the due date or save as a draft.",
+              type: "error"
+            });
+            return;
+          }
+        }
+
         // Show loading toast before starting the process
         const loadingToast = toaster.create({
           title: "Updating Survey",

@@ -26,6 +26,7 @@ type Survey = {
   created_at: string;
   class_id: number;
   json?: string;
+  due_date?: string;
 };
 
 type SurveyWithCounts = Survey & {
@@ -131,6 +132,22 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
   const handlePublish = useCallback(
     async (survey: Survey) => {
+
+      // Validate due date
+      if (survey.due_date) {
+        const dueDate = new Date(survey.due_date);
+        const now = new Date();
+        
+        if (dueDate < now) {
+          toaster.create({
+            title: "Cannot Publish Survey",
+            description: "The due date is in the past. Please edit the survey and update the due date before publishing.",
+            type: "error"
+          });
+          return;
+        }
+      }
+
       // Show loading toast
       const loadingToast = toaster.create({
         title: "Publishing Survey",
