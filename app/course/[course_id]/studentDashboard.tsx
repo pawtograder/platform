@@ -2,6 +2,7 @@ import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { Skeleton } from "@/components/ui/skeleton";
 import StudentLabSection from "@/components/ui/student-lab-section";
 import { createClient } from "@/utils/supabase/server";
+import { Survey } from "@/types/survey";
 import {
   Box,
   CardBody,
@@ -48,13 +49,18 @@ export default async function StudentDashboard({
     .order("created_at", { ascending: false })
     .limit(5);
 
-  const { data: surveys } = await supabase
-    .from("surveys")
-    .select("*")
-    .eq("class_id", course_id)
-    .eq()
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const { data: surveysRaw } = await supabase
+  .from("surveys" as any)
+  .select("*")
+  .eq("class_id", course_id)
+  .eq("status", "published")
+  .gte("due_date", new Date().toISOString())
+  .order("created_at", { ascending: false })
+  .limit(5);
+
+const surveys = (surveysRaw ?? []) as unknown as Survey[];
+
+
 
   const { data: helpRequests } = await supabase
     .from("help_requests")
@@ -165,23 +171,62 @@ export default async function StudentDashboard({
       </Box>
 
       <Box>
-        <Heading size="lg" mb={4}>
-          Active Surveys
-        </Heading>
-        <Stack spaceY={4}>
-          {discussions?.map((thread) => {
-            const topic = topics?.find((t) => t.id === thread.topic_id);
-            if (!topic) {
-              return <Skeleton key={thread.id} height="100px" />;
-            }
-            return (
-              <Link href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
-                <DiscussionPostSummary thread={thread} topic={topic} />
+    <Heading size="lg" mb={4}>
+      Active Surveys
+    </Heading>
+    <Stack spaceY={4}>
+      {(!surveys || surveys.length === 0) ? (
+        <CardRoot>
+          <CardHeader>No active surveys</CardHeader>
+          <CardBody>
+            <DataListRoot>
+              <DataListItem>
+                <DataListItemLabel>Info</DataListItemLabel>
+                <DataListItemValue>
+                  There are no published, active surveys for this course right now.
+                </DataListItemValue>
+              </DataListItem>
+            </DataListRoot>
+          </CardBody>
+        </CardRoot>
+      ) : (
+        surveys.map((survey) => (
+          <CardRoot key={survey.id}>
+            <CardHeader>
+              <Link href={`/course/${course_id}/surveys/${survey.id}`}>
+                {survey.title ?? "Untitled survey"}
               </Link>
-            );
-          })}
-        </Stack>
-      </Box>
+            </CardHeader>
+            <CardBody>
+              <DataListRoot>
+                <DataListItem>
+                  <DataListItemLabel>Due</DataListItemLabel>
+                  <DataListItemValue>
+                    {survey.due_date
+                      ? formatInTimeZone(
+                          new TZDate(survey.due_date),
+                          "America/New_York", // or course time zone if you prefer
+                          "Pp"
+                        )
+                      : "No due date"}
+                  </DataListItemValue>
+                </DataListItem>
+                {survey.description && (
+                  <DataListItem>
+                    <DataListItemLabel>Description</DataListItemLabel>
+                    <DataListItemValue>
+                      {survey.description}
+                    </DataListItemValue>
+                  </DataListItem>
+                )}
+              </DataListRoot>
+            </CardBody>
+          </CardRoot>
+        ))
+      )}
+    </Stack>
+  </Box>
+
 
       <Box>
         <Heading size="lg" mb={4}>
