@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
@@ -21,6 +22,7 @@ import { format } from "date-fns";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
+import { useParams } from "next/navigation";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -56,6 +58,7 @@ function csvSafe(value: unknown): string {
 }
 
 export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
+  const { course_id } = useParams();
   const { mutate: deleteReviewAssignment } = useDelete();
   const { role: course } = useClassProfiles();
   const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions } = useCourseController();
@@ -420,6 +423,17 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               submitterName = `Submission ID: ${submission.id}`;
             }
           }
+
+          // If we have a valid submission, make it clickable
+          if (submission) {
+            const url = `/course/${course_id}/assignments/${assignmentId}/submissions/${submission.id}?review_assignment_id=${row.original.id}`;
+            return (
+              <Link href={url}>
+                {submitterName}
+              </Link>
+            );
+          }
+
           return submitterName;
         },
         enableColumnFilter: true,
