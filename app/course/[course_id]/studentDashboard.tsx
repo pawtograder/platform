@@ -2,7 +2,7 @@ import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { Skeleton } from "@/components/ui/skeleton";
 import StudentLabSection from "@/components/ui/student-lab-section";
 import { createClient } from "@/utils/supabase/server";
-import { Survey } from "@/types/survey";
+import { Survey, SurveyResponse } from "@/types/survey";
 import {
   Box,
   CardBody,
@@ -14,7 +14,9 @@ import {
   DataListRoot,
   Heading,
   Stack,
-  VStack
+  VStack,
+  Button,
+  Text
 } from "@chakra-ui/react";
 import { formatInTimeZone } from "date-fns-tz";
 
@@ -23,6 +25,7 @@ import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
 import RegradeRequestsTable from "./RegradeRequestsTable";
+
 export default async function StudentDashboard({
   course_id,
   private_profile_id
@@ -50,17 +53,34 @@ export default async function StudentDashboard({
     .limit(5);
 
   const { data: surveysRaw } = await supabase
-  .from("surveys" as any)
-  .select("*")
-  .eq("class_id", course_id)
-  .eq("status", "published")
-  .gte("due_date", new Date().toISOString())
-  .order("created_at", { ascending: false })
-  .limit(5);
+    .from("surveys" as any)
+    .select("*")
+    .eq("class_id", course_id)
+    .eq("status", "published")
+    .gte("due_date", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(5);
 
-const surveys = (surveysRaw ?? []) as unknown as Survey[];
+  const surveys = (surveysRaw ?? []) as unknown as Survey[];
 
+  let surveyResponses: SurveyResponse[] = [];
+  if (surveys.length > 0) {
+    const surveyIds = surveys.map((s) => s.id);
 
+    const { data: responsesRaw } = await supabase
+      .from("survey_responses" as any)
+      .select("*")
+      .eq("profile_id", private_profile_id)
+      .in("survey_id", surveyIds);
+
+    surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
+  }
+
+  // Build a quick lookup: survey_id -> response
+  const responsesBySurveyId = new Map<string, SurveyResponse>();
+  for (const r of surveyResponses) {
+    responsesBySurveyId.set(r.survey_id, r);
+  }
 
   const { data: helpRequests } = await supabase
     .from("help_requests")
@@ -171,62 +191,105 @@ const surveys = (surveysRaw ?? []) as unknown as Survey[];
       </Box>
 
       <Box>
-    <Heading size="lg" mb={4}>
-      Active Surveys
-    </Heading>
-    <Stack spaceY={4}>
-      {(!surveys || surveys.length === 0) ? (
-        <CardRoot>
-          <CardHeader>No active surveys</CardHeader>
-          <CardBody>
-            <DataListRoot>
-              <DataListItem>
-                <DataListItemLabel>Info</DataListItemLabel>
-                <DataListItemValue>
-                  There are no published, active surveys for this course right now.
-                </DataListItemValue>
-              </DataListItem>
-            </DataListRoot>
-          </CardBody>
-        </CardRoot>
-      ) : (
-        surveys.map((survey) => (
-          <CardRoot key={survey.id}>
-            <CardHeader>
-              <Link href={`/course/${course_id}/surveys/${survey.id}`}>
-                {survey.title ?? "Untitled survey"}
-              </Link>
-            </CardHeader>
-            <CardBody>
-              <DataListRoot>
-                <DataListItem>
-                  <DataListItemLabel>Due</DataListItemLabel>
-                  <DataListItemValue>
-                    {survey.due_date
-                      ? formatInTimeZone(
-                          new TZDate(survey.due_date),
-                          "America/New_York", // or course time zone if you prefer
-                          "Pp"
-                        )
-                      : "No due date"}
-                  </DataListItemValue>
-                </DataListItem>
-                {survey.description && (
+        <Heading size="lg" mb={4}>
+          Active Surveys
+        </Heading>
+        <Stack spaceY={4}>
+          {!surveys || surveys.length === 0 ? (
+            <CardRoot>
+              <CardHeader>No active surveys</CardHeader>
+              <CardBody>
+                <DataListRoot>
                   <DataListItem>
-                    <DataListItemLabel>Description</DataListItemLabel>
+                    <DataListItemLabel>Info</DataListItemLabel>
                     <DataListItemValue>
-                      {survey.description}
+                      There are no published, active surveys for this course right now.
                     </DataListItemValue>
                   </DataListItem>
-                )}
-              </DataListRoot>
-            </CardBody>
-          </CardRoot>
-        ))
-      )}
-    </Stack>
-  </Box>
+                </DataListRoot>
+              </CardBody>
+            </CardRoot>
+          ) : (
+            surveys.map((survey) => {
+              const response = responsesBySurveyId.get(survey.id);
 
+              let statusLabel = "Not started";
+              let buttonLabel = "Start";
+              let colorScheme: "blue" | "yellow" | "green" | "gray" = "blue";
+
+              if (response) {
+                if (response.is_submitted) {
+                  if (survey.allow_response_editing) {
+                    statusLabel = "Submitted (editable)";
+                    buttonLabel = "Edit";
+                    colorScheme = "green";
+                  } else {
+                    statusLabel = "Submitted (locked)";
+                    buttonLabel = "View";
+                    colorScheme = "gray";
+                  }
+                } else {
+                  statusLabel = "In progress";
+                  buttonLabel = "Continue";
+                  colorScheme = "yellow";
+                }
+              }
+
+              const href = `/course/${course_id}/surveys/${survey.id}`;
+
+              return (
+                <CardRoot key={survey.id}>
+                  <CardHeader>
+                    <Stack direction="row" justify="space-between" align="center" gap={4}>
+                      <Box>
+                        <Link href={href}>
+                          <Text as="span" fontWeight="semibold">
+                            {survey.title ?? "Untitled survey"}
+                          </Text>
+                        </Link>
+                        {survey.description && (
+                          <Text fontSize="sm" opacity={0.8} mt={1}>
+                            {survey.description}
+                          </Text>
+                        )}
+                        <Text fontSize="xs" opacity={0.6} mt={1}>
+                          {statusLabel}
+                        </Text>
+                      </Box>
+                      <Link href={href}>
+                        <Button size="sm" colorScheme={colorScheme}>
+                          {buttonLabel}
+                        </Button>
+                      </Link>
+                    </Stack>
+                  </CardHeader>
+                  <CardBody>
+                    <DataListRoot>
+                      <DataListItem>
+                        <DataListItemLabel>Due</DataListItemLabel>
+                        <DataListItemValue>
+                          {survey.due_date
+                            ? formatInTimeZone(new TZDate(survey.due_date), "America/New_York", "Pp")
+                            : "No due date"}
+                        </DataListItemValue>
+                      </DataListItem>
+
+                      {response?.submitted_at && (
+                        <DataListItem>
+                          <DataListItemLabel>Submitted</DataListItemLabel>
+                          <DataListItemValue>
+                            {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "Pp")}
+                          </DataListItemValue>
+                        </DataListItem>
+                      )}
+                    </DataListRoot>
+                  </CardBody>
+                </CardRoot>
+              );
+            })
+          )}
+        </Stack>
+      </Box>
 
       <Box>
         <Heading size="lg" mb={4}>
