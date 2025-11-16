@@ -68,7 +68,12 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
 
   // Miscellaneous operations
   assignment_due_date_exceptions: { maxInsertsPerSecond: 10, description: "Due date exceptions", batchSize: 100 },
-  submission_regrade_requests: { maxInsertsPerSecond: 4, description: "Regrade requests", batchSize: 100 }
+  submission_regrade_requests: { maxInsertsPerSecond: 4, description: "Regrade requests", batchSize: 100 },
+
+  // Survey operations
+  surveys: { maxInsertsPerSecond: 5, description: "Survey creation", batchSize: 10 },
+  survey_templates: { maxInsertsPerSecond: 10, description: "Survey template creation", batchSize: 20 },
+  survey_responses: { maxInsertsPerSecond: 20, description: "Survey response creation", batchSize: 100 }
 };
 // Performance tracking
 export interface PerformanceMetrics {
@@ -400,20 +405,20 @@ export class RateLimitManager {
       const batchInfo = config.batchSize ? config.batchSize.toString() : "N/A";
       console.log(
         dataType.padEnd(25) +
-          config.maxInsertsPerSecond.toString().padEnd(15) +
-          batchInfo.padEnd(12) +
-          config.description
+        config.maxInsertsPerSecond.toString().padEnd(15) +
+        batchInfo.padEnd(12) +
+        config.description
       );
     });
 
     console.log(`\n📈 ACTUAL PERFORMANCE RESULTS:`);
     console.log(
       "Data Type".padEnd(25) +
-        "Count".padEnd(12) +
-        "Target/sec".padEnd(12) +
-        "Actual/sec".padEnd(12) +
-        "Batch Info".padEnd(15) +
-        "Efficiency"
+      "Count".padEnd(12) +
+      "Target/sec".padEnd(12) +
+      "Actual/sec".padEnd(12) +
+      "Batch Info".padEnd(15) +
+      "Efficiency"
     );
     console.log("-".repeat(95));
 
@@ -429,11 +434,11 @@ export class RateLimitManager {
 
       console.log(
         dataType.padEnd(25) +
-          metrics.totalInserted.toLocaleString().padEnd(12) +
-          config.maxInsertsPerSecond.toString().padEnd(12) +
-          (metrics.actualRate?.toFixed(2) || "0").padEnd(12) +
-          batchInfo.padEnd(15) +
-          efficiencyStr
+        metrics.totalInserted.toLocaleString().padEnd(12) +
+        config.maxInsertsPerSecond.toString().padEnd(12) +
+        (metrics.actualRate?.toFixed(2) || "0").padEnd(12) +
+        batchInfo.padEnd(15) +
+        efficiencyStr
       );
 
       totalInserted += metrics.totalInserted;
@@ -452,10 +457,10 @@ export class RateLimitManager {
 
     console.log(
       "TOTALS".padEnd(25) +
-        totalInserted.toLocaleString().padEnd(12) +
-        totalTargetRate.toString().padEnd(12) +
-        overallRate.toFixed(2).padEnd(12) +
-        `${overallEfficiency.toFixed(1)}%`
+      totalInserted.toLocaleString().padEnd(12) +
+      totalTargetRate.toString().padEnd(12) +
+      overallRate.toFixed(2).padEnd(12) +
+      `${overallEfficiency.toFixed(1)}%`
     );
 
     console.log(`\n⏱️  TIMING SUMMARY:`);

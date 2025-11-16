@@ -10,7 +10,8 @@ import {
   type LabAssignmentConfig,
   type GroupAssignmentConfig,
   type HelpRequestConfig,
-  type DiscussionConfig
+  type DiscussionConfig,
+  type SurveyConfig
 } from "./DatabaseSeedingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -34,6 +35,7 @@ interface SeederConfig {
   groupAssignments?: GroupAssignmentConfig;
   helpRequests?: HelpRequestConfig;
   discussions?: DiscussionConfig;
+  surveyConfig?: SurveyConfig;
   gradingScheme?: "current" | "specification";
   rateLimitOverrides?: Record<string, { maxInsertsPerSecond: number; description: string; batchSize?: number }>;
 }
@@ -124,7 +126,13 @@ const TEMPLATES: Record<string, SeederConfig> = {
       postsPerTopic: faker.number.int({ min: 5, max: 16 }),
       maxRepliesPerPost: 16
     },
-    gradingScheme: "specification"
+    gradingScheme: "specification",
+    surveyConfig: {
+      numSurveys: 5,
+      numTemplates: 3,
+      responseRate: 0.75, // 75% of students respond
+      submissionRate: 0.85 // 85% of responses are submitted
+    }
   },
 
   large: {
@@ -174,6 +182,12 @@ const TEMPLATES: Record<string, SeederConfig> = {
         maxInsertsPerSecond: 1,
         description: "Assignment creation (large scale, lots of students, many gradebok columns!)"
       }
+    },
+    surveyConfig: {
+      numSurveys: 15,
+      numTemplates: 8,
+      responseRate: 0.70,
+      submissionRate: 0.80
     }
   },
 
