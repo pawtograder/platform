@@ -9,6 +9,7 @@ import { toaster } from "@/components/ui/toaster";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { SurveyWithResponse } from "@/types/survey";
+import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 
 type FilterType = "all" | "not_started" | "completed";
 
@@ -181,6 +182,16 @@ export default function StudentSurveysPage() {
   const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
   const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
 
+  // Filter options for student view
+  const filterOptions = useMemo(
+    () => [
+      { value: "all" as const, label: "All" },
+      { value: "not_started" as const, label: "Not Started" },
+      { value: "completed" as const, label: "Completed" }
+    ],
+    []
+  );
+
   const filteredSurveys = useMemo(() => {
     switch (activeFilter) {
       case "all":
@@ -250,47 +261,17 @@ export default function StudentSurveysPage() {
         </VStack>
 
         {/* Filter Buttons */}
-        <HStack gap={2} wrap="wrap">
-          <Button
-            size="sm"
-            variant="outline"
-            bg={activeFilter === "all" ? filterButtonActiveBg : filterButtonInactiveBg}
-            color={activeFilter === "all" ? filterButtonActiveColor : filterButtonInactiveColor}
-            borderColor={activeFilter === "all" ? filterButtonActiveBg : borderColor}
-            _hover={{
-              bg: activeFilter === "all" ? filterButtonActiveBg : filterButtonHoverBg
-            }}
-            onClick={() => setActiveFilter("all")}
-          >
-            All
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            bg={activeFilter === "not_started" ? filterButtonActiveBg : filterButtonInactiveBg}
-            color={activeFilter === "not_started" ? filterButtonActiveColor : filterButtonInactiveColor}
-            borderColor={activeFilter === "not_started" ? filterButtonActiveBg : borderColor}
-            _hover={{
-              bg: activeFilter === "not_started" ? filterButtonActiveBg : filterButtonHoverBg
-            }}
-            onClick={() => setActiveFilter("not_started")}
-          >
-            Not Started
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            bg={activeFilter === "completed" ? filterButtonActiveBg : filterButtonInactiveBg}
-            color={activeFilter === "completed" ? filterButtonActiveColor : filterButtonInactiveColor}
-            borderColor={activeFilter === "completed" ? filterButtonActiveBg : borderColor}
-            _hover={{
-              bg: activeFilter === "completed" ? filterButtonActiveBg : filterButtonHoverBg
-            }}
-            onClick={() => setActiveFilter("completed")}
-          >
-            Completed
-          </Button>
-        </HStack>
+        <SurveyFilterButtons
+          activeFilter={activeFilter}
+          setActiveFilter={setActiveFilter}
+          filterOptions={filterOptions}
+          filterButtonActiveBg={filterButtonActiveBg}
+          filterButtonActiveColor={filterButtonActiveColor}
+          filterButtonInactiveBg={filterButtonInactiveBg}
+          filterButtonInactiveColor={filterButtonInactiveColor}
+          filterButtonHoverBg={filterButtonHoverBg}
+          tableBorderColor={borderColor}
+        />
 
         {/* Surveys List */}
         <VStack align="stretch" gap={4}>
