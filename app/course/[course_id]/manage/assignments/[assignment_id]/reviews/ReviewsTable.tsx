@@ -427,11 +427,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           // If we have a valid submission, make it clickable
           if (submission) {
             const url = `/course/${course_id}/assignments/${assignmentId}/submissions/${submission.id}?review_assignment_id=${row.original.id}`;
-            return (
-              <Link href={url}>
-                {submitterName}
-              </Link>
-            );
+            return <Link href={url}>{submitterName}</Link>;
           }
 
           return submitterName;
@@ -552,7 +548,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       }
     ],
-    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
+    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, course_id, assignmentId]
   );
   const joinedSelect =
     "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
