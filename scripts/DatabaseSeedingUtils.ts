@@ -923,6 +923,7 @@ export class DatabaseSeeder {
       groupAssignmentConfig: this.config.groupAssignmentConfig || defaultGroupAssignmentConfig,
       helpRequestConfig: this.config.helpRequestConfig,
       discussionConfig: this.config.discussionConfig,
+      surveyConfig: this.config.surveyConfig,
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
       recycleUsers: this.config.recycleUsers !== false // Default to true unless explicitly disabled

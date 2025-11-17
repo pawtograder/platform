@@ -82,7 +82,13 @@ const TEMPLATES: Record<string, SeederConfig> = {
       maxRepliesPerRequest: 10,
       maxMembersPerRequest: 3
     },
-    gradingScheme: "specification"
+    gradingScheme: "specification",
+    surveyConfig: {
+      numSurveys: 3,
+      numTemplates: 2,
+      responseRate: 0.75,
+      submissionRate: 0.85
+    }
   },
 
   small: {
@@ -130,8 +136,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
     surveyConfig: {
       numSurveys: 5,
       numTemplates: 3,
-      responseRate: 0.75, // 75% of students respond
-      submissionRate: 0.85 // 85% of responses are submitted
+      responseRate: 0.75,
+      submissionRate: 0.85
     }
   },
 
@@ -233,6 +239,12 @@ const TEMPLATES: Record<string, SeederConfig> = {
       maxRepliesPerPost: 10
     },
     gradingScheme: "current",
+    surveyConfig: {
+      numSurveys: 8,
+      numTemplates: 5,
+      responseRate: 0.70,
+      submissionRate: 0.80
+    },
     rateLimitOverrides: {}
   }
 };
@@ -259,6 +271,7 @@ async function runSeeding(config: SeederConfig) {
     .withGroupAssignments(config.groupAssignments!)
     .withHelpRequests(config.helpRequests!)
     .withDiscussions(config.discussions!)
+    .withSurveys(config.surveyConfig!)
     .withGradingScheme(config.gradingScheme!)
     .seed();
 }
