@@ -15,11 +15,10 @@ import {
   Stack,
   VStack
 } from "@chakra-ui/react";
-import { formatInTimeZone } from "date-fns-tz";
 
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import { TZDate } from "@date-fns/tz";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "next/link";
 import RegradeRequestsTable from "./RegradeRequestsTable";
 export default async function StudentDashboard({
@@ -74,7 +73,7 @@ export default async function StudentDashboard({
 
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-
+  console.log("helpRequests", helpRequests);
   return (
     <VStack spaceY={0} align="stretch" p={2}>
       {identities.data && !githubIdentity && <LinkAccount />}
@@ -112,13 +111,11 @@ export default async function StudentDashboard({
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
-                        {assignment.due_date
-                          ? formatInTimeZone(
-                              new TZDate(assignment.due_date),
-                              assignment.classes?.time_zone || "America/New_York",
-                              "Pp"
-                            )
-                          : "No due date"}
+                        {assignment.due_date ? (
+                          <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
+                        ) : (
+                          "No due date"
+                        )}
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>
@@ -182,7 +179,9 @@ export default async function StudentDashboard({
               <CardHeader>
                 <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
               </CardHeader>
-              <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
+              <CardBody>
+                Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />
+              </CardBody>
             </CardRoot>
           ))}
         </Stack>

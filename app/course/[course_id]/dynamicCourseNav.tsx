@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneModal } from "@/components/TimeZoneModal";
 import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import {
@@ -15,12 +16,13 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
-import React, { Fragment, useEffect, useRef, useState } from "react";
+import React, { Fragment, useEffect, useRef } from "react";
 import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
@@ -177,21 +179,31 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
   );
 }
 
-function TimeZoneWarning({ courseTz }: { courseTz: string }) {
-  const [dismissed, setDismissed] = useState(false);
-  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (courseTz === browserTz || dismissed) {
-    return <></>;
+function TimeZoneIndicator() {
+  const { mode, timeZone, courseTimeZone, browserTimeZone } = useTimeZone();
+
+  // Only show indicator if timezones differ
+  if (courseTimeZone === browserTimeZone) {
+    return null;
   }
+
+  const getTimeZoneAbbr = (tz: string) => {
+    try {
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat("en", {
+        timeZone: tz,
+        timeZoneName: "short"
+      });
+      const parts = formatter.formatToParts(now);
+      return parts.find((part) => part.type === "timeZoneName")?.value || tz;
+    } catch {
+      return tz;
+    }
+  };
+
   return (
-    <Alert
-      status="warning"
-      w={{ base: "100%", md: "fit-content" }}
-      size="sm"
-      closable
-      onClose={() => setDismissed(true)}
-    >
-      Warning: This course is in {courseTz} but your computer appears to be in {browserTz}
+    <Alert status="info" w={{ base: "100%", md: "fit-content" }} size="sm">
+      Showing times in {mode === "course" ? "course" : "your local"} time zone ({getTimeZoneAbbr(timeZone)})
     </Alert>
   );
 }
@@ -341,8 +353,8 @@ export default function DynamicCourseNav() {
             </HStack>
           </Box>
 
-          {/* Timezone warning */}
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <TimeZoneIndicator />
+          <TimeZoneModal />
         </VStack>
       </Box>
 
@@ -425,7 +437,7 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <TimeZoneIndicator />
           <UserMenu />
         </Flex>
       </Box>

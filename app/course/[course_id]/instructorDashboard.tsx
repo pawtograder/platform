@@ -1,7 +1,12 @@
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
-import * as Sentry from "@sentry/nextjs";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
+  Badge,
   Box,
   CardBody,
   CardHeader,
@@ -10,25 +15,20 @@ import {
   DataListItemLabel,
   DataListItemValue,
   DataListRoot,
+  Flex,
   Heading,
+  HStack,
   Skeleton,
   Stack,
-  VStack,
-  Badge,
-  Flex,
   Text,
-  HStack
+  VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
+import * as Sentry from "@sentry/nextjs";
 import { formatInTimeZone } from "date-fns-tz";
-import Link from "next/link";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import { getUserRolesForCourse } from "@/lib/ssrUtils";
-import LinkAccount from "@/components/github/link-account";
-import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-
+import Link from "next/link";
+import { redirect } from "next/navigation";
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
   <DataListRoot
@@ -467,9 +467,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
-                        {metric.due_date
-                          ? formatInTimeZone(new TZDate(metric.due_date), metric.time_zone || "America/New_York", "Pp")
-                          : "No due date"}
+                        {metric.due_date ? <TimeZoneAwareDate date={metric.due_date} format="Pp" /> : "No due date"}
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>
@@ -513,7 +511,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CardHeader>
                 <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
               </CardHeader>
-              <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
+              <CardBody>
+                Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />
+              </CardBody>
             </CardRoot>
           ))}
         </Stack>

@@ -2,6 +2,7 @@
 
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 import NotificationsBox from "@/components/notifications/notifications-box";
+import { TimeZoneSelector } from "@/components/TimeZoneSelector";
 import { Button } from "@/components/ui/button";
 import { ColorModeButton } from "@/components/ui/color-mode";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -30,17 +32,19 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { FiClock } from "react-icons/fi";
+
 import { useInvalidate, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaGithub } from "react-icons/fa";
 import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
+import { LuCheck, LuCopy } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RiChatSettingsFill } from "react-icons/ri";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../../actions";
-import { LuCopy, LuCheck } from "react-icons/lu";
 
 function SupportMenu() {
   // Track whether the build number has been successfully copied
@@ -589,6 +593,72 @@ const NotificationPreferencesMenu = () => {
   );
 };
 
+const TimeZonePreferencesMenu = () => {
+  const { mode, setMode, courseTimeZone } = useTimeZone();
+  const browserTimeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  try {
+    // Only show if timezones differ
+    if (courseTimeZone === browserTimeZone) {
+      return null;
+    }
+
+    const getTimeZoneAbbr = (tz: string) => {
+      try {
+        const now = new Date();
+        const formatter = new Intl.DateTimeFormat("en", {
+          timeZone: tz,
+          timeZoneName: "short"
+        });
+        const parts = formatter.formatToParts(now);
+        return parts.find((part) => part.type === "timeZoneName")?.value || tz;
+      } catch {
+        return tz;
+      }
+    };
+
+    return (
+      <Dialog.Root size="md" placement="center">
+        <Dialog.Trigger asChild>
+          <Button
+            variant="ghost"
+            colorPalette="gray"
+            width="100%"
+            justifyContent="flex-start"
+            textAlign="left"
+            size="sm"
+            py={0}
+          >
+            <FiClock size={16} />
+            Time Zone Settings
+          </Button>
+        </Dialog.Trigger>
+        <Portal>
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>Time Zone Settings</Dialog.Title>
+              </Dialog.Header>
+              <Dialog.Body>
+                <TimeZoneSelector />
+              </Dialog.Body>
+              <Dialog.Footer>
+                <Dialog.ActionTrigger asChild>
+                  <Button variant="outline">Close</Button>
+                </Dialog.ActionTrigger>
+              </Dialog.Footer>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
+    );
+  } catch (error) {
+    console.error("TimeZonePreferencesMenu error:", error);
+    // TimeZone provider not available, don't render
+    return null;
+  }
+};
+
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const { role: enrollment } = useClassProfiles();
@@ -639,6 +709,8 @@ function UserSettingsMenu() {
                 </HStack>
                 <ProfileChangesMenu />
                 <NotificationPreferencesMenu />
+                <TimeZonePreferencesMenu />
+
                 <Button
                   variant="ghost"
                   onClick={signOutAction}
