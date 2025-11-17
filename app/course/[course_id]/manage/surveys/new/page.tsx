@@ -74,22 +74,25 @@ export default function NewSurveyPage() {
             .single();
 
           if (data && !error) {
+            // Cast data to expected type
+            const templateData = data as any;
+            
             // Load the template JSON into the form
-            const templateJson = typeof data.template === "string" ? data.template : JSON.stringify(data.template);
+            const templateJson = typeof templateData.template === "string" ? templateData.template : JSON.stringify(templateData.template);
             
             setValue("json", templateJson, { shouldDirty: true });
             
             // Optionally set title and description from template
-            if (data.title) {
-              setValue("title", `${data.title} (Copy)`, { shouldDirty: true });
+            if (templateData.title) {
+              setValue("title", `${templateData.title} (Copy)`, { shouldDirty: true });
             }
-            if (data.description) {
-              setValue("description", data.description, { shouldDirty: true });
+            if (templateData.description) {
+              setValue("description", templateData.description, { shouldDirty: true });
             }
 
             toaster.create({
               title: "Template Loaded",
-              description: `Template "${data.title}" has been loaded.`,
+              description: `Template "${templateData.title}" has been loaded.`,
               type: "success"
             });
 
@@ -404,6 +407,21 @@ export default function NewSurveyPage() {
   // -------- FULL SUBMIT (WRAPPER) --------
   const onSubmit = useCallback(
     async (values: FieldValues) => {
+      // Validate due date if trying to publish
+      if (values.status === "published" && values.due_date) {
+        const dueDate = new Date(values.due_date as string);
+        const now = new Date();
+        
+        if (dueDate < now) {
+          toaster.create({
+            title: "Cannot Publish Survey",
+            description: "The due date must be in the future. Please update the due date or save as a draft.",
+            type: "error"
+          });
+          return;
+        }
+      }
+
       // Show loading toast
       const loadingToast = toaster.create({
         title: "Creating Survey",

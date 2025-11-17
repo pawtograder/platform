@@ -13,6 +13,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
+import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 
 type FilterType = "all" | "completed" | "awaiting";
 
@@ -25,6 +26,7 @@ type Survey = {
   created_at: string;
   class_id: number;
   json?: string;
+  due_date?: string;
 };
 
 type SurveyWithCounts = Survey & {
@@ -58,6 +60,16 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   const filterButtonInactiveBg = useColorModeValue("#F2F2F2", "#374151");
   const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
   const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
+
+  // Filter options for instructor view
+  const filterOptions = useMemo(
+    () => [
+      { value: "all" as const, label: "All" },
+      { value: "completed" as const, label: "Completed" },
+      { value: "awaiting" as const, label: "Awaiting Responses" }
+    ],
+    []
+  );
 
   // Filter surveys based on completion status
   const filteredSurveys = useMemo(() => {
@@ -120,6 +132,22 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
   const handlePublish = useCallback(
     async (survey: Survey) => {
+
+      // Validate due date
+      if (survey.due_date) {
+        const dueDate = new Date(survey.due_date);
+        const now = new Date();
+        
+        if (dueDate < now) {
+          toaster.create({
+            title: "Cannot Publish Survey",
+            description: "The due date is in the past. Please edit the survey and update the due date before publishing.",
+            type: "error"
+          });
+          return;
+        }
+      }
+
       // Show loading toast
       const loadingToast = toaster.create({
         title: "Publishing Survey",
@@ -338,47 +366,17 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   return (
     <>
       {/* Filter Buttons */}
-      <HStack gap={2} mb={4}>
-        <Button
-          size="sm"
-          variant="outline"
-          bg={activeFilter === "all" ? filterButtonActiveBg : filterButtonInactiveBg}
-          color={activeFilter === "all" ? filterButtonActiveColor : filterButtonInactiveColor}
-          borderColor={activeFilter === "all" ? filterButtonActiveBg : tableBorderColor}
-          _hover={{
-            bg: activeFilter === "all" ? filterButtonActiveBg : filterButtonHoverBg
-          }}
-          onClick={() => setActiveFilter("all")}
-        >
-          All
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          bg={activeFilter === "completed" ? filterButtonActiveBg : filterButtonInactiveBg}
-          color={activeFilter === "completed" ? filterButtonActiveColor : filterButtonInactiveColor}
-          borderColor={activeFilter === "completed" ? filterButtonActiveBg : tableBorderColor}
-          _hover={{
-            bg: activeFilter === "completed" ? filterButtonActiveBg : filterButtonHoverBg
-          }}
-          onClick={() => setActiveFilter("completed")}
-        >
-          Completed
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          bg={activeFilter === "awaiting" ? filterButtonActiveBg : filterButtonInactiveBg}
-          color={activeFilter === "awaiting" ? filterButtonActiveColor : filterButtonInactiveColor}
-          borderColor={activeFilter === "awaiting" ? filterButtonActiveBg : tableBorderColor}
-          _hover={{
-            bg: activeFilter === "awaiting" ? filterButtonActiveBg : filterButtonHoverBg
-          }}
-          onClick={() => setActiveFilter("awaiting")}
-        >
-          Awaiting Responses
-        </Button>
-      </HStack>
+      <SurveyFilterButtons
+        activeFilter={activeFilter}
+        setActiveFilter={setActiveFilter}
+        filterOptions={filterOptions}
+        filterButtonActiveBg={filterButtonActiveBg}
+        filterButtonActiveColor={filterButtonActiveColor}
+        filterButtonInactiveBg={filterButtonInactiveBg}
+        filterButtonInactiveColor={filterButtonInactiveColor}
+        filterButtonHoverBg={filterButtonHoverBg}
+        tableBorderColor={tableBorderColor}
+      />
 
       <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
         <Table.Root variant="outline" size="md">
