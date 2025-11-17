@@ -8,23 +8,27 @@ export function TimeZoneAwareDate({
   date: string;
   format?: "full" | "compact" | "dateOnly" | "timeOnly" | "Pp" | "MMM d, h:mm a" | "MMM d";
 }) {
-  // Always call the hook at the top level
-  let timeZone;
-  let hasTimeZoneProvider = true;
+  // Always call hook unconditionally at top level (Rules of Hooks)
+  const timeZoneContext = useTimeZone();
 
-  try {
-    const timeZoneContext = useTimeZone();
-    timeZone = timeZoneContext.timeZone;
-  } catch {
-    hasTimeZoneProvider = false;
-  }
+  // Use provider timezone if available, otherwise fall back to browser's timezone
+  const timeZone = timeZoneContext?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const d = new Date(date);
 
-  // If no provider, use fallback
-  if (!hasTimeZoneProvider) {
-    return <>{d.toLocaleString()}</>;
-  }
+  // Helper to safely extract timezone abbreviation
+  const getTimeZoneAbbr = () => {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timeZone,
+        timeZoneName: "short"
+      }).formatToParts(d);
+      return parts.find((part) => part.type === "timeZoneName")?.value || "";
+    } catch {
+      // Fallback to the original method if formatToParts fails
+      return d.toLocaleString("en-US", { timeZone: timeZone, timeZoneName: "short" }).split(", ")[1] || "";
+    }
+  };
 
   // Handle different format options
   switch (format) {
@@ -44,7 +48,6 @@ export function TimeZoneAwareDate({
           })}
         </>
       );
-
     case "dateOnly":
       // "Oct 5, 2025 (EDT)"
       return (
@@ -55,10 +58,9 @@ export function TimeZoneAwareDate({
             day: "numeric",
             year: "numeric"
           })}{" "}
-          ({d.toLocaleString("en-US", { timeZone: timeZone, timeZoneName: "short" }).split(", ")[1]})
+          ({getTimeZoneAbbr()})
         </>
       );
-
     case "timeOnly":
       // "8:21 PM EDT"
       return (
@@ -71,7 +73,6 @@ export function TimeZoneAwareDate({
           })}
         </>
       );
-
     case "Pp":
       // "10/05/2025, 8:21 PM"
       return (
@@ -87,7 +88,6 @@ export function TimeZoneAwareDate({
           })}
         </>
       );
-
     case "MMM d, h:mm a":
       // "Oct 5, 8:21 PM EDT"
       return (
@@ -102,7 +102,6 @@ export function TimeZoneAwareDate({
           })}
         </>
       );
-
     case "MMM d":
       // "Oct 5 (EDT)"
       return (
@@ -112,10 +111,9 @@ export function TimeZoneAwareDate({
             month: "short",
             day: "numeric"
           })}{" "}
-          ({d.toLocaleString("en-US", { timeZone: timeZone, timeZoneName: "short" }).split(", ")[1]})
+          ({getTimeZoneAbbr()})
         </>
       );
-
     default:
     case "full":
       // "Oct 5, 2025, 11:21 PM EDT"

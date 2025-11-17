@@ -73,7 +73,7 @@ export default async function StudentDashboard({
 
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-  console.log("helpRequests", helpRequests);
+
   return (
     <VStack spaceY={0} align="stretch" p={2}>
       {identities.data && !githubIdentity && <LinkAccount />}

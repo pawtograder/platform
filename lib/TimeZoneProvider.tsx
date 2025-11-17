@@ -50,7 +50,6 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
     if (isClient) {
       localStorage.setItem(COOKIE_NAME, newMode);
     }
-    setShowModal(false);
   };
 
   const dismissModal = () => {
