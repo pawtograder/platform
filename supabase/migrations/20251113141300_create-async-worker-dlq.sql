@@ -77,6 +77,10 @@ begin
 end;
 $$;
 
+-- Grant execute permission to service_role
+revoke all on function public.get_async_queue_sizes() from public;
+grant execute on function public.get_async_queue_sizes() to service_role;
+
 -- Create RPC function to get circuit breaker statuses
 create or replace function public.get_circuit_breaker_statuses()
 returns table (
@@ -106,32 +110,6 @@ end;
 $$;
 
 -- Grant execute permission to service_role
-revoke all on function public.get_async_queue_sizes() from public;
-grant execute on function public.get_async_queue_sizes() to service_role;
-
 revoke all on function public.get_circuit_breaker_statuses() from public;
 grant execute on function public.get_circuit_breaker_statuses() to service_role;
-
--- Create RPC function to get async queue sizes for metrics endpoint
-
-create or replace function public.get_async_queue_sizes()
-returns table (
-  async_queue_size bigint,
-  dlq_queue_size bigint
-)
-language plpgsql
-security definer
-set search_path = public, pgmq
-as $$
-begin
-  return query
-  select 
-    (select count(*)::bigint from pgmq.q_async_calls where vt <= now()) as async_queue_size,
-    (select count(*)::bigint from pgmq.q_async_calls_dlq where vt <= now()) as dlq_queue_size;
-end;
-$$;
-
--- Grant execute permission to service_role
-revoke all on function public.get_async_queue_sizes() from public;
-grant execute on function public.get_async_queue_sizes() to service_role;
 

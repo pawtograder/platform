@@ -32,7 +32,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
 
     // Generate Prometheus metrics format
-    const timestamp = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
+    const timestamp = Date.now(); // Unix timestamp in milliseconds
 
     function escapeLabel(value: string): string {
       // Escape special characters in Prometheus labels
