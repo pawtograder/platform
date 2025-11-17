@@ -505,15 +505,11 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
 
     while (true) {
       const to = from + pageSize - 1;
-      let query = supabase
+      const query = supabase
         .from("gradebook_column_students")
         .select("*")
-        .in("gradebook_column_id", uniqueGradebookColumnIds);
-
-      // If 20 or fewer students, filter by student_id for better performance
-      if (studentIds.length <= 20) {
-        query = query.in("student_id", studentIds);
-      }
+        .in("gradebook_column_id", uniqueGradebookColumnIds)
+        .in("student_id", studentIds);
 
       const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await query.range(from, to);
 
@@ -566,9 +562,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
-    console.log(
-      `Retrieved ${allGradebookColumnStudents.length} gradebook column students for ${students.size} students and ${gradebookColumnIds.size} gradebook columns`
-    );
     const ret = allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
@@ -950,7 +943,6 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     count: number
   ) => {
-    console.log("Drop_lowest called with value:", value);
     if (isDenseMatrix(value)) {
       value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
     }
