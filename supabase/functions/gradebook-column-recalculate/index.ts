@@ -54,8 +54,7 @@ async function processRowsAll(
   const rowKeyToMessages = new Map<string, QueueMessage<RowMessage>[]>();
 
   // Deduplicate by (gradebook_id, student_id, is_private)
-  // NOTE: When we de-duplicate, there seem to be some knock-on effects that cause incorrect calculations
-  // So, at the cost of repeated work we don't deduplicate anymore (to save the cost of more debugging!)
+  // Aggregate duplicate message IDs so all messages can be archived
   const keyFor = (m: RowMessage) => `${m.gradebook_id}:${m.student_id}:${m.is_private}`;
   const rows = new Map<string, { primary: QueueMessage<RowMessage>; duplicateMsgIds: number[] }>();
   for (const msg of queueMessages) {
@@ -73,13 +72,15 @@ async function processRowsAll(
     }
     rowKeyToMessages.get(fullRowKey)!.push(msg);
 
-    // const existing = rows.get(k);
-    // if (!existing) {
-    rows.set(k, { primary: msg, duplicateMsgIds: [] });
-    // } else {
-    // existing.duplicateMsgIds.push(msg.msg_id);
-    // console.log(`Found a duplicate message for ${k}`);
-    // }
+    // Aggregate duplicate message IDs - critical for archiving all messages
+    const existing = rows.get(k);
+    if (!existing) {
+      rows.set(k, { primary: msg, duplicateMsgIds: [] });
+    } else {
+      // Add this message's ID to the duplicate list so it gets archived
+      existing.duplicateMsgIds.push(msg.msg_id);
+      console.log(`[DEBUG] ${workerId} Found duplicate message for ${k}: msg_id ${msg.msg_id} added to duplicates (total duplicates: ${existing.duplicateMsgIds.length})`);
+    }
   }
 
   // Log duplicate row keys detected

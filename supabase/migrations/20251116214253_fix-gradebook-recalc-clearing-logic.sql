@@ -147,18 +147,28 @@ BEGIN
     )
   ),
   -- Step 7: Clear recalc state for all version-matched rows (both with updates and without)
+  -- ORDER BY key columns to ensure deterministic lock acquisition order and prevent deadlocks
   cleared_rows AS (
     UPDATE public.gradebook_row_recalc_state
     SET 
       dirty = false,
       is_recalculating = false,
       updated_at = NOW()
-    FROM all_students_to_clear astc
-    WHERE gradebook_row_recalc_state.class_id = astc.class_id
-      AND gradebook_row_recalc_state.gradebook_id = astc.gradebook_id
-      AND gradebook_row_recalc_state.student_id = astc.student_id
-      AND gradebook_row_recalc_state.is_private = astc.is_private
-      AND gradebook_row_recalc_state.version = astc.expected_version
+    FROM (
+      SELECT 
+        astc.class_id,
+        astc.gradebook_id,
+        astc.student_id,
+        astc.is_private,
+        astc.expected_version
+      FROM all_students_to_clear astc
+      ORDER BY astc.class_id, astc.gradebook_id, astc.student_id, astc.is_private
+    ) ordered_astc
+    WHERE gradebook_row_recalc_state.class_id = ordered_astc.class_id
+      AND gradebook_row_recalc_state.gradebook_id = ordered_astc.gradebook_id
+      AND gradebook_row_recalc_state.student_id = ordered_astc.student_id
+      AND gradebook_row_recalc_state.is_private = ordered_astc.is_private
+      AND gradebook_row_recalc_state.version = ordered_astc.expected_version
     RETURNING 
       gradebook_row_recalc_state.class_id,
       gradebook_row_recalc_state.gradebook_id,
