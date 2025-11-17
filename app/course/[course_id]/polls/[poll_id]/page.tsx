@@ -130,6 +130,17 @@ export default function PollTakingPage() {
           description: "Your poll response has been recorded.",
           type: "success"
         });
+
+        // Check if multiple responses are allowed
+        const pollQuestion = poll.question as any;
+        const allowMultipleResponses = pollQuestion?.allowMultipleResponses === true; // Default to false (one-time only)
+
+        // If only one response is allowed, redirect after a short delay
+        if (!allowMultipleResponses) {
+          setTimeout(() => {
+            router.push(`/course/${course_id}/polls`);
+          }, 1500);
+        }
       } catch (error) {
         console.error("Error submitting poll response:", error);
         toaster.create({
@@ -141,7 +152,7 @@ export default function PollTakingPage() {
         setIsSubmitting(false);
       }
     },
-    [poll, public_profile_id]
+    [poll, public_profile_id, router, course_id]
   );
 
   if (isLoading) {
@@ -157,7 +168,7 @@ export default function PollTakingPage() {
   }
 
   // Convert poll question to SurveyJS format
-  const pollQuestion = poll.question as any;
+  const pollQuestionData = poll.question as any;
   const surveyConfig: any = {
     pages: [
       {
@@ -167,43 +178,47 @@ export default function PollTakingPage() {
     ],
   };
 
-  if (pollQuestion?.type === "multiple-choice" || pollQuestion?.type === "single-choice") {
-    const element: any = {
-      type: pollQuestion.type === "multiple-choice" ? "checkbox" : "radiogroup",
+  if (pollQuestionData?.type === "multiple-choice" || pollQuestionData?.type === "single-choice") {
+    surveyConfig.pages[0].elements.push({
+      type: pollQuestionData.type === "multiple-choice" ? "checkbox" : "radiogroup",
       name: "poll_question",
-      title: pollQuestion.prompt,
-      choices: pollQuestion.choices?.map((c: any) => c.label) || [],
+      title: pollQuestionData.prompt,
+      choices: pollQuestionData.choices?.map((c: any) => c.label) || [],
       isRequired: true,
-    };
-    
-    // Add "other" option if allowed for multiple-choice
-    if (pollQuestion.type === "multiple-choice" && pollQuestion.allowOther) {
-      element.hasOther = true;
-      element.otherText = "Other (please specify)";
-    }
-    
-    surveyConfig.pages[0].elements.push(element);
-  } else if (pollQuestion?.type === "rating") {
+    });
+  } else if (pollQuestionData?.type === "open-ended") {
+    surveyConfig.pages[0].elements.push({
+      type: "comment",
+      name: "poll_question",
+      title: pollQuestionData.prompt,
+      isRequired: true,
+    });
+  } else if (pollQuestionData?.type === "rating") {
     surveyConfig.pages[0].elements.push({
       type: "rating",
       name: "poll_question",
-      title: pollQuestion.prompt,
-      rateMin: pollQuestion.min || 1,
-      rateMax: pollQuestion.max || 5,
-      minRateDescription: pollQuestion.minLabel || "",
-      maxRateDescription: pollQuestion.maxLabel || "",
+      title: pollQuestionData.prompt,
+      rateMin: pollQuestionData.min || 1,
+      rateMax: pollQuestionData.max || 5,
+      minRateDescription: pollQuestionData.minLabel || "",
+      maxRateDescription: pollQuestionData.maxLabel || "",
       isRequired: true,
     });
-  } else if (pollQuestion?.type === "text") {
+  } else if (pollQuestionData?.type === "text") {
     surveyConfig.pages[0].elements.push({
       type: "text",
       name: "poll_question",
-      title: pollQuestion.prompt,
+      title: pollQuestionData.prompt,
       isRequired: true,
     });
   }
 
-  const isReadOnly = !!existingResponse?.is_submitted || !poll.is_live;
+  // Check if multiple responses are allowed
+  const pollQuestion = poll.question as any;
+  const allowMultipleResponses = pollQuestion?.allowMultipleResponses === true;
+  
+  // If only one response is allowed and student has already submitted, make it read-only
+  const isReadOnly = (!allowMultipleResponses && !!existingResponse?.is_submitted) || !poll.is_live;
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
@@ -234,10 +249,17 @@ export default function PollTakingPage() {
             </Box>
           )}
 
-          {existingResponse?.is_submitted && (
+          {existingResponse?.is_submitted && !allowMultipleResponses && (
             <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="md" p={3}>
               <Text color={textColor} fontSize="sm" fontWeight="medium">
-                You have already submitted a response to this poll.
+                You have already submitted a response to this poll. You cannot submit again.
+              </Text>
+            </Box>
+          )}
+          {existingResponse?.is_submitted && allowMultipleResponses && (
+            <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="md" p={3}>
+              <Text color={textColor} fontSize="sm" fontWeight="medium">
+                You have already submitted a response. You can update your response below.
               </Text>
             </Box>
           )}

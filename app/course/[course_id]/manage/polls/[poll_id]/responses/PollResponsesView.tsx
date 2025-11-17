@@ -81,7 +81,7 @@ export default function PollResponsesView({
         return String(answer || "—");
       } else if (questionData?.type === "rating") {
         return String(response.poll_question || "—");
-      } else if (questionData?.type === "text") {
+      } else if (questionData?.type === "text" || questionData?.type === "open-ended") {
         return String(response.poll_question || "—");
       }
       return JSON.stringify(response);

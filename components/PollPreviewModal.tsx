@@ -61,6 +61,13 @@ export function PollPreviewModal({ isOpen, onClose, pollJson, pollTitle }: PollP
           choices: pollData.choices?.map((c: any) => c.label) || [],
           isRequired: true,
         });
+      } else if (pollData.type === "open-ended") {
+        surveyConfig.pages[0].elements.push({
+          type: "comment",
+          name: "poll_question",
+          title: pollData.prompt,
+          isRequired: true,
+        });
       } else if (pollData.type === "rating") {
         surveyConfig.pages[0].elements.push({
           type: "rating",

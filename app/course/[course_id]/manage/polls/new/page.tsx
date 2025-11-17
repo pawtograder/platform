@@ -11,7 +11,7 @@ import {
   Heading,
   Checkbox
 } from "@chakra-ui/react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
@@ -26,6 +26,7 @@ import { PollPreviewModal } from "@/components/PollPreviewModal";
 type PollFormValues = {
   title: string;
   question: string;
+  allowMultipleResponses: boolean;
 };
 
 const samplePollTemplate = `{
@@ -49,6 +50,7 @@ export default function NewPollPage() {
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors },
     getValues,
     setValue,
@@ -56,7 +58,8 @@ export default function NewPollPage() {
   } = useForm<PollFormValues>({
     defaultValues: {
       title: "",
-      question: samplePollTemplate
+      question: samplePollTemplate,
+      allowMultipleResponses: false
     }
   });
 
@@ -160,6 +163,8 @@ export default function NewPollPage() {
       let parsedQuestion: Record<string, unknown>;
       try {
         parsedQuestion = JSON.parse(values.question);
+        // Add allowMultipleResponses to the question JSON
+        parsedQuestion.allowMultipleResponses = values.allowMultipleResponses;
       } catch (error) {
         toaster.create({
           title: "Invalid JSON",
@@ -368,6 +373,31 @@ export default function NewPollPage() {
                     </Button>
                   </HStack>
                 </Field>
+              </Box>
+
+              {/* Allow Multiple Responses */}
+              <Box>
+                <Controller
+                  name="allowMultipleResponses"
+                  control={control}
+                  render={({ field }) => (
+                    <Checkbox.Root
+                      checked={field.value}
+                      onCheckedChange={(details) => field.onChange(details.checked === true)}
+                    >
+                      <Checkbox.HiddenInput />
+                      <Checkbox.Control />
+                      <Checkbox.Label>
+                        <Text fontSize="sm" color={textColor}>
+                          Allow students to answer multiple times
+                        </Text>
+                      </Checkbox.Label>
+                    </Checkbox.Root>
+                  )}
+                />
+                <Text fontSize="xs" color={buttonTextColor} mt={1} ml={6}>
+                  If unchecked, students can only submit one response. After submitting, they will be redirected.
+                </Text>
               </Box>
 
               <HStack gap={4} justify="flex-start" pt={4}>

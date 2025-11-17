@@ -121,8 +121,8 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
       }));
     }
 
-    // Text responses - show count but no chart (too many unique values)
-    if (questionData?.type === "text") {
+    // Text and open-ended responses - show count but no chart (too many unique values)
+    if (questionData?.type === "text" || questionData?.type === "open-ended") {
       return [];
     }
 
@@ -131,8 +131,8 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
 
   const questionData = pollQuestion as any;
 
-  // Don't show chart for text questions (too many unique responses)
-  if (questionData?.type === "text") {
+  // Don't show chart for text or open-ended questions (too many unique responses)
+  if (questionData?.type === "text" || questionData?.type === "open-ended") {
     return null;
   }
 

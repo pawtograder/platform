@@ -15,13 +15,13 @@ import {
   Portal,
   Checkbox,
 } from "@chakra-ui/react";
+import { useColorModeValue } from "@/components/ui/color-mode";
 import { LuTrash2, LuPlus } from "react-icons/lu";
 
 type PollQuestionJSON = {
   prompt: string;
-  type: "multiple-choice" | "single-choice" | "rating" | "text";
+  type: "multiple-choice" | "single-choice" | "rating" | "text" | "open-ended";
   choices?: Array<{ id: string; label: string }>;
-  allowOther?: boolean;
   min?: number;
   max?: number;
   minLabel?: string;
@@ -39,6 +39,7 @@ const pollTypeCollection = createListCollection({
     { label: "Single Choice", value: "single-choice" },
     { label: "Rating", value: "rating" },
     { label: "Text", value: "text" },
+    { label: "Open Ended", value: "open-ended" },
   ],
 });
 
@@ -48,6 +49,8 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
     type: "multiple-choice",
     choices: [{ id: "choice1", label: "" }],
   });
+
+  const jsonTextColor = useColorModeValue("#1A202C", "#FFFFFF");
 
   // Parse initial value
   useEffect(() => {
@@ -81,14 +84,18 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         if (!updated.choices || updated.choices.length === 0) {
           updated.choices = [{ id: "choice1", label: "" }];
         }
-        // Only allow "other" for multiple-choice
-        if (newType === "single-choice") {
-          delete updated.allowOther;
-        }
       } else {
         // Remove choices for non-choice types
         delete updated.choices;
-        delete updated.allowOther;
+      }
+      
+      // Open-ended doesn't need any special fields
+      if (newType === "open-ended") {
+        delete updated.choices;
+        delete updated.min;
+        delete updated.max;
+        delete updated.minLabel;
+        delete updated.maxLabel;
       }
 
       // Add min/max for rating type
@@ -185,7 +192,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
           </Select.Control>
           <Portal>
             <Select.Positioner>
-              <Select.Content>
+              <Select.Content style={{ zIndex: 9999 }}>
                 {pollTypeCollection.items.map((item) => (
                   <Select.Item key={item.value} item={item}>
                     {item.label}
@@ -232,25 +239,6 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
               </HStack>
             ))}
           </VStack>
-          {/* Allow "Other" option for multiple-choice */}
-          {pollData.type === "multiple-choice" && (
-            <Box mt={3}>
-              <Checkbox.Root
-                checked={pollData.allowOther || false}
-                onCheckedChange={(e) => {
-                  setPollData((prev) => ({
-                    ...prev,
-                    allowOther: e.checked === true
-                  }));
-                }}
-              >
-                <Checkbox.Control />
-                <Checkbox.Label>
-                  <Text fontSize="sm">Allow open-ended "Other" option</Text>
-                </Checkbox.Label>
-              </Checkbox.Root>
-            </Box>
-          )}
         </Box>
       )}
 
@@ -313,6 +301,15 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         </Box>
       )}
 
+      {/* Open-ended type */}
+      {pollData.type === "open-ended" && (
+        <Box>
+          <Text fontSize="sm" color="gray.500">
+            Open-ended questions allow students to provide detailed text responses.
+          </Text>
+        </Box>
+      )}
+
       <Separator />
 
       {/* JSON Preview */}
@@ -333,7 +330,9 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
           borderColor="gray.200"
           _dark={{ borderColor: "gray.700" }}
         >
-          <pre style={{ margin: 0, color: "inherit" }}>{JSON.stringify(pollData, null, 2)}</pre>
+          <pre style={{ margin: 0, color: jsonTextColor }}>
+            {JSON.stringify(pollData, null, 2)}
+          </pre>
         </Box>
       </Box>
     </VStack>
