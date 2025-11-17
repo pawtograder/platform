@@ -897,6 +897,23 @@ export async function addDependencySourceFunctions({
       value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
     }
     if (Array.isArray(value)) {
+      // Log input to help diagnose issues
+      console.log(
+        `Mean called with ${value.length} values (weighted=${weighted}):`,
+        JSON.stringify(
+          value.map((v) => ({
+            score: isGradebookColumnStudent(v) ? v.score : "N/A",
+            max_score: isGradebookColumnStudent(v) ? v.max_score : "N/A",
+            column_slug: isGradebookColumnStudent(v)
+              ? (v as unknown as { column_slug?: string })?.column_slug
+              : "N/A",
+            released: isGradebookColumnStudent(v) ? v.released : "N/A",
+            is_private: isGradebookColumnStudent(v) ? v.is_private : "N/A",
+            is_missing: isGradebookColumnStudent(v) ? v.is_missing : "N/A"
+          }))
+        )
+      );
+
       const valuesToAverage = value.map((v) => {
         if (isGradebookColumnStudent(v)) {
           if (!v.released && !v.is_private) {
@@ -917,18 +934,82 @@ export async function addDependencySourceFunctions({
         );
       });
       const validValues = valuesToAverage.filter(
-        (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
+        (v) =>
+          v !== undefined &&
+          v.score !== undefined &&
+          v.max_score !== undefined &&
+          v.max_score !== null &&
+          v.max_score > 0 &&
+          v.score !== null
       );
+
+      // Check for scores exceeding max_score (data integrity issue)
+      const scoresExceedingMax = validValues.filter((v) => {
+        if (!v || v.score === undefined || v.max_score === undefined) return false;
+        return v.score > v.max_score;
+      });
+      if (scoresExceedingMax.length > 0) {
+        console.warn(
+          `Mean calculation: Found ${scoresExceedingMax.length} values where score > max_score: ${JSON.stringify(
+            scoresExceedingMax.map((v) => {
+              if (!v || v.score === undefined || v.max_score === undefined) return {};
+              return {
+                score: v.score,
+                max_score: v.max_score,
+                column_slug: (v as unknown as { column_slug?: string })?.column_slug,
+                ratio: v.score / v.max_score
+              };
+            })
+          )}`
+        );
+      }
+
       if (validValues.length === 0) {
+        console.warn(
+          `Mean calculation: No valid values after filtering. Input values: ${JSON.stringify(
+            valuesToAverage.map((v) => ({
+              score: v?.score,
+              max_score: v?.max_score,
+              column_slug: (v as unknown as { column_slug?: string })?.column_slug
+            }))
+          )}`
+        );
         return undefined;
       }
       if (weighted) {
         const totalPoints = validValues.reduce((a, b) => a + (b?.max_score ?? 0), 0);
         const totalScore = validValues.reduce((a, b) => a + (b?.score ?? 0), 0);
         if (totalPoints === 0) {
+          console.warn(
+            `Mean calculation: totalPoints is 0 after filtering. Input values: ${JSON.stringify(
+              valuesToAverage.map((v) => ({
+                score: v?.score,
+                max_score: v?.max_score,
+                column_slug: (v as unknown as { column_slug?: string })?.column_slug
+              }))
+            )}`
+          );
           return undefined;
         }
         const ret = (100 * totalScore) / totalPoints;
+        // Log if result exceeds 100% to help diagnose issues
+        if (ret > 100) {
+          console.warn(
+            `Mean calculation resulted in score > 100%: ${ret}%. Values: ${JSON.stringify(
+              validValues.map((v) => {
+                if (!v || v.score === undefined || v.max_score === undefined) return {};
+                return {
+                  score: v.score,
+                  max_score: v.max_score,
+                  column_slug: (v as unknown as { column_slug?: string })?.column_slug,
+                  contribution_to_score: v.score,
+                  contribution_to_points: v.max_score,
+                  ratio: v.score / v.max_score
+                };
+              })
+            )}, totalScore: ${totalScore}, totalPoints: ${totalPoints}, calculation: (100 * ${totalScore}) / ${totalPoints}`
+          );
+        }
         return ret;
       } else {
         const ret =
@@ -947,6 +1028,15 @@ export async function addDependencySourceFunctions({
       value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
     }
     if (Array.isArray(value)) {
+      // Log input values to help diagnose issues
+      const inputSummary = value.map((v) => ({
+        score: v.score,
+        max_score: v.max_score,
+        column_slug: (v as unknown as { column_slug?: string })?.column_slug,
+        is_droppable: v.is_droppable
+      }));
+      console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
+
       const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
       const ret: GradebookColumnStudentWithMaxScore[] = [];
       let numDropped = 0;
@@ -957,6 +1047,29 @@ export async function addDependencySourceFunctions({
         }
         ret.push(v);
       }
+
+      // Log output values
+      const outputSummary = ret.map((v) => ({
+        score: v.score,
+        max_score: v.max_score,
+        column_slug: (v as unknown as { column_slug?: string })?.column_slug
+      }));
+      console.log(`Drop_lowest returning ${ret.length} values after dropping ${numDropped}:`, JSON.stringify(outputSummary));
+
+      // Warn if any returned values have invalid max_score
+      const invalidMaxScore = ret.filter((v) => !v.max_score || v.max_score <= 0);
+      if (invalidMaxScore.length > 0) {
+        console.warn(
+          `Drop_lowest: ${invalidMaxScore.length} returned values have invalid max_score: ${JSON.stringify(
+            invalidMaxScore.map((v) => ({
+              score: v.score,
+              max_score: v.max_score,
+              column_slug: (v as unknown as { column_slug?: string })?.column_slug
+            }))
+          )}`
+        );
+      }
+
       return ret;
     }
     throw new Error("Drop_lowest called with non-matrix value");
