@@ -99,11 +99,7 @@
         {
           "type": "checkbox",
           "name": "question3",
-          "choices": [
-            "Item 1",
-            "Item 2",
-            "Item 3"
-          ]
+          "choices": ["Item 1", "Item 2", "Item 3"]
         },
         {
           "type": "boolean",

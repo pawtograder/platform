@@ -4,8 +4,8 @@ export type ResponseData = Record<string, any>;
 
 export type SurveyResponse = {
   id: string;
-  survey_id: string;         
-  profile_id: string;       
+  survey_id: string;
+  profile_id: string;
   response: ResponseData;
   is_submitted: boolean;
   submitted_at?: string;

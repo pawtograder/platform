@@ -199,8 +199,7 @@ export default function StudentSurveysPage() {
       case "not_started":
         // Show surveys that are not started or in progress (still available to take)
         return surveys.filter(
-          (survey) =>
-            survey.response_status === "not_started" || survey.response_status === "in_progress"
+          (survey) => survey.response_status === "not_started" || survey.response_status === "in_progress"
         );
       case "completed":
         // Show completed surveys
@@ -276,14 +275,7 @@ export default function StudentSurveysPage() {
         {/* Surveys List */}
         <VStack align="stretch" gap={4}>
           {filteredSurveys.length === 0 ? (
-            <Box
-              w="100%"
-              bg={cardBgColor}
-              border="1px solid"
-              borderColor={borderColor}
-              borderRadius="lg"
-              p={8}
-            >
+            <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
               <VStack align="center" gap={2}>
                 <Text color={textColor} fontSize="md" fontWeight="medium">
                   No surveys match the selected filter.
@@ -295,65 +287,65 @@ export default function StudentSurveysPage() {
             </Box>
           ) : (
             filteredSurveys.map((survey) => (
-            <Box
-              key={survey.id}
-              w="100%"
-              bg={cardBgColor}
-              border="1px solid"
-              borderColor={borderColor}
-              borderRadius="lg"
-              p={6}
-            >
-              <VStack align="stretch" gap={4}>
-                <HStack justify="space-between" align="start">
-                  <VStack align="start" gap={2} flex={1}>
-                    <Heading size="md" color={textColor}>
-                      {survey.title}
-                    </Heading>
-                    {survey.description && (
-                      <Text color={textColor} fontSize="sm" opacity={0.8}>
-                        {survey.description}
-                      </Text>
-                    )}
-                  </VStack>
-                </HStack>
-
-                <HStack justify="space-between" align="center">
-                  <HStack gap={4} align="center">
-                    {getStatusBadge(survey)}
-                    <VStack align="start" gap={1}>
-                      {survey.due_date && (
-                        <Text color={textColor} fontSize="sm" fontWeight="medium">
-                          Due: {formatDueDate(survey.due_date)}
-                        </Text>
-                      )}
-                      {survey.submitted_at && (
-                        <Text color={textColor} fontSize="sm" opacity={0.7}>
-                          Submitted: {formatDueDate(survey.submitted_at)}
+              <Box
+                key={survey.id}
+                w="100%"
+                bg={cardBgColor}
+                border="1px solid"
+                borderColor={borderColor}
+                borderRadius="lg"
+                p={6}
+              >
+                <VStack align="stretch" gap={4}>
+                  <HStack justify="space-between" align="start">
+                    <VStack align="start" gap={2} flex={1}>
+                      <Heading size="md" color={textColor}>
+                        {survey.title}
+                      </Heading>
+                      {survey.description && (
+                        <Text color={textColor} fontSize="sm" opacity={0.8}>
+                          {survey.description}
                         </Text>
                       )}
                     </VStack>
                   </HStack>
 
-                  <Link href={`/course/${course_id}/surveys/${survey.id}`}>
-                    <Button
-                      size="sm"
-                      bg={survey.response_status === "completed" ? "#6B7280" : "#22C55E"}
-                      color="white"
-                      _hover={{
-                        bg: survey.response_status === "completed" ? "#4B5563" : "#16A34A"
-                      }}
-                    >
-                      {survey.response_status === "completed"
-                        ? "View Submission"
-                        : survey.response_status === "in_progress"
-                          ? "Continue Survey"
-                          : "Start Survey"}
-                    </Button>
-                  </Link>
-                </HStack>
-              </VStack>
-            </Box>
+                  <HStack justify="space-between" align="center">
+                    <HStack gap={4} align="center">
+                      {getStatusBadge(survey)}
+                      <VStack align="start" gap={1}>
+                        {survey.due_date && (
+                          <Text color={textColor} fontSize="sm" fontWeight="medium">
+                            Due: {formatDueDate(survey.due_date)}
+                          </Text>
+                        )}
+                        {survey.submitted_at && (
+                          <Text color={textColor} fontSize="sm" opacity={0.7}>
+                            Submitted: {formatDueDate(survey.submitted_at)}
+                          </Text>
+                        )}
+                      </VStack>
+                    </HStack>
+
+                    <Link href={`/course/${course_id}/surveys/${survey.id}`}>
+                      <Button
+                        size="sm"
+                        bg={survey.response_status === "completed" ? "#6B7280" : "#22C55E"}
+                        color="white"
+                        _hover={{
+                          bg: survey.response_status === "completed" ? "#4B5563" : "#16A34A"
+                        }}
+                      >
+                        {survey.response_status === "completed"
+                          ? "View Submission"
+                          : survey.response_status === "in_progress"
+                            ? "Continue Survey"
+                            : "Start Survey"}
+                      </Button>
+                    </Link>
+                  </HStack>
+                </VStack>
+              </Box>
             ))
           )}
         </VStack>

@@ -76,12 +76,13 @@ export default function NewSurveyPage() {
           if (data && !error) {
             // Cast data to expected type
             const templateData = data as any;
-            
+
             // Load the template JSON into the form
-            const templateJson = typeof templateData.template === "string" ? templateData.template : JSON.stringify(templateData.template);
-            
+            const templateJson =
+              typeof templateData.template === "string" ? templateData.template : JSON.stringify(templateData.template);
+
             setValue("json", templateJson, { shouldDirty: true });
-            
+
             // Optionally set title and description from template
             if (templateData.title) {
               setValue("title", `${templateData.title} (Copy)`, { shouldDirty: true });
@@ -411,7 +412,7 @@ export default function NewSurveyPage() {
       if (values.status === "published" && values.due_date) {
         const dueDate = new Date(values.due_date as string);
         const now = new Date();
-        
+
         if (dueDate < now) {
           toaster.create({
             title: "Cannot Publish Survey",

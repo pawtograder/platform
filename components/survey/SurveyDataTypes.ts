@@ -9,36 +9,24 @@ export interface BuilderSurvey {
 }
 
 export interface BuilderPage {
-  id: string;         
-  name: string;         
+  id: string;
+  name: string;
   elements: BuilderElement[];
 }
 
-export type BuilderElement = 
-| TextElement
-| CommentElement
-| RadioGroupElement
-| ChoiceMultiElement
-| BooleanElement
+export type BuilderElement = TextElement | CommentElement | RadioGroupElement | ChoiceMultiElement | BooleanElement;
 
-
-export type ElementType =
-  | "text"
-  | "comment"
-  | "checkbox"
-  | "radiogroup"
-  | "boolean";
-
+export type ElementType = "text" | "comment" | "checkbox" | "radiogroup" | "boolean";
 
 export type Choice = {
-  value: string;    
-  text?: string;   
+  value: string;
+  text?: string;
 };
 
 export interface ElementBase {
-  id: string;               
+  id: string;
   type: ElementType;
-  name: string;              
+  name: string;
   title?: string;
   description?: string;
   isRequired?: boolean;
@@ -53,12 +41,12 @@ export type TextElement = ElementBase & {
 
 export type CommentElement = ElementBase & {
   type: "comment";
-}
+};
 
 export type RadioGroupElement = ElementBase & {
   type: "radiogroup";
   choices: Choice[];
-}
+};
 
 export type ChoiceMultiElement = ElementBase & {
   type: "checkbox";
@@ -69,4 +57,4 @@ export type BooleanElement = ElementBase & {
   type: "boolean";
   labelTrue?: string;
   labelFalse?: string;
-}
+};

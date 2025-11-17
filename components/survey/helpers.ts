@@ -1,9 +1,4 @@
-import type {
-  BuilderSurvey,
-  BuilderPage,
-  BuilderElement,
-  ElementType,
-} from "./SurveyDataTypes";
+import type { BuilderSurvey, BuilderPage, BuilderElement, ElementType } from "./SurveyDataTypes";
 import { makePage, makeElement } from "./factories";
 
 /**helpers */
@@ -16,70 +11,45 @@ function arrayMove<T>(arr: T[], from: number, to: number): T[] {
   return copy;
 }
 
-const clamp = (n: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, n));
+const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
-const findPageIdx = (pages: BuilderPage[], pageId: string) =>
-  pages.findIndex((p) => p.id === pageId);
+const findPageIdx = (pages: BuilderPage[], pageId: string) => pages.findIndex((p) => p.id === pageId);
 
-const findElIdx = (page: BuilderPage, elId: string) =>
-  page.elements.findIndex((e) => e.id === elId);
+const findElIdx = (page: BuilderPage, elId: string) => page.elements.findIndex((e) => e.id === elId);
 
 /**
  * survey funcs for page
  */
 
-export function addPage(
-  survey: BuilderSurvey,
-  name?: string,
-  withDefault: boolean = false
-): BuilderSurvey {
+export function addPage(survey: BuilderSurvey, name?: string, withDefault: boolean = false): BuilderSurvey {
   const newPage = makePage(name, withDefault);
   return { ...survey, pages: [...survey.pages, newPage] };
 }
 
-export function renamePage(
-  survey: BuilderSurvey,
-  pageId: string,
-  name: string
-): BuilderSurvey {
+export function renamePage(survey: BuilderSurvey, pageId: string, name: string): BuilderSurvey {
   return {
     ...survey,
-    pages: survey.pages.map((p) =>
-      p.id === pageId ? { ...p, name:name } : p
-    ),
+    pages: survey.pages.map((p) => (p.id === pageId ? { ...p, name: name } : p))
   };
 }
 
-
-export function removePage(
-  survey: BuilderSurvey,
-  pageId: string
-): BuilderSurvey {
+export function removePage(survey: BuilderSurvey, pageId: string): BuilderSurvey {
   const idx = findPageIdx(survey.pages, pageId);
-  if (idx < 0) return survey; 
+  if (idx < 0) return survey;
 
-  const nextPages = survey.pages
-    .slice(0, idx)
-    .concat(survey.pages.slice(idx + 1));
+  const nextPages = survey.pages.slice(0, idx).concat(survey.pages.slice(idx + 1));
 
-  return nextPages.length
-    ? { ...survey, pages: nextPages }
-    : { ...survey, pages: [makePage("page1", true)] };
+  return nextPages.length ? { ...survey, pages: nextPages } : { ...survey, pages: [makePage("page1", true)] };
 }
 
-export function movePage(
-  survey: BuilderSurvey,
-  pageId: string,
-  dir: -1 | 1
-): BuilderSurvey {
+export function movePage(survey: BuilderSurvey, pageId: string, dir: -1 | 1): BuilderSurvey {
   const idx = findPageIdx(survey.pages, pageId);
   if (idx < 0) return survey;
   const to = clamp(idx + dir, 0, survey.pages.length - 1);
-  if (to === idx) return survey; 
+  if (to === idx) return survey;
   return {
     ...survey,
-    pages: arrayMove(survey.pages, idx, to),
+    pages: arrayMove(survey.pages, idx, to)
   };
 }
 
@@ -96,10 +66,8 @@ export function addElementToPage(
   return {
     ...survey,
     pages: survey.pages.map((p) =>
-      p.id === pageId
-        ? { ...p, elements: [...p.elements, makeElement(type, nameHint)] }
-        : p
-    ),
+      p.id === pageId ? { ...p, elements: [...p.elements, makeElement(type, nameHint)] } : p
+    )
   };
 }
 
@@ -141,7 +109,6 @@ function normalizeElement(el: BuilderElement): BuilderElement {
   }
 }
 
-
 export function updateElement<K extends keyof BuilderElement>(
   survey: BuilderSurvey,
   pageId: string,
@@ -165,10 +132,10 @@ export function updateElement<K extends keyof BuilderElement>(
 
               // minor updates may still require guardrails (e.g., clearing choices from text)
               return normalizeElement(next);
-            }),
+            })
           }
         : p
-    ),
+    )
   };
 }
 
@@ -188,35 +155,21 @@ export function updateElementPatch(
               if (el.id !== elId) return el;
               const next = { ...el, ...patch } as BuilderElement;
               return normalizeElement(next);
-            }),
+            })
           }
         : p
-    ),
+    )
   };
 }
 
-
-export function removeElement(
-  survey: BuilderSurvey,
-  pageId: string,
-  elId: string
-): BuilderSurvey {
+export function removeElement(survey: BuilderSurvey, pageId: string, elId: string): BuilderSurvey {
   return {
     ...survey,
-    pages: survey.pages.map((p) =>
-      p.id === pageId
-        ? { ...p, elements: p.elements.filter((e) => e.id !== elId) }
-        : p
-    ),
+    pages: survey.pages.map((p) => (p.id === pageId ? { ...p, elements: p.elements.filter((e) => e.id !== elId) } : p))
   };
 }
 
-export function moveElement(
-  survey: BuilderSurvey,
-  pageId: string,
-  elId: string,
-  dir: -1 | 1
-): BuilderSurvey {
+export function moveElement(survey: BuilderSurvey, pageId: string, elId: string, dir: -1 | 1): BuilderSurvey {
   return {
     ...survey,
     pages: survey.pages.map((p) => {
@@ -226,7 +179,7 @@ export function moveElement(
       const to = clamp(from + dir, 0, p.elements.length - 1);
       if (to === from) return p;
       return { ...p, elements: arrayMove(p.elements, from, to) };
-    }),
+    })
   };
 }
 
@@ -251,9 +204,9 @@ export function addChoice(
           const n = next.length + 1;
           next.push(text ? { value: value ?? `Item ${n}`, text } : { value: value ?? `Item ${n}` });
           return { ...el, choices: next };
-        }),
+        })
       };
-    }),
+    })
   };
 }
 
@@ -279,9 +232,9 @@ export function moveChoice(
           if (to < 0 || to >= list.length) return el;
 
           return { ...el, choices: arrayMove(list, from, to) };
-        }),
+        })
       };
-    }),
+    })
   };
 }
 
@@ -307,18 +260,13 @@ export function setChoice(
           if (idx < 0 || idx >= next.length) return el;
           next[idx] = text ? { value, text } : { value };
           return { ...el, choices: next };
-        }),
+        })
       };
-    }),
+    })
   };
 }
 
-export function removeChoice(
-  survey: BuilderSurvey,
-  pageId: string,
-  elId: string,
-  idx: number
-): BuilderSurvey {
+export function removeChoice(survey: BuilderSurvey, pageId: string, elId: string, idx: number): BuilderSurvey {
   return {
     ...survey,
     pages: survey.pages.map((p) => {
@@ -331,9 +279,8 @@ export function removeChoice(
           const next = (el.choices ?? []).filter((_, i) => i !== idx);
           const safe = next.length ? next : [{ value: "Item 1" }];
           return { ...el, choices: safe };
-        }),
+        })
       };
-    }),
+    })
   };
 }
-

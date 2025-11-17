@@ -105,12 +105,12 @@ function escapeCSVValue(value: string): string {
   }
 
   const stringValue = String(value);
-  
+
   // if string value contains comma, quote, or newline, wrap in quotes and escape internal quotes
   if (stringValue.includes(",") || stringValue.includes('"') || stringValue.includes("\n")) {
     return `"${stringValue.replace(/"/g, '""')}"`;
   }
-  
+
   return stringValue;
 }
 
@@ -131,7 +131,7 @@ export default function SurveyResponsesView({
   totalStudents
 }: SurveyResponsesViewProps) {
   const router = useRouter();
-  
+
   // Filter state
   const [dateRangeStart, setDateRangeStart] = useState<string>("");
   const [dateRangeEnd, setDateRangeEnd] = useState<string>("");
@@ -139,7 +139,7 @@ export default function SurveyResponsesView({
   const [showFilters, setShowFilters] = useState(false);
   const [anonymousMode, setAnonymousMode] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
-  
+
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
@@ -242,7 +242,7 @@ export default function SurveyResponsesView({
   let isLessThan24Hours = false;
   if (surveyDueDate) {
     const dueDate = new Date(surveyDueDate);
-    
+
     if (isPast(dueDate)) {
       timeRemaining = "Closed";
       isOverdue = true;
@@ -250,16 +250,16 @@ export default function SurveyResponsesView({
       const totalHoursLeft = differenceInHours(dueDate, currentTime);
       const daysLeft = differenceInDays(dueDate, currentTime);
       const hoursLeft = totalHoursLeft % 24;
-      
+
       if (totalHoursLeft < 24) {
         isLessThan24Hours = true;
       }
-      
+
       if (daysLeft > 0) {
-        timeRemaining = `${daysLeft} day${daysLeft !== 1 ? 's' : ''}${hoursLeft > 0 ? `, ${hoursLeft}h` : ''}`;
+        timeRemaining = `${daysLeft} day${daysLeft !== 1 ? "s" : ""}${hoursLeft > 0 ? `, ${hoursLeft}h` : ""}`;
       } else if (hoursLeft > 0) {
         const minutesLeft = Math.floor((dueDate.getTime() - currentTime.getTime()) / (1000 * 60)) % 60;
-        timeRemaining = `${hoursLeft}h${minutesLeft > 0 ? ` ${minutesLeft}m` : ''}`;
+        timeRemaining = `${hoursLeft}h${minutesLeft > 0 ? ` ${minutesLeft}m` : ""}`;
       } else {
         const minutesLeft = Math.floor((dueDate.getTime() - currentTime.getTime()) / (1000 * 60));
         timeRemaining = minutesLeft > 0 ? `${minutesLeft}m` : "Less than 1m";
@@ -297,7 +297,10 @@ export default function SurveyResponsesView({
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `survey-responses-${surveyTitle.replace(/[^a-z0-9]/gi, "_")}-${new Date().toISOString().split("T")[0]}.csv`);
+    link.setAttribute(
+      "download",
+      `survey-responses-${surveyTitle.replace(/[^a-z0-9]/gi, "_")}-${new Date().toISOString().split("T")[0]}.csv`
+    );
     link.style.visibility = "hidden";
     document.body.appendChild(link);
     link.click();
@@ -359,14 +362,7 @@ export default function SurveyResponsesView({
 
         {/* Filter Panel */}
         {showFilters && (
-          <Box
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={4}
-            mb={4}
-          >
+          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={4} mb={4}>
             <VStack align="stretch" gap={4}>
               <HStack justify="space-between">
                 <Text fontWeight="bold" color={textColor}>
@@ -536,15 +532,15 @@ export default function SurveyResponsesView({
           <Text fontSize="sm" color={headerTextColor} mb={1}>
             TIME REMAINING
           </Text>
-          <Text 
-            fontSize="2xl" 
-            fontWeight="bold" 
+          <Text
+            fontSize="2xl"
+            fontWeight="bold"
             color={
-              isOverdue 
-                ? useColorModeValue("#DC2626", "#EF4444") 
-                : isLessThan24Hours 
-                ? useColorModeValue("#D97706", "#F59E0B") 
-                : textColor
+              isOverdue
+                ? useColorModeValue("#DC2626", "#EF4444")
+                : isLessThan24Hours
+                  ? useColorModeValue("#D97706", "#F59E0B")
+                  : textColor
             }
           >
             {timeRemaining}
@@ -555,32 +551,32 @@ export default function SurveyResponsesView({
       {/* Responses Table */}
       <Box border="1px solid" borderColor={borderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
         <Table.Root variant="outline" size="md">
-        <Table.Header>
-          <Table.Row bg={headerBgColor}>
-            {!anonymousMode && (
-              <>
-                <Table.ColumnHeader
-                  color={headerTextColor}
-                  fontSize="xs"
-                  fontWeight="semibold"
-                  textTransform="uppercase"
-                  py={3}
-                  pl={6}
-                >
-                  STUDENT NAME
-                </Table.ColumnHeader>
-                <Table.ColumnHeader
-                  color={headerTextColor}
-                  fontSize="xs"
-                  fontWeight="semibold"
-                  textTransform="uppercase"
-                  py={3}
-                >
-                  SUBMITTED AT
-                </Table.ColumnHeader>
-              </>
-            )}
-            {visibleQuestions.map((questionName, index) => (
+          <Table.Header>
+            <Table.Row bg={headerBgColor}>
+              {!anonymousMode && (
+                <>
+                  <Table.ColumnHeader
+                    color={headerTextColor}
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    textTransform="uppercase"
+                    py={3}
+                    pl={6}
+                  >
+                    STUDENT NAME
+                  </Table.ColumnHeader>
+                  <Table.ColumnHeader
+                    color={headerTextColor}
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    textTransform="uppercase"
+                    py={3}
+                  >
+                    SUBMITTED AT
+                  </Table.ColumnHeader>
+                </>
+              )}
+              {visibleQuestions.map((questionName, index) => (
                 <Table.ColumnHeader
                   key={questionName}
                   color={headerTextColor}
@@ -617,7 +613,11 @@ export default function SurveyResponsesView({
                       </Table.Cell>
                       <Table.Cell py={4}>
                         <Text color={textColor}>
-                          {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")}
+                          {formatInTimeZone(
+                            new TZDate(response.submitted_at),
+                            "America/New_York",
+                            "MMM d, yyyy, h:mm a"
+                          )}
                         </Text>
                       </Table.Cell>
                     </>

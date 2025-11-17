@@ -25,10 +25,10 @@ export type Survey = {
  */
 function flattenResponseData(responseData: Record<string, any>, prefix = ""): Record<string, any> {
   const flattened: Record<string, any> = {};
-  
+
   for (const [key, value] of Object.entries(responseData)) {
     const newKey = prefix ? `${prefix}.${key}` : key;
-    
+
     if (Array.isArray(value)) {
       // Handle arrays (e.g., multi-select questions)
       flattened[newKey] = value.join(", ");
@@ -40,7 +40,7 @@ function flattenResponseData(responseData: Record<string, any>, prefix = ""): Re
       flattened[newKey] = value || "";
     }
   }
-  
+
   return flattened;
 }
 
@@ -49,12 +49,12 @@ function flattenResponseData(responseData: Record<string, any>, prefix = ""): Re
  */
 function getQuestionTitles(surveyJson: any): Record<string, string> {
   const titles: Record<string, string> = {};
-  
+
   try {
     const survey = new Model(surveyJson);
-    
+
     // Get all questions from the survey
-    survey.getAllQuestions().forEach(question => {
+    survey.getAllQuestions().forEach((question) => {
       if (question.name) {
         titles[question.name] = question.title || question.name;
       }
@@ -62,7 +62,7 @@ function getQuestionTitles(surveyJson: any): Record<string, string> {
   } catch (error) {
     console.warn("Error parsing survey JSON for question titles:", error);
   }
-  
+
   return titles;
 }
 
@@ -76,11 +76,11 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
 
   // Get question titles for headers
   const questionTitles = getQuestionTitles(survey.questions);
-  
+
   // Get all unique question names from all responses
   const allQuestionNames = new Set<string>();
-  responses.forEach(response => {
-    Object.keys(flattenResponseData(response.response)).forEach(key => {
+  responses.forEach((response) => {
+    Object.keys(flattenResponseData(response.response)).forEach((key) => {
       allQuestionNames.add(key);
     });
   });
@@ -88,15 +88,15 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
   // Create CSV headers
   const headers = [
     "Student Name",
-    "SIS User ID", 
+    "SIS User ID",
     "Status",
     "Submitted At",
     "Last Updated",
-    ...Array.from(allQuestionNames).map(name => questionTitles[name] || name)
+    ...Array.from(allQuestionNames).map((name) => questionTitles[name] || name)
   ];
 
   // Create CSV rows
-  const rows = responses.map(response => {
+  const rows = responses.map((response) => {
     const flattenedResponse = flattenResponseData(response.response);
     const studentName = response.profiles.name;
     const status = response.is_submitted ? "Completed" : "Partial";
@@ -109,7 +109,7 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
       status,
       submittedAt,
       lastUpdated,
-      ...Array.from(allQuestionNames).map(name => flattenedResponse[name] || "")
+      ...Array.from(allQuestionNames).map((name) => flattenedResponse[name] || "")
     ];
 
     return row;
@@ -118,15 +118,17 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
   // Convert to CSV format
   const csvContent = [
     headers.join(","),
-    ...rows.map(row => 
-      row.map(cell => {
-        // Escape commas and quotes in CSV
-        const cellStr = String(cell || "");
-        if (cellStr.includes(",") || cellStr.includes('"') || cellStr.includes("\n")) {
-          return `"${cellStr.replace(/"/g, '""')}"`;
-        }
-        return cellStr;
-      }).join(",")
+    ...rows.map((row) =>
+      row
+        .map((cell) => {
+          // Escape commas and quotes in CSV
+          const cellStr = String(cell || "");
+          if (cellStr.includes(",") || cellStr.includes('"') || cellStr.includes("\n")) {
+            return `"${cellStr.replace(/"/g, '""')}"`;
+          }
+          return cellStr;
+        })
+        .join(",")
     )
   ].join("\n");
 
@@ -139,7 +141,7 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
 export function downloadCSV(csvContent: string, filename: string) {
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
-  
+
   if (link.download !== undefined) {
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
@@ -167,11 +169,7 @@ export function exportResponsesToExcel(responses: SurveyResponse[], survey: Surv
 /**
  * Main export function that handles both CSV and Excel formats
  */
-export function exportSurveyResponses(
-  responses: SurveyResponse[], 
-  survey: Survey, 
-  format: "csv" | "excel" = "csv"
-) {
+export function exportSurveyResponses(responses: SurveyResponse[], survey: Survey, format: "csv" | "excel" = "csv") {
   if (responses.length === 0) {
     throw new Error("No responses to export");
   }

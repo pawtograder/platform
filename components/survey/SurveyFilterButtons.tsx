@@ -49,4 +49,3 @@ export default function SurveyFilterButtons<T extends string>({
     </HStack>
   );
 }
-

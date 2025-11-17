@@ -85,11 +85,7 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
             </div>
           ) : parsedJson ? (
             <div className="survey-preview-container">
-              <SurveyComponent
-                surveyJson={parsedJson}
-                isPopup={false}
-                readOnly={false}
-              />
+              <SurveyComponent surveyJson={parsedJson} isPopup={false} readOnly={false} />
             </div>
           ) : (
             <div className="text-center py-8">

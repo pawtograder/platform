@@ -1,10 +1,4 @@
-import type {
-  BuilderSurvey,
-  BuilderPage,
-  BuilderElement,
-  Choice,
-  SurveyMeta, 
-} from "./SurveyDataTypes";
+import type { BuilderSurvey, BuilderPage, BuilderElement, Choice, SurveyMeta } from "./SurveyDataTypes";
 import { makeEmptySurvey, makePage, makeElement, cloneChoice } from "./factories";
 
 function toChoiceObject(c: any): Choice {
@@ -24,7 +18,7 @@ export function toJSON(survey: BuilderSurvey): any {
   const meta = survey.meta ?? {};
   const pages = survey.pages.map((p) => ({
     name: p.name,
-    elements: p.elements.map(exportElement),
+    elements: p.elements.map(exportElement)
   }));
 
   const root: any = {};
@@ -54,7 +48,7 @@ function exportElement(el: BuilderElement): any {
         isRequired: el.isRequired,
         inputType: el.inputType ?? "text",
         validators: el.validators,
-        ...(el.config || {}),
+        ...(el.config || {})
       };
     case "comment":
       return {
@@ -64,7 +58,7 @@ function exportElement(el: BuilderElement): any {
         description: el.description,
         isRequired: el.isRequired,
         validators: el.validators,
-        ...(el.config || {}),
+        ...(el.config || {})
       };
     case "radiogroup":
       return {
@@ -75,7 +69,7 @@ function exportElement(el: BuilderElement): any {
         isRequired: el.isRequired,
         validators: el.validators,
         choices: (el.choices ?? []).map(fromChoiceObject),
-        ...(el.config || {}),
+        ...(el.config || {})
       };
     case "checkbox":
       return {
@@ -86,7 +80,7 @@ function exportElement(el: BuilderElement): any {
         isRequired: el.isRequired,
         validators: el.validators,
         choices: (el.choices ?? []).map(fromChoiceObject),
-        ...(el.config || {}),
+        ...(el.config || {})
       };
     case "boolean":
       return {
@@ -98,9 +92,9 @@ function exportElement(el: BuilderElement): any {
         validators: el.validators,
         labelTrue: el.labelTrue,
         labelFalse: el.labelFalse,
-        ...(el.config || {}),
+        ...(el.config || {})
       };
-      // unreachable
+    // unreachable
     default:
       return { type: (el as any).type, name: (el as any).name, ...(el as any) };
   }
@@ -110,25 +104,25 @@ export function fromJSON(input: any): BuilderSurvey {
   const root = input ?? {};
   const meta: SurveyMeta = {
     title: isNonEmptyString(root.title) ? root.title : undefined,
-    config: pickRootConfig(root),
+    config: pickRootConfig(root)
   };
 
-const builderPages: BuilderPage[] = safeArray(root.pages).map((p: any, idx: number) => {
+  const builderPages: BuilderPage[] = safeArray(root.pages).map((p: any, idx: number) => {
     const pageName = isNonEmptyString(p?.name) ? p.name : `page${idx + 1}`;
     const page: BuilderPage = {
-      ...(makePage(pageName)),
+      ...makePage(pageName),
       name: pageName,
-      elements: safeArray(p?.elements).map(importElement),
+      elements: safeArray(p?.elements).map(importElement)
     };
     return page;
   });
 
-const pages = builderPages.length > 0 ? builderPages : [makePage()];
+  const pages = builderPages.length > 0 ? builderPages : [makePage()];
 
-const survey: BuilderSurvey = {
-    ...(makeEmptySurvey()),
+  const survey: BuilderSurvey = {
+    ...makeEmptySurvey(),
     meta,
-    pages,
+    pages
   };
 
   return normalizeForEditor(survey);
@@ -140,9 +134,9 @@ export function fromJSONString(json: string): BuilderSurvey {
     return fromJSON(parsed);
   } catch {
     return {
-      ...(makeEmptySurvey()),
+      ...makeEmptySurvey(),
       meta: { title: undefined, config: {} },
-      pages: [makePage()],
+      pages: [makePage()]
     };
   }
 }
@@ -158,13 +152,13 @@ export function normalizeForEditor(survey: BuilderSurvey): BuilderSurvey {
         return { ...el, choices: normalizedChoices };
       }
       return el;
-    }),
+    })
   }));
 
   return {
     ...survey,
     meta: survey.meta ?? { title: undefined, config: {} },
-    pages,
+    pages
   };
 }
 
@@ -174,7 +168,7 @@ function importElement(src: any): BuilderElement {
   switch (t) {
     case "text":
       return {
-        ...(makeElement("text", src?.name)),
+        ...makeElement("text", src?.name),
         type: "text",
         name: fallbackName(src?.name, "text"),
         title: src?.title,
@@ -190,31 +184,23 @@ function importElement(src: any): BuilderElement {
           "description",
           "isRequired",
           "validators",
-          "inputType",
-        ]),
+          "inputType"
+        ])
       };
     case "comment":
       return {
-        ...(makeElement("comment", src?.name)),
+        ...makeElement("comment", src?.name),
         type: "comment",
         name: fallbackName(src?.name, "comment"),
         title: src?.title,
         description: src?.description,
         isRequired: !!src?.isRequired,
         validators: safeArray(src?.validators),
-        config: restWithoutKeys(src, [
-          "id",
-          "type",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-        ]),
+        config: restWithoutKeys(src, ["id", "type", "name", "title", "description", "isRequired", "validators"])
       };
     case "radiogroup":
       return {
-        ...(makeElement("radiogroup", src?.name)),
+        ...makeElement("radiogroup", src?.name),
         type: "radiogroup",
         name: fallbackName(src?.name, "radiogroup"),
         title: src?.title,
@@ -230,12 +216,12 @@ function importElement(src: any): BuilderElement {
           "description",
           "isRequired",
           "validators",
-          "choices",
-        ]),
+          "choices"
+        ])
       };
     case "checkbox":
       return {
-        ...(makeElement("checkbox", src?.name)),
+        ...makeElement("checkbox", src?.name),
         type: "checkbox",
         name: fallbackName(src?.name, "checkbox"),
         title: src?.title,
@@ -251,12 +237,12 @@ function importElement(src: any): BuilderElement {
           "description",
           "isRequired",
           "validators",
-          "choices",
-        ]),
+          "choices"
+        ])
       };
     case "boolean":
       return {
-        ...(makeElement("boolean", src?.name)),
+        ...makeElement("boolean", src?.name),
         type: "boolean",
         name: fallbackName(src?.name, "boolean"),
         title: src?.title,
@@ -274,34 +260,33 @@ function importElement(src: any): BuilderElement {
           "isRequired",
           "validators",
           "labelTrue",
-          "labelFalse",
-        ]),
+          "labelFalse"
+        ])
       };
     default: {
-  const base = makeElement("text", src?.name); 
-  return {
-    ...base, 
-    name: isNonEmptyString(src?.name) ? src.name : base.name,
-    title: src?.title ?? base.title,
-    description: src?.description ?? base.description,
-    isRequired: src?.isRequired ?? base.isRequired,
-    validators: Array.isArray(src?.validators) ? src.validators : (base.validators ?? []),
-    inputType: "text",
-    config: restWithoutKeys(src, [
-      "id",
-      "type",
-      "name",
-      "title",
-      "description",
-      "isRequired",
-      "validators",
-      "inputType",
-    ]),
-  };
-}
+      const base = makeElement("text", src?.name);
+      return {
+        ...base,
+        name: isNonEmptyString(src?.name) ? src.name : base.name,
+        title: src?.title ?? base.title,
+        description: src?.description ?? base.description,
+        isRequired: src?.isRequired ?? base.isRequired,
+        validators: Array.isArray(src?.validators) ? src.validators : (base.validators ?? []),
+        inputType: "text",
+        config: restWithoutKeys(src, [
+          "id",
+          "type",
+          "name",
+          "title",
+          "description",
+          "isRequired",
+          "validators",
+          "inputType"
+        ])
+      };
+    }
   }
 }
-
 
 function isNonEmptyString(s: any): s is string {
   return typeof s === "string" && s.trim().length > 0;
@@ -332,4 +317,3 @@ function pickRootConfig(root: any): Record<string, any> {
   }
   return cfg;
 }
-

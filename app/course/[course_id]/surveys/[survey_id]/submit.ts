@@ -39,11 +39,7 @@ export async function saveResponse(
   }
 }
 
-
-export async function getResponse(
-  surveyId: string,
-  profileID: string
-): Promise<SurveyResponse | null> {
+export async function getResponse(surveyId: string, profileID: string): Promise<SurveyResponse | null> {
   const supabase = createClient();
 
   try {
@@ -66,8 +62,6 @@ export async function getResponse(
   }
 }
 
-
-
 export async function getAllResponses(surveyId: string, classId: string) {
   const supabase = createClient();
 
@@ -89,13 +83,14 @@ export async function getAllResponses(surveyId: string, classId: string) {
     }
 
     // Get the profile_ids from responses
-    const profileIds = responses.map((r: any) => r.profile_id); 
+    const profileIds = responses.map((r: any) => r.profile_id);
 
     // Get user_roles to map profile -> profile data (and optionally user_id)
     // We assume survey_responses.profile_id corresponds to user_roles.private_profile_id
     const { data: userRoles, error: userRolesError } = await supabase
       .from("user_roles" as any)
-      .select(`
+      .select(
+        `
         user_id,
         private_profile_id,
         profiles:private_profile_id (
@@ -103,7 +98,8 @@ export async function getAllResponses(surveyId: string, classId: string) {
           name,
           sis_user_id
         )
-      `)
+      `
+      )
       .eq("class_id", classId)
       .in("private_profile_id", profileIds); // ✅ was in("user_id", ...)
 
@@ -121,12 +117,11 @@ export async function getAllResponses(surveyId: string, classId: string) {
     // Combine responses with profile data
     const responsesWithProfiles = responses.map((response: any) => ({
       ...response,
-      profiles:
-        profileMap.get(response.profile_id) || {
-          id: response.profile_id,
-          name: "Unknown Student",
-          sis_user_id: null
-        }
+      profiles: profileMap.get(response.profile_id) || {
+        id: response.profile_id,
+        name: "Unknown Student",
+        sis_user_id: null
+      }
     }));
 
     return responsesWithProfiles;

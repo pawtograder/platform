@@ -11,7 +11,18 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { Box, Input, VStack, HStack, Text, Badge, createListCollection, Textarea, Fieldset, Icon } from "@chakra-ui/react";
+import {
+  Box,
+  Input,
+  VStack,
+  HStack,
+  Text,
+  Badge,
+  createListCollection,
+  Textarea,
+  Fieldset,
+  Icon
+} from "@chakra-ui/react";
 import { SelectRoot, SelectTrigger, SelectValueText, SelectContent, SelectItem } from "@/components/ui/select";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { Field } from "@/components/ui/field";
@@ -66,7 +77,7 @@ export function SurveyTemplateLibraryModal({
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [deleteConfirmTemplate, setDeleteConfirmTemplate] = useState<SurveyTemplate | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  
+
   // Edit form state
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -170,9 +181,7 @@ export function SurveyTemplateLibraryModal({
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (t) =>
-          t.title.toLowerCase().includes(query) ||
-          t.description?.toLowerCase().includes(query)
+        (t) => t.title.toLowerCase().includes(query) || t.description?.toLowerCase().includes(query)
       );
     }
 
@@ -220,7 +229,7 @@ export function SurveyTemplateLibraryModal({
 
     try {
       const supabase = createClient();
-      
+
       const { error } = await supabase
         .from("survey_templates" as any)
         .update({
@@ -278,7 +287,7 @@ export function SurveyTemplateLibraryModal({
 
     try {
       const supabase = createClient();
-      
+
       const { error } = await supabase
         .from("survey_templates" as any)
         .delete()
@@ -322,9 +331,12 @@ export function SurveyTemplateLibraryModal({
     }
   };
 
-  const isOwner = useCallback((template: SurveyTemplate) => {
-    return template.created_by === private_profile_id;
-  }, [private_profile_id]);
+  const isOwner = useCallback(
+    (template: SurveyTemplate) => {
+      return template.created_by === private_profile_id;
+    },
+    [private_profile_id]
+  );
 
   // Create collection for visibility filter
   const visibilityCollection = useMemo(
@@ -530,7 +542,7 @@ export function SurveyTemplateLibraryModal({
                         >
                           Clone
                         </Button>
-                        
+
                         {/* Show three-dot menu for owned templates */}
                         {isOwner(template) && (
                           <MenuRoot>
@@ -554,7 +566,12 @@ export function SurveyTemplateLibraryModal({
                               <MenuItem value="edit" onClick={() => handleEdit(template)} style={{ cursor: "pointer" }}>
                                 Edit Info
                               </MenuItem>
-                              <MenuItem value="delete" color="red.500" onClick={() => handleDeleteClick(template)} style={{ cursor: "pointer" }}>
+                              <MenuItem
+                                value="delete"
+                                color="red.500"
+                                onClick={() => handleDeleteClick(template)}
+                                style={{ cursor: "pointer" }}
+                              >
                                 Delete
                               </MenuItem>
                             </MenuContent>

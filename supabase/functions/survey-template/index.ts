@@ -19,10 +19,7 @@ export type Response = {
   template?: Json[];
 };
 
-async function handleRequest(
-  req: Request,
-  scope: Sentry.Scope
-): Promise<Response> {
+async function handleRequest(req: Request, scope: Sentry.Scope): Promise<Response> {
   const { title, template } = (await req.json()) as Request;
 
   scope?.setTag("function", "survey-save-as-template");
@@ -31,15 +28,11 @@ async function handleRequest(
   scope?.setTag("class_section_id", class_section_id?.toString() || "");
   scope?.setTag("class_id", class_id?.toString() || "");
 
-  const supabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    {
-      global: {
-        headers: { Authorization: req.headers.get("Authorization")! }
-      }
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: {
+      headers: { Authorization: req.headers.get("Authorization")! }
     }
-  );
+  });
 
   switch (operation) {
     case "POST":
@@ -57,33 +50,31 @@ async function handleRequest(
       .from("survey_templates")
       .insert({
         title,
-        template,
+        template
       })
       .select("id")
       .single();
-  
+
     if (templateError) {
       throw new Error(`Failed to create template: ${templateError.message}`);
     }
 
     return {
       success: true,
-      template_id: savedTemplate.id,
+      template_id: savedTemplate.id
     };
-  }
+  };
 
   const getTemplates = async () => {
-    const { data: templates, error: templatesError } = await supabase
-      .from("survey_templates")
-      .select("*")
+    const { data: templates, error: templatesError } = await supabase.from("survey_templates").select("*");
 
     if (templatesError) {
       throw new Error(`Failed to get templates: ${templatesError.message}`);
     }
-  }
+  };
   //TODO:  Implement update and delete templates
-  const updateTemplate = async () => {}
-  const deleteTemplate = async () => {}
+  const updateTemplate = async () => {};
+  const deleteTemplate = async () => {};
 }
 
 Deno.serve(async (req) => {

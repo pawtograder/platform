@@ -217,7 +217,7 @@ export default function EditSurveyPage() {
         if (values.status === "published" && values.due_date) {
           const dueDate = new Date(values.due_date as string);
           const now = new Date();
-          
+
           if (dueDate < now) {
             toaster.create({
               title: "Cannot Publish Survey",
@@ -365,11 +365,11 @@ export default function EditSurveyPage() {
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
-      <SurveyForm 
-        form={form} 
-        onSubmit={onSubmit} 
-        saveDraftOnly={saveDraftOnly} 
-        isEdit={true} 
+      <SurveyForm
+        form={form}
+        onSubmit={onSubmit}
+        saveDraftOnly={saveDraftOnly}
+        isEdit={true}
         privateProfileId={private_profile_id}
       />
     </Box>

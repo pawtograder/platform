@@ -660,9 +660,7 @@ export default function SurveyForm({
             <DialogCloseTrigger />
           </DialogHeader>
           <DialogBody>
-            <Text color={textColor}>
-              Are you sure you want to cancel? Any unsaved changes will be lost.
-            </Text>
+            <Text color={textColor}>Are you sure you want to cancel? Any unsaved changes will be lost.</Text>
           </DialogBody>
           <DialogFooter>
             <HStack gap={3} justify="flex-end">
@@ -675,12 +673,7 @@ export default function SurveyForm({
               >
                 Keep Editing
               </Button>
-              <Button
-                bg="#EF4444"
-                color="white"
-                _hover={{ bg: "#DC2626" }}
-                onClick={handleDiscard}
-              >
+              <Button bg="#EF4444" color="white" _hover={{ bg: "#DC2626" }} onClick={handleDiscard}>
                 Discard
               </Button>
             </HStack>
