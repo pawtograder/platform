@@ -237,7 +237,7 @@ export default function PollTakingPage() {
 
         <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
           <PollForm
-            surveyJson={poll.question ?? {}}
+            surveyJson={JSON.stringify(surveyConfig)}
             initialData={existingResponse?.response}
             readOnly={isReadOnly}
             onComplete={handleComplete}

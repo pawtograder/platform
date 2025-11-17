@@ -82,6 +82,16 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       return "—";
     }
     try {
+      // Extract the prompt from the question object
+      const prompt = (question as any)?.prompt;
+      if (prompt && typeof prompt === "string") {
+        // Truncate if too long
+        if (prompt.length <= 80) {
+          return prompt;
+        }
+        return `${prompt.slice(0, 80)}…`;
+      }
+      // Fallback to JSON if no prompt found
       const serialized = JSON.stringify(question);
       if (serialized.length <= 80) {
         return serialized;

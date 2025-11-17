@@ -297,13 +297,17 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         <Box
           p={3}
           bg="gray.50"
+          _dark={{ bg: "gray.800" }}
           borderRadius="md"
           fontSize="xs"
           fontFamily="mono"
           overflow="auto"
           maxH="200px"
+          border="1px solid"
+          borderColor="gray.200"
+          _dark={{ borderColor: "gray.700" }}
         >
-          <pre>{JSON.stringify(pollData, null, 2)}</pre>
+          <pre style={{ margin: 0, color: "inherit" }}>{JSON.stringify(pollData, null, 2)}</pre>
         </Box>
       </Box>
     </VStack>
