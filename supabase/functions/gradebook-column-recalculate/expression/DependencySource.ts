@@ -498,41 +498,30 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const uniqueGradebookColumnIds = Array.from(gradebookColumnIds);
     const studentIds = Array.from(students);
 
-    // Fetch all gradebook column students with pagination
-    const allGradebookColumnStudents: GradebookColumnStudent[] = [];
-    let from = 0;
-    const pageSize = 1000;
-
-    while (true) {
-      const to = from + pageSize - 1;
-      const query = supabase
-        .from("gradebook_column_students")
-        .select("*")
-        .in("gradebook_column_id", uniqueGradebookColumnIds)
-        .in("student_id", studentIds);
-
-      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await query.range(from, to);
-
-      if (gradebookColumnsFetchError) {
-        throw gradebookColumnsFetchError;
+    // Use RPC function to efficiently fetch gradebook column students for large arrays
+    // This avoids PostgreSQL IN clause limitations
+    const { data: allGradebookColumnStudentsData, error: gradebookColumnsFetchError } = (await supabase.rpc(
+      "get_gradebook_column_students_bulk",
+      {
+        p_student_ids: studentIds,
+        p_gradebook_column_ids: uniqueGradebookColumnIds
       }
+    )) as unknown as { data: GradebookColumnStudent[] | null; error: unknown };
 
-      if (!gradebookColumnStudents || gradebookColumnStudents.length === 0) {
-        break;
-      }
-
-      allGradebookColumnStudents.push(...gradebookColumnStudents);
-
-      if (gradebookColumnStudents.length < pageSize) {
-        break;
-      }
-
-      from += pageSize;
+    if (gradebookColumnsFetchError) {
+      throw gradebookColumnsFetchError;
     }
+
+    if (!allGradebookColumnStudentsData) {
+      throw new Error("Failed to fetch gradebook column students: no data returned");
+    }
+
+    const allGradebookColumnStudents: GradebookColumnStudent[] = allGradebookColumnStudentsData;
 
     // Fetch all gradebook columns with pagination
     const allGradebookColumns: GradebookColumn[] = [];
-    from = 0;
+    let from = 0;
+    const pageSize = 1000;
 
     while (true) {
       const to = from + pageSize - 1;
@@ -904,9 +893,7 @@ export async function addDependencySourceFunctions({
           value.map((v) => ({
             score: isGradebookColumnStudent(v) ? v.score : "N/A",
             max_score: isGradebookColumnStudent(v) ? v.max_score : "N/A",
-            column_slug: isGradebookColumnStudent(v)
-              ? (v as unknown as { column_slug?: string })?.column_slug
-              : "N/A",
+            column_slug: isGradebookColumnStudent(v) ? (v as unknown as { column_slug?: string })?.column_slug : "N/A",
             released: isGradebookColumnStudent(v) ? v.released : "N/A",
             is_private: isGradebookColumnStudent(v) ? v.is_private : "N/A",
             is_missing: isGradebookColumnStudent(v) ? v.is_missing : "N/A"
@@ -1054,7 +1041,10 @@ export async function addDependencySourceFunctions({
         max_score: v.max_score,
         column_slug: (v as unknown as { column_slug?: string })?.column_slug
       }));
-      console.log(`Drop_lowest returning ${ret.length} values after dropping ${numDropped}:`, JSON.stringify(outputSummary));
+      console.log(
+        `Drop_lowest returning ${ret.length} values after dropping ${numDropped}:`,
+        JSON.stringify(outputSummary)
+      );
 
       // Warn if any returned values have invalid max_score
       const invalidMaxScore = ret.filter((v) => !v.max_score || v.max_score <= 0);

@@ -9560,6 +9560,26 @@ export type Database = {
           state: string;
         }[];
       };
+      get_gradebook_column_students_bulk: {
+        Args: { p_gradebook_column_ids: Json; p_student_ids: Json };
+        Returns: {
+          class_id: number;
+          created_at: string;
+          gradebook_column_id: number;
+          gradebook_id: number;
+          id: number;
+          incomplete_values: Json;
+          is_droppable: boolean;
+          is_excused: boolean;
+          is_missing: boolean;
+          is_private: boolean;
+          released: boolean;
+          score: number;
+          score_override: number;
+          score_override_note: string;
+          student_id: string;
+        }[];
+      };
       get_gradebook_records_for_all_students: {
         Args: { p_class_id: number };
         Returns: Json;

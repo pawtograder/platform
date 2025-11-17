@@ -829,7 +829,7 @@ async function processRowsAll(
 export async function processBatch(
   adminSupabase: ReturnType<typeof createClient<Database>>,
   scope: Sentry.Scope,
-  maxMessages = 500
+  maxMessages = 200
 ) {
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_row_recalculate",
