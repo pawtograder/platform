@@ -13,6 +13,7 @@ import {
   Separator,
   Select,
   Portal,
+  Checkbox,
 } from "@chakra-ui/react";
 import { LuTrash2, LuPlus } from "react-icons/lu";
 
@@ -20,6 +21,7 @@ type PollQuestionJSON = {
   prompt: string;
   type: "multiple-choice" | "single-choice" | "rating" | "text";
   choices?: Array<{ id: string; label: string }>;
+  allowOther?: boolean;
   min?: number;
   max?: number;
   minLabel?: string;
@@ -79,9 +81,14 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         if (!updated.choices || updated.choices.length === 0) {
           updated.choices = [{ id: "choice1", label: "" }];
         }
+        // Only allow "other" for multiple-choice
+        if (newType === "single-choice") {
+          delete updated.allowOther;
+        }
       } else {
         // Remove choices for non-choice types
         delete updated.choices;
+        delete updated.allowOther;
       }
 
       // Add min/max for rating type
@@ -225,6 +232,25 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
               </HStack>
             ))}
           </VStack>
+          {/* Allow "Other" option for multiple-choice */}
+          {pollData.type === "multiple-choice" && (
+            <Box mt={3}>
+              <Checkbox.Root
+                checked={pollData.allowOther || false}
+                onCheckedChange={(e) => {
+                  setPollData((prev) => ({
+                    ...prev,
+                    allowOther: e.checked === true
+                  }));
+                }}
+              >
+                <Checkbox.Control />
+                <Checkbox.Label>
+                  <Text fontSize="sm">Allow open-ended "Other" option</Text>
+                </Checkbox.Label>
+              </Checkbox.Root>
+            </Box>
+          )}
         </Box>
       )}
 

@@ -168,13 +168,21 @@ export default function PollTakingPage() {
   };
 
   if (pollQuestion?.type === "multiple-choice" || pollQuestion?.type === "single-choice") {
-    surveyConfig.pages[0].elements.push({
+    const element: any = {
       type: pollQuestion.type === "multiple-choice" ? "checkbox" : "radiogroup",
       name: "poll_question",
       title: pollQuestion.prompt,
       choices: pollQuestion.choices?.map((c: any) => c.label) || [],
       isRequired: true,
-    });
+    };
+    
+    // Add "other" option if allowed for multiple-choice
+    if (pollQuestion.type === "multiple-choice" && pollQuestion.allowOther) {
+      element.hasOther = true;
+      element.otherText = "Other (please specify)";
+    }
+    
+    surveyConfig.pages[0].elements.push(element);
   } else if (pollQuestion?.type === "rating") {
     surveyConfig.pages[0].elements.push({
       type: "rating",

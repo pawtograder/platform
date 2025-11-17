@@ -4,6 +4,7 @@ import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Badge } f
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { formatInTimeZone } from "date-fns-tz";
 import { useRouter } from "next/navigation";
+import PollAnalyticsChart from "./PollAnalyticsChart";
 
 type PollResponse = {
   id: string;
@@ -63,7 +64,19 @@ export default function PollResponsesView({
       if (questionData?.type === "multiple-choice" || questionData?.type === "single-choice") {
         const answer = response.poll_question;
         if (Array.isArray(answer)) {
-          return answer.join(", ");
+          // Handle "other" responses
+          return answer
+            .map((item: string) => {
+              if (item.startsWith("other:")) {
+                return `Other: ${item.replace("other:", "")}`;
+              }
+              return item;
+            })
+            .join(", ");
+        }
+        // Handle single "other" response
+        if (typeof answer === "string" && answer.startsWith("other:")) {
+          return `Other: ${answer.replace("other:", "")}`;
         }
         return String(answer || "—");
       } else if (questionData?.type === "rating") {
@@ -136,6 +149,9 @@ export default function PollResponsesView({
             </Text>
           </Box>
         ) : (
+          <>
+            {/* Analytics Chart */}
+            <PollAnalyticsChart pollQuestion={pollQuestion} responses={responses} />
           <Box border="1px solid" borderColor={borderColor} borderRadius="lg" overflow="hidden">
             <Table.Root size="sm">
               <Table.Header bg={headerBgColor}>
@@ -174,6 +190,7 @@ export default function PollResponsesView({
               </Table.Body>
             </Table.Root>
           </Box>
+          </>
         )}
       </VStack>
     </Container>
