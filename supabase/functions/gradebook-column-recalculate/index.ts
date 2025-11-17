@@ -193,7 +193,12 @@ async function processRowsAll(
             break;
           }
           if (!verPage || verPage.length === 0) break;
-          for (const row of verPage as unknown as Array<{ student_id: string; version: number; dirty: boolean; is_recalculating: boolean }>) {
+          for (const row of verPage as unknown as Array<{
+            student_id: string;
+            version: number;
+            dirty: boolean;
+            is_recalculating: boolean;
+          }>) {
             versionsByStudent.set(row.student_id, row.version);
           }
           if (verPage.length < vPageSize) break;
@@ -370,11 +375,12 @@ async function processRowsAll(
               `[DEBUG] ${workerId} BATCH_UPDATE: Sample results (first 5):`,
               JSON.stringify(sampleResults, null, 2)
             );
-            
+
             // Log breakdown of result statuses
             const statusBreakdown = {
               cleared: results.filter((r) => r.cleared).length,
-              version_matched_but_not_cleared: results.filter((r) => r.version_matched && !r.cleared && !r.error).length,
+              version_matched_but_not_cleared: results.filter((r) => r.version_matched && !r.cleared && !r.error)
+                .length,
               version_mismatch: results.filter((r) => !r.version_matched && !r.error).length,
               has_error: results.filter((r) => r.error).length,
               updated_count_zero: results.filter((r) => r.updated_count === 0).length,
@@ -396,9 +402,7 @@ async function processRowsAll(
           // Calculate which message IDs should have been archived (cleared rows with version match)
           const shouldBeArchivedMsgIds = batchUpdates
             .filter((bu) => {
-              const result = results.find(
-                (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-              );
+              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
               return result?.cleared && result?.version_matched && !result?.error;
             })
             .flatMap((bu) => bu.message_ids);
@@ -416,29 +420,23 @@ async function processRowsAll(
           if (versionMatchedButNotCleared > 0) {
             const versionMatchedButNotClearedMsgIds = batchUpdates
               .filter((bu) => {
-                const result = results.find(
-                  (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-                );
+                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
                 return result && result.version_matched && !result.cleared && !result.error;
               })
               .flatMap((bu) => bu.message_ids);
             console.warn(
               `[DEBUG] ${workerId} BATCH_UPDATE WARNING: ${versionMatchedButNotCleared} rows had version_matched=true but cleared=false! ${versionMatchedButNotClearedMsgIds.length} messages will NOT be archived: [${versionMatchedButNotClearedMsgIds.slice(0, 20).join(", ")}${versionMatchedButNotClearedMsgIds.length > 20 ? "..." : ""}]`
             );
-            
+
             // Log details about why these weren't cleared
             const notClearedDetails = batchUpdates
               .filter((bu) => {
-                const result = results.find(
-                  (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-                );
+                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
                 return result && result.version_matched && !result.cleared && !result.error;
               })
               .slice(0, 5)
               .map((bu) => {
-                const result = results.find(
-                  (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-                );
+                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
                 return {
                   student_id: bu.student_id,
                   is_private: bu.is_private,
@@ -457,9 +455,7 @@ async function processRowsAll(
           if (notClearedCount > 0 && versionMatchedButNotCleared === 0) {
             const notClearedMsgIds = batchUpdates
               .filter((bu) => {
-                const result = results.find(
-                  (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-                );
+                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
                 return result && !result.cleared && !result.error;
               })
               .flatMap((bu) => bu.message_ids);
@@ -471,9 +467,7 @@ async function processRowsAll(
           if (versionMismatchCount > 0) {
             const versionMismatchMsgIds = batchUpdates
               .filter((bu) => {
-                const result = results.find(
-                  (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-                );
+                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
                 return result && !result.version_matched && !result.error;
               })
               .flatMap((bu) => bu.message_ids);
@@ -699,7 +693,7 @@ async function processRowsAll(
             `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Sample results (first 5):`,
             JSON.stringify(sampleResults, null, 2)
           );
-          
+
           // Log breakdown of result statuses
           const statusBreakdown = {
             cleared: results.filter((r) => r.cleared).length,
@@ -725,9 +719,7 @@ async function processRowsAll(
         // Calculate which message IDs should have been archived (cleared rows with version match)
         const shouldBeArchivedMsgIdsScoped = batchUpdatesScoped
           .filter((bu) => {
-            const result = results.find(
-              (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-            );
+            const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
             return result?.cleared && result?.version_matched && !result?.error;
           })
           .flatMap((bu) => bu.message_ids);
@@ -745,29 +737,23 @@ async function processRowsAll(
         if (versionMatchedButNotCleared > 0) {
           const versionMatchedButNotClearedMsgIds = batchUpdatesScoped
             .filter((bu) => {
-              const result = results.find(
-                (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-              );
+              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
               return result && result.version_matched && !result.cleared && !result.error;
             })
             .flatMap((bu) => bu.message_ids);
           console.warn(
             `[DEBUG] ${workerId} BATCH_UPDATE WARNING (scoped): ${versionMatchedButNotCleared} rows had version_matched=true but cleared=false! ${versionMatchedButNotClearedMsgIds.length} messages will NOT be archived: [${versionMatchedButNotClearedMsgIds.slice(0, 20).join(", ")}${versionMatchedButNotClearedMsgIds.length > 20 ? "..." : ""}]`
           );
-          
+
           // Log details about why these weren't cleared
           const notClearedDetails = batchUpdatesScoped
             .filter((bu) => {
-              const result = results.find(
-                (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-              );
+              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
               return result && result.version_matched && !result.cleared && !result.error;
             })
             .slice(0, 5)
             .map((bu) => {
-              const result = results.find(
-                (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-              );
+              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
               return {
                 student_id: bu.student_id,
                 is_private: bu.is_private,
@@ -786,9 +772,7 @@ async function processRowsAll(
         if (notClearedCount > 0 && versionMatchedButNotCleared === 0) {
           const notClearedMsgIds = batchUpdatesScoped
             .filter((bu) => {
-              const result = results.find(
-                (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-              );
+              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
               return result && !result.cleared && !result.error;
             })
             .flatMap((bu) => bu.message_ids);
@@ -800,9 +784,7 @@ async function processRowsAll(
         if (versionMismatchCount > 0) {
           const versionMismatchMsgIds = batchUpdatesScoped
             .filter((bu) => {
-              const result = results.find(
-                (r) => r.student_id === bu.student_id && r.is_private === bu.is_private
-              );
+              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
               return result && !result.version_matched && !result.error;
             })
             .flatMap((bu) => bu.message_ids);
@@ -864,7 +846,7 @@ export async function processBatch(
   scope.setTag("queue_length", result.data?.length || 0);
   if (result.data && result.data.length > 0) {
     const queueMessages = result.data as QueueMessage<RowMessage>[];
-    
+
     // Log message details including read_ct to track stuck messages
     const messageDetails = queueMessages.map((msg) => ({
       msg_id: msg.msg_id,
@@ -876,7 +858,7 @@ export async function processBatch(
       `${workerId} Processing ${queueMessages.length} messages in a single pass. Message details:`,
       JSON.stringify(messageDetails, null, 2)
     );
-    
+
     // Log high read_ct messages that might be stuck
     const highReadCtMessages = queueMessages.filter((msg) => msg.read_ct > 5);
     if (highReadCtMessages.length > 0) {
@@ -889,7 +871,7 @@ export async function processBatch(
         }))
       );
     }
-    
+
     const didWork = await processRowsAll(adminSupabase, scope, queueMessages);
     return didWork;
   } else {
