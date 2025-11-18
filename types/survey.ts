@@ -1,17 +1,11 @@
-// Shared survey types to avoid duplication across files
+import type { Tables } from "@/utils/supabase/SupabaseTypes";
 
-export type ResponseData = Record<string, any>;
+type DbSurvey = Tables<"surveys">;
+type DbSurveyResponse = Tables<"survey_responses">;
 
-export type SurveyResponse = {
-  id: string;
-  survey_id: string;
-  profile_id: string;
-  response: ResponseData;
-  is_submitted: boolean;
-  submitted_at?: string;
-  created_at?: string;
-  updated_at?: string;
-};
+export type ResponseData = DbSurveyResponse["response"];
+
+export type SurveyResponse = DbSurveyResponse;
 
 export type SurveyResponseWithProfile = SurveyResponse & {
   profiles: {
@@ -21,17 +15,7 @@ export type SurveyResponseWithProfile = SurveyResponse & {
   };
 };
 
-export type Survey = {
-  id: string;
-  title: string;
-  description?: string;
-  json: any;
-  due_date?: string;
-  allow_response_editing: boolean;
-  status: "draft" | "published" | "closed";
-  created_at?: string;
-  updated_at?: string;
-};
+export type Survey = DbSurvey;
 
 export type SurveyWithResponse = Survey & {
   response_status: "not_started" | "in_progress" | "completed";

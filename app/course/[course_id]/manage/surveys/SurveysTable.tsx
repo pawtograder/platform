@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Table, Text, Badge, HStack, Icon } from "@chakra-ui/react";
+import { Box, Table, Text, Badge, Icon } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
