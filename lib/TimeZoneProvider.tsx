@@ -59,20 +59,6 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
   // Get the active timezone based on current mode
   const activeTimeZone = mode === "course" ? courseTimeZone : browserTimeZone;
 
-  // Standard date formatter
-  const formatDate = (date: Date | string, options?: Intl.DateTimeFormatOptions) => {
-    const d = typeof date === "string" ? new Date(date) : date;
-    return d.toLocaleString(undefined, {
-      timeZone: activeTimeZone,
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      ...options
-    });
-  };
-
   return (
     <TimeZoneContext.Provider
       value={{

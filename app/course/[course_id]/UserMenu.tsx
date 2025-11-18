@@ -594,27 +594,13 @@ const NotificationPreferencesMenu = () => {
 };
 
 const TimeZonePreferencesMenu = () => {
-  const { mode, setMode, courseTimeZone } = useTimeZone();
+  const { courseTimeZone } = useTimeZone();
   const browserTimeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
   try {
     // Only show if timezones differ
     if (courseTimeZone === browserTimeZone) {
       return null;
     }
-
-    const getTimeZoneAbbr = (tz: string) => {
-      try {
-        const now = new Date();
-        const formatter = new Intl.DateTimeFormat("en", {
-          timeZone: tz,
-          timeZoneName: "short"
-        });
-        const parts = formatter.formatToParts(now);
-        return parts.find((part) => part.type === "timeZoneName")?.value || tz;
-      } catch {
-        return tz;
-      }
-    };
 
     return (
       <Dialog.Root size="md" placement="center">
