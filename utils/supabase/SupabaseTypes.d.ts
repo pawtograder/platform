@@ -8173,7 +8173,6 @@ export type Database = {
         Row: {
           allow_response_editing: boolean;
           class_id: number;
-          class_section_id: number | null;
           created_at: string;
           created_by: string;
           deleted_at: string | null;
@@ -8191,7 +8190,6 @@ export type Database = {
         Insert: {
           allow_response_editing?: boolean;
           class_id: number;
-          class_section_id?: number | null;
           created_at?: string;
           created_by: string;
           deleted_at?: string | null;
@@ -8209,7 +8207,6 @@ export type Database = {
         Update: {
           allow_response_editing?: boolean;
           class_id?: number;
-          class_section_id?: number | null;
           created_at?: string;
           created_by?: string;
           deleted_at?: string | null;
@@ -8230,13 +8227,6 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "surveys_class_section_id_fkey";
-            columns: ["class_section_id"];
-            isOneToOne: false;
-            referencedRelation: "class_sections";
             referencedColumns: ["id"];
           },
           {
