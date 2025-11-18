@@ -192,8 +192,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
     surveyConfig: {
       numSurveys: 15,
       numTemplates: 8,
-      responseRate: 0.70,
-      submissionRate: 0.80
+      responseRate: 0.7,
+      submissionRate: 0.8
     }
   },
 
@@ -242,8 +242,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
     surveyConfig: {
       numSurveys: 8,
       numTemplates: 5,
-      responseRate: 0.70,
-      submissionRate: 0.80
+      responseRate: 0.7,
+      submissionRate: 0.8
     },
     rateLimitOverrides: {}
   }

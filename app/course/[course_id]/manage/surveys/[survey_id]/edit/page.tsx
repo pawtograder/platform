@@ -60,7 +60,6 @@ export default function EditSurveyPage() {
   const hasLoadedSurvey = useRef(false);
   const loadingPromise = useRef<Promise<void> | null>(null);
 
-
   useEffect(() => {
     if (role.role === "grader") {
       toaster.create({
@@ -92,7 +91,7 @@ export default function EditSurveyPage() {
         setIsLoading(true);
         const supabase = createClient();
         const { data, error } = await supabase
-          .from("surveys" )
+          .from("surveys")
           .select("*")
           .eq("id", rawSurveyId)
           .eq("class_id", Number(course_id))
@@ -109,25 +108,25 @@ export default function EditSurveyPage() {
           return;
         }
 
-        console.log("[EditSurvey] Survey data loaded successfully:", (data ).id);
+        console.log("[EditSurvey] Survey data loaded successfully:", data.id);
         setSurveyData(data);
 
         // Convert due_date from ISO string to datetime-local format
         let dueDateFormatted = "";
-        if ((data ).due_date) {
-          const date = new Date((data ).due_date);
+        if (data.due_date) {
+          const date = new Date(data.due_date);
           // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
           dueDateFormatted = date.toISOString().slice(0, 16);
         }
 
         // Load the survey data into the form
         reset({
-          title: (data ).title || "",
-          description: (data ).description || "",
-          json: (data ).json || "",
-          status: (data ).status || "draft",
+          title: data.title || "",
+          description: data.description || "",
+          json: data.json || "",
+          status: data.status || "draft",
           due_date: dueDateFormatted,
-          allow_response_editing: Boolean((data ).allow_response_editing)
+          allow_response_editing: Boolean(data.allow_response_editing)
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
@@ -176,9 +175,8 @@ export default function EditSurveyPage() {
             }
           }
 
-
           const { data, error } = await supabase
-            .from("surveys" )
+            .from("surveys")
             .update({
               title: (values.title as string) || "Untitled Survey",
               description: (values.description as string) || null,
@@ -197,9 +195,9 @@ export default function EditSurveyPage() {
             throw new Error(error?.message || "Failed to save draft");
           }
 
-          trackEvent("survey_updated" , {
+          trackEvent("survey_updated", {
             course_id: Number(course_id),
-            survey_id: (data ).survey_id,
+            survey_id: data.survey_id,
             status: "draft",
             has_due_date: !!values.due_date,
             allow_response_editing: values.allow_response_editing
@@ -259,10 +257,9 @@ export default function EditSurveyPage() {
           let parsedJson = toJsonString(values.json);
           let validationErrors = null;
 
-
           // Update the survey
           const { data, error } = await supabase
-            .from("surveys" )
+            .from("surveys")
             .update({
               title: values.title as string,
               description: (values.description as string) || null,
@@ -280,7 +277,7 @@ export default function EditSurveyPage() {
             // If database error, try to save as draft with error flag
             try {
               const fallbackData = await supabase
-                .from("surveys" )
+                .from("surveys")
                 .update({
                   title: values.title as string,
                   description: (values.description as string) || null,
@@ -304,9 +301,9 @@ export default function EditSurveyPage() {
           }
 
           // Track survey update
-          trackEvent("survey_updated" , {
+          trackEvent("survey_updated", {
             course_id: Number(course_id),
-            survey_id: (data ).survey_id,
+            survey_id: data.survey_id,
             status: validationErrors ? "draft" : values.status,
             has_due_date: !!values.due_date,
             allow_response_editing: values.allow_response_editing,

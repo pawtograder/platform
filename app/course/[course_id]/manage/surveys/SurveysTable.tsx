@@ -16,9 +16,7 @@ import { useIsInstructor } from "@/hooks/useClassProfiles";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 
-
 type FilterType = "all" | "completed" | "awaiting";
-
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
@@ -142,7 +140,6 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         type: "loading"
       });
 
-
       try {
         const supabase = createClient();
 
@@ -158,7 +155,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Update survey status to published
         const { data, error } = await supabase
-          .from("surveys" )
+          .from("surveys")
           .update({
             status: validationErrors ? "draft" : "published",
             validation_errors: validationErrors
@@ -189,7 +186,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         }
 
         // Track the publish event
-        trackEvent("survey_published" , {
+        trackEvent("survey_published", {
           course_id: Number(courseId),
           survey_id: survey.survey_id,
           has_validation_errors: !!validationErrors
@@ -224,7 +221,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Update survey status to closed
         const { data, error } = await supabase
-          .from("surveys" )
+          .from("surveys")
           .update({
             status: "closed"
           })
@@ -245,7 +242,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         });
 
         // Track the close event
-        trackEvent("survey_closed" , {
+        trackEvent("survey_closed", {
           course_id: Number(courseId),
           survey_id: survey.survey_id
         });

@@ -251,13 +251,7 @@ const SURVEYJS_TEMPLATES = {
             type: "radiogroup",
             name: "office_hours",
             title: "How often did you attend office hours?",
-            choices: [
-              "Never",
-              "Rarely",
-              "Sometimes",
-              "Often",
-              "Very Often"
-            ],
+            choices: ["Never", "Rarely", "Sometimes", "Often", "Very Often"],
             isRequired: true
           },
           {
@@ -447,13 +441,7 @@ const SURVEYJS_TEMPLATES = {
             type: "radiogroup",
             name: "completion",
             title: "Did you complete the lab exercises?",
-            choices: [
-              "Yes, completed all",
-              "Mostly completed",
-              "About half",
-              "Less than half",
-              "Did not complete"
-            ],
+            choices: ["Yes, completed all", "Mostly completed", "About half", "Less than half", "Did not complete"],
             isRequired: true
           },
           {
@@ -1155,10 +1143,10 @@ export class DatabaseSeeder {
 
       console.log(
         dataType.padEnd(25) +
-        config.maxInsertsPerSecond.toString().padEnd(10) +
-        batchSize.padEnd(8) +
-        batchesPerSec.padEnd(12) +
-        config.description
+          config.maxInsertsPerSecond.toString().padEnd(10) +
+          batchSize.padEnd(8) +
+          batchesPerSec.padEnd(12) +
+          config.description
       );
     });
     console.log("");
@@ -4412,26 +4400,24 @@ public class Entrypoint {
 
       // Determine survey status (70% published, 20% draft, 10% closed)
       const statusRoll = Math.random();
-      const status = statusRoll < 0.7 ? 'published' : statusRoll < 0.9 ? 'draft' : 'closed';
+      const status = statusRoll < 0.7 ? "published" : statusRoll < 0.9 ? "draft" : "closed";
 
       // Create survey with SurveyJS JSON format
       const surveyData = {
         class_id: class_id,
         created_by: instructor.private_profile_id,
-        title: `${template.title} ${i > surveyTypes.length - 1 ? `#${Math.floor(i / surveyTypes.length) + 1}` : ''}`.trim(),
+        title:
+          `${template.title} ${i > surveyTypes.length - 1 ? `#${Math.floor(i / surveyTypes.length) + 1}` : ""}`.trim(),
         description: template.description,
         json: template, // Store the entire SurveyJS template
-        status: status as 'draft' | 'published' | 'closed',
+        status: status as "draft" | "published" | "closed",
         allow_response_editing: Math.random() < 0.7, // 70% allow editing
-        due_date: status === 'published'
-          ? addDays(new Date(), Math.floor(Math.random() * 30) + 7).toISOString()
-          : null,
+        due_date: status === "published" ? addDays(new Date(), Math.floor(Math.random() * 30) + 7).toISOString() : null,
         version: 1
       };
 
-      const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit(
-        'surveys',
-        () => supabase.from('surveys').insert(surveyData).select('id, survey_id, status, title')
+      const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit("surveys", () =>
+        supabase.from("surveys").insert(surveyData).select("id, survey_id, status, title")
       );
 
       if (surveyError) {
@@ -4443,7 +4429,7 @@ public class Entrypoint {
     }
 
     // Create responses for published surveys
-    const publishedSurveys = surveys.filter(s => s.status === 'published');
+    const publishedSurveys = surveys.filter((s) => s.status === "published");
     if (publishedSurveys.length > 0) {
       await this.createSurveyResponses(
         publishedSurveys,
@@ -4457,11 +4443,7 @@ public class Entrypoint {
     console.log(`✓ Created ${surveys.length} surveys with responses`);
   }
 
-  private async createSurveyTemplates(
-    config: SurveyConfig,
-    class_id: number,
-    instructors: TestingUser[]
-  ) {
+  private async createSurveyTemplates(config: SurveyConfig, class_id: number, instructors: TestingUser[]) {
     console.log(`   Creating ${config.numTemplates} survey templates...`);
 
     const templates = [];
@@ -4478,13 +4460,13 @@ public class Entrypoint {
         title: `${template.title} Template`,
         description: `Reusable template: ${template.description}`,
         template: template, // Store the full SurveyJS template
-        scope: 'course' as const,
+        scope: "course" as const,
         version: 1
       };
 
       const { data: templateResult, error: templateError } = await this.rateLimitManager.trackAndLimit(
-        'survey_templates',
-        () => supabase.from('survey_templates').insert(templateData).select('id, title')
+        "survey_templates",
+        () => supabase.from("survey_templates").insert(templateData).select("id, title")
       );
 
       if (templateError) {
@@ -4516,16 +4498,12 @@ public class Entrypoint {
 
     for (const survey of surveys) {
       // Get the survey JSON to generate appropriate responses
-      const { data: surveyData } = await supabase
-        .from('surveys')
-        .select('json')
-        .eq('id', survey.id)
-        .single();
+      const { data: surveyData } = await supabase.from("surveys").select("json").eq("id", survey.id).single();
 
       if (!surveyData || !surveyData.json) continue;
 
       const surveyJson = surveyData.json as { pages: Array<{ elements: Array<any> }> };
-      const allElements = surveyJson.pages.flatMap(page => page.elements || []);
+      const allElements = surveyJson.pages.flatMap((page) => page.elements || []);
 
       // Determine which students respond (based on responseRate)
       const respondingStudents = students.filter(() => Math.random() < responseRate);
@@ -4552,13 +4530,13 @@ public class Entrypoint {
 
     // Batch insert responses
     if (responsesToCreate.length > 0) {
-      const BATCH_SIZE = this.rateLimits['survey_responses']?.batchSize || 100;
+      const BATCH_SIZE = this.rateLimits["survey_responses"]?.batchSize || 100;
       const chunks = chunkArray(responsesToCreate, BATCH_SIZE);
 
       for (const chunk of chunks) {
         const { error: responseError } = await this.rateLimitManager.trackAndLimit(
-          'survey_responses',
-          () => supabase.from('survey_responses').insert(chunk).select('id'),
+          "survey_responses",
+          () => supabase.from("survey_responses").insert(chunk).select("id"),
           chunk.length
         );
 
@@ -4567,40 +4545,40 @@ public class Entrypoint {
         }
       }
 
-      const submittedCount = responsesToCreate.filter(r => r.is_submitted).length;
+      const submittedCount = responsesToCreate.filter((r) => r.is_submitted).length;
       console.log(`   ✓ Created ${responsesToCreate.length} responses (${submittedCount} submitted)`);
     }
   }
 
   private generateSurveyJSResponse(element: any): any {
     switch (element.type) {
-      case 'rating':
+      case "rating":
         const min = element.rateMin || 1;
         const max = element.rateMax || 5;
         const step = element.rateStep || 1;
         const range = (max - min) / step;
         return min + Math.floor(Math.random() * (range + 1)) * step;
 
-      case 'radiogroup':
-      case 'dropdown':
+      case "radiogroup":
+      case "dropdown":
         const choices = element.choices || [];
         if (choices.length === 0) return null;
         return choices[Math.floor(Math.random() * choices.length)];
 
-      case 'checkbox':
+      case "checkbox":
         const checkboxChoices = element.choices || [];
         if (checkboxChoices.length === 0) return [];
         // Select 1-3 random options
         const numSelections = Math.floor(Math.random() * Math.min(3, checkboxChoices.length)) + 1;
         return faker.helpers.arrayElements(checkboxChoices, numSelections);
 
-      case 'boolean':
+      case "boolean":
         return Math.random() < 0.5;
 
-      case 'text':
+      case "text":
         return faker.lorem.sentence();
 
-      case 'comment':
+      case "comment":
         const rows = element.rows || 3;
         return faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
 

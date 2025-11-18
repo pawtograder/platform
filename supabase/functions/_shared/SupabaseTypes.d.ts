@@ -8238,7 +8238,6 @@ export type Database = {
           }
         ];
       };
-
     };
     Views: {
       active_submissions_for_class: {
