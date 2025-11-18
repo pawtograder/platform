@@ -498,33 +498,58 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const uniqueGradebookColumnIds = Array.from(gradebookColumnIds);
     const studentIds = Array.from(students);
 
-    // Use RPC function to efficiently fetch gradebook column students for large arrays
-    // This avoids PostgreSQL IN clause limitations
-    const { data: allGradebookColumnStudentsData, error: gradebookColumnsFetchError } = (await supabase.rpc(
-      "get_gradebook_column_students_bulk",
-      {
-        p_student_ids: studentIds,
-        p_gradebook_column_ids: uniqueGradebookColumnIds
+    // Fetch gradebook column students using the bulk RPC function with pagination
+    // The RPC function uses stable sorting (ORDER BY id) to ensure consistent pagination
+    const allGradebookColumnStudents: GradebookColumnStudent[] = [];
+    const pageSize = 1000;
+    let offset = 0;
+
+    while (true) {
+      const { data: pageData, error: rpcError } = (await (supabase.rpc as unknown as (
+        name: string,
+        args: {
+          p_student_ids: unknown;
+          p_gradebook_column_ids: unknown;
+          p_limit: number;
+          p_offset: number;
+        }
+      ) => Promise<{ data: GradebookColumnStudent[] | null; error: unknown }>)(
+        "get_gradebook_column_students_bulk",
+        {
+          p_student_ids: studentIds,
+          p_gradebook_column_ids: uniqueGradebookColumnIds,
+          p_limit: pageSize,
+          p_offset: offset
+        }
+      ));
+
+      if (rpcError) {
+        throw new Error(
+          `Failed to fetch gradebook column students via RPC at offset ${offset}: ${JSON.stringify(rpcError)}`
+        );
       }
-    )) as unknown as { data: GradebookColumnStudent[] | null; error: unknown };
 
-    if (gradebookColumnsFetchError) {
-      throw gradebookColumnsFetchError;
+      if (!pageData || pageData.length === 0) {
+        break;
+      }
+
+      allGradebookColumnStudents.push(...pageData);
+
+      // If we got fewer rows than the page size, we've reached the end
+      if (pageData.length < pageSize) {
+        break;
+      }
+
+      offset += pageSize;
     }
-
-    if (!allGradebookColumnStudentsData) {
-      throw new Error("Failed to fetch gradebook column students: no data returned");
-    }
-
-    const allGradebookColumnStudents: GradebookColumnStudent[] = allGradebookColumnStudentsData;
 
     // Fetch all gradebook columns with pagination
     const allGradebookColumns: GradebookColumn[] = [];
     let from = 0;
-    const pageSize = 1000;
+    const columnPageSize = 1000;
 
     while (true) {
-      const to = from + pageSize - 1;
+      const to = from + columnPageSize - 1;
       const { data: gradebookColumns, error: gradebookColumnsError } = await supabase
         .from("gradebook_columns")
         .select("*")
@@ -541,11 +566,11 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
 
       allGradebookColumns.push(...gradebookColumns);
 
-      if (gradebookColumns.length < pageSize) {
+      if (gradebookColumns.length < columnPageSize) {
         break;
       }
 
-      from += pageSize;
+      from += columnPageSize;
     }
 
     for (const gradebookColumn of allGradebookColumns) {

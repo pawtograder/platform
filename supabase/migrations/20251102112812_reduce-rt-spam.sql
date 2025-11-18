@@ -17,7 +17,6 @@ DECLARE
 BEGIN
     -- Store configuration in a temporary table (for reference, not used in triggers)
     -- Actual thresholds are hardcoded in functions for performance
-    RAISE NOTICE 'Bulk update threshold: % rows, max IDs in message: %', bulk_update_threshold, max_ids_in_message;
 END $$;
 
 -- ============================================================================
@@ -50,7 +49,6 @@ DECLARE
     MAX_IDS CONSTANT INTEGER := 49;
 BEGIN
     operation_type := TG_OP;
-    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Trigger fired: operation=%, table=gradebook_column_students', operation_type;
     
     -- Determine which transition table to use
     IF operation_type = 'DELETE' THEN
@@ -80,20 +78,13 @@ BEGIN
         FROM new_table;
     END IF;
     
-    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Collected: affected_count=%, class_ids=%, private_students=%, public_students=%', 
-        affected_count, class_ids, 
-        COALESCE(array_length(private_student_ids, 1), 0), 
-        COALESCE(array_length(public_student_ids, 1), 0);
-    
     -- If no rows affected, exit early
     IF affected_count IS NULL OR affected_count = 0 THEN
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Early return: no rows affected';
         RETURN NULL;
     END IF;
     
     -- Enforce single-class constraint
     IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Early return: no class_id found';
         RETURN NULL;
     END IF;
     
@@ -107,7 +98,6 @@ BEGIN
     -- Build payload based on affected count
     IF affected_count >= BULK_THRESHOLD THEN
         -- Large bulk: refetch signal
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Using bulk mode (>=% rows): refetch signal', BULK_THRESHOLD;
         staff_payload := jsonb_build_object(
             'type', 'table_change',
             'operation', operation_type,
@@ -123,10 +113,8 @@ BEGIN
         -- Small bulk: include IDs (up to MAX_IDS)
         IF array_length(affected_row_ids, 1) > MAX_IDS THEN
             affected_row_ids := affected_row_ids[1:MAX_IDS];
-            RAISE NOTICE '[broadcast_gradebook_column_students_statement] Truncated row_ids to first %', MAX_IDS;
         END IF;
         
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Using small bulk mode (<% rows): including row_ids', BULK_THRESHOLD;
         staff_payload := jsonb_build_object(
             'type', 'table_change',
             'operation', operation_type,
@@ -147,8 +135,6 @@ BEGIN
     
     -- Broadcast private records to staff channel only
     IF private_student_ids IS NOT NULL AND array_length(private_student_ids, 1) > 0 THEN
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Broadcasting % private records to staff channel: gradebook:%:staff', 
-            array_length(private_student_ids, 1), class_id_value;
         -- Only private records: broadcast to staff channel
         PERFORM public.safe_broadcast(
             staff_payload,
@@ -161,8 +147,6 @@ BEGIN
     -- Broadcast non-private records to individual student channels only
     -- Each student gets their own gradebook channel: gradebook:$class_id:student:$student_id
     IF public_student_ids IS NOT NULL AND array_length(public_student_ids, 1) > 0 THEN
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Broadcasting % public records to individual student channels', 
-            array_length(public_student_ids, 1);
         FOREACH student_id IN ARRAY public_student_ids
         LOOP
             PERFORM public.safe_broadcast(
@@ -172,10 +156,8 @@ BEGIN
                 true
             );
         END LOOP;
-        RAISE NOTICE '[broadcast_gradebook_column_students_statement] Completed broadcasting to % student channels', array_length(public_student_ids, 1);
     END IF;
     
-    RAISE NOTICE '[broadcast_gradebook_column_students_statement] Function completed';
     RETURN NULL;
 END;
 $$;
@@ -288,7 +270,6 @@ DECLARE
     affected_rows_by_class JSONB; -- Map of class_id -> array of affected rows
 BEGIN
     operation_type := TG_OP;
-    RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Trigger fired: operation=%, table=gradebook_row_recalc_state', operation_type;
     
     -- Collect affected count, all unique class_ids, and affected rows data grouped by class_id
     -- Use transition tables directly (old_table/new_table are statement-level trigger transition tables)
@@ -363,24 +344,19 @@ BEGIN
         
         -- Early return for INSERT triggers with empty new_table (INSERT ... ON CONFLICT DO UPDATE conflict case)
         IF affected_count = 0 THEN
-            RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Early return: INSERT trigger with empty new_table (likely INSERT ... ON CONFLICT DO UPDATE conflict) or no private rows';
             RETURN NULL;
         END IF;
     END IF;
     
-    RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Collected: affected_count=%, class_ids=% (private rows only)', affected_count, class_ids;
-    
     -- Early return if no private rows affected
     -- Note: COUNT(*) should never return NULL, but check for 0
     IF affected_count IS NULL OR affected_count = 0 THEN
-        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Early return: no private rows affected (only public rows or no rows)';
         RETURN NULL;
     END IF;
     
     -- Early return if no class_ids found
     -- Note: ARRAY_AGG returns NULL if no rows, so check for NULL or empty array
     IF class_ids IS NULL OR array_length(class_ids, 1) IS NULL OR array_length(class_ids, 1) = 0 THEN
-        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Early return: no class_ids found for private rows';
         RETURN NULL;
     END IF;
     
@@ -410,9 +386,6 @@ BEGIN
             );
         END;
         
-        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Broadcasting to class_id=%, channel=gradebook:%:staff, affected_count=% (private rows only)', 
-            class_id_value, class_id_value, jsonb_array_length(staff_payload->'affected_rows');
-        
         -- Broadcast to gradebook staff channel for this class
         -- Note: safe_broadcast checks for subscribers before sending, so if no one is subscribed, it won't send
         PERFORM public.safe_broadcast(
@@ -421,11 +394,8 @@ BEGIN
             'gradebook:' || class_id_value || ':staff',
             true
         );
-        
-        RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Broadcast completed for class_id=%', class_id_value;
     END LOOP;
     
-    RAISE NOTICE '[broadcast_gradebook_row_recalc_state_statement] Function completed: total broadcasts=%', array_length(class_ids, 1);
     RETURN NULL;
 END;
 $$;
@@ -468,9 +438,6 @@ CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation(
 DECLARE
   row_message jsonb;
 BEGIN
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Called: class_id=%, gradebook_id=%, student_id=%, is_private=%, reason=%', 
-    p_class_id, p_gradebook_id, p_student_id, p_is_private, p_reason;
-  
   -- Per-row advisory lock to avoid duplicate enqueues under concurrency
   PERFORM pg_advisory_xact_lock(
     hashtextextended(
@@ -499,7 +466,12 @@ BEGIN
         AND s.dirty = true
         AND s.is_recalculating = false
     ) THEN
-      RAISE NOTICE '[enqueue_gradebook_row_recalculation] Skipped: row already dirty and not recalculating';
+      -- Still check if we need to enqueue opposite privacy mode
+      IF p_is_private = true THEN
+        PERFORM public.enqueue_gradebook_row_recalculation(
+          p_class_id, p_gradebook_id, p_student_id, false, p_reason || ' (opposite privacy)', p_trigger_id
+        );
+      END IF;
       RETURN;
     END IF;
   END IF;
@@ -513,7 +485,6 @@ BEGIN
   );
 
   -- Send a single message to the row queue
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Sending message to queue: gradebook_row_recalculate';
   PERFORM pgmq_public.send(
     queue_name := 'gradebook_row_recalculate',
     message := row_message
@@ -523,18 +494,22 @@ BEGIN
   -- The statement-level trigger will broadcast all changes in this statement at once
   -- Note: This INSERT ... ON CONFLICT DO UPDATE will fire either the INSERT or UPDATE trigger
   -- depending on whether a conflict occurs. Both triggers use the same function which handles both cases.
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Upserting gradebook_row_recalc_state (this will trigger statement-level broadcast)';
   INSERT INTO public.gradebook_row_recalc_state (class_id, gradebook_id, student_id, is_private, dirty, is_recalculating, version)
   VALUES (p_class_id, p_gradebook_id, p_student_id, p_is_private, true, true, 1)
   ON CONFLICT (class_id, gradebook_id, student_id, is_private)
   DO UPDATE SET dirty = true, is_recalculating = true, version = public.gradebook_row_recalc_state.version + 1, updated_at = now();
   
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation] Completed upsert';
+  -- If is_private=true, also enqueue is_private=false
+  IF p_is_private = true THEN
+    PERFORM public.enqueue_gradebook_row_recalculation(
+      p_class_id, p_gradebook_id, p_student_id, false, p_reason || ' (opposite privacy)', p_trigger_id
+    );
+  END IF;
 END;
 $$;
 
 COMMENT ON FUNCTION public.enqueue_gradebook_row_recalculation(bigint, bigint, uuid, boolean, text, bigint)
-  IS 'Enqueues recalculation for all gradebook cells of a specific student in a class for the given privacy variant. State changes are broadcast via statement-level triggers, which batch multiple updates efficiently.';
+  IS 'Enqueues recalculation for all gradebook cells of a specific student in a class for the given privacy variant. When is_private=true is enqueued, also enqueues is_private=false for the same student. State changes are broadcast via statement-level triggers, which batch multiple updates efficiently.';
 
 -- ============================================================================
 -- BATCH ENQUEUE FUNCTION
@@ -542,6 +517,7 @@ COMMENT ON FUNCTION public.enqueue_gradebook_row_recalculation(bigint, bigint, u
 
 -- Batch version of enqueue_gradebook_row_recalculation that processes multiple rows
 -- in a single statement, allowing statement-level triggers to batch broadcasts
+-- When is_private=true is enqueued, also enqueues is_private=false for the same student
 CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation_batch(
   p_rows jsonb[]
 ) RETURNS void
@@ -559,9 +535,8 @@ DECLARE
   student_id_val uuid;
   is_private_val boolean;
   skipped_count integer := 0;
+  opposite_privacy_rows jsonb[] := ARRAY[]::jsonb[];
 BEGIN
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation_batch] Called with % rows', array_length(p_rows, 1);
-  
   -- Collect messages and rows to insert/update
   messages := ARRAY[]::jsonb[];
   rows_to_insert := ARRAY[]::jsonb[];
@@ -619,14 +594,83 @@ BEGIN
     
     -- Collect row for batch upsert
     rows_to_insert := array_append(rows_to_insert, row_rec);
+    
+    -- If is_private=true, also enqueue is_private=false (but only if not already in input)
+    IF is_private_val = true THEN
+      -- Check if is_private=false is already in the input rows to avoid duplicates
+      IF NOT EXISTS (
+        SELECT 1 FROM unnest(p_rows) AS existing_row
+        WHERE (existing_row->>'class_id')::bigint = class_id_val
+          AND (existing_row->>'gradebook_id')::bigint = gradebook_id_val
+          AND (existing_row->>'student_id')::uuid = student_id_val
+          AND (existing_row->>'is_private')::boolean = false
+      ) THEN
+        opposite_privacy_rows := array_append(opposite_privacy_rows, 
+          jsonb_build_object(
+            'class_id', class_id_val,
+            'gradebook_id', gradebook_id_val,
+            'student_id', student_id_val,
+            'is_private', false
+          )
+        );
+      END IF;
+    END IF;
   END LOOP;
   
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation_batch] Processed: total=%, skipped=%, to_enqueue=%, to_upsert=%', 
-    array_length(p_rows, 1), skipped_count, array_length(messages, 1), array_length(rows_to_insert, 1);
+  -- Process opposite privacy rows (is_private=false when is_private=true was enqueued)
+  IF array_length(opposite_privacy_rows, 1) > 0 THEN
+    FOREACH row_rec IN ARRAY opposite_privacy_rows
+    LOOP
+      class_id_val := (row_rec->>'class_id')::bigint;
+      gradebook_id_val := (row_rec->>'gradebook_id')::bigint;
+      student_id_val := (row_rec->>'student_id')::uuid;
+      is_private_val := false;
+      
+      -- Apply gating rules for opposite privacy row
+      PERFORM pg_advisory_xact_lock(
+        hashtextextended(
+          class_id_val::text || ':' || gradebook_id_val::text || ':' || student_id_val::text || ':false',
+          42
+        )::bigint
+      );
+      
+      IF NOT EXISTS (
+        SELECT 1 FROM public.gradebook_row_recalc_state s
+        WHERE s.class_id = class_id_val
+          AND s.gradebook_id = gradebook_id_val
+          AND s.student_id = student_id_val
+          AND s.is_private = false
+          AND s.is_recalculating = true
+      ) THEN
+        IF EXISTS (
+          SELECT 1 FROM public.gradebook_row_recalc_state s
+          WHERE s.class_id = class_id_val
+            AND s.gradebook_id = gradebook_id_val
+            AND s.student_id = student_id_val
+            AND s.is_private = false
+            AND s.dirty = true
+            AND s.is_recalculating = false
+        ) THEN
+          CONTINUE; -- Skip this row
+        END IF;
+      END IF;
+      
+      -- Build message for queue
+      row_message := jsonb_build_object(
+        'class_id', class_id_val,
+        'gradebook_id', gradebook_id_val,
+        'student_id', student_id_val,
+        'is_private', false
+      );
+      messages := array_append(messages, row_message);
+      
+      -- Collect row for batch upsert
+      rows_to_insert := array_append(rows_to_insert, row_rec);
+    END LOOP;
+  END IF;
   
   -- Send all messages to queue in batch if any
   IF array_length(messages, 1) > 0 THEN
-    RAISE NOTICE '[enqueue_gradebook_row_recalculation_batch] Sending % messages to queue: gradebook_row_recalculate', array_length(messages, 1);
     PERFORM pgmq_public.send_batch(
       queue_name := 'gradebook_row_recalculate',
       messages := messages
@@ -634,36 +678,34 @@ BEGIN
   END IF;
   
   -- Batch upsert all rows in a single statement
+  -- Deduplicate rows_to_insert to avoid ON CONFLICT errors when both privacy modes are present
   -- This will trigger the statement-level broadcast trigger once for all rows
   IF array_length(rows_to_insert, 1) > 0 THEN
-    RAISE NOTICE '[enqueue_gradebook_row_recalculation_batch] Batch upserting % rows (this will trigger statement-level broadcast)', array_length(rows_to_insert, 1);
     INSERT INTO public.gradebook_row_recalc_state (
       class_id, gradebook_id, student_id, is_private, dirty, is_recalculating, version
     )
-    SELECT 
-      (r->>'class_id')::bigint,
-      (r->>'gradebook_id')::bigint,
-      (r->>'student_id')::uuid,
-      (r->>'is_private')::boolean,
+    SELECT DISTINCT ON (class_id, gradebook_id, student_id, is_private)
+      (r->>'class_id')::bigint AS class_id,
+      (r->>'gradebook_id')::bigint AS gradebook_id,
+      (r->>'student_id')::uuid AS student_id,
+      (r->>'is_private')::boolean AS is_private,
       true, -- dirty
       true, -- is_recalculating
       1     -- version
     FROM unnest(rows_to_insert) AS r
+    ORDER BY class_id, gradebook_id, student_id, is_private
     ON CONFLICT (class_id, gradebook_id, student_id, is_private)
     DO UPDATE SET 
       dirty = true, 
       is_recalculating = true, 
       version = public.gradebook_row_recalc_state.version + 1, 
       updated_at = now();
-    RAISE NOTICE '[enqueue_gradebook_row_recalculation_batch] Batch upsert completed';
   END IF;
-  
-  RAISE NOTICE '[enqueue_gradebook_row_recalculation_batch] Function completed';
 END;
 $$;
 
 COMMENT ON FUNCTION public.enqueue_gradebook_row_recalculation_batch(jsonb[])
-  IS 'Batch version of enqueue_gradebook_row_recalculation that processes multiple rows in a single statement, allowing statement-level triggers to batch broadcasts efficiently.';
+  IS 'Batch version of enqueue_gradebook_row_recalculation that processes multiple rows in a single statement, allowing statement-level triggers to batch broadcasts efficiently. When is_private=true is enqueued, also enqueues is_private=false for the same student.';
 
 -- ============================================================================
 -- UPDATE recalculate_gradebook_column_for_all_students_statement TO USE BATCH
@@ -676,8 +718,6 @@ DECLARE
   rows_to_enqueue jsonb[];
   row_rec RECORD;
 BEGIN
-  RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Trigger fired: operation=%, table=gradebook_columns', TG_OP;
-  
   -- Collect all affected students into a JSONB array
   rows_to_enqueue := ARRAY[]::jsonb[];
   
@@ -698,16 +738,10 @@ BEGIN
     );
   END LOOP;
   
-  RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Collected % rows to enqueue', array_length(rows_to_enqueue, 1);
-  
   -- Batch enqueue all rows in a single call
   -- This will result in a single INSERT statement, triggering the broadcast trigger once
   IF array_length(rows_to_enqueue, 1) > 0 THEN
-    RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Calling batch enqueue function';
     PERFORM public.enqueue_gradebook_row_recalculation_batch(rows_to_enqueue);
-    RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Batch enqueue completed';
-  ELSE
-    RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] No rows to enqueue';
   END IF;
   
   RETURN NULL;
@@ -729,8 +763,6 @@ DECLARE
   rows_to_enqueue jsonb[];
   r RECORD;
 BEGIN
-  RAISE NOTICE '[gradebook_column_student_recalculate_dependents_statement] Trigger fired: operation=%, table=gradebook_column_students', TG_OP;
-  
   IF TG_OP = 'INSERT' THEN
     RETURN NULL;
   END IF;
@@ -777,18 +809,12 @@ BEGIN
     );
   END LOOP;
   
-  RAISE NOTICE '[gradebook_column_student_recalculate_dependents_statement] Collected % rows to enqueue (after filtering out rows currently being recalculated)', array_length(rows_to_enqueue, 1);
-  
   -- Batch enqueue all rows in a single call
   -- This will result in a single INSERT/UPDATE statement, triggering the broadcast trigger once
   -- Note: Rows that are currently being recalculated (is_recalculating = true) are skipped
   -- to prevent feedback loops when update_gradebook_row() updates rows during recalculation
   IF array_length(rows_to_enqueue, 1) > 0 THEN
-    RAISE NOTICE '[gradebook_column_student_recalculate_dependents_statement] Calling batch enqueue function';
     PERFORM public.enqueue_gradebook_row_recalculation_batch(rows_to_enqueue);
-    RAISE NOTICE '[gradebook_column_student_recalculate_dependents_statement] Batch enqueue completed';
-  ELSE
-    RAISE NOTICE '[gradebook_column_student_recalculate_dependents_statement] No rows to enqueue (all filtered out or no dependencies)';
   END IF;
 
   RETURN NULL;
@@ -848,8 +874,6 @@ DECLARE
   messages_to_send jsonb[];
   msg_id bigint;
 BEGIN
-  RAISE NOTICE '[update_gradebook_rows_batch] Called with % students', array_length(p_batch_updates, 1);
-  
   -- Single query execution with all CTEs chained together
   -- This ensures updated_rows CTE is available for subsequent steps
   WITH student_updates_expanded AS (
@@ -1128,19 +1152,6 @@ BEGIN
     cleared_details
   FROM final_results;
   
-  RAISE NOTICE '[update_gradebook_rows_batch] Step 1: Expanded % update rows from input', expanded_count;
-  RAISE NOTICE '[update_gradebook_rows_batch] Step 2: % rows matched version check (will be updated)', version_matched_count;
-  RAISE NOTICE '[update_gradebook_rows_batch] Step 3: Updated % gradebook_column_students rows', updated_gcs_count;
-  RAISE NOTICE '[update_gradebook_rows_batch] Step 4: Found % unique students with updates, preparing to clear recalc state', unique_students_count;
-  RAISE NOTICE '[update_gradebook_rows_batch] Step 5: Cleared recalc state for % rows', cleared_state_count;
-  
-  -- Debug: Log details of cleared rows to verify they were actually cleared
-  IF cleared_details IS NOT NULL AND jsonb_array_length(cleared_details) > 0 THEN
-    RAISE NOTICE '[update_gradebook_rows_batch] Step 5 details: %', cleared_details;
-  END IF;
-  
-  RAISE NOTICE '[update_gradebook_rows_batch] Step 6: Built results for % students', jsonb_array_length(results);
-  
   -- Step 7: Archive messages for successfully cleared rows (version matched)
   -- Extract message IDs from results where version matched and cleared
   SELECT ARRAY_AGG(DISTINCT msg_ids.msg_id) INTO message_ids_to_archive
@@ -1157,12 +1168,10 @@ BEGIN
   ) AS msg_ids;
   
   IF message_ids_to_archive IS NOT NULL AND array_length(message_ids_to_archive, 1) > 0 THEN
-    RAISE NOTICE '[update_gradebook_rows_batch] Step 7: Archiving % messages', array_length(message_ids_to_archive, 1);
     FOREACH msg_id IN ARRAY message_ids_to_archive
     LOOP
       PERFORM pgmq_public.archive('gradebook_row_recalculate', msg_id);
     END LOOP;
-    RAISE NOTICE '[update_gradebook_rows_batch] Step 7: Archived % messages', array_length(message_ids_to_archive, 1);
   END IF;
   
   -- Step 8: Re-enqueue rows with version mismatches
@@ -1182,7 +1191,6 @@ BEGIN
   WHERE (sr->>'version_matched')::boolean = false;
   
   IF rows_to_reenqueue IS NOT NULL AND jsonb_array_length(rows_to_reenqueue) > 0 THEN
-    RAISE NOTICE '[update_gradebook_rows_batch] Step 8: Re-enqueueing % rows with version mismatches', jsonb_array_length(rows_to_reenqueue);
     -- Build messages array and send directly to queue (no state update needed)
     -- The state is already set from the original enqueue, we just need to re-send the message
     SELECT ARRAY_AGG(
@@ -1200,11 +1208,8 @@ BEGIN
         queue_name := 'gradebook_row_recalculate',
         messages := messages_to_send
       );
-      RAISE NOTICE '[update_gradebook_rows_batch] Step 8: Re-enqueued % messages directly to queue', array_length(messages_to_send, 1);
     END IF;
   END IF;
-  
-  RAISE NOTICE '[update_gradebook_rows_batch] Function completed successfully';
   
   RETURN COALESCE(results, '[]'::jsonb);
 END;
