@@ -10,8 +10,6 @@ interface TimeZoneContextType {
   timeZone: string;
   courseTimeZone: string;
   browserTimeZone: string;
-  formatDate: (date: Date | string, options?: Intl.DateTimeFormatOptions) => string;
-  formatDateWithExplicitTZ: (date: Date | string, options?: Intl.DateTimeFormatOptions) => string;
   showModal: boolean;
   dismissModal: () => void;
 }
@@ -75,21 +73,6 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
     });
   };
 
-  // Date formatter that always shows timezone abbreviation for clarity
-  const formatDateWithExplicitTZ = (date: Date | string, options?: Intl.DateTimeFormatOptions) => {
-    const d = typeof date === "string" ? new Date(date) : date;
-    return d.toLocaleString(undefined, {
-      timeZone: activeTimeZone,
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZoneName: "short",
-      ...options
-    });
-  };
-
   return (
     <TimeZoneContext.Provider
       value={{
@@ -98,8 +81,6 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
         timeZone: activeTimeZone,
         courseTimeZone,
         browserTimeZone,
-        formatDate,
-        formatDateWithExplicitTZ,
         showModal,
         dismissModal
       }}
