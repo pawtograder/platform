@@ -525,6 +525,23 @@ export async function processEnvelope(
     Sentry.captureException(e, scope);
   }
 
+  // Test DLQ failure injection - throw error if enabled via environment variable
+  // When enabled, if a message has been retried at least once, always fail it again
+  // to ensure it reaches the DLQ threshold (5 retries)
+  const injectDlqFailure = Deno.env.get("INJECT_DLQ_FAILURE");
+  const retryCount = envelope.retry_count ?? 0;
+  if ((injectDlqFailure === "true" || injectDlqFailure === "1")) {
+    if (retryCount >= 1 || Math.random() < 0.5) {
+      const error = new Error(`DLQ test failure injection - simulating processing error (retry ${retryCount})`);
+      scope.setTag("dlq_test_injection", "true");
+      scope.setContext("dlq_test_injection", {
+        retry_count: retryCount,
+        method: envelope.method
+      });
+      throw error;
+    }
+  }
+
   try {
     switch (envelope.method) {
       case "sync_student_team": {
