@@ -41,7 +41,6 @@ export default function EditSurveyPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [surveyData, setSurveyData] = useState<SurveyRow>();
   const { role } = useClassProfiles();
-  const rawCourseId = getParam(course_id, "course_id");
   const rawSurveyId = getParam(survey_id, "survey_id");
 
   const form = useForm<SurveyFormData>({
@@ -56,7 +55,7 @@ export default function EditSurveyPage() {
     }
   });
 
-  const { getValues, setValue, reset } = form;
+  const reset = form.reset;
   const hasLoadedSurvey = useRef(false);
   const loadingPromise = useRef<Promise<void> | null>(null);
 
@@ -254,8 +253,8 @@ export default function EditSurveyPage() {
           const supabase = createClient();
 
           // Parse the JSON to ensure it's valid (only for active updates)
-          let parsedJson = toJsonString(values.json);
-          let validationErrors = null;
+          const parsedJson = toJsonString(values.json);
+          const validationErrors = null;
 
           // Update the survey
           const { data, error } = await supabase
@@ -295,7 +294,7 @@ export default function EditSurveyPage() {
                 throw new Error(fallbackData.error.message);
               }
             } catch (fallbackError) {
-              throw new Error(`Failed to update survey: ${error?.message || "Unknown error"}`);
+              throw new Error(`Failed to update survey: ${error?.message || fallbackError|| "Unknown error"}`);
             }
             return;
           }
