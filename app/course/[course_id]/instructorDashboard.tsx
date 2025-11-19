@@ -23,9 +23,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
 import * as Sentry from "@sentry/nextjs";
-import { formatInTimeZone } from "date-fns-tz";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -163,11 +161,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const reviewAssignmentsSummary = allReviewAssignmentsSummary
     ?.filter((summary) => (summary.incomplete_reviews ?? 0) > 0)
     .concat(allReviewAssignmentsSummary?.filter((summary) => (summary.incomplete_reviews ?? 0) === 0).slice(0, 2));
-  const { data: course, error: courseError } = await supabase
-    .from("classes")
-    .select("time_zone")
-    .eq("id", course_id)
-    .single();
+  const { error: courseError } = await supabase.from("classes").select("time_zone").eq("id", course_id).single();
 
   if (courseError) {
     Sentry.captureException(courseError);
@@ -312,13 +306,11 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
                         <Text fontSize="sm">
-                          {reviewSummary.soonest_due_date
-                            ? formatInTimeZone(
-                                new TZDate(reviewSummary.soonest_due_date),
-                                course?.time_zone || "America/New_York",
-                                "MMM d, h:mm a"
-                              )
-                            : "No due date"}
+                          {reviewSummary.soonest_due_date ? (
+                            <TimeZoneAwareDate date={reviewSummary.soonest_due_date} format="MMM d, h:mm a" />
+                          ) : (
+                            "No due date"
+                          )}
                         </Text>
                       </DataListItemValue>
                     </DataListItem>
@@ -343,8 +335,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <Text fontWeight="semibold">{metric.title}</Text>
                     </Link>
                     <Badge colorScheme="gray" size="sm">
-                      Due{" "}
-                      {formatInTimeZone(new TZDate(metric.due_date), metric.time_zone || "America/New_York", "MMM d")}
+                      Due <TimeZoneAwareDate date={metric.due_date} format="MMM d" />
                     </Badge>
                   </Flex>
                 </CardHeader>
@@ -661,7 +652,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       const studentName =
                         submission?.profiles?.name || submission?.assignment_groups?.name || "Unknown";
                       const assignmentTitle = submission?.assignments?.title || "Unknown Assignment";
-                      const timeAgo = new Date(error.created_at).toLocaleString();
 
                       return (
                         <Box key={error.id} p={2} border="1px solid" borderColor="border.subtle" borderRadius="md">
@@ -670,7 +660,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                               {error.name}
                             </Text>
                             <Text fontSize="xs" color="fg.muted">
-                              {timeAgo}
+                              <TimeZoneAwareDate date={error.created_at} format="compact" />
                             </Text>
                           </Flex>
                           <Text fontSize="sm" color="fg.muted">

@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -9,6 +10,7 @@ import { AlertCircle, CheckCircle, ChevronDown, ChevronRight, ChevronUp, XCircle
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import EnrollmentsTable from "./enrollmentsTable";
+
 type ClassWithSyncStatus = GetResult<
   Database["public"],
   Database["public"]["Tables"]["classes"]["Row"],
@@ -145,7 +147,8 @@ function SyncStatusIndicator({ syncStatus }: { syncStatus: SisSyncStatus }) {
             </Text>
             {syncStatus.last_sync_time && (
               <Text>
-                <strong>Last Sync:</strong> {new Date(syncStatus.last_sync_time).toLocaleString()}
+                <strong>Last Sync:</strong>
+                <TimeZoneAwareDate date={syncStatus.last_sync_time} format="compact" />
               </Text>
             )}
           </Box>

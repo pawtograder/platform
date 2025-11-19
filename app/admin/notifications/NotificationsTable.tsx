@@ -1,13 +1,14 @@
 "use client";
 
 import { SystemNotification } from "@/components/notifications/notification-teaser";
-import { toaster } from "@/components/ui/toaster";
-import { Badge, Box, HStack, IconButton, Text, VStack, Table } from "@chakra-ui/react";
-import { Eye, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
-import { useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { useNotificationsTable } from "@/hooks/useNotificationsTable";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
+import { toaster } from "@/components/ui/toaster";
+import { useNotificationsTable } from "@/hooks/useNotificationsTable";
+import { createClient } from "@/utils/supabase/client";
+import { Badge, Box, HStack, IconButton, Table, Text, VStack } from "@chakra-ui/react";
+import { ChevronLeft, ChevronRight, Eye, Trash2 } from "lucide-react";
+import { useState } from "react";
 
 export default function NotificationsTable() {
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
@@ -50,16 +51,6 @@ export default function NotificationsTable() {
       });
     }
   }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
-  };
 
   const getSeverityColor = (severity?: string) => {
     switch (severity) {
@@ -193,7 +184,7 @@ export default function NotificationsTable() {
                 </Table.Cell>
                 <Table.Cell>
                   <Text fontSize="xs" color="fg.muted">
-                    {formatDate(notification.created_at)}
+                    <TimeZoneAwareDate date={notification.created_at} format="Pp" />
                   </Text>
                 </Table.Cell>
                 <Table.Cell>

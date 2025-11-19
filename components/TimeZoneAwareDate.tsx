@@ -55,7 +55,7 @@ export function TimeZoneAwareDate({
         // "Oct 5, 2025, 11:21 PM EDT"
         return formatInTimeZone(d, timeZone, "MMM d, yyyy, h:mm a zzz");
     }
-  }, [date, format, timeZone]); // Memo dependencies
+  }, [date, format, timeZone]);
 
   return <>{formattedDate}</>;
 }

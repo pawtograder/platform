@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -190,9 +191,7 @@ export default function AssignmentExceptionsTable({
                 <Table.Cell>{r.creator_id ? <PersonName uid={r.creator_id} /> : ""}</Table.Cell>
                 <Table.Cell>{r.note}</Table.Cell>
                 <Table.Cell>
-                  {new Date(r.created_at).toLocaleString("en-US", {
-                    timeZone: course.time_zone || "America/New_York"
-                  })}
+                  <TimeZoneAwareDate date={r.created_at} format="compact" />
                 </Table.Cell>
                 <Table.Cell>
                   <HStack gap={2}>

@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -460,7 +461,11 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorKey: "due_date",
         cell: function render({ getValue }) {
           const dueDate = getValue<string>();
-          return dueDate ? format(new TZDate(dueDate, course.classes.time_zone ?? "America/New_York"), "P p") : "N/A"; // Added time with 'p'
+          return dueDate ? (
+            <TimeZoneAwareDate date={new TZDate(dueDate, course.classes.time_zone ?? "America/New_York")} format="Pp" />
+          ) : (
+            "N/A"
+          );
         }
       },
       {

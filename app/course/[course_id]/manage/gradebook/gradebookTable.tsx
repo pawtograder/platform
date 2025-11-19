@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
@@ -74,6 +75,7 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
 import { Select } from "chakra-react-select";
+import { LucideInfo } from "lucide-react";
 import { useParams } from "next/navigation";
 import pluralize from "pluralize";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -101,7 +103,6 @@ import { WhatIf } from "../../gradebook/whatIf";
 import GradebookCell from "./gradebookCell";
 import { GradebookPopoverProvider } from "./GradebookPopoverProvider";
 import ImportGradebookColumn from "./importGradebookColumn";
-import { LucideInfo } from "lucide-react";
 const MemoizedGradebookCell = React.memo(GradebookCell);
 
 function RenderExprDocs() {
@@ -728,7 +729,7 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
   );
 }
 
-function ExteralDataAdvice({ externalData }: { externalData: GradebookColumnExternalData }) {
+function ExternalDataAdvice({ externalData }: { externalData: GradebookColumnExternalData }) {
   return (
     <VStack gap={0} align="flex-start">
       <Text fontSize="sm" color="fg.default" fontWeight="medium">
@@ -738,7 +739,7 @@ function ExteralDataAdvice({ externalData }: { externalData: GradebookColumnExte
         File: {externalData.fileName}
       </Text>
       <Text fontSize="sm" color="fg.default" fontWeight="medium">
-        Date: {new Date(externalData.date).toLocaleDateString()}
+        Date: <TimeZoneAwareDate date={externalData.date} format="compact" />
       </Text>
       <Text fontSize="sm" color="fg.default" fontWeight="medium">
         Creator:
@@ -1505,7 +1506,7 @@ function GradebookColumnHeader({
                   <Portal>
                     <Tooltip.Positioner style={{ zIndex: 10000 }}>
                       <Tooltip.Content>
-                        <ExteralDataAdvice externalData={column.external_data as GradebookColumnExternalData} />
+                        <ExternalDataAdvice externalData={column.external_data as GradebookColumnExternalData} />
                       </Tooltip.Content>
                     </Tooltip.Positioner>
                   </Portal>
