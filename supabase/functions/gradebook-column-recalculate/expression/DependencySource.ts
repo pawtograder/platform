@@ -505,23 +505,22 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     let offset = 0;
 
     while (true) {
-      const { data: pageData, error: rpcError } = (await (supabase.rpc as unknown as (
-        name: string,
-        args: {
-          p_student_ids: unknown;
-          p_gradebook_column_ids: unknown;
-          p_limit: number;
-          p_offset: number;
-        }
-      ) => Promise<{ data: GradebookColumnStudent[] | null; error: unknown }>)(
-        "get_gradebook_column_students_bulk",
-        {
-          p_student_ids: studentIds,
-          p_gradebook_column_ids: uniqueGradebookColumnIds,
-          p_limit: pageSize,
-          p_offset: offset
-        }
-      ));
+      const { data: pageData, error: rpcError } = await (
+        supabase.rpc as unknown as (
+          name: string,
+          args: {
+            p_student_ids: unknown;
+            p_gradebook_column_ids: unknown;
+            p_limit: number;
+            p_offset: number;
+          }
+        ) => Promise<{ data: GradebookColumnStudent[] | null; error: unknown }>
+      )("get_gradebook_column_students_bulk", {
+        p_student_ids: studentIds,
+        p_gradebook_column_ids: uniqueGradebookColumnIds,
+        p_limit: pageSize,
+        p_offset: offset
+      });
 
       if (rpcError) {
         throw new Error(

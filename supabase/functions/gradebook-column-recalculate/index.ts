@@ -79,7 +79,9 @@ async function processRowsAll(
     } else {
       // Add this message's ID to the duplicate list so it gets archived
       existing.duplicateMsgIds.push(msg.msg_id);
-      console.log(`[DEBUG] ${workerId} Found duplicate message for ${k}: msg_id ${msg.msg_id} added to duplicates (total duplicates: ${existing.duplicateMsgIds.length})`);
+      console.log(
+        `[DEBUG] ${workerId} Found duplicate message for ${k}: msg_id ${msg.msg_id} added to duplicates (total duplicates: ${existing.duplicateMsgIds.length})`
+      );
     }
   }
 

@@ -706,7 +706,6 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
     }
 
-
     // Wait for grade to be updated in database
     await expect(async () => {
       const { data: finalGradebookColumnStudent, error: finalGradebookColumnStudentError } = await supabase
