@@ -799,11 +799,6 @@ export async function processGradebookRowsCalculation(
         if (DEBUG_LOG) {
           console.log(`Adding update GCID: ${columnId}, nextScore: ${nextScore}, curScore: ${curScore}`);
         }
-        if (column.score_expression.includes("countif")) {
-          console.log(
-            `[DEBUG] ADDING_UPDATE: Column ${column.id} (${column.slug}) adding update: score=${nextScore}, is_missing=${isMissing}, released=${nextReleased}`
-          );
-        }
         updates.push({
           gradebook_column_id: columnId,
           score: nextScore,

@@ -207,12 +207,11 @@ abstract class DependencySourceBase implements DependencySource {
       }
       throw new Error(`Unsupported key type: ${typeof key}`);
     }
-    return this.valuesMap
-      .get(context.student_id)
-      ?.find(
-        (value) =>
-          value.key === key && value.class_id === class_id && value.is_private === context.is_private_calculation
-      )?.value;
+    const studentValues = this.valuesMap.get(context.student_id);
+    const matchingValue = studentValues?.find(
+      (value) => value.key === key && value.class_id === class_id && value.is_private === context.is_private_calculation
+    );
+    return matchingValue?.value;
   }
 }
 
@@ -452,7 +451,16 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         if (Array.isArray(key)) {
           const values = key.map((k) => {
             if (typeof k !== "string") return undefined;
-            return readOverride(k) ?? readBase(k);
+            const overrideVal = readOverride(k);
+            const baseVal = readBase(k);
+            // If we have an override value but base has score_override, use base's score_override
+            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
+              return {
+                ...baseVal,
+                score: baseVal.score_override
+              };
+            }
+            return overrideVal ?? baseVal;
           });
           this._pushMissingIfNeeded(
             context,
@@ -461,9 +469,19 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
           return values;
         }
         if (isDenseMatrix(key)) {
-          const values = (key as Matrix<string>)
-            .toArray()
-            .map((k) => (typeof k === "string" ? (readOverride(k) ?? readBase(k)) : undefined));
+          const values = (key as Matrix<string>).toArray().map((k) => {
+            if (typeof k !== "string") return undefined;
+            const overrideVal = readOverride(k);
+            const baseVal = readBase(k);
+            // If we have an override value but base has score_override, use base's score_override
+            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
+              return {
+                ...baseVal,
+                score: baseVal.score_override
+              };
+            }
+            return overrideVal ?? baseVal;
+          });
           this._pushMissingIfNeeded(
             context,
             values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
@@ -471,7 +489,22 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
           return values;
         }
       } else if (typeof key === "string") {
-        const value = readOverride(key) ?? readBase(key);
+        const overrideValue = readOverride(key);
+        const baseValue = readBase(key);
+
+        // If we have an override value (freshly calculated), but the base value has a score_override,
+        // we should use the base value's score_override instead of the calculated override value
+        let value: GradebookColumnStudentWithMaxScore | undefined;
+        if (overrideValue && baseValue && baseValue.score_override !== null && baseValue.score_override !== undefined) {
+          // Use base value with its score_override
+          value = {
+            ...baseValue,
+            score: baseValue.score_override
+          };
+        } else {
+          // Use override value if available, otherwise use base value
+          value = overrideValue ?? baseValue;
+        }
         if (value) {
           this._pushMissingIfNeeded(context, value);
           return value;
@@ -880,7 +913,7 @@ export async function addDependencySourceFunctions({
     return value < threshold ? 1 : 0;
   };
   imports["countif"] = (
-    _context: ExpressionContext,
+    context: ExpressionContext,
     value: GradebookColumnStudentWithMaxScore[],
     condition: (value: GradebookColumnStudentWithMaxScore) => boolean
   ) => {

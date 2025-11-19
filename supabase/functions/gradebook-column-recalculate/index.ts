@@ -37,6 +37,7 @@ type RowMessage = {
 };
 
 const SCOPED_FETCH_THRESHOLD = 50;
+const MAX_BATCH_UPDATE_SIZE = 75; // Maximum number of students to update per RPC call
 const workerId = crypto.randomUUID();
 
 // Helper to create unique row key for gradebook_row_recalc_state
@@ -313,40 +314,43 @@ async function processRowsAll(
       }
 
       if (batchUpdates.length > 0) {
-        // Collect all message IDs being sent to RPC for archiving
-        const allMessageIds = batchUpdates.flatMap((bu) => bu.message_ids);
+        // Split into chunks of MAX_BATCH_UPDATE_SIZE to avoid timeouts
+        const chunks: (typeof batchUpdates)[] = [];
+        for (let i = 0; i < batchUpdates.length; i += MAX_BATCH_UPDATE_SIZE) {
+          chunks.push(batchUpdates.slice(i, i + MAX_BATCH_UPDATE_SIZE));
+        }
+
         console.log(
-          `[DEBUG] ${workerId} BATCH_UPDATE: About to batch update ${batchUpdates.length} students for gradebook ${gradebook_id} with ${allMessageIds.length} message IDs: [${allMessageIds.join(", ")}]`
+          `[DEBUG] ${workerId} BATCH_UPDATE: Processing ${batchUpdates.length} students in ${chunks.length} chunks (max ${MAX_BATCH_UPDATE_SIZE} per chunk) for gradebook ${gradebook_id}`
         );
 
-        // Log what we're sending to RPC for debugging
-        const sampleBatchUpdate = batchUpdates.slice(0, 3).map((bu) => ({
-          student_id: bu.student_id,
-          is_private: bu.is_private,
-          expected_version: bu.expected_version,
-          updates_count: bu.updates.length,
-          message_ids_count: bu.message_ids.length
-        }));
-        console.log(
-          `[DEBUG] ${workerId} RPC CALL: Sample batch update (first 3):`,
-          JSON.stringify(sampleBatchUpdate, null, 2)
-        );
+        // Process each chunk separately
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+          const chunk = chunks[chunkIndex];
+          const allMessageIds = chunk.flatMap((bu) => bu.message_ids);
 
-        const { error: batchError, data: batchResults } = await adminSupabase.rpc("update_gradebook_rows_batch", {
-          p_batch_updates: batchUpdates
-        });
+          console.log(
+            `[DEBUG] ${workerId} BATCH_UPDATE: Processing chunk ${chunkIndex + 1}/${chunks.length} with ${chunk.length} students and ${allMessageIds.length} message IDs`
+          );
 
-        if (batchError) {
-          console.error(
-            `[DEBUG] ${workerId} BATCH_UPDATE ERROR: Failed to batch update rows for gradebook ${gradebook_id}. Messages NOT archived: [${allMessageIds.join(", ")}]`,
-            batchError
-          );
-          Sentry.captureException(batchError, gbScope);
-          // Log which messages failed to be archived due to RPC error
-          console.error(
-            `[DEBUG] ${workerId} ARCHIVE FAILED: ${allMessageIds.length} messages (msg_ids: [${allMessageIds.join(", ")}]) were NOT archived due to RPC error. These will be re-read when visibility timeout expires.`
-          );
-        } else {
+          const batchStartTime = Date.now();
+          const { error: batchError, data: batchResults } = await adminSupabase.rpc("update_gradebook_rows_batch", {
+            p_batch_updates:
+              chunk as unknown as Database["public"]["Functions"]["update_gradebook_rows_batch"]["Args"]["p_batch_updates"]
+          });
+          const batchDuration = Date.now() - batchStartTime;
+
+          if (batchError) {
+            console.error(
+              `[DEBUG] ${workerId} BATCH_UPDATE ERROR (chunk ${chunkIndex + 1}/${chunks.length}): Failed to batch update rows for gradebook ${gradebook_id} after ${batchDuration}ms. Messages NOT archived: [${allMessageIds.join(", ")}]`,
+              batchError
+            );
+            Sentry.captureException(batchError, gbScope);
+            console.error(
+              `[DEBUG] ${workerId} ARCHIVE FAILED (chunk ${chunkIndex + 1}): ${allMessageIds.length} messages were NOT archived due to RPC error. These will be re-read when visibility timeout expires.`
+            );
+            continue; // Skip to next chunk
+          }
           // Extract results array from the RPC response object
           const rpcResponse = batchResults as unknown as {
             results?: Array<{
@@ -357,144 +361,35 @@ async function processRowsAll(
               cleared: boolean;
               error?: string;
             }>;
+            archive_count?: number;
+            archive_errors?: number;
+            expanded_count?: number;
+            version_matched_count?: number;
+            updated_gcs_count?: number;
+            cleared_state_count?: number;
           };
           const results = rpcResponse?.results ?? [];
 
           console.log(
-            `[DEBUG] ${workerId} BATCH_UPDATE: Successfully processed ${results.length} students for gradebook ${gradebook_id}. Messages should be archived by RPC.`
+            `[DEBUG] ${workerId} BATCH_UPDATE (chunk ${chunkIndex + 1}/${chunks.length}): Completed in ${batchDuration}ms. Processed ${results.length} students, archived ${rpcResponse?.archive_count ?? 0}/${allMessageIds.length} messages`
           );
 
-          // Log detailed results for debugging why rows aren't cleared
-          if (results.length > 0) {
-            const sampleResults = results.slice(0, 5).map((r) => ({
-              student_id: r.student_id,
-              is_private: r.is_private,
-              version_matched: r.version_matched,
-              cleared: r.cleared,
-              updated_count: r.updated_count,
-              error: r.error
-            }));
-            console.log(
-              `[DEBUG] ${workerId} BATCH_UPDATE: Sample results (first 5):`,
-              JSON.stringify(sampleResults, null, 2)
-            );
-
-            // Log breakdown of result statuses
-            const statusBreakdown = {
-              cleared: results.filter((r) => r.cleared).length,
-              version_matched_but_not_cleared: results.filter((r) => r.version_matched && !r.cleared && !r.error)
-                .length,
-              version_mismatch: results.filter((r) => !r.version_matched && !r.error).length,
-              has_error: results.filter((r) => r.error).length,
-              updated_count_zero: results.filter((r) => r.updated_count === 0).length,
-              updated_count_nonzero: results.filter((r) => r.updated_count > 0).length
-            };
-            console.log(
-              `[DEBUG] ${workerId} BATCH_UPDATE: Result status breakdown:`,
-              JSON.stringify(statusBreakdown, null, 2)
+          if (rpcResponse?.archive_errors && rpcResponse.archive_errors > 0) {
+            console.warn(
+              `[DEBUG] ${workerId} ARCHIVE ERRORS (chunk ${chunkIndex + 1}): ${rpcResponse.archive_errors} messages failed to archive.`
             );
           }
 
-          // Log results summary with detailed breakdown
+          // Log summary for this chunk
           const clearedCount = results.filter((r) => r.cleared).length;
           const versionMismatchCount = results.filter((r) => !r.version_matched && !r.error).length;
           const errorCount = results.filter((r) => r.error).length;
-          const notClearedCount = results.filter((r) => !r.cleared && !r.error).length;
-          const versionMatchedButNotCleared = results.filter((r) => r.version_matched && !r.cleared && !r.error).length;
 
-          // Calculate which message IDs should have been archived (cleared rows with version match)
-          const shouldBeArchivedMsgIds = batchUpdates
-            .filter((bu) => {
-              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-              return result?.cleared && result?.version_matched && !result?.error;
-            })
-            .flatMap((bu) => bu.message_ids);
-
-          if (clearedCount > 0) {
-            console.log(
-              `[DEBUG] ${workerId} BATCH_UPDATE: Cleared ${clearedCount} rows. Expected ${shouldBeArchivedMsgIds.length} messages to be archived: [${shouldBeArchivedMsgIds.join(", ")}]`
-            );
-          } else {
+          if (clearedCount < results.length) {
             console.warn(
-              `[DEBUG] ${workerId} BATCH_UPDATE WARNING: No rows were cleared! ${allMessageIds.length} messages were processed but NONE will be archived. This means messages will be re-read.`
+              `[DEBUG] ${workerId} BATCH_UPDATE (chunk ${chunkIndex + 1}): Only ${clearedCount}/${results.length} rows cleared. Version mismatches: ${versionMismatchCount}, Errors: ${errorCount}`
             );
           }
-
-          if (versionMatchedButNotCleared > 0) {
-            const versionMatchedButNotClearedMsgIds = batchUpdates
-              .filter((bu) => {
-                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-                return result && result.version_matched && !result.cleared && !result.error;
-              })
-              .flatMap((bu) => bu.message_ids);
-            console.warn(
-              `[DEBUG] ${workerId} BATCH_UPDATE WARNING: ${versionMatchedButNotCleared} rows had version_matched=true but cleared=false! ${versionMatchedButNotClearedMsgIds.length} messages will NOT be archived: [${versionMatchedButNotClearedMsgIds.slice(0, 20).join(", ")}${versionMatchedButNotClearedMsgIds.length > 20 ? "..." : ""}]`
-            );
-
-            // Log details about why these weren't cleared
-            const notClearedDetails = batchUpdates
-              .filter((bu) => {
-                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-                return result && result.version_matched && !result.cleared && !result.error;
-              })
-              .slice(0, 5)
-              .map((bu) => {
-                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-                return {
-                  student_id: bu.student_id,
-                  is_private: bu.is_private,
-                  version_matched: result?.version_matched,
-                  cleared: result?.cleared,
-                  updated_count: result?.updated_count,
-                  message_ids: bu.message_ids
-                };
-              });
-            console.warn(
-              `[DEBUG] ${workerId} BATCH_UPDATE: Sample of version_matched but not cleared (first 5):`,
-              JSON.stringify(notClearedDetails, null, 2)
-            );
-          }
-
-          if (notClearedCount > 0 && versionMatchedButNotCleared === 0) {
-            const notClearedMsgIds = batchUpdates
-              .filter((bu) => {
-                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-                return result && !result.cleared && !result.error;
-              })
-              .flatMap((bu) => bu.message_ids);
-            console.warn(
-              `[DEBUG] ${workerId} BATCH_UPDATE WARNING: ${notClearedCount} rows were NOT cleared (version mismatch or other reason). ${notClearedMsgIds.length} messages will NOT be archived: [${notClearedMsgIds.slice(0, 20).join(", ")}${notClearedMsgIds.length > 20 ? "..." : ""}]`
-            );
-          }
-
-          if (versionMismatchCount > 0) {
-            const versionMismatchMsgIds = batchUpdates
-              .filter((bu) => {
-                const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-                return result && !result.version_matched && !result.error;
-              })
-              .flatMap((bu) => bu.message_ids);
-            console.log(
-              `[DEBUG] ${workerId} BATCH_UPDATE: ${versionMismatchCount} rows had version mismatches (re-enqueued by RPC). ${versionMismatchMsgIds.length} original messages should still be archived: [${versionMismatchMsgIds.join(", ")}]`
-            );
-          }
-
-          if (errorCount > 0) {
-            console.log(`[DEBUG] ${workerId} BATCH_UPDATE: ${errorCount} rows had errors`);
-            // Log which students had errors - their messages might not be archived
-            const errorStudents = results.filter((r) => r.error).map((r) => r.student_id);
-            const errorMessageIds = batchUpdates
-              .filter((bu) => errorStudents.includes(bu.student_id))
-              .flatMap((bu) => bu.message_ids);
-            console.warn(
-              `[DEBUG] ${workerId} ARCHIVE WARNING: Messages for students with errors might not be archived: msg_ids [${errorMessageIds.join(", ")}]`
-            );
-          }
-
-          // Log summary of all message IDs and their expected archiving status
-          console.log(
-            `[DEBUG] ${workerId} ARCHIVE SUMMARY for gradebook ${gradebook_id}: Total messages=${allMessageIds.length}, Should be archived=${shouldBeArchivedMsgIds.length}, Will NOT be archived=${allMessageIds.length - shouldBeArchivedMsgIds.length}`
-          );
         }
       } else {
         console.log(
@@ -641,30 +536,46 @@ async function processRowsAll(
     });
 
     if (batchUpdatesScoped.length > 0) {
-      // Collect all message IDs being sent to RPC for archiving
-      const allMessageIdsScoped = batchUpdatesScoped.flatMap((bu) => bu.message_ids);
+      // Split into chunks of MAX_BATCH_UPDATE_SIZE to avoid timeouts
+      const chunksScoped: (typeof batchUpdatesScoped)[] = [];
+      for (let i = 0; i < batchUpdatesScoped.length; i += MAX_BATCH_UPDATE_SIZE) {
+        chunksScoped.push(batchUpdatesScoped.slice(i, i + MAX_BATCH_UPDATE_SIZE));
+      }
+
       console.log(
-        `[DEBUG] ${workerId} BATCH_UPDATE (scoped): About to batch update ${batchUpdatesScoped.length} students for gradebook ${gradebook_id} with ${allMessageIdsScoped.length} message IDs: [${allMessageIdsScoped.join(", ")}]`
+        `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Processing ${batchUpdatesScoped.length} students in ${chunksScoped.length} chunks (max ${MAX_BATCH_UPDATE_SIZE} per chunk) for gradebook ${gradebook_id}`
       );
 
-      const { error: batchErrorScoped, data: batchResultsScoped } = await adminSupabase.rpc(
-        "update_gradebook_rows_batch",
-        {
-          p_batch_updates: batchUpdatesScoped
+      // Process each chunk separately
+      for (let chunkIndex = 0; chunkIndex < chunksScoped.length; chunkIndex++) {
+        const chunkScoped = chunksScoped[chunkIndex];
+        const allMessageIdsScoped = chunkScoped.flatMap((bu) => bu.message_ids);
+
+        console.log(
+          `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Processing chunk ${chunkIndex + 1}/${chunksScoped.length} with ${chunkScoped.length} students and ${allMessageIdsScoped.length} message IDs`
+        );
+
+        const batchStartTimeScoped = Date.now();
+        const { error: batchErrorScoped, data: batchResultsScoped } = await adminSupabase.rpc(
+          "update_gradebook_rows_batch",
+          {
+            p_batch_updates:
+              chunkScoped as unknown as Database["public"]["Functions"]["update_gradebook_rows_batch"]["Args"]["p_batch_updates"]
+          }
+        );
+        const batchDurationScoped = Date.now() - batchStartTimeScoped;
+
+        if (batchErrorScoped) {
+          console.error(
+            `[DEBUG] ${workerId} BATCH_UPDATE ERROR (scoped, chunk ${chunkIndex + 1}/${chunksScoped.length}): Failed to batch update rows for gradebook ${gradebook_id} after ${batchDurationScoped}ms. Messages NOT archived: [${allMessageIdsScoped.join(", ")}]`,
+            batchErrorScoped
+          );
+          Sentry.captureException(batchErrorScoped, gbScope);
+          console.error(
+            `[DEBUG] ${workerId} ARCHIVE FAILED (scoped, chunk ${chunkIndex + 1}): ${allMessageIdsScoped.length} messages were NOT archived due to RPC error. These will be re-read when visibility timeout expires.`
+          );
+          continue; // Skip to next chunk
         }
-      );
-
-      if (batchErrorScoped) {
-        console.error(
-          `[DEBUG] ${workerId} BATCH_UPDATE ERROR (scoped): Failed to batch update rows for gradebook ${gradebook_id}. Messages NOT archived: [${allMessageIdsScoped.join(", ")}]`,
-          batchErrorScoped
-        );
-        Sentry.captureException(batchErrorScoped, gbScope);
-        // Log which messages failed to be archived due to RPC error
-        console.error(
-          `[DEBUG] ${workerId} ARCHIVE FAILED (scoped): ${allMessageIdsScoped.length} messages (msg_ids: [${allMessageIdsScoped.join(", ")}]) were NOT archived due to RPC error. These will be re-read when visibility timeout expires.`
-        );
-      } else {
         // Extract results array from the RPC response object
         const rpcResponseScoped = batchResultsScoped as unknown as {
           results?: Array<{
@@ -675,143 +586,35 @@ async function processRowsAll(
             cleared: boolean;
             error?: string;
           }>;
+          archive_count?: number;
+          archive_errors?: number;
+          expanded_count?: number;
+          version_matched_count?: number;
+          updated_gcs_count?: number;
+          cleared_state_count?: number;
         };
         const results = rpcResponseScoped?.results ?? [];
 
         console.log(
-          `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Successfully processed ${results.length} students for gradebook ${gradebook_id}. Messages should be archived by RPC.`
+          `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}/${chunksScoped.length}): Completed in ${batchDurationScoped}ms. Processed ${results.length} students, archived ${rpcResponseScoped?.archive_count ?? 0}/${allMessageIdsScoped.length} messages`
         );
 
-        // Log detailed results for debugging why rows aren't cleared
-        if (results.length > 0) {
-          const sampleResults = results.slice(0, 5).map((r) => ({
-            student_id: r.student_id,
-            is_private: r.is_private,
-            version_matched: r.version_matched,
-            cleared: r.cleared,
-            updated_count: r.updated_count,
-            error: r.error
-          }));
-          console.log(
-            `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Sample results (first 5):`,
-            JSON.stringify(sampleResults, null, 2)
-          );
-
-          // Log breakdown of result statuses
-          const statusBreakdown = {
-            cleared: results.filter((r) => r.cleared).length,
-            version_matched_but_not_cleared: results.filter((r) => r.version_matched && !r.cleared && !r.error).length,
-            version_mismatch: results.filter((r) => !r.version_matched && !r.error).length,
-            has_error: results.filter((r) => r.error).length,
-            updated_count_zero: results.filter((r) => r.updated_count === 0).length,
-            updated_count_nonzero: results.filter((r) => r.updated_count > 0).length
-          };
-          console.log(
-            `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Result status breakdown:`,
-            JSON.stringify(statusBreakdown, null, 2)
+        if (rpcResponseScoped?.archive_errors && rpcResponseScoped.archive_errors > 0) {
+          console.warn(
+            `[DEBUG] ${workerId} ARCHIVE ERRORS (scoped, chunk ${chunkIndex + 1}): ${rpcResponseScoped.archive_errors} messages failed to archive.`
           );
         }
 
-        // Log results summary with detailed breakdown
+        // Log summary for this chunk
         const clearedCount = results.filter((r) => r.cleared).length;
         const versionMismatchCount = results.filter((r) => !r.version_matched && !r.error).length;
         const errorCount = results.filter((r) => r.error).length;
-        const notClearedCount = results.filter((r) => !r.cleared && !r.error).length;
-        const versionMatchedButNotCleared = results.filter((r) => r.version_matched && !r.cleared && !r.error).length;
 
-        // Calculate which message IDs should have been archived (cleared rows with version match)
-        const shouldBeArchivedMsgIdsScoped = batchUpdatesScoped
-          .filter((bu) => {
-            const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-            return result?.cleared && result?.version_matched && !result?.error;
-          })
-          .flatMap((bu) => bu.message_ids);
-
-        if (clearedCount > 0) {
-          console.log(
-            `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Cleared ${clearedCount} rows. Expected ${shouldBeArchivedMsgIdsScoped.length} messages to be archived: [${shouldBeArchivedMsgIdsScoped.join(", ")}]`
-          );
-        } else {
+        if (clearedCount < results.length) {
           console.warn(
-            `[DEBUG] ${workerId} BATCH_UPDATE WARNING (scoped): No rows were cleared! ${allMessageIdsScoped.length} messages were processed but NONE will be archived. This means messages will be re-read.`
+            `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}): Only ${clearedCount}/${results.length} rows cleared. Version mismatches: ${versionMismatchCount}, Errors: ${errorCount}`
           );
         }
-
-        if (versionMatchedButNotCleared > 0) {
-          const versionMatchedButNotClearedMsgIds = batchUpdatesScoped
-            .filter((bu) => {
-              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-              return result && result.version_matched && !result.cleared && !result.error;
-            })
-            .flatMap((bu) => bu.message_ids);
-          console.warn(
-            `[DEBUG] ${workerId} BATCH_UPDATE WARNING (scoped): ${versionMatchedButNotCleared} rows had version_matched=true but cleared=false! ${versionMatchedButNotClearedMsgIds.length} messages will NOT be archived: [${versionMatchedButNotClearedMsgIds.slice(0, 20).join(", ")}${versionMatchedButNotClearedMsgIds.length > 20 ? "..." : ""}]`
-          );
-
-          // Log details about why these weren't cleared
-          const notClearedDetails = batchUpdatesScoped
-            .filter((bu) => {
-              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-              return result && result.version_matched && !result.cleared && !result.error;
-            })
-            .slice(0, 5)
-            .map((bu) => {
-              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-              return {
-                student_id: bu.student_id,
-                is_private: bu.is_private,
-                version_matched: result?.version_matched,
-                cleared: result?.cleared,
-                updated_count: result?.updated_count,
-                message_ids: bu.message_ids
-              };
-            });
-          console.warn(
-            `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Sample of version_matched but not cleared (first 5):`,
-            JSON.stringify(notClearedDetails, null, 2)
-          );
-        }
-
-        if (notClearedCount > 0 && versionMatchedButNotCleared === 0) {
-          const notClearedMsgIds = batchUpdatesScoped
-            .filter((bu) => {
-              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-              return result && !result.cleared && !result.error;
-            })
-            .flatMap((bu) => bu.message_ids);
-          console.warn(
-            `[DEBUG] ${workerId} BATCH_UPDATE WARNING (scoped): ${notClearedCount} rows were NOT cleared (version mismatch or other reason). ${notClearedMsgIds.length} messages will NOT be archived: [${notClearedMsgIds.slice(0, 20).join(", ")}${notClearedMsgIds.length > 20 ? "..." : ""}]`
-          );
-        }
-
-        if (versionMismatchCount > 0) {
-          const versionMismatchMsgIds = batchUpdatesScoped
-            .filter((bu) => {
-              const result = results.find((r) => r.student_id === bu.student_id && r.is_private === bu.is_private);
-              return result && !result.version_matched && !result.error;
-            })
-            .flatMap((bu) => bu.message_ids);
-          console.log(
-            `[DEBUG] ${workerId} BATCH_UPDATE (scoped): ${versionMismatchCount} rows had version mismatches (re-enqueued by RPC). ${versionMismatchMsgIds.length} original messages should still be archived: [${versionMismatchMsgIds.join(", ")}]`
-          );
-        }
-
-        if (errorCount > 0) {
-          console.log(`[DEBUG] ${workerId} BATCH_UPDATE (scoped): ${errorCount} rows had errors`);
-          // Log which students had errors - their messages might not be archived
-          const errorStudents = results.filter((r) => r.error).map((r) => r.student_id);
-          const errorMessageIds = batchUpdatesScoped
-            .filter((bu) => errorStudents.includes(bu.student_id))
-            .flatMap((bu) => bu.message_ids);
-          console.warn(
-            `[DEBUG] ${workerId} ARCHIVE WARNING (scoped): Messages for students with errors might not be archived: msg_ids [${errorMessageIds.join(", ")}]`
-          );
-        }
-
-        // Log summary of all message IDs and their expected archiving status
-        console.log(
-          `[DEBUG] ${workerId} ARCHIVE SUMMARY (scoped) for gradebook ${gradebook_id}: Total messages=${allMessageIdsScoped.length}, Should be archived=${shouldBeArchivedMsgIdsScoped.length}, Will NOT be archived=${allMessageIdsScoped.length - shouldBeArchivedMsgIdsScoped.length}`
-        );
       }
     } else {
       console.log(
