@@ -51,24 +51,65 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
   });
 
   const jsonTextColor = useColorModeValue("#1A202C", "#FFFFFF");
+  const jsonBgColor = useColorModeValue("#F9FAFB", "#1F2937");
+  const jsonBorderColor = useColorModeValue("#E5E7EB", "#374151");
+  const textColor = useColorModeValue("#1A202C", "#FFFFFF");
+  const secondaryTextColor = useColorModeValue("#6B7280", "#9CA3AF");
 
-  // Parse initial value
+  // Track the last normalized JSON we received and emitted to prevent loops
+  const lastReceivedNormalizedRef = React.useRef<string>("");
+  const lastEmittedNormalizedRef = React.useRef<string>("");
+  const isInitialMount = React.useRef(true);
+
+  // Helper to normalize JSON for comparison (parse and stringify to remove formatting differences)
+  const normalizeJson = React.useCallback((jsonStr: string): string => {
+    try {
+      const parsed = JSON.parse(jsonStr);
+      return JSON.stringify(parsed);
+    } catch {
+      return jsonStr;
+    }
+  }, []);
+
+  // Parse initial value - only when value prop actually changes from outside
   useEffect(() => {
-    if (value && value.trim()) {
+    if (!value || !value.trim()) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const normalized = normalizeJson(value);
+    
+    // Only update if the normalized value actually changed from outside
+    if (normalized !== lastReceivedNormalizedRef.current) {
       try {
         const parsed = JSON.parse(value);
         setPollData(parsed);
+        lastReceivedNormalizedRef.current = normalized;
+        lastEmittedNormalizedRef.current = normalized;
       } catch {
-        // Invalid JSON, use defaults
+        // Invalid JSON, use defaults - don't update
+        lastReceivedNormalizedRef.current = normalized;
       }
     }
-  }, [value]);
+    isInitialMount.current = false;
+  }, [value, normalizeJson]);
 
-  // Update JSON when pollData changes
+  // Update JSON when pollData changes - but skip on initial mount and if we just received this value
   useEffect(() => {
+    if (isInitialMount.current) {
+      return; // Skip on initial mount
+    }
+    
     const jsonString = JSON.stringify(pollData, null, 2);
-    onChange(jsonString);
-  }, [pollData, onChange]);
+    const normalized = normalizeJson(jsonString);
+    
+    // Only call onChange if the normalized JSON actually changed and it's different from what we last received
+    if (normalized !== lastEmittedNormalizedRef.current && normalized !== lastReceivedNormalizedRef.current) {
+      lastEmittedNormalizedRef.current = normalized;
+      onChange(jsonString);
+    }
+  }, [pollData, onChange, normalizeJson]);
 
   const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setPollData((prev) => ({ ...prev, prompt: e.target.value }));
@@ -156,7 +197,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
     <VStack align="stretch" gap={6} p={4}>
       {/* Prompt */}
       <Box>
-        <Text fontSize="sm" fontWeight="medium" mb={2}>
+        <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
           Question Prompt
         </Text>
         <Input
@@ -168,7 +209,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
 
       {/* Type Selection */}
       <Box>
-        <Text fontSize="sm" fontWeight="medium" mb={2}>
+        <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
           Question Type
         </Text>
         <Select.Root
@@ -209,7 +250,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
       {(pollData.type === "multiple-choice" || pollData.type === "single-choice") && pollData.choices && (
         <Box>
           <HStack justify="space-between" mb={2}>
-            <Text fontSize="sm" fontWeight="medium">
+            <Text fontSize="sm" fontWeight="medium" color={textColor}>
               Choices
             </Text>
             <Button size="sm" onClick={handleAddChoice}>
@@ -247,7 +288,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         <VStack align="stretch" gap={4}>
           <HStack gap={4}>
             <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2}>
+              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
                 Minimum Value
               </Text>
               <Input
@@ -257,7 +298,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
               />
             </Box>
             <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2}>
+              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
                 Maximum Value
               </Text>
               <Input
@@ -269,7 +310,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
           </HStack>
           <HStack gap={4}>
             <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2}>
+              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
                 Minimum Label
               </Text>
               <Input
@@ -279,7 +320,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
               />
             </Box>
             <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2}>
+              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
                 Maximum Label
               </Text>
               <Input
@@ -295,7 +336,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
       {/* Text type doesn't need additional options */}
       {pollData.type === "text" && (
         <Box>
-          <Text fontSize="sm" color="gray.500">
+          <Text fontSize="sm" color={secondaryTextColor}>
             Text questions allow free-form responses from students.
           </Text>
         </Box>
@@ -304,7 +345,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
       {/* Open-ended type */}
       {pollData.type === "open-ended" && (
         <Box>
-          <Text fontSize="sm" color="gray.500">
+          <Text fontSize="sm" color={secondaryTextColor}>
             Open-ended questions allow students to provide detailed text responses.
           </Text>
         </Box>
@@ -314,21 +355,19 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
 
       {/* JSON Preview */}
       <Box>
-        <Text fontSize="sm" fontWeight="medium" mb={2}>
+        <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
           JSON Preview
         </Text>
         <Box
           p={3}
-          bg="gray.50"
-          _dark={{ bg: "gray.800" }}
+          bg={jsonBgColor}
           borderRadius="md"
           fontSize="xs"
           fontFamily="mono"
           overflow="auto"
           maxH="200px"
           border="1px solid"
-          borderColor="gray.200"
-          _dark={{ borderColor: "gray.700" }}
+          borderColor={jsonBorderColor}
         >
           <pre style={{ margin: 0, color: jsonTextColor }}>
             {JSON.stringify(pollData, null, 2)}

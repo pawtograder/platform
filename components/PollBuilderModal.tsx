@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Box, Button, HStack, VStack, Heading, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import PollBuilder from "@/components/PollBuilder";
@@ -30,6 +30,11 @@ export default function PollBuilderModal({
   useEffect(() => {
     if (isOpen) setDraftJson(initialJson ?? "");
   }, [isOpen, initialJson]);
+
+  // Stabilize the onChange callback to prevent unnecessary re-renders
+  const handleJsonChange = useCallback((json: string) => {
+    setDraftJson(json);
+  }, []);
 
   const handleUsePoll = () => {
     onSave(draftJson || "");
@@ -97,7 +102,7 @@ export default function PollBuilderModal({
 
         {/* Body: the builder */}
         <Box flex="1" overflow="auto" p={4}>
-          <PollBuilder value={draftJson} onChange={setDraftJson} />
+          <PollBuilder value={draftJson} onChange={handleJsonChange} />
         </Box>
       </Box>
     </Box>
