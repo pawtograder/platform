@@ -53,7 +53,7 @@ export default async function StudentDashboard({
     .limit(5);
 
   const { data: surveysRaw } = await supabase
-    .from("surveys" as any)
+    .from("surveys")
     .select("*")
     .eq("class_id", course_id)
     .eq("status", "published")
@@ -68,7 +68,7 @@ export default async function StudentDashboard({
     const surveyIds = surveys.map((s) => s.id);
 
     const { data: responsesRaw } = await supabase
-      .from("survey_responses" as any)
+      .from("survey_responses")
       .select("*")
       .eq("profile_id", private_profile_id)
       .in("survey_id", surveyIds);
@@ -148,10 +148,10 @@ export default async function StudentDashboard({
                       <DataListItemValue>
                         {assignment.due_date
                           ? formatInTimeZone(
-                              new TZDate(assignment.due_date),
-                              assignment.classes?.time_zone || "America/New_York",
-                              "Pp"
-                            )
+                            new TZDate(assignment.due_date),
+                            assignment.classes?.time_zone || "America/New_York",
+                            "Pp"
+                          )
                           : "No due date"}
                       </DataListItemValue>
                     </DataListItem>
