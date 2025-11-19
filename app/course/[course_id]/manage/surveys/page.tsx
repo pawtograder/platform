@@ -3,6 +3,7 @@ import { createClient } from "@/utils/supabase/server";
 import SurveysTable from "./SurveysTable";
 import EmptySurveysState from "./EmptySurveysState";
 import SurveysHeader from "./SurveysHeader";
+import type { Survey } from "@/types/survey";
 
 type ManageSurveysPageProps = {
   params: Promise<{ course_id: string }>;
@@ -19,7 +20,7 @@ export default async function ManageSurveysPage({ params }: ManageSurveysPagePro
 
   // Fetch surveys for this course (excluding soft-deleted)
   const { data: surveys, error } = await supabase
-    .from("surveys" as any)
+    .from("surveys")
     .select("*")
     .eq("class_id", Number(course_id))
     .is("deleted_at", null)
@@ -31,9 +32,9 @@ export default async function ManageSurveysPage({ params }: ManageSurveysPagePro
 
   // Fetch response counts for each survey
   const surveysWithCounts = await Promise.all(
-    (surveys || []).map(async (survey: any) => {
+    (surveys || []).map(async (survey: Survey) => {
       const { count } = await supabase
-        .from("survey_responses" as any)
+        .from("survey_responses")
         .select("*", { count: "exact", head: true })
         .eq("survey_id", survey.id)
         .eq("is_submitted", true)
@@ -41,7 +42,9 @@ export default async function ManageSurveysPage({ params }: ManageSurveysPagePro
 
       return {
         ...survey,
-        response_count: count || 0
+        response_count: count || 0,
+        submitted_count: count || 0,
+
       };
     })
   );
