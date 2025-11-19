@@ -1956,3 +1956,93 @@ BEGIN
 END;
 $$;
 
+-- Migration: Enqueue recalculation when gradebook cell's released field changes
+-- 
+-- When a gradebook_column_students cell's "released" field is updated for a row
+-- where is_private = false, we need to enqueue recalculation for is_private = true
+-- because the released status affects calculated columns and visibility.
+--
+-- This migration creates a statement-level trigger that:
+-- 1. Detects when released field changes on gradebook_column_students where is_private = false
+-- 2. Finds unique students where released changed
+-- 3. Enqueues recalculation for is_private = true
+
+-- ============================================================================
+-- CREATE TRIGGER FUNCTION FOR RELEASED FIELD CHANGES
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.enqueue_recalc_on_released_change() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$
+DECLARE
+  rows_to_enqueue jsonb[];
+  r RECORD;
+BEGIN
+  -- Only process UPDATE operations
+  IF TG_OP != 'UPDATE' THEN
+    RETURN NULL;
+  END IF;
+
+  -- Collect unique students where released changed for is_private = false rows
+  -- and enqueue recalculation for is_private = false
+  rows_to_enqueue := ARRAY[]::jsonb[];
+  
+  FOR r IN (
+    SELECT DISTINCT 
+      new_rec.class_id,
+      new_rec.gradebook_id,
+      new_rec.student_id
+    FROM new_table new_rec
+    INNER JOIN old_table old_rec ON new_rec.id = old_rec.id
+    WHERE new_rec.released IS DISTINCT FROM old_rec.released
+      -- Skip rows that are currently being recalculated
+      AND NOT EXISTS (
+        SELECT 1 FROM public.gradebook_row_recalc_state rs
+        WHERE rs.class_id = new_rec.class_id
+          AND rs.gradebook_id = new_rec.gradebook_id
+          AND rs.student_id = new_rec.student_id
+          AND rs.is_private = false
+          AND rs.is_recalculating = true
+      )
+  ) LOOP
+    -- Avoid duplicates
+    IF NOT EXISTS (
+      SELECT 1 FROM unnest(rows_to_enqueue) AS existing
+      WHERE (existing->>'class_id')::bigint = r.class_id
+        AND (existing->>'gradebook_id')::bigint = r.gradebook_id
+        AND (existing->>'student_id')::uuid = r.student_id
+        AND (existing->>'is_private')::boolean = false
+    ) THEN
+      rows_to_enqueue := array_append(rows_to_enqueue, 
+        jsonb_build_object(
+          'class_id', r.class_id,
+          'gradebook_id', r.gradebook_id,
+          'student_id', r.student_id,
+          'is_private', false
+        )
+      );
+    END IF;
+  END LOOP;
+  
+  -- Batch enqueue all rows in a single call
+  IF array_length(rows_to_enqueue, 1) > 0 THEN
+    PERFORM public.enqueue_gradebook_row_recalculation_batch(rows_to_enqueue);
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+-- ============================================================================
+-- CREATE STATEMENT-LEVEL TRIGGER
+-- ============================================================================
+
+CREATE TRIGGER trigger_enqueue_recalc_on_released_change
+AFTER UPDATE ON public.gradebook_column_students
+    REFERENCING OLD TABLE AS old_table NEW TABLE AS new_table
+FOR EACH STATEMENT
+EXECUTE FUNCTION public.enqueue_recalc_on_released_change();
+
+COMMENT ON TRIGGER trigger_enqueue_recalc_on_released_change ON public.gradebook_column_students
+  IS 'Statement-level trigger that enqueues recalculation for is_private=true when the released field changes on gradebook_column_students rows where is_private=false.';
