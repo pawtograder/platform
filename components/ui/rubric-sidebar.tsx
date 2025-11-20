@@ -559,6 +559,11 @@ export function RubricCheckComment({
             </HStack>
           </Box>
           <Box pl={1} pr={1} color="fg.muted">
+            {check && (
+              <Text fontSize="sm" fontWeight="semibold" mb={1} color="fg.default" wordBreak="break-word">
+                {check.name}
+              </Text>
+            )}
             <HStack gap={1}>
               <Box flexShrink={0}>{pointsText}</Box>{" "}
               {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
