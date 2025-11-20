@@ -7,7 +7,7 @@ import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useCallback, useState } from "react";
-import { useRouter, useSearchParams, useParams } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 import { SurveyTemplateLibraryModal } from "@/components/survey/SurveyTemplateLibraryModal";
@@ -84,12 +84,11 @@ export default function SurveyForm({
     watch,
     getValues,
     setValue,
-    formState: { errors, isDirty }
+    formState: { errors }
   } = form;
 
   const router = useRouter();
   const { course_id } = useParams();
-  const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isScopeModalOpen, setIsScopeModalOpen] = useState(false);
@@ -187,16 +186,17 @@ export default function SurveyForm({
       });
 
       try {
-        const { error } = await supabase.from("survey_templates" as any).insert({
+        const insertData = {
           id: crypto.randomUUID(),
           title: surveyData.title,
           description: surveyData.description,
           template: surveyData.json,
           created_by: privateProfileId,
           scope,
-          class_id: scope === "course" ? Number(course_id) : null,
-          created_at: new Date().toISOString()
-        });
+          created_at: new Date().toISOString(),
+          ...(scope === "course" ? { class_id: Number(course_id) } : {})
+        };
+        const { error } = await supabase.from("survey_templates").insert(insertData as any);
 
         toaster.dismiss(loadingToast);
 
@@ -213,7 +213,7 @@ export default function SurveyForm({
             type: "success"
           });
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Error adding to template library:", err);
         toaster.dismiss(loadingToast);
         toaster.create({
@@ -235,7 +235,7 @@ export default function SurveyForm({
         } else {
           await onSubmit(values);
         }
-      } catch (error) {
+      } catch {
         toaster.error({
           title: "Changes not saved",
           description: "An error occurred while saving the survey. Please try again."
@@ -500,7 +500,7 @@ export default function SurveyForm({
                   borderColor={borderColor}
                 >
                   <Text color={placeholderColor} mb={4}>
-                    Click 'Show Preview' to see how the survey will appear to students.
+                    Click &apos;Show Preview&apos; to see how the survey will appear to students.
                   </Text>
                   <Button
                     variant="outline"
