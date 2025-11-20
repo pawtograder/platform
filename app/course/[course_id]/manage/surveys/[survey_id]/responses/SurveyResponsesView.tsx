@@ -4,7 +4,7 @@ import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Input, Ba
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
-import { differenceInMinutes, isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
+import { isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
 import { useRouter } from "next/navigation";
 import { Model } from "survey-core";
 import { useMemo, useCallback, useState, useEffect } from "react";
@@ -14,7 +14,7 @@ type SurveyResponse = {
   id: string;
   survey_id: string;
   profile_id: string; // Foreign key to profiles
-  response: Record<string, any>; // Dynamic response data based on survey questions
+  response: Record<string, unknown>; // Dynamic response data based on survey questions
   created_at: string;
   submitted_at: string;
   updated_at: string;
@@ -30,7 +30,7 @@ type SurveyResponsesViewProps = {
   surveyTitle: string;
   surveyVersion: number;
   surveyStatus: string;
-  surveyJson: any; // The JSON configuration of the survey
+  surveyJson: Record<string, unknown>; // The JSON configuration of the survey
   surveyDueDate: string | null; // The deadline for the survey
   responses: SurveyResponse[];
   totalStudents: number;
@@ -39,7 +39,7 @@ type SurveyResponsesViewProps = {
 /**
  * Gets question titles from survey JSON for dynamic column headers
  */
-function getQuestionTitles(surveyJson: any): Record<string, string> {
+function getQuestionTitles(surveyJson: Record<string, unknown>): Record<string, string> {
   const titles: Record<string, string> = {};
 
   try {
@@ -52,7 +52,8 @@ function getQuestionTitles(surveyJson: any): Record<string, string> {
       }
     });
   } catch (error) {
-    console.warn("Error parsing survey JSON for question titles:", error);
+    // Error parsing survey JSON for question titles
+    void error;
   }
 
   return titles;
@@ -61,7 +62,7 @@ function getQuestionTitles(surveyJson: any): Record<string, string> {
 /**
  * Formats response values for display in the table
  */
-function formatResponseValue(value: any): string {
+function formatResponseValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "—";
   }
@@ -80,13 +81,14 @@ function formatResponseValue(value: any): string {
 
   if (typeof value === "object") {
     // For complex objects, try to extract meaningful data
-    if (value.text) return value.text;
-    if (value.value) return String(value.value);
-    if (value.name) return value.name;
-    if (value.title) return value.title;
+    const obj = value as Record<string, unknown>;
+    if (obj.text && typeof obj.text === "string") return obj.text;
+    if (obj.value) return String(obj.value);
+    if (obj.name && typeof obj.name === "string") return obj.name;
+    if (obj.title && typeof obj.title === "string") return obj.title;
 
     // If it's a simple object with string values, join them
-    const stringValues = Object.values(value).filter((v) => typeof v === "string");
+    const stringValues = Object.values(obj).filter((v) => typeof v === "string");
     if (stringValues.length > 0) {
       return stringValues.join(", ");
     }
@@ -114,17 +116,10 @@ function escapeCSVValue(value: string): string {
   return stringValue;
 }
 
-type QuestionFilter = {
-  questionName: string;
-  value: string;
-};
-
 export default function SurveyResponsesView({
   courseId,
-  surveyId,
   surveyTitle,
   surveyVersion,
-  surveyStatus,
   surveyJson,
   surveyDueDate,
   responses,
@@ -148,6 +143,8 @@ export default function SurveyResponsesView({
   const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
   const emptyStateTextColor = useColorModeValue("#6B7280", "#718096");
   const filterBadgeBg = useColorModeValue("#3B82F6", "#2563EB");
+  const overdueColor = useColorModeValue("#DC2626", "#EF4444");
+  const urgentColor = useColorModeValue("#D97706", "#F59E0B");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -191,7 +188,8 @@ export default function SurveyResponsesView({
           return isWithinInterval(submittedDate, { start: startDate, end: endDate });
         });
       } catch (error) {
-        console.warn("Error parsing date range:", error);
+        // Error parsing date range
+        void error;
       }
     }
 
@@ -537,9 +535,9 @@ export default function SurveyResponsesView({
             fontWeight="bold"
             color={
               isOverdue
-                ? useColorModeValue("#DC2626", "#EF4444")
+                ? overdueColor
                 : isLessThan24Hours
-                  ? useColorModeValue("#D97706", "#F59E0B")
+                  ? urgentColor
                   : textColor
             }
           >
