@@ -2,7 +2,7 @@ import { Model } from "survey-core";
 
 export type SurveyResponse = {
   id: string;
-  response: Record<string, any>;
+  response: Record<string, unknown>;
   is_submitted: boolean;
   submitted_at?: string;
   created_at: string;
@@ -17,14 +17,14 @@ export type SurveyResponse = {
 export type Survey = {
   id: string;
   title: string;
-  questions: any;
+  questions: unknown;
 };
 
 /**
  * Flattens nested response data into a flat object for CSV export
  */
-function flattenResponseData(responseData: Record<string, any>, prefix = ""): Record<string, any> {
-  const flattened: Record<string, any> = {};
+function flattenResponseData(responseData: Record<string, unknown>, prefix = ""): Record<string, unknown> {
+  const flattened: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(responseData)) {
     const newKey = prefix ? `${prefix}.${key}` : key;
@@ -34,7 +34,7 @@ function flattenResponseData(responseData: Record<string, any>, prefix = ""): Re
       flattened[newKey] = value.join(", ");
     } else if (value && typeof value === "object") {
       // Handle nested objects
-      Object.assign(flattened, flattenResponseData(value, newKey));
+      Object.assign(flattened, flattenResponseData(value as Record<string, unknown>, newKey));
     } else {
       // Handle primitive values
       flattened[newKey] = value || "";
@@ -47,7 +47,7 @@ function flattenResponseData(responseData: Record<string, any>, prefix = ""): Re
 /**
  * Gets question titles from survey JSON for CSV headers
  */
-function getQuestionTitles(surveyJson: any): Record<string, string> {
+function getQuestionTitles(surveyJson: unknown): Record<string, string> {
   const titles: Record<string, string> = {};
 
   try {
