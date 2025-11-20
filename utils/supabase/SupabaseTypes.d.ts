@@ -867,6 +867,59 @@ export type Database = {
           }
         ];
       };
+      async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Json;
+          error_message: string | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Json | null;
+          log_id: number | null;
+          method: Database["public"]["Enums"]["github_async_method"];
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method: Database["public"]["Enums"]["github_async_method"];
+          original_msg_id?: number | null;
+          retry_count: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method?: Database["public"]["Enums"]["github_async_method"];
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "async_worker_dlq_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       audit: {
         Row: {
           class_id: number;
@@ -9249,6 +9302,23 @@ export type Database = {
         };
         Returns: boolean;
       };
+      check_can_add_to_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
+      check_can_remove_from_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_profile_id_to_remove: string;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
       check_github_error_threshold: {
         Args: { p_org: string; p_threshold: number; p_window_minutes: number };
         Returns: number;
@@ -9527,6 +9597,24 @@ export type Database = {
           errors_recent_1h: number;
           errors_total: number;
           method: string;
+        }[];
+      };
+      get_async_queue_sizes: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          async_queue_size: number;
+          dlq_queue_size: number;
+        }[];
+      };
+      get_circuit_breaker_statuses: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          is_open: boolean;
+          key: string;
+          open_until: string;
+          scope: string;
+          state: string;
+          trip_count: number;
         }[];
       };
       get_github_api_metrics_recent: {
