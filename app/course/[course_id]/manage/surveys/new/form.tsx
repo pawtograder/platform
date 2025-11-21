@@ -192,12 +192,12 @@ export default function SurveyForm({
         const insertData: SurveyTemplateInsert = {
           id: crypto.randomUUID(),
           title: surveyData.title,
-          description: surveyData.description ?? '',
+          description: surveyData.description ?? "",
           template: surveyData.json ?? {},
           created_by: privateProfileId,
           scope,
           created_at: new Date().toISOString(),
-          class_id: Number(course_id),
+          class_id: Number(course_id)
           //...(scope === "course" ? { class_id: Number(course_id) } : null)
         };
         const { error } = await supabase.from("survey_templates").insert(insertData);

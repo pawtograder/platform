@@ -148,10 +148,10 @@ export default async function StudentDashboard({
                       <DataListItemValue>
                         {assignment.due_date
                           ? formatInTimeZone(
-                            new TZDate(assignment.due_date),
-                            assignment.classes?.time_zone || "America/New_York",
-                            "Pp"
-                          )
+                              new TZDate(assignment.due_date),
+                              assignment.classes?.time_zone || "America/New_York",
+                              "Pp"
+                            )
                           : "No due date"}
                       </DataListItemValue>
                     </DataListItem>

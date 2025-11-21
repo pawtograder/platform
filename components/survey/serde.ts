@@ -97,7 +97,11 @@ function exportElement(el: BuilderElement): Record<string, unknown> {
       };
     // unreachable
     default:
-      return { type: (el as Record<string, unknown>).type, name: (el as Record<string, unknown>).name, ...(el as Record<string, unknown>) };
+      return {
+        type: (el as Record<string, unknown>).type,
+        name: (el as Record<string, unknown>).name,
+        ...(el as Record<string, unknown>)
+      };
   }
 }
 
@@ -178,7 +182,9 @@ function importElement(src: unknown): BuilderElement {
         description: elem?.description as string | undefined,
         isRequired: !!elem?.isRequired,
         validators: safeArray(elem?.validators),
-        inputType: isNonEmptyString(elem?.inputType) ? (elem.inputType as "text" | "number" | "email" | "tel" | "url") : "text",
+        inputType: isNonEmptyString(elem?.inputType)
+          ? (elem.inputType as "text" | "number" | "email" | "tel" | "url")
+          : "text",
         config: restWithoutKeys(elem, [
           "type",
           "id",
@@ -274,7 +280,9 @@ function importElement(src: unknown): BuilderElement {
         title: (elem?.title as string | undefined) ?? base.title,
         description: (elem?.description as string | undefined) ?? base.description,
         isRequired: (elem?.isRequired as boolean | undefined) ?? base.isRequired,
-        validators: Array.isArray(elem?.validators) ? (elem.validators as Array<Record<string, unknown>>) : (base.validators ?? []),
+        validators: Array.isArray(elem?.validators)
+          ? (elem.validators as Array<Record<string, unknown>>)
+          : (base.validators ?? []),
         inputType: "text",
         config: restWithoutKeys(elem, [
           "id",

@@ -13,7 +13,6 @@ import { FieldValues } from "react-hook-form";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
 
-
 type SurveyFormData = {
   title: string;
   description?: string;
@@ -59,7 +58,7 @@ export default function NewSurveyPage() {
     }
   });
 
-  const {setValue, reset } = form;
+  const { setValue, reset } = form;
   const hasLoadedDraft = useRef(false);
   const hasLoadedTemplate = useRef(false);
 
@@ -73,11 +72,7 @@ export default function NewSurveyPage() {
       const loadTemplate = async () => {
         try {
           const supabase = createClient();
-          const { data, error } = await supabase
-            .from("survey_templates")
-            .select("*")
-            .eq("id", templateId)
-            .single();
+          const { data, error } = await supabase.from("survey_templates").select("*").eq("id", templateId).single();
 
           if (data && !error) {
             // Cast data to expected type
@@ -150,26 +145,26 @@ export default function NewSurveyPage() {
 
           if (data && !error) {
             console.log("[loadLatestDraft] Raw data from DB:", data);
-            console.log("[loadLatestDraft] due_date:", (data).due_date);
-            console.log("[loadLatestDraft] allow_response_editing:", (data).allow_response_editing);
-            console.log("[loadLatestDraft] status:", (data).status);
+            console.log("[loadLatestDraft] due_date:", data.due_date);
+            console.log("[loadLatestDraft] allow_response_editing:", data.allow_response_editing);
+            console.log("[loadLatestDraft] status:", data.status);
 
             // Convert due_date from ISO string to datetime-local format
             let dueDateFormatted = "";
-            if ((data).due_date) {
-              const date = new Date((data).due_date);
+            if (data.due_date) {
+              const date = new Date(data.due_date);
               // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
               dueDateFormatted = date.toISOString().slice(0, 16);
             }
 
             // Load the draft data into the form
             const formData = {
-              title: (data).title || "",
-              description: (data).description || "",
-              json: (data).json || "",
-              status: (data).status || "draft",
+              title: data.title || "",
+              description: data.description || "",
+              json: data.json || "",
+              status: data.status || "draft",
               due_date: dueDateFormatted,
-              allow_response_editing: Boolean((data).allow_response_editing)
+              allow_response_editing: Boolean(data.allow_response_editing)
             };
 
             console.log("[loadLatestDraft] Form data being loaded:", formData);
@@ -211,7 +206,7 @@ export default function NewSurveyPage() {
       const {
         shouldRedirect = true,
         validateJson = false,
-        showToast = true,
+        showToast = true
         //toastTitle = "Survey Saved",
         //toastDescription = "Your survey has been saved."
       } = options;
@@ -267,7 +262,7 @@ export default function NewSurveyPage() {
 
         if (existingSurvey && !surveyError) {
           // Update existing survey
-          console.log("[saveSurvey] updating existing survey:", (existingSurvey).id);
+          console.log("[saveSurvey] updating existing survey:", existingSurvey.id);
 
           const updatePayload = {
             title: (values.title as string) || "Untitled Survey",
@@ -283,7 +278,7 @@ export default function NewSurveyPage() {
           const result = await supabase
             .from("surveys")
             .update(updatePayload)
-            .eq("id", (existingSurvey).id)
+            .eq("id", existingSurvey.id)
             .select("id, survey_id")
             .single()
             .returns<SurveyIds>();
@@ -365,7 +360,7 @@ export default function NewSurveyPage() {
       // Track analytics
       trackEvent("survey_created", {
         course_id: Number(course_id),
-        survey_id: (data).survey_id,
+        survey_id: data.survey_id,
         status: finalStatus,
         has_due_date: !!values.due_date,
         allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),

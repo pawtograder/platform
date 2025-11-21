@@ -12,7 +12,6 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Survey, SurveyResponse } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
 
-
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
   loading: () => (

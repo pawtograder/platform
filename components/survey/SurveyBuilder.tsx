@@ -204,7 +204,11 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
     });
   }
 
-  function updateElementField(elId: string, key: keyof BuilderElement, value: string | boolean | Record<string, unknown> | Record<string, unknown>[] | undefined) {
+  function updateElementField(
+    elId: string,
+    key: keyof BuilderElement,
+    value: string | boolean | Record<string, unknown> | Record<string, unknown>[] | undefined
+  ) {
     if (!currentPageId) return;
     setSurvey((prev) => updateElementOp(prev, currentPageId, elId, key, value));
   }

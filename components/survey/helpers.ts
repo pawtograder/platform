@@ -75,7 +75,7 @@ function normalizeElement(el: BuilderElement): BuilderElement {
   switch (el.type) {
     case "text": {
       const textEl = { ...el };
-      if (!('inputType' in textEl)) {
+      if (!("inputType" in textEl)) {
         (textEl as unknown as Record<string, unknown>).inputType = "text";
       }
       delete (textEl as unknown as Record<string, unknown>).choices;
@@ -111,10 +111,10 @@ function normalizeElement(el: BuilderElement): BuilderElement {
       const elRecord = boolEl as unknown as Record<string, unknown>;
       delete elRecord.choices;
       delete elRecord.inputType;
-      if (!('labelTrue' in elRecord)) {
+      if (!("labelTrue" in elRecord)) {
         elRecord.labelTrue = "Yes";
       }
-      if (!('labelFalse' in elRecord)) {
+      if (!("labelFalse" in elRecord)) {
         elRecord.labelFalse = "No";
       }
       return boolEl;
@@ -137,19 +137,19 @@ export function updateElement<K extends keyof BuilderElement>(
     pages: survey.pages.map((p) =>
       p.id === pageId
         ? {
-          ...p,
-          elements: p.elements.map((el) => {
-            if (el.id !== elId) return el;
+            ...p,
+            elements: p.elements.map((el) => {
+              if (el.id !== elId) return el;
 
-            const next = { ...el, [key]: value } as BuilderElement;
+              const next = { ...el, [key]: value } as BuilderElement;
 
-            // if the type itself changed, normalize hard
-            if (key === "type") return normalizeElement(next);
+              // if the type itself changed, normalize hard
+              if (key === "type") return normalizeElement(next);
 
-            // minor updates may still require guardrails (e.g., clearing choices from text)
-            return normalizeElement(next);
-          })
-        }
+              // minor updates may still require guardrails (e.g., clearing choices from text)
+              return normalizeElement(next);
+            })
+          }
         : p
     )
   };
@@ -166,13 +166,13 @@ export function updateElementPatch(
     pages: survey.pages.map((p) =>
       p.id === pageId
         ? {
-          ...p,
-          elements: p.elements.map((el) => {
-            if (el.id !== elId) return el;
-            const next = { ...el, ...patch } as BuilderElement;
-            return normalizeElement(next);
-          })
-        }
+            ...p,
+            elements: p.elements.map((el) => {
+              if (el.id !== elId) return el;
+              const next = { ...el, ...patch } as BuilderElement;
+              return normalizeElement(next);
+            })
+          }
         : p
     )
   };

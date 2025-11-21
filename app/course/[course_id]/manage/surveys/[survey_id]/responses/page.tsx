@@ -53,24 +53,24 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   // Fetch all responses for this survey_id (across all versions)
   // Join with profiles to get student names and emails
   const { data: responses, error: responsesError } = await supabase
-  .from("survey_responses")
-  .select(
-    `
+    .from("survey_responses")
+    .select(
+      `
       *,
       profiles:profiles!profile_id (
         id,
         name
       )
     `
-  )
-  .eq("survey_id", survey.id);
- // Use the database ID of the latest survey version to fetch responses
+    )
+    .eq("survey_id", survey.id);
+  // Use the database ID of the latest survey version to fetch responses
   // .eq("is_submitted", true); // Temporarily comment out to test if this column exists
   // .is("deleted_at", null); // Temporarily comment out to test if this column exists
 
   if (responsesError) {
     console.error("Error fetching responses:", responsesError);
-    console.error("Survey ID used for query:", (survey).id);
+    console.error("Survey ID used for query:", survey.id);
     console.error("Course ID:", course_id);
     return (
       <Container py={8} maxW="1200px" my={2}>
@@ -97,12 +97,12 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     <SurveyResponsesView
       courseId={course_id}
       surveyId={survey_id} // The UUID
-      surveyTitle={(survey).title}
+      surveyTitle={survey.title}
       surveyVersion={1} // Temporarily hardcode since we're not selecting version
-      surveyStatus={(survey).status}
-      surveyJson={(survey).json}
-      surveyDueDate={(survey).due_date}
-      responses={(responses) || []}
+      surveyStatus={survey.status}
+      surveyJson={survey.json}
+      surveyDueDate={survey.due_date}
+      responses={responses || []}
       totalStudents={totalStudents || 0}
     />
   );

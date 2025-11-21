@@ -114,7 +114,7 @@ export default function StudentSurveysPage() {
           .eq("profile_id", profileId)
           .in(
             "survey_id",
-            surveysData.map(s => s.id)
+            surveysData.map((s) => s.id)
           );
 
         if (responsesError) {
@@ -122,8 +122,8 @@ export default function StudentSurveysPage() {
         }
 
         // Merge surveys with the current profile's response status
-        const surveysWithResponse: SurveyWithResponse[] = surveysData.map(survey => {
-          const response = responsesData?.find(r => r.survey_id === survey.id);
+        const surveysWithResponse: SurveyWithResponse[] = surveysData.map((survey) => {
+          const response = responsesData?.find((r) => r.survey_id === survey.id);
 
           let response_status: "not_started" | "in_progress" | "completed" = "not_started";
           if (response) {

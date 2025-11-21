@@ -11,7 +11,6 @@ import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
 import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
 
-
 type SurveyResponsesViewProps = {
   courseId: string;
   surveyId: string; // The UUID
@@ -515,13 +514,7 @@ export default function SurveyResponsesView({
           <Text
             fontSize="2xl"
             fontWeight="bold"
-            color={
-              isOverdue
-                ? overdueColor
-                : isLessThan24Hours
-                  ? urgentColor
-                  : textColor
-            }
+            color={isOverdue ? overdueColor : isLessThan24Hours ? urgentColor : textColor}
           >
             {timeRemaining}
           </Text>

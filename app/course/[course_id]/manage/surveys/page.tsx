@@ -43,8 +43,7 @@ export default async function ManageSurveysPage({ params }: ManageSurveysPagePro
       return {
         ...survey,
         response_count: count || 0,
-        submitted_count: count || 0,
-
+        submitted_count: count || 0
       };
     })
   );

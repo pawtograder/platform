@@ -288,10 +288,7 @@ export function SurveyTemplateLibraryModal({
     try {
       const supabase = createClient();
 
-      const { error } = await supabase
-        .from("survey_templates")
-        .delete()
-        .eq("id", deleteConfirmTemplate.id);
+      const { error } = await supabase.from("survey_templates").delete().eq("id", deleteConfirmTemplate.id);
 
       toaster.dismiss(loadingToast);
 

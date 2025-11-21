@@ -294,7 +294,7 @@ export default function EditSurveyPage() {
                 throw new Error(fallbackData.error.message);
               }
             } catch (fallbackError) {
-              throw new Error(`Failed to update survey: ${error?.message || fallbackError|| "Unknown error"}`);
+              throw new Error(`Failed to update survey: ${error?.message || fallbackError || "Unknown error"}`);
             }
             return;
           }
