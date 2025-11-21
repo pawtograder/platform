@@ -1,44 +1,28 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
 import { formatInTimeZone } from "date-fns-tz";
-import PollResponsesView from "./PollResponsesView";
+import PollResponsesDynamicViewer from "./PollResponsesDynamicViewer";
+import PollResponsesHeader from "./PollResponsesHeader";
+import { LivePoll, LivePollResponse } from "@/types/poll";
 
 type PollResponsesPageProps = {
   params: Promise<{ course_id: string; poll_id: string }>;
-};
-
-type LivePollRecord = {
-  id: string;
-  class_id: number;
-  created_by: string;
-  title: string;
-  question: Record<string, unknown> | null;
-  is_live: boolean;
-  created_at: string;
-};
-
-type LivePollResponseRecord = {
-  id: string;
-  live_poll_id: string;
-  public_profile_id: string;
-  response: Record<string, unknown>;
-  submitted_at: string | null;
-  is_submitted: boolean;
-  created_at: string;
 };
 
 export default async function PollResponsesPage({ params }: PollResponsesPageProps) {
   const { course_id, poll_id } = await params;
   const supabase = await createClient();
 
-  const { data: poll, error: pollError } = await supabase
+  // Supabase returns data with unknown structure, so we cast it to our LivePoll type
+  // The actual database might have extra fields, but TypeScript will treat it as LivePoll
+  const { data: pollData, error: pollError } = await supabase
     .from("live_polls" as any)
-    .select("id, class_id, title, question, is_live, created_at")
+    .select("*")
     .eq("id", poll_id)
     .eq("class_id", Number(course_id))
     .single();
 
-  if (pollError || !poll) {
+  if (pollError || !pollData) {
     console.error("Error fetching poll:", pollError);
     return (
       <Container py={8} maxW="1200px" my={2}>
@@ -49,6 +33,8 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
       </Container>
     );
   }
+
+  const poll = pollData as unknown as LivePoll;
 
   const { data: responsesData, error: responsesError } = await supabase
     .from("live_poll_responses" as any)
@@ -68,7 +54,7 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
     );
   }
 
-  const responses = ((responsesData || []) as unknown) as LivePollResponseRecord[];
+  const responses = ((responsesData || []) as unknown) as LivePollResponse[];
   const profileIds = Array.from(new Set(responses.map((response) => response.public_profile_id))).filter(Boolean);
 
   let profileMap = new Map<string, { name: string | null }>();
@@ -90,6 +76,7 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
 
   const enrichedResponses = responses.map((response) => ({
     ...response,
+    response: response.response || {},
     profile_name: profileMap.get(response.public_profile_id)?.name || "Unknown"
   }));
 
@@ -97,12 +84,11 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
   const timezone = classData?.time_zone || "America/New_York";
 
   return (
-    <PollResponsesView
+    <PollResponsesDynamicViewer
       courseId={course_id}
       pollId={poll_id}
-      pollTitle={(poll as unknown as LivePollRecord).title}
-      pollQuestion={(poll as unknown as LivePollRecord).question}
-      pollIsLive={(poll as unknown as LivePollRecord).is_live}
+      pollQuestion={poll.question}
+      pollIsLive={poll.is_live}
       responses={enrichedResponses}
       timezone={timezone}
     />

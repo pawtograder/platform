@@ -5,37 +5,15 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 import { formatInTimeZone } from "date-fns-tz";
 import { useRouter } from "next/navigation";
 import PollAnalyticsChart from "./PollAnalyticsChart";
-
-type PollResponse = {
-  id: string;
-  live_poll_id: string;
-  public_profile_id: string;
-  response: Record<string, unknown>;
-  submitted_at: string | null;
-  is_submitted: boolean;
-  created_at: string;
-  profile_name: string;
-};
-
-type PollResponsesViewProps = {
-  courseId: string;
-  pollId: string;
-  pollTitle: string;
-  pollQuestion: Record<string, unknown> | null;
-  pollIsLive: boolean;
-  responses: PollResponse[];
-  timezone: string;
-};
-
+import {LivePoll, LivePollResponse,PollQuestion, MultipleChoicePollQuestions} from "@/types/poll";
 export default function PollResponsesView({
   courseId,
-  pollId,
-  pollTitle,
-  pollQuestion,
+  pollQuestion: json,
   pollIsLive,
   responses,
   timezone
 }: PollResponsesViewProps) {
+  const questionPrompt = json.prompt || "Poll";
   const router = useRouter();
 
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -60,8 +38,11 @@ export default function PollResponsesView({
     try {
       // For poll responses, the response is typically a single value
       // Try to extract the actual answer
-      const questionData = pollQuestion as any;
-      if (questionData?.type === "multiple-choice" || questionData?.type === "single-choice") {
+      if (!pollQuestion) {
+        return JSON.stringify(response);
+      }
+      
+      if (pollQuestion.type === "multiple-choice" || pollQuestion.type === "single-choice") {
         const answer = response.poll_question;
         if (Array.isArray(answer)) {
           // Handle "other" responses
@@ -79,9 +60,9 @@ export default function PollResponsesView({
           return `Other: ${answer.replace("other:", "")}`;
         }
         return String(answer || "—");
-      } else if (questionData?.type === "rating") {
+      } else if (pollQuestion.type === "rating") {
         return String(response.poll_question || "—");
-      } else if (questionData?.type === "text" || questionData?.type === "open-ended") {
+      } else if (pollQuestion.type === "text" || pollQuestion.type === "open-ended") {
         return String(response.poll_question || "—");
       }
       return JSON.stringify(response);
@@ -109,7 +90,7 @@ export default function PollResponsesView({
               ← Back to Polls
             </Button>
             <Heading size="xl" color={textColor}>
-              {pollTitle}
+              {questionPrompt}
             </Heading>
             <HStack gap={2}>
               <Badge

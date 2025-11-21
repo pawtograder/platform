@@ -3,22 +3,13 @@ import { createClient } from "@/utils/supabase/server";
 import PollsHeader from "./PollsHeader";
 import EmptyPollsState from "./EmptyPollsState";
 import PollsTable from "./PollsTable";
+import { LivePoll } from "@/types/poll";
 
 type ManagePollsPageProps = {
   params: Promise<{ course_id: string }>;
 };
 
-type LivePollRecord = {
-  id: string;
-  class_id: number;
-  created_by: string;
-  title: string;
-  question: Record<string, unknown> | null;
-  is_live: boolean;
-  created_at: string;
-};
-
-export type LivePollWithCounts = LivePollRecord & {
+export type LivePollWithCounts = LivePoll & {
   response_count: number;
 };
 
@@ -29,7 +20,7 @@ export default async function ManagePollsPage({ params }: ManagePollsPageProps) 
   const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
   const timezone = classData?.time_zone || "America/New_York";
 
-  const { data: pollsData, error } = await supabase
+  const { data: pollData, error } = await supabase
     .from("live_polls" as any)
     .select("*")
     .eq("class_id", Number(course_id))
@@ -44,14 +35,14 @@ export default async function ManagePollsPage({ params }: ManagePollsPageProps) 
     });
   }
 
-  const polls = ((pollsData || []) as unknown) as LivePollRecord[];
+  const polls = ((pollData || []) as unknown) as LivePoll[];
 
   if (!polls || polls.length === 0) {
     return <EmptyPollsState courseId={course_id} />;
   }
 
   const pollsWithCounts: LivePollWithCounts[] = await Promise.all(
-    polls.map(async (poll: LivePollRecord) => {
+    polls.map(async (poll: LivePoll) => {
       const { count } = await supabase
         .from("live_poll_responses" as any)
         .select("*", { count: "exact", head: true })

@@ -1,11 +1,22 @@
-export type PollQuestion = Record<string, unknown> | null;
+// Poll question structure - a single question object
+export type PollQuestion = {
+  id: string;
+};
+
+export type MultipleChoicePollQuestion = PollQuestion & {
+  type: "multiple-choice";
+  prompt: string;
+  choices: {
+    label: string;
+  }[];
+  correct_choices: string[];
+};
 
 export type LivePoll = {
   id: string;
   class_id: number;
   created_by: string;
-  title: string;
-  question: PollQuestion;
+  question: JSON;
   is_live: boolean;
   created_at: string;
   deactivates_at?: string | null;

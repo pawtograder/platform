@@ -20,10 +20,9 @@ interface PollPreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
   pollJson: string;
-  pollTitle?: string;
 }
 
-export function PollPreviewModal({ isOpen, onClose, pollJson, pollTitle }: PollPreviewModalProps) {
+export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModalProps) {
   const [isValidJson, setIsValidJson] = useState(true);
   const [surveyConfig, setSurveyConfig] = useState<any>(null);
 
@@ -33,6 +32,8 @@ export function PollPreviewModal({ isOpen, onClose, pollJson, pollTitle }: PollP
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
 
+  const [pollTitle, setPollTitle] = useState<string>("");
+
   const initializePoll = useCallback(() => {
     if (!pollJson.trim()) {
       setIsValidJson(false);
@@ -41,6 +42,8 @@ export function PollPreviewModal({ isOpen, onClose, pollJson, pollTitle }: PollP
 
     try {
       const pollData = JSON.parse(pollJson);
+      // Extract prompt from poll data for title
+      setPollTitle(pollData?.prompt || "Poll Preview");
       
       // Convert poll JSON to SurveyJS format for preview
       const surveyConfig: any = {
@@ -125,7 +128,7 @@ export function PollPreviewModal({ isOpen, onClose, pollJson, pollTitle }: PollP
       >
         <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
           <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
-            Poll Preview: {pollTitle || "Untitled Poll"}
+            Poll Preview: {pollTitle}
           </DialogTitle>
           <DialogCloseTrigger />
         </DialogHeader>

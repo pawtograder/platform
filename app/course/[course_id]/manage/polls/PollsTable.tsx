@@ -10,20 +10,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { FaTrash } from "react-icons/fa";
-
-type LivePollRecord = {
-  id: string;
-  class_id: number;
-  created_by: string;
-  title: string;
-  question: Record<string, unknown> | null;
-  is_live: boolean;
-  created_at: string;
-};
-
-export type LivePollWithCounts = LivePollRecord & {
-  response_count: number;
-};
+import { LivePollWithCounts } from "./page";
 
 type PollsTableProps = {
   polls: LivePollWithCounts[];
@@ -77,31 +64,6 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     );
   };
 
-  const summarizeQuestion = (question: Record<string, unknown> | null) => {
-    if (!question) {
-      return "—";
-    }
-    try {
-      // Extract the prompt from the question object
-      const prompt = (question as any)?.prompt;
-      if (prompt && typeof prompt === "string") {
-        // Truncate if too long
-        if (prompt.length <= 80) {
-          return prompt;
-        }
-        return `${prompt.slice(0, 80)}…`;
-      }
-      // Fallback to JSON if no prompt found
-      const serialized = JSON.stringify(question);
-      if (serialized.length <= 80) {
-        return serialized;
-      }
-      return `${serialized.slice(0, 80)}…`;
-    } catch {
-      return "—";
-    }
-  };
-
   const handleToggleLive = useCallback(async (pollId: string, nextState: boolean) => {
     const supabase = createClient();
     const loadingToast = toaster.create({
@@ -149,8 +111,8 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     }
   }, []);
 
-  const handleDelete = useCallback(async (pollId: string, pollTitle: string) => {
-    const confirmed = confirm(`Are you sure you want to delete "${pollTitle}"? This action cannot be undone.`);
+  const handleDelete = useCallback(async (pollId: string) => {
+    const confirmed = confirm(`Are you sure you want to delete this poll? This action cannot be undone.`);
     if (!confirmed) return;
 
     const loadingToast = toaster.create({
@@ -158,7 +120,6 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       description: "Removing poll and all responses...",
       type: "loading"
     });
-
     try {
       const supabase = createClient();
       const { error } = await supabase
@@ -218,14 +179,11 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       </HStack>
 
       <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden">
-        <Table.Root size="sm" variant="plain">
+        <Table.Root size="sm">
           <Table.Header bg={tableHeaderBg}>
             <Table.Row>
               <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
-                Title
-              </Table.ColumnHeader>
-              <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
-                Question Preview
+                Question
               </Table.ColumnHeader>
               <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
                 Status
@@ -247,14 +205,9 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                 <Table.Cell>
                   <Link href={`/course/${courseId}/manage/polls/${poll.id}/responses`}>
                     <Text fontWeight="medium" color={textColor}>
-                      {poll.title}
+                      {poll.question?.prompt}
                     </Text>
                   </Link>
-                </Table.Cell>
-                <Table.Cell>
-                  <Text fontSize="sm" color={secondaryTextColor} noOfLines={1}>
-                    {summarizeQuestion(poll.question)}
-                  </Text>
                 </Table.Cell>
                 <Table.Cell>{getStatusBadge(poll.is_live)}</Table.Cell>
                 <Table.Cell>
@@ -282,12 +235,14 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                       </MenuTrigger>
                       <MenuContent>
                         <MenuItem
+                          value={poll.is_live ? "close" : "open"}
                           onClick={() => handleToggleLive(poll.id, !poll.is_live)}
                         >
                           {poll.is_live ? "Close Poll" : "Open Poll"}
                         </MenuItem>
                         <MenuItem
-                          onClick={() => handleDelete(poll.id, poll.title)}
+                          value="delete"
+                          onClick={() => handleDelete(poll.id, poll.question)}
                           colorPalette="red"
                         >
                           <FaTrash />

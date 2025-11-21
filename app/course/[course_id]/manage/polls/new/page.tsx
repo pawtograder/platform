@@ -24,7 +24,6 @@ import PollBuilderModal from "@/components/PollBuilderModal";
 import { PollPreviewModal } from "@/components/PollPreviewModal";
 
 type PollFormValues = {
-  title: string;
   question: string;
   allowMultipleResponses: boolean;
 };
@@ -57,14 +56,12 @@ export default function NewPollPage() {
     watch
   } = useForm<PollFormValues>({
     defaultValues: {
-      title: "",
       question: samplePollTemplate,
       allowMultipleResponses: false
     }
   });
 
   const questionValue = watch("question");
-  const titleValue = watch("title");
 
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
@@ -85,7 +82,28 @@ export default function NewPollPage() {
       return;
     }
     try {
-      JSON.parse(jsonValue);
+      const parsed = JSON.parse(jsonValue);
+      
+      // Ensure it's a single question object, not an array
+      if (Array.isArray(parsed)) {
+        toaster.create({
+          title: "Invalid Question Format",
+          description: "Polls can only contain a single question. Please provide a single question object, not an array.",
+          type: "error"
+        });
+        return;
+      }
+      
+      // Ensure it has required fields
+      if (typeof parsed !== "object" || parsed === null || !parsed.prompt || !parsed.type) {
+        toaster.create({
+          title: "Invalid Question Format",
+          description: "Question must be an object with 'prompt' and 'type' fields.",
+          type: "error"
+        });
+        return;
+      }
+      
       toaster.create({
         title: "JSON valid",
         description: "Your poll question JSON looks good.",
@@ -129,7 +147,28 @@ export default function NewPollPage() {
       return;
     }
     try {
-      JSON.parse(jsonValue);
+      const parsed = JSON.parse(jsonValue);
+      
+      // Ensure it's a single question object, not an array
+      if (Array.isArray(parsed)) {
+        toaster.create({
+          title: "Invalid Question Format",
+          description: "Polls can only contain a single question. Please provide a single question object, not an array.",
+          type: "error"
+        });
+        return;
+      }
+      
+      // Ensure it has required fields
+      if (typeof parsed !== "object" || parsed === null || !parsed.prompt || !parsed.type) {
+        toaster.create({
+          title: "Invalid Question Format",
+          description: "Question must be an object with 'prompt' and 'type' fields.",
+          type: "error"
+        });
+        return;
+      }
+      
       setIsPreviewOpen(true);
     } catch {
       toaster.create({
@@ -162,7 +201,29 @@ export default function NewPollPage() {
 
       let parsedQuestion: Record<string, unknown>;
       try {
-        parsedQuestion = JSON.parse(values.question);
+        const parsed = JSON.parse(values.question);
+        
+        // Ensure it's a single question object, not an array
+        if (Array.isArray(parsed)) {
+          toaster.create({
+            title: "Invalid Question Format",
+            description: "Polls can only contain a single question. Please provide a single question object, not an array.",
+            type: "error"
+          });
+          return;
+        }
+        
+        // Ensure it has required fields for a single question
+        if (typeof parsed !== "object" || parsed === null || !parsed.prompt || !parsed.type) {
+          toaster.create({
+            title: "Invalid Question Format",
+            description: "Question must be an object with 'prompt' and 'type' fields.",
+            type: "error"
+          });
+          return;
+        }
+        
+        parsedQuestion = parsed;
         // Add allowMultipleResponses to the question JSON
         parsedQuestion.allowMultipleResponses = values.allowMultipleResponses;
       } catch (error) {
@@ -190,7 +251,6 @@ export default function NewPollPage() {
           .insert({
             class_id: Number(course_id),
             created_by: public_profile_id,
-            title: values.title.trim(),
             question: parsedQuestion,
             is_live: isLive,
             deactivates_at: deactivatesAt
@@ -282,31 +342,6 @@ export default function NewPollPage() {
         >
           <form onSubmit={onSubmit}>
             <VStack align="stretch" gap={6}>
-              <Box>
-                <Field
-                  label="Poll Title"
-                  errorText={errors.title?.message?.toString()}
-                  invalid={!!errors.title}
-                  required
-                >
-                  <Input
-                    placeholder="Ex: Midterm Review Pulse Check"
-                    bg={bgColor}
-                    borderColor={borderColor}
-                    color={textColor}
-                    _placeholder={{ color: placeholderColor }}
-                    _focus={{ borderColor: "blue.500" }}
-                    {...register("title", {
-                      required: "Poll title is required",
-                      maxLength: {
-                        value: 200,
-                        message: "Title must be less than 200 characters"
-                      }
-                    })}
-                  />
-                </Field>
-              </Box>
-
               <Box>
                 <Field
                   label="Poll Question JSON"
@@ -461,7 +496,6 @@ export default function NewPollPage() {
         isOpen={isPreviewOpen}
         onClose={() => setIsPreviewOpen(false)}
         pollJson={questionValue}
-        pollTitle={titleValue}
       />
     </Box>
   );
