@@ -83,7 +83,7 @@ export default function SurveyTakingPage() {
         const { data: surveyDataRaw, error: surveyError } = await supabase
           .from("surveys")
           .select("*")
-          .eq("id", survey_id)
+          .eq("id", survey_id as string)
           .eq("class_id", Number(course_id))
           .eq("status", "published")
           .single();
