@@ -27,23 +27,16 @@ type SurveyResponsesViewProps = {
 /**
  * Gets question titles from survey JSON for dynamic column headers
  */
-function getQuestionTitles(surveyJson: Record<string, unknown>): Record<string, string> {
+function getQuestionTitles(surveyJson: Survey["json"]): Record<string, string> {
   const titles: Record<string, string> = {};
-
   try {
     const survey = new Model(surveyJson);
-
-    // Get all questions from the survey
-    survey.getAllQuestions().forEach((question) => {
-      if (question.name) {
-        titles[question.name] = question.title || question.name;
-      }
+    survey.getAllQuestions().forEach((q) => {
+      if (q.name) titles[q.name] = q.title || q.name;
     });
-  } catch (error) {
-    // Error parsing survey JSON for question titles
-    void error;
+  } catch {
+    /* ignore */
   }
-
   return titles;
 }
 
@@ -145,7 +138,7 @@ export default function SurveyResponsesView({
   const totalResponses = responses.length;
 
   // Get dynamic question columns from survey JSON
-  const questionTitles = useMemo(() => {
+  const questionTitles = useMemo<Record<string, string>>(() => {
     return getQuestionTitles(surveyJson);
   }, [surveyJson]);
 
@@ -153,11 +146,10 @@ export default function SurveyResponsesView({
   const allQuestionNames = useMemo(() => {
     const questionNames = new Set<string>();
     responses.forEach((response) => {
-      if (response.response) {
-        Object.keys(response.response).forEach((key) => {
-          questionNames.add(key);
-        });
-      }
+      const answers = (response.response ?? {}) as Record<string, unknown>;
+      Object.keys(answers).forEach((key) => {
+        questionNames.add(key);
+      });
     });
     return Array.from(questionNames);
   }, [responses]);
@@ -172,6 +164,7 @@ export default function SurveyResponsesView({
         const startDate = parseISO(dateRangeStart);
         const endDate = parseISO(dateRangeEnd);
         filtered = filtered.filter((response) => {
+          if (!response.submitted_at) return false;
           const submittedDate = parseISO(response.submitted_at);
           return isWithinInterval(submittedDate, { start: startDate, end: endDate });
         });
@@ -265,13 +258,14 @@ export default function SurveyResponsesView({
     ];
 
     const csvRows = filteredResponses.map((response) => {
+      const answers = (response.response ?? {}) as Record<string, unknown>;
       const row = [
         response.profiles?.name || "N/A",
         response.submitted_at
           ? formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")
           : "—",
         ...allQuestionNames.map((questionName) => {
-          const value = response.response?.[questionName];
+          const value = answers[questionName];
           return formatResponseValue(value);
         })
       ];
@@ -590,36 +584,41 @@ export default function SurveyResponsesView({
                 </Table.Cell>
               </Table.Row>
             ) : (
-              filteredResponses.map((response) => (
-                <Table.Row key={response.id} bg={tableRowBg} borderColor={borderColor}>
-                  {!anonymousMode && (
-                    <>
-                      <Table.Cell py={4} pl={6}>
-                        <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
+              filteredResponses.map((response) => {
+                const answers = (response.response ?? {}) as Record<string, unknown>;
+                return (
+                  <Table.Row key={response.id} bg={tableRowBg} borderColor={borderColor}>
+                    {!anonymousMode && (
+                      <>
+                        <Table.Cell py={4} pl={6}>
+                          <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
+                        </Table.Cell>
+                        <Table.Cell py={4}>
+                          <Text color={textColor}>
+                            {response.submitted_at
+                              ? formatInTimeZone(
+                                  new TZDate(response.submitted_at),
+                                  "America/New_York",
+                                  "MMM d, yyyy, h:mm a"
+                                )
+                              : "—"}
+                          </Text>
+                        </Table.Cell>
+                      </>
+                    )}
+                    {visibleQuestions.map((questionName, index) => (
+                      <Table.Cell
+                        key={questionName}
+                        py={4}
+                        pl={anonymousMode && index === 0 ? 6 : undefined}
+                        pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
+                      >
+                        <Text color={textColor}>{formatResponseValue(answers[questionName])}</Text>
                       </Table.Cell>
-                      <Table.Cell py={4}>
-                        <Text color={textColor}>
-                          {formatInTimeZone(
-                            new TZDate(response.submitted_at),
-                            "America/New_York",
-                            "MMM d, yyyy, h:mm a"
-                          )}
-                        </Text>
-                      </Table.Cell>
-                    </>
-                  )}
-                  {visibleQuestions.map((questionName, index) => (
-                    <Table.Cell
-                      key={questionName}
-                      py={4}
-                      pl={anonymousMode && index === 0 ? 6 : undefined}
-                      pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
-                    >
-                      <Text color={textColor}>{formatResponseValue(response.response?.[questionName])}</Text>
-                    </Table.Cell>
-                  ))}
-                </Table.Row>
-              ))
+                    ))}
+                  </Table.Row>
+                );
+              })
             )}
           </Table.Body>
         </Table.Root>
