@@ -1,6 +1,6 @@
 export interface SurveyMeta {
   title?: string;
-  config?: Record<string, any>;
+  config?: Record<string, unknown>;
 }
 
 export interface BuilderSurvey {
@@ -30,8 +30,8 @@ export interface ElementBase {
   title?: string;
   description?: string;
   isRequired?: boolean;
-  validators?: Array<Record<string, any>>;
-  config?: Record<string, any>;
+  validators?: Array<Record<string, unknown>>;
+  config?: Record<string, unknown>;
 }
 
 export type TextElement = ElementBase & {
