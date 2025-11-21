@@ -196,7 +196,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
       if (added) {
         setOpenItems((ids) => Array.from(new Set([...ids, added.id])));
         const safeName = nameHint ?? added.name ?? `${type}_${page.elements.length}`;
-        const withName = updateElementOp(next, currentPageId, added.id, "name" as any, safeName);
+        const withName = updateElementOp(next, currentPageId, added.id, "name", safeName);
         const withTitle = updateElementOp(withName, currentPageId, added.id, "title", safeName);
         return withTitle;
       }
