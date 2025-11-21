@@ -10,6 +10,8 @@ import dynamic from "next/dynamic";
 import { saveResponse, getResponse } from "./submit";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Survey, SurveyResponse } from "@/types/survey";
+import { Model, ValueChangedEvent } from "survey-core";
+
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -30,7 +32,7 @@ export default function SurveyTakingPage() {
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [_isSubmitting, setIsSubmitting] = useState(false);
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -79,7 +81,7 @@ export default function SurveyTakingPage() {
 
         // Get survey data
         const { data: surveyDataRaw, error: surveyError } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .select("*")
           .eq("id", survey_id)
           .eq("class_id", Number(course_id))
@@ -120,7 +122,7 @@ export default function SurveyTakingPage() {
   }, [course_id, survey_id, private_profile_id]); // Include private_profile_id from hook
 
   const handleSurveyComplete = useCallback(
-    async (surveyModel: any) => {
+    async (surveyModel: Model) => {
       if (!private_profile_id || !survey) {
         console.error("Cannot submit survey: Missing profile_id or survey");
         return;
@@ -158,7 +160,7 @@ export default function SurveyTakingPage() {
   );
 
   const handleValueChanged = useCallback(
-    async (surveyModel: any, options: any) => {
+    async (surveyModel: Model, _options?: ValueChangedEvent) => {
       if (!private_profile_id || !survey || !survey.allow_response_editing) return;
 
       // Extract only the survey data from the model, not the entire model object
