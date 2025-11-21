@@ -1,8 +1,6 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
-import { formatInTimeZone } from "date-fns-tz";
 import PollResponsesDynamicViewer from "./PollResponsesDynamicViewer";
-import PollResponsesHeader from "./PollResponsesHeader";
 import { LivePoll, LivePollResponse } from "@/types/poll";
 
 type PollResponsesPageProps = {
@@ -90,7 +88,6 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
       pollQuestion={poll.question}
       pollIsLive={poll.is_live}
       responses={enrichedResponses}
-      timezone={timezone}
     />
   );
 }

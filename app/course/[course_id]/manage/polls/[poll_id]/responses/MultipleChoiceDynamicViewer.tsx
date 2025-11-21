@@ -1,199 +1,276 @@
 "use client";
 
-import { Box, VStack, HStack, Heading, Text, Button } from "@chakra-ui/react";
+import { Box, VStack, Heading, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { useMemo } from "react";
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
+import { useMemo, useEffect, useRef } from "react";
+import { CloseButton } from "@/components/ui/close-button";
 
 type PollResponse = {
-  id: string;
-  live_poll_id: string;
-  public_profile_id: string;
-  response: Record<string, unknown>;
-  submitted_at: string | null;
-  is_submitted: boolean;
-  created_at: string;
-  profile_name: string;
+    id: string;
+    live_poll_id: string;
+    public_profile_id: string;
+    response: Record<string, unknown>;
+    submitted_at: string | null;
+    is_submitted: boolean;
+    created_at: string;
+    profile_name: string;
 };
 
 type MultipleChoiceDynamicViewerProps = {
-  pollQuestion: JSON;
-  responses: PollResponse[];
-  onClose: () => void;
+    pollQuestion: JSON;
+    responses: PollResponse[];
+    isFullWindow?: boolean;
+    onExit?: () => void;
+    pollUrl?: string;
 };
 
 export default function MultipleChoiceDynamicViewer({
-  pollQuestion,
-  responses,
-  onClose
+    pollQuestion,
+    responses,
+    isFullWindow = false,
+    onExit,
+    pollUrl,
 }: MultipleChoiceDynamicViewerProps) {
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const tooltipBg = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const tooltipTextColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
+    const textColor = useColorModeValue("#000000", "#FFFFFF");
+    const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
+    const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
+    const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
+    const fullscreenRef = useRef<HTMLDivElement>(null);
 
-  const questionData = (pollQuestion as unknown) as Record<string, unknown> | null;
-  const questionPrompt = (questionData?.prompt as string) || "Poll";
-  const choices = (questionData?.choices as Array<{ label: string }>) || [];
+    // Handle fullscreen API
+    useEffect(() => {
+        if (!isFullWindow || !fullscreenRef.current) return;
 
-  const chartData = useMemo(() => {
-    const submittedResponses = responses.filter((r) => r.is_submitted);
-    const choiceCounts: Record<string, number> = {};
-    const otherResponses: string[] = [];
+        const element = fullscreenRef.current;
 
-    // Initialize counts for all choices
-    choices.forEach((choice) => {
-      choiceCounts[choice.label] = 0;
-    });
-
-    // Count responses
-    submittedResponses.forEach((response) => {
-      const answer = response.response.poll_question;
-      
-      if (Array.isArray(answer)) {
-        // Multiple choice - can have multiple selections
-        answer.forEach((item: string) => {
-          if (item.startsWith("other:")) {
-            const otherText = item.replace("other:", "");
-            if (otherText) {
-              otherResponses.push(otherText);
+        // Enter fullscreen
+        const enterFullscreen = async () => {
+            try {
+                if (element.requestFullscreen) {
+                    await element.requestFullscreen();
+                } else if ((element as any).webkitRequestFullscreen) {
+                    // Safari
+                    await (element as any).webkitRequestFullscreen();
+                } else if ((element as any).mozRequestFullScreen) {
+                    // Firefox
+                    await (element as any).mozRequestFullScreen();
+                } else if ((element as any).msRequestFullscreen) {
+                    // IE/Edge
+                    await (element as any).msRequestFullscreen();
+                }
+            } catch (error) {
+                console.error("Error entering fullscreen:", error);
             }
-          } else if (choiceCounts.hasOwnProperty(item)) {
-            choiceCounts[item]++;
-          }
-        });
-      } else if (typeof answer === "string") {
-        if (answer.startsWith("other:")) {
-          const otherText = answer.replace("other:", "");
-          if (otherText) {
-            otherResponses.push(otherText);
-          }
-        } else if (choiceCounts.hasOwnProperty(answer)) {
-          choiceCounts[answer]++;
-        }
-      }
+        };
+
+        enterFullscreen();
+
+        // Handle fullscreen change events (user might exit via browser controls)
+        const handleFullscreenChange = () => {
+            const isFullscreen = !!(
+                document.fullscreenElement ||
+                (document as any).webkitFullscreenElement ||
+                (document as any).mozFullScreenElement ||
+                (document as any).msFullscreenElement
+            );
+
+            if (!isFullscreen && onExit) {
+                onExit();
+            }
+        };
+
+        document.addEventListener("fullscreenchange", handleFullscreenChange);
+        document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+        document.addEventListener("mozfullscreenchange", handleFullscreenChange);
+        document.addEventListener("MSFullscreenChange", handleFullscreenChange);
+
+        return () => {
+            document.removeEventListener("fullscreenchange", handleFullscreenChange);
+            document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+            document.removeEventListener("mozfullscreenchange", handleFullscreenChange);
+            document.removeEventListener("MSFullscreenChange", handleFullscreenChange);
+
+            // Exit fullscreen on cleanup
+            const exitFullscreen = async () => {
+                try {
+                    if (document.exitFullscreen) {
+                        await document.exitFullscreen();
+                    } else if ((document as any).webkitExitFullscreen) {
+                        await (document as any).webkitExitFullscreen();
+                    } else if ((document as any).mozCancelFullScreen) {
+                        await (document as any).mozCancelFullScreen();
+                    } else if ((document as any).msExitFullscreen) {
+                        await (document as any).msExitFullscreen();
+                    }
+                } catch (error) {
+                    console.error("Error exiting fullscreen:", error);
+                }
+            };
+
+            exitFullscreen();
+        };
+    }, [isFullWindow, onExit]);
+
+    // Handle Escape key to exit full window mode
+    useEffect(() => {
+        if (!isFullWindow || !onExit) return;
+
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                // Exit fullscreen first, then call onExit
+                const exitFullscreen = async () => {
+                    try {
+                        if (document.exitFullscreen) {
+                            await document.exitFullscreen();
+                        } else if ((document as any).webkitExitFullscreen) {
+                            await (document as any).webkitExitFullscreen();
+                        } else if ((document as any).mozCancelFullScreen) {
+                            await (document as any).mozCancelFullScreen();
+                        } else if ((document as any).msExitFullscreen) {
+                            await (document as any).msExitFullscreen();
+                        }
+                    } catch (error) {
+                        console.error("Error exiting fullscreen:", error);
+                    }
+                };
+                exitFullscreen();
+                onExit();
+            }
+        };
+
+        window.addEventListener("keydown", handleEscape);
+        return () => window.removeEventListener("keydown", handleEscape);
+    }, [isFullWindow, onExit]);
+
+    const questionData = (pollQuestion as unknown) as Record<string, unknown> | null;
+    const firstElement = (questionData?.elements as unknown as Array<{ title: string; choices: string[] | Array<{ text?: string; label?: string; value?: string }> }>)?.[0];
+    const questionPrompt = firstElement?.title || "Poll";
+    // Handle choices as either string array or object array
+    const choicesRaw = firstElement?.choices || [];
+    const choices = choicesRaw.map((choice) => {
+        if (typeof choice === "string") return choice;
+        return choice.text || choice.label || choice.value || String(choice);
     });
 
-    // Convert to chart data format
-    const data = Object.entries(choiceCounts).map(([name, value]) => ({
-      name: name.length > 30 ? `${name.slice(0, 30)}...` : name,
-      fullName: name,
-      Responses: value,
-    }));
+    const chartData = useMemo(() => {
+        const submittedResponses = responses.filter((r) => r.is_submitted);
+        const choiceCounts: Record<string, number> = {};
 
-    // Add "Other" category if there are other responses
-    if (otherResponses.length > 0) {
-      data.push({
-        name: "Other",
-        fullName: "Other",
-        Responses: otherResponses.length,
-      });
-    }
+        choices.forEach((choice) => {
+            choiceCounts[choice] = 0;
+        });
 
-    return data.sort((a, b) => b.Responses - a.Responses);
-  }, [responses, choices]);
+        submittedResponses.forEach((response) => {
+            const answer = response.response.poll_question;
 
-  const submittedResponses = responses.filter((r) => r.is_submitted);
-
-  return (
-    <Box
-      position="fixed"
-      inset="0"
-      bg={cardBgColor}
-      zIndex="9999"
-      display="flex"
-      flexDirection="column"
-      p={8}
-    >
-      <VStack align="stretch" gap={6} flex="1" overflow="auto">
-        {/* Header with close button */}
-        <HStack justify="space-between">
-          <Heading size="2xl" color={textColor}>
-            {questionPrompt}
-          </Heading>
-          <Button
-            variant="outline"
-            size="sm"
-            bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-            onClick={onClose}
-          >
-            Close
-          </Button>
-        </HStack>
-
-        {/* Response count */}
-        <Text fontSize="lg" color={textColor}>
-          {submittedResponses.length} response{submittedResponses.length !== 1 ? "s" : ""}
-        </Text>
-
-        {/* Chart */}
-        {chartData.length > 0 ? (
-          <Box
-            flex="1"
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={6}
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={borderColor} />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fill: tickColor, fontSize: 14 }}
-                  angle={-45}
-                  textAnchor="end"
-                  height={100}
-                  interval={0}
-                />
-                <YAxis tick={{ fill: tickColor, fontSize: 14 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: tooltipBg,
-                    color: tooltipTextColor,
-                    border: `1px solid ${borderColor}`,
-                    borderRadius: "4px",
-                  }}
-                  formatter={(value: number, name: string, props: any) => {
-                    if (props.payload.fullName && props.payload.fullName !== props.payload.name) {
-                      return [`${value}`, `${props.payload.fullName}`];
+            if (Array.isArray(answer)) {
+                answer.forEach((item: string) => {
+                    if (!item.startsWith("other:") && choiceCounts.hasOwnProperty(item)) {
+                        choiceCounts[item]++;
                     }
-                    return [value, name];
-                  }}
-                />
-                <Legend />
-                <Bar
-                  dataKey="Responses"
-                  fill="#3B82F6"
-                  radius={[4, 4, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </Box>
-        ) : (
-          <Box
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={12}
-            textAlign="center"
-          >
-            <Text fontSize="lg" color={textColor}>
-              No responses yet
-            </Text>
-          </Box>
-        )}
-      </VStack>
-    </Box>
-  );
-}
+                });
+            } else if (typeof answer === "string" && !answer.startsWith("other:") && choiceCounts.hasOwnProperty(answer)) {
+                choiceCounts[answer]++;
+            }
+        });
 
+        return Object.entries(choiceCounts).map(([name, value]) => ({
+            name,
+            value,
+        }));
+    }, [responses, choices]);
+
+    const containerProps = isFullWindow
+        ? {
+            w: "100vw",
+            h: "100vh",
+            bg: cardBgColor,
+            display: "flex",
+            flexDirection: "column" as const,
+            p: 8,
+        }
+        : {
+            bg: cardBgColor,
+            borderRadius: "lg",
+            p: 6,
+            border: "1px solid",
+            borderColor: borderColor,
+        };
+
+    const handleExit = () => {
+        // Exit fullscreen first
+        const exitFullscreen = async () => {
+            try {
+                if (document.exitFullscreen) {
+                    await document.exitFullscreen();
+                } else if ((document as any).webkitExitFullscreen) {
+                    await (document as any).webkitExitFullscreen();
+                } else if ((document as any).mozCancelFullScreen) {
+                    await (document as any).mozCancelFullScreen();
+                } else if ((document as any).msExitFullscreen) {
+                    await (document as any).msExitFullscreen();
+                }
+            } catch (error) {
+                console.error("Error exiting fullscreen:", error);
+            }
+        };
+        exitFullscreen();
+        if (onExit) {
+            onExit();
+        }
+    };
+
+    return (
+        <Box {...containerProps} ref={fullscreenRef}>
+            {isFullWindow && (
+                <Box position="absolute" top={4} right={4} zIndex={10000}>
+                    <CloseButton
+                        onClick={handleExit}
+                        aria-label="Exit fullscreen"
+                        size="lg"
+                    />
+                </Box>
+            )}
+            {isFullWindow && pollUrl && (
+                <Box position="absolute" bottom={4} right={4} zIndex={10000}>
+                    <Text fontSize="sm" color={textColor} textAlign="right">
+                        Answer Live at:{" "}
+                        <Text as="span" fontWeight="semibold" color="#3B82F6">
+                            {pollUrl}
+                        </Text>
+                    </Text>
+                </Box>
+            )}
+            <VStack align="stretch" gap={4} flex="1" minH={isFullWindow ? "0" : "400px"}>
+                <Heading size={isFullWindow ? "xl" : "lg"} color={textColor} textAlign="center">
+                    {questionPrompt}
+                </Heading>
+                <Box flex="1" minH="0">
+                    <ResponsiveContainer width="100%" height={isFullWindow ? "100%" : "400px"}>
+                        <BarChart
+                            data={chartData}
+                            layout="vertical"
+                            margin={{ top: 20, right: 30, left: 150, bottom: 20 }}
+                        >
+                            <XAxis
+                                type="number"
+                                tick={{ fill: tickColor }}
+                                allowDecimals={false}
+                                domain={[0, "dataMax"]}
+                                tickFormatter={(value) => Number.isInteger(value) ? String(value) : ""}
+                            />
+                            <YAxis
+                                type="category"
+                                dataKey="name"
+                                tick={{ fill: tickColor }}
+                                width={140}
+                            />
+                            <Bar dataKey="value" fill="#3B82F6" />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </Box>
+            </VStack>
+        </Box>
+    );
+}

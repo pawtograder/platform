@@ -35,16 +35,17 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
     }
 
     const questionData = pollQuestion as any;
+    const firstElement = questionData?.elements?.[0];
     const submittedResponses = responses.filter((r) => r.is_submitted);
 
-    // Handle multiple-choice and single-choice
-    if (questionData?.type === "multiple-choice" || questionData?.type === "single-choice") {
+    // Handle multiple-choice and single-choice (checkbox/radiogroup)
+    if (firstElement?.type === "checkbox" || firstElement?.type === "radiogroup") {
       const choiceCounts: Record<string, number> = {};
       const otherResponses: string[] = [];
 
       // Initialize counts for all choices
-      questionData.choices?.forEach((choice: any) => {
-        choiceCounts[choice.label] = 0;
+      firstElement.choices?.forEach((choice: string) => {
+        choiceCounts[choice] = 0;
       });
 
       // Count responses
@@ -97,10 +98,10 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
     }
 
     // Handle rating
-    if (questionData?.type === "rating") {
+    if (firstElement?.type === "rating") {
       const ratingCounts: Record<number, number> = {};
-      const min = questionData.min || 1;
-      const max = questionData.max || 5;
+      const min = firstElement.min || 1;
+      const max = firstElement.max || 5;
 
       // Initialize counts
       for (let i = min; i <= max; i++) {
@@ -122,7 +123,7 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
     }
 
     // Text and open-ended responses - show count but no chart (too many unique values)
-    if (questionData?.type === "text" || questionData?.type === "open-ended") {
+    if (firstElement?.type === "text" || firstElement?.type === "comment") {
       return [];
     }
 
@@ -130,10 +131,11 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
   }, [pollQuestion, responses]);
 
   const questionData = pollQuestion as any;
+  const firstElement = questionData?.elements?.[0];
   const submittedResponses = responses.filter((r) => r.is_submitted);
 
   // Don't show chart for text or open-ended questions (too many unique responses)
-  if (questionData?.type === "text" || questionData?.type === "open-ended") {
+  if (firstElement?.type === "text" || firstElement?.type === "comment") {
     return (
       <Box
         bg={cardBgColor}

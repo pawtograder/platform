@@ -29,13 +29,11 @@ type PollFormValues = {
 };
 
 const samplePollTemplate = `{
-  "prompt": "Which topic should we review next?",
-  "type": "multiple-choice",
-  "choices": [
-    { "id": "recursion", "label": "Recursion" },
-    { "id": "dynamic-programming", "label": "Dynamic Programming" },
-    { "id": "graphs", "label": "Graphs" }
-  ]
+  "elements": [{
+    "type": "checkbox",
+    "title": "Which topic should we review next?",
+    "choices": ["Recursion", "Dynamic Programming", "Graphs"]
+  }]
 }`;
 
 export default function NewPollPage() {
@@ -84,21 +82,22 @@ export default function NewPollPage() {
     try {
       const parsed = JSON.parse(jsonValue);
       
-      // Ensure it's a single question object, not an array
-      if (Array.isArray(parsed)) {
+      // Ensure it has the elements array structure
+      if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.elements) || parsed.elements.length === 0) {
         toaster.create({
           title: "Invalid Question Format",
-          description: "Polls can only contain a single question. Please provide a single question object, not an array.",
+          description: "Question must be an object with an 'elements' array containing at least one element.",
           type: "error"
         });
         return;
       }
       
-      // Ensure it has required fields
-      if (typeof parsed !== "object" || parsed === null || !parsed.prompt || !parsed.type) {
+      // Ensure the first element has required fields
+      const firstElement = parsed.elements[0];
+      if (!firstElement.type || !firstElement.title) {
         toaster.create({
           title: "Invalid Question Format",
-          description: "Question must be an object with 'prompt' and 'type' fields.",
+          description: "The first element in 'elements' must have 'type' and 'title' fields.",
           type: "error"
         });
         return;
@@ -160,7 +159,7 @@ export default function NewPollPage() {
       }
       
       // Ensure it has required fields
-      if (typeof parsed !== "object" || parsed === null || !parsed.prompt || !parsed.type) {
+      if (typeof parsed !== "object" || parsed === null || !parsed.title || !parsed.type) {
         toaster.create({
           title: "Invalid Question Format",
           description: "Question must be an object with 'prompt' and 'type' fields.",
@@ -203,29 +202,33 @@ export default function NewPollPage() {
       try {
         const parsed = JSON.parse(values.question);
         
-        // Ensure it's a single question object, not an array
-        if (Array.isArray(parsed)) {
+        // Ensure it has the elements array structure
+        if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.elements) || parsed.elements.length === 0) {
           toaster.create({
             title: "Invalid Question Format",
-            description: "Polls can only contain a single question. Please provide a single question object, not an array.",
+            description: "Question must be an object with an 'elements' array containing at least one element.",
             type: "error"
           });
           return;
         }
         
-        // Ensure it has required fields for a single question
-        if (typeof parsed !== "object" || parsed === null || !parsed.prompt || !parsed.type) {
+        // Ensure the first element has required fields
+        const firstElement = parsed.elements[0];
+        if (!firstElement.type || !firstElement.title) {
           toaster.create({
             title: "Invalid Question Format",
-            description: "Question must be an object with 'prompt' and 'type' fields.",
+            description: "The first element in 'elements' must have 'type' and 'title' fields.",
             type: "error"
           });
           return;
         }
         
-        parsedQuestion = parsed;
-        // Add allowMultipleResponses to the question JSON
-        parsedQuestion.allowMultipleResponses = values.allowMultipleResponses;
+        parsedQuestion = parsed as Record<string, unknown>;
+        // Add allowMultipleResponses to the first element
+        const elements = parsedQuestion.elements as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(elements) && elements[0]) {
+          elements[0].allowMultipleResponses = values.allowMultipleResponses;
+        }
       } catch (error) {
         toaster.create({
           title: "Invalid JSON",
@@ -500,4 +503,3 @@ export default function NewPollPage() {
     </Box>
   );
 }
-

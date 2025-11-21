@@ -1,8 +1,8 @@
 "use client";
 
-import { HStack, Button, Box } from "@chakra-ui/react";
+import { HStack, Button, Box, Text } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { useColorModeValue } from "@/components/ui/color-mode";
@@ -27,6 +27,21 @@ export default function PollResponsesHeader({
     
     const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
     const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
+    const textColor = useColorModeValue("#1A202C", "#FFFFFF");
+
+    // Get base URL - localhost for dev, pawtograder.com for production
+    const baseUrl = useMemo(() => {
+        if (typeof window !== "undefined") {
+            const hostname = window.location.hostname;
+            if (hostname === "localhost" || hostname === "127.0.0.1") {
+                return `${hostname}:${window.location.port || 3000}`;
+            }
+            return `${hostname}`;
+        }
+        return "localhost:3000";
+    }, []);
+
+    const pollUrl = `${baseUrl}/livepoll/${courseID}`;
 
     const handleToggleLive = useCallback(async () => {
         const nextState = !pollIsLive;
@@ -89,6 +104,12 @@ export default function PollResponsesHeader({
                 >
                     ← Back to Polls
                 </Button>
+                <Text fontSize="sm" color={textColor} textAlign="center">
+                    Answer Live at:{" "}
+                    <Text as="span" fontWeight="semibold" color="#3B82F6">
+                        {pollUrl}
+                    </Text>
+                </Text>
                 <HStack gap={2}>
                     <Button
                         variant="outline"

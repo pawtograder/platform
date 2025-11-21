@@ -11,6 +11,7 @@ import { useCallback, useState, useMemo } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { FaTrash } from "react-icons/fa";
 import { LivePollWithCounts } from "./page";
+import { BsPrinterFill } from "react-icons/bs";
 
 type PollsTableProps = {
   polls: LivePollWithCounts[];
@@ -43,6 +44,12 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     }
     return pollRows.filter((poll) => (activeFilter === "live" ? poll.is_live : !poll.is_live));
   }, [pollRows, activeFilter]);
+
+  const getQuestionPrompt = (question: LivePollWithCounts) => {
+    const questionData = (question.question as unknown) as Record<string, unknown> | null;
+    return (questionData?.elements as unknown as { title: string }[])?.[0]?.title || "Poll";
+  };
+  
 
   const getStatusBadge = (isLive: boolean) => {
     const colors = isLive
@@ -205,7 +212,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                 <Table.Cell>
                   <Link href={`/course/${courseId}/manage/polls/${poll.id}/responses`}>
                     <Text fontWeight="medium" color={textColor}>
-                      {poll.question?.prompt}
+                      {getQuestionPrompt(poll)}
                     </Text>
                   </Link>
                 </Table.Cell>
@@ -242,7 +249,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                         </MenuItem>
                         <MenuItem
                           value="delete"
-                          onClick={() => handleDelete(poll.id, poll.question)}
+                          onClick={() => handleDelete(poll.id)}
                           colorPalette="red"
                         >
                           <FaTrash />

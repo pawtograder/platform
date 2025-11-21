@@ -1,15 +1,18 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { Box } from "@chakra-ui/react";
+import { useColorModeValue } from "@/components/ui/color-mode";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 
-function parseJsonForType(pollQuestion: JSON): "radio-group" | "single-choice" | "open-ended" | "rating" | "text" {
-    const json = pollQuestion as any;
-    if (!json.type) {
-        throw new Error("Poll question JSON must have a 'type' field");
+function parseJsonForType(pollQuestion: JSON): "radiogroup" | "checkbox" | "single-choice" | "open-ended" | "rating" | "text" {
+    const questionData = (pollQuestion as unknown) as Record<string, unknown> | null;
+    const type = (questionData?.elements as unknown as { type: string }[])?.[0]?.type;
+    if (!type) {
+        throw new Error("Poll question JSON must have a 'type' field in elements[0]");
     }
-    return json.type;
+    return type as "radiogroup" | "checkbox" | "single-choice" | "open-ended" | "rating" | "text";
 }
 
 type PollResponsesDynamicViewerProps = {
@@ -18,7 +21,6 @@ type PollResponsesDynamicViewerProps = {
     pollQuestion: JSON;
     pollIsLive: boolean;
     responses: any[];
-    timezone: string;
 };
 
 export default function PollResponsesDynamicViewer({
@@ -27,12 +29,21 @@ export default function PollResponsesDynamicViewer({
     pollQuestion,
     pollIsLive: initialPollIsLive,
     responses,
-    timezone
 }: PollResponsesDynamicViewerProps) {
     const [isPresenting, setIsPresenting] = useState(false);
     const [pollIsLive, setPollIsLive] = useState(initialPollIsLive);
     
     const type = parseJsonForType(pollQuestion);
+
+    // Calculate poll URL
+    const pollUrl = useMemo(() => {
+        if (typeof window === "undefined") return "";
+        const hostname = window.location.hostname;
+        if (hostname === "localhost" || hostname === "127.0.0.1") {
+            return `${hostname}:${window.location.port || 3000}/livepoll/${courseId}`;
+        }
+        return `${hostname}/livepoll/${courseId}`;
+    }, [courseId]);
 
     const handlePresent = useCallback(() => {
         setIsPresenting(true);
@@ -46,19 +57,24 @@ export default function PollResponsesDynamicViewer({
         setPollIsLive(isLive);
     }, []);
 
-    // Render fullscreen present view
+    // Render full window present view
     if (isPresenting) {
         switch (type) {
-            case "radio-group":
-                return <MultipleChoiceDynamicViewer pollQuestion={pollQuestion} responses={responses} onClose={handleClosePresent} />;
+            case "radiogroup":
+            case "checkbox":
+                return <MultipleChoiceDynamicViewer pollQuestion={pollQuestion} responses={responses} isFullWindow={true} onExit={handleClosePresent} pollUrl={pollUrl} />;
             default:
-                return <div>Unsupported poll question type: {type}</div>;
+                return (
+                    <Box position="fixed" inset="0" bg={useColorModeValue("#E5E5E5", "#1A1A1A")} zIndex="9999" display="flex" alignItems="center" justifyContent="center">
+                        <div>Unsupported poll question type: {type}</div>
+                    </Box>
+                );
         }
     }
 
     // Render normal view with header
     return (
-        <>
+        <div>
             <PollResponsesHeader 
                 courseID={courseId} 
                 pollID={pollId}
@@ -66,10 +82,11 @@ export default function PollResponsesDynamicViewer({
                 onPresent={handlePresent}
                 onPollStatusChange={handlePollStatusChange}
             />
-            <div>
-                {/* Regular view content will go here - for now just showing the type */}
-                Poll type: {type}
-            </div>
-        </>
+            {type === "radiogroup" || type === "checkbox" ? (
+                <MultipleChoiceDynamicViewer pollQuestion={pollQuestion} responses={responses} isFullWindow={false} />
+            ) : (
+                <div>Unsupported poll question type: {type}</div>
+            )}
+        </div>
     );
 }

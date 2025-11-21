@@ -7,8 +7,8 @@ import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.css";
 
 interface SurveyComponentProps {
-  surveyJson: any;
-  isPopup?: boolean;
+  surveyModel?: Model;
+  surveyJson?: any;
   isExpanded?: boolean;
   onComplete?: (survey: Model) => void;
   onValueChanged?: (survey: Model, options: any) => void;
@@ -17,8 +17,8 @@ interface SurveyComponentProps {
 }
 
 export default function SurveyComponent({
+  surveyModel,
   surveyJson,
-  isPopup = false,
   isExpanded = true,
   onComplete,
   onValueChanged,
@@ -28,8 +28,8 @@ export default function SurveyComponent({
   // Get color mode to determine theme
   const isDarkMode = useColorModeValue(false, true);
 
-  // Create survey model from JSON
-  const survey = new Model(surveyJson);
+  // Create survey model from JSON or use provided model
+  const survey = surveyModel || new Model(surveyJson);
 
   // Apply SurveyJS theme based on color mode
   if (isDarkMode) {
@@ -55,11 +55,6 @@ export default function SurveyComponent({
 
   if (onValueChanged) {
     survey.onValueChanged.add(onValueChanged);
-  }
-
-  // Render the survey in a pop-up window
-  if (isPopup) {
-    return <PopupSurvey model={survey} isExpanded={isExpanded} />;
   }
 
   // Render the survey inside the page
