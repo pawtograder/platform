@@ -40,7 +40,7 @@ type SurveyTemplate = {
   id: string;
   title: string;
   description: string | null;
-  template: any; // JSONB
+  template: Record<string, unknown> | null;
   created_by: string;
   scope: "course" | "global";
   class_id: number | null;
@@ -107,7 +107,7 @@ export function SurveyTemplateLibraryModal({
 
       // Fetch global templates
       const { data: globalData, error: globalError } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .select(
           `
           *,
@@ -121,7 +121,7 @@ export function SurveyTemplateLibraryModal({
 
       // Fetch course-specific templates (matching class_id)
       const { data: courseData, error: courseError } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .select(
           `
           *,
@@ -143,7 +143,7 @@ export function SurveyTemplateLibraryModal({
       const allTemplates = [...(globalData || []), ...(courseData || [])];
 
       // Type assertion for the joined data
-      const typedData = allTemplates.map((item: any) => ({
+      const typedData = allTemplates.map((item) => ({
         ...item,
         profiles: Array.isArray(item.profiles) ? item.profiles[0] : item.profiles
       })) as SurveyTemplate[];
@@ -231,12 +231,12 @@ export function SurveyTemplateLibraryModal({
       const supabase = createClient();
 
       const { error } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .update({
           title: editTitle,
-          description: editDescription || null,
+          description: editDescription || undefined,
           scope: editScope,
-          class_id: editScope === "course" ? Number(courseId) : null,
+          class_id: editScope === "course" ? Number(courseId) : undefined,
           updated_at: new Date().toISOString()
         })
         .eq("id", editingTemplate.id);
@@ -261,7 +261,7 @@ export function SurveyTemplateLibraryModal({
       setIsEditModalOpen(false);
       setEditingTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch (error) {
+    } catch {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
@@ -289,7 +289,7 @@ export function SurveyTemplateLibraryModal({
       const supabase = createClient();
 
       const { error } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .delete()
         .eq("id", deleteConfirmTemplate.id);
 
@@ -313,7 +313,7 @@ export function SurveyTemplateLibraryModal({
       setIsDeleteConfirmOpen(false);
       setDeleteConfirmTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch (error) {
+    } catch {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
@@ -712,7 +712,7 @@ export function SurveyTemplateLibraryModal({
 
           <DialogBody p={6}>
             <Text color={textColor}>
-              Are you sure you want to delete "{deleteConfirmTemplate?.title}"? This action cannot be undone.
+              Are you sure you want to delete &quot;{deleteConfirmTemplate?.title}&quot;? This action cannot be undone.
             </Text>
           </DialogBody>
 
