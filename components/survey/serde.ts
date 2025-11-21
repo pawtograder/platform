@@ -1,4 +1,4 @@
-import type { BuilderSurvey, BuilderPage, BuilderElement, Choice, SurveyMeta } from "./SurveyDataTypes";
+import type { BuilderSurvey, BuilderPage, BuilderElement, Choice, SurveyMeta } from "./SurveyBuilderDataTypes";
 import { makeEmptySurvey, makePage, makeElement, cloneChoice } from "./factories";
 
 function toChoiceObject(c: unknown): Choice {

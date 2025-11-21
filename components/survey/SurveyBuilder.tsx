@@ -21,7 +21,7 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { LuChevronUp, LuChevronDown, LuTrash2 } from "react-icons/lu";
 
-import type { BuilderSurvey, BuilderPage, BuilderElement, ElementType } from "./SurveyDataTypes";
+import type { BuilderSurvey, BuilderPage, BuilderElement, ElementType } from "./SurveyBuilderDataTypes";
 import { makeEmptySurvey } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
 

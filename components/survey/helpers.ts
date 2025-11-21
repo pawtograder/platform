@@ -1,4 +1,4 @@
-import type { BuilderSurvey, BuilderPage, BuilderElement, ElementType } from "./SurveyDataTypes";
+import type { BuilderSurvey, BuilderPage, BuilderElement, ElementType } from "./SurveyBuilderDataTypes";
 import { makePage, makeElement } from "./factories";
 
 /**helpers */
