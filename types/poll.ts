@@ -8,6 +8,7 @@ export type LivePoll = {
   question: PollQuestion;
   is_live: boolean;
   created_at: string;
+  deactivates_at?: string | null;
 };
 
 export type LivePollResponse = {

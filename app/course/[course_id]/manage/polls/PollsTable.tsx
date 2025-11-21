@@ -111,9 +111,18 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     });
 
     try {
+      // If making poll live, set deactivates_at to 1 hour from now
+      // If closing poll, clear deactivates_at
+      const updateData: { is_live: boolean; deactivates_at: string | null } = {
+        is_live: nextState,
+        deactivates_at: nextState 
+          ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
+          : null
+      };
+
       const { error } = await supabase
         .from("live_polls" as any)
-        .update({ is_live: nextState })
+        .update(updateData)
         .eq("id", pollId);
 
       if (error) {

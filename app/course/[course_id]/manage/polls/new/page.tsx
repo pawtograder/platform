@@ -180,6 +180,11 @@ export default function NewPollPage() {
       try {
         const isLive = publish;
 
+        // If publishing, set deactivates_at to 1 hour from now
+        const deactivatesAt = isLive 
+          ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
+          : null;
+
         const { error } = await supabase
           .from("live_polls" as any)
           .insert({
@@ -187,7 +192,8 @@ export default function NewPollPage() {
             created_by: public_profile_id,
             title: values.title.trim(),
             question: parsedQuestion,
-            is_live: isLive
+            is_live: isLive,
+            deactivates_at: deactivatesAt
           })
           .select("id")
           .single();
