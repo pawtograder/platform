@@ -10,8 +10,7 @@ export type SurveyResponse = DbSurveyResponse;
 export type SurveyResponseWithProfile = SurveyResponse & {
   profiles: {
     id: string;
-    name: string;
-    sis_user_id: string | null;
+    name: string | null;
   };
 };
 

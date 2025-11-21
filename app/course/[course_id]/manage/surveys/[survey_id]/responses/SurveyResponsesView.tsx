@@ -9,30 +9,18 @@ import { useRouter } from "next/navigation";
 import { Model } from "survey-core";
 import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
+import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
 
-type SurveyResponse = {
-  id: string;
-  survey_id: string;
-  profile_id: string; // Foreign key to profiles
-  response: Record<string, unknown>; // Dynamic response data based on survey questions
-  created_at: string;
-  submitted_at: string;
-  updated_at: string;
-  is_submitted: boolean;
-  profiles: {
-    name: string;
-  };
-};
 
 type SurveyResponsesViewProps = {
   courseId: string;
   surveyId: string; // The UUID
-  surveyTitle: string;
+  surveyTitle: Survey["title"];
   surveyVersion: number;
-  surveyStatus: string;
-  surveyJson: Record<string, unknown>; // The JSON configuration of the survey
-  surveyDueDate: string | null; // The deadline for the survey
-  responses: SurveyResponse[];
+  surveyStatus: Survey["status"];
+  surveyJson: Survey["json"]; // The JSON configuration of the survey
+  surveyDueDate: Survey["due_date"]; // The deadline for the survey
+  responses: SurveyResponseWithProfile[];
   totalStudents: number;
 };
 

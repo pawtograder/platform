@@ -12,7 +12,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
 
   // Fetch survey data to get title, status, version, JSON, and due_date (latest version)
   const { data: survey, error: surveyError } = await supabase
-    .from("surveys" as any)
+    .from("surveys")
     .select("id, title, status, json, due_date")
     // .select("id, title, status, version, json") // Temporarily remove version to test
     .eq("survey_id", survey_id)
@@ -53,22 +53,24 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   // Fetch all responses for this survey_id (across all versions)
   // Join with profiles to get student names and emails
   const { data: responses, error: responsesError } = await supabase
-    .from("survey_responses" as any)
-    .select(
-      `
+  .from("survey_responses")
+  .select(
+    `
       *,
-      profiles!profile_id (
+      profiles:profiles!profile_id (
+        id,
         name
       )
     `
-    )
-    .eq("survey_id", (survey as any).id); // Use the database ID of the latest survey version to fetch responses
+  )
+  .eq("survey_id", survey.id);
+ // Use the database ID of the latest survey version to fetch responses
   // .eq("is_submitted", true); // Temporarily comment out to test if this column exists
   // .is("deleted_at", null); // Temporarily comment out to test if this column exists
 
   if (responsesError) {
     console.error("Error fetching responses:", responsesError);
-    console.error("Survey ID used for query:", (survey as any).id);
+    console.error("Survey ID used for query:", (survey).id);
     console.error("Course ID:", course_id);
     return (
       <Container py={8} maxW="1200px" my={2}>
@@ -95,12 +97,12 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     <SurveyResponsesView
       courseId={course_id}
       surveyId={survey_id} // The UUID
-      surveyTitle={(survey as any).title}
+      surveyTitle={(survey).title}
       surveyVersion={1} // Temporarily hardcode since we're not selecting version
-      surveyStatus={(survey as any).status}
-      surveyJson={(survey as any).json}
-      surveyDueDate={(survey as any).due_date}
-      responses={(responses as any) || []}
+      surveyStatus={(survey).status}
+      surveyJson={(survey).json}
+      surveyDueDate={(survey).due_date}
+      responses={(responses) || []}
       totalStudents={totalStudents || 0}
     />
   );
