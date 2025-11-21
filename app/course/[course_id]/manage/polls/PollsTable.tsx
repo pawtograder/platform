@@ -8,6 +8,7 @@ import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/me
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { FaTrash } from "react-icons/fa";
 import { LivePollWithCounts } from "./page";
@@ -22,6 +23,7 @@ type PollsTableProps = {
 type FilterType = "all" | "live" | "closed";
 
 export default function PollsTable({ polls, courseId, timezone }: PollsTableProps) {
+  const router = useRouter();
   const [pollRows, setPollRows] = useState<LivePollWithCounts[]>(polls);
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
@@ -246,6 +248,12 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                           onClick={() => handleToggleLive(poll.id, !poll.is_live)}
                         >
                           {poll.is_live ? "Close Poll" : "Open Poll"}
+                        </MenuItem>
+                        <MenuItem
+                          value="view"
+                          onClick={() => router.push(`/course/${courseId}/manage/polls/${poll.id}/responses`)}
+                        >
+                          View Poll
                         </MenuItem>
                         <MenuItem
                           value="delete"

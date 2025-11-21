@@ -271,15 +271,16 @@ export default function NewPollPage() {
             description: "Your poll has been published and is now live for students.",
             type: "success"
           });
+          // Navigate back to polls page after publishing
+          router.push(`/course/${course_id}/manage/polls`);
         } else {
           toaster.create({
             title: "Draft saved",
             description: "Your poll has been saved as a draft.",
             type: "success"
           });
+          // Stay on the page when saving as draft so user can continue editing
         }
-
-        router.push(`/course/${course_id}/manage/polls`);
       } catch (error) {
         toaster.create({
           title: "Unable to save poll",
@@ -420,7 +421,7 @@ export default function NewPollPage() {
               </Box>
 
               {/* Allow Multiple Responses */}
-              <Box>
+              {/* <Box>
                 <Controller
                   name="allowMultipleResponses"
                   control={control}
@@ -442,7 +443,7 @@ export default function NewPollPage() {
                 <Text fontSize="xs" color={buttonTextColor} mt={1} ml={6}>
                   If unchecked, students can only submit one response. After submitting, they will be redirected.
                 </Text>
-              </Box>
+              </Box> */}
 
               <HStack gap={4} justify="flex-start" pt={4}>
                 <UIButton
