@@ -269,7 +269,7 @@ export interface PageViewedEvent {
 export interface SurveyCreatedEvent {
   course_id: number;
   survey_id: string;
-  status: "draft" | "published";
+  status: "draft" | "published" | "closed";
   has_due_date: boolean;
   allow_response_editing: boolean;
   has_validation_errors: boolean;

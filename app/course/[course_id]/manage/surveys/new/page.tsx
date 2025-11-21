@@ -363,9 +363,9 @@ export default function NewSurveyPage() {
       }
 
       // Track analytics
-      trackEvent("survey_created" as any, {
+      trackEvent("survey_created", {
         course_id: Number(course_id),
-        survey_id: (data as any).survey_id,
+        survey_id: (data).survey_id,
         status: finalStatus,
         has_due_date: !!values.due_date,
         allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
@@ -456,7 +456,7 @@ export default function NewSurveyPage() {
         toaster.dismiss(loadingToast);
 
         return result;
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("[onSubmit] final error:", err);
         toaster.dismiss(loadingToast);
         toaster.error({
