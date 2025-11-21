@@ -32,7 +32,7 @@ export default function SurveyTakingPage() {
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [_isSubmitting, setIsSubmitting] = useState(false);
+  const [, setIsSubmitting] = useState(false);
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -160,7 +160,8 @@ export default function SurveyTakingPage() {
   );
 
   const handleValueChanged = useCallback(
-    async (surveyModel: Model, _options?: ValueChangedEvent) => {
+    async (surveyModel: Model, options?: ValueChangedEvent) => {
+      void options;
       if (!private_profile_id || !survey || !survey.allow_response_editing) return;
 
       // Extract only the survey data from the model, not the entire model object
