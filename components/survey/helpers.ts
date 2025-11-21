@@ -73,36 +73,52 @@ export function addElementToPage(
 
 function normalizeElement(el: BuilderElement): BuilderElement {
   switch (el.type) {
-    case "text":
-      (el as any).inputType = (el as any).inputType ?? "text";
-      delete (el as any).choices;
-      delete (el as any).labelTrue;
-      delete (el as any).labelFalse;
-      return el;
+    case "text": {
+      const textEl = { ...el };
+      if (!('inputType' in textEl)) {
+        (textEl as unknown as Record<string, unknown>).inputType = "text";
+      }
+      delete (textEl as unknown as Record<string, unknown>).choices;
+      delete (textEl as unknown as Record<string, unknown>).labelTrue;
+      delete (textEl as unknown as Record<string, unknown>).labelFalse;
+      return textEl;
+    }
 
-    case "comment":
-      delete (el as any).choices;
-      delete (el as any).inputType;
-      delete (el as any).labelTrue;
-      delete (el as any).labelFalse;
-      return el;
+    case "comment": {
+      const commentEl = { ...el };
+      delete (commentEl as unknown as Record<string, unknown>).choices;
+      delete (commentEl as unknown as Record<string, unknown>).inputType;
+      delete (commentEl as unknown as Record<string, unknown>).labelTrue;
+      delete (commentEl as unknown as Record<string, unknown>).labelFalse;
+      return commentEl;
+    }
 
     case "radiogroup":
-    case "checkbox":
-      if (!Array.isArray((el as any).choices) || !(el as any).choices.length) {
-        (el as any).choices = [{ value: "Item 1" }, { value: "Item 2" }, { value: "Item 3" }];
+    case "checkbox": {
+      const choiceEl = { ...el };
+      const elRecord = choiceEl as unknown as Record<string, unknown>;
+      if (!Array.isArray(elRecord.choices) || !elRecord.choices.length) {
+        elRecord.choices = [{ value: "Item 1" }, { value: "Item 2" }, { value: "Item 3" }];
       }
-      delete (el as any).inputType;
-      delete (el as any).labelTrue;
-      delete (el as any).labelFalse;
-      return el;
+      delete elRecord.inputType;
+      delete elRecord.labelTrue;
+      delete elRecord.labelFalse;
+      return choiceEl;
+    }
 
-    case "boolean":
-      delete (el as any).choices;
-      delete (el as any).inputType;
-      (el as any).labelTrue = (el as any).labelTrue ?? "Yes";
-      (el as any).labelFalse = (el as any).labelFalse ?? "No";
-      return el;
+    case "boolean": {
+      const boolEl = { ...el };
+      const elRecord = boolEl as unknown as Record<string, unknown>;
+      delete elRecord.choices;
+      delete elRecord.inputType;
+      if (!('labelTrue' in elRecord)) {
+        elRecord.labelTrue = "Yes";
+      }
+      if (!('labelFalse' in elRecord)) {
+        elRecord.labelFalse = "No";
+      }
+      return boolEl;
+    }
 
     default:
       return el;
@@ -121,19 +137,19 @@ export function updateElement<K extends keyof BuilderElement>(
     pages: survey.pages.map((p) =>
       p.id === pageId
         ? {
-            ...p,
-            elements: p.elements.map((el) => {
-              if (el.id !== elId) return el;
+          ...p,
+          elements: p.elements.map((el) => {
+            if (el.id !== elId) return el;
 
-              const next = { ...el, [key]: value } as BuilderElement;
+            const next = { ...el, [key]: value } as BuilderElement;
 
-              // if the type itself changed, normalize hard
-              if (key === "type") return normalizeElement(next);
+            // if the type itself changed, normalize hard
+            if (key === "type") return normalizeElement(next);
 
-              // minor updates may still require guardrails (e.g., clearing choices from text)
-              return normalizeElement(next);
-            })
-          }
+            // minor updates may still require guardrails (e.g., clearing choices from text)
+            return normalizeElement(next);
+          })
+        }
         : p
     )
   };
@@ -150,13 +166,13 @@ export function updateElementPatch(
     pages: survey.pages.map((p) =>
       p.id === pageId
         ? {
-            ...p,
-            elements: p.elements.map((el) => {
-              if (el.id !== elId) return el;
-              const next = { ...el, ...patch } as BuilderElement;
-              return normalizeElement(next);
-            })
-          }
+          ...p,
+          elements: p.elements.map((el) => {
+            if (el.id !== elId) return el;
+            const next = { ...el, ...patch } as BuilderElement;
+            return normalizeElement(next);
+          })
+        }
         : p
     )
   };
@@ -200,10 +216,12 @@ export function addChoice(
           if (el.id !== elId) return el;
           if (el.type !== "radiogroup" && el.type !== "checkbox") return el;
 
-          const next = [...(el.choices ?? [])];
+          const elRecord = el as unknown as Record<string, unknown>;
+          const currentChoices = Array.isArray(elRecord.choices) ? elRecord.choices : [];
+          const next = [...currentChoices];
           const n = next.length + 1;
           next.push(text ? { value: value ?? `Item ${n}`, text } : { value: value ?? `Item ${n}` });
-          return { ...el, choices: next };
+          return { ...el, choices: next } as BuilderElement;
         })
       };
     })
@@ -227,11 +245,12 @@ export function moveChoice(
           if (el.id !== elId) return el;
           if (el.type !== "radiogroup" && el.type !== "checkbox") return el;
 
-          const list = el.choices ?? [];
+          const elRecord = el as unknown as Record<string, unknown>;
+          const list = Array.isArray(elRecord.choices) ? elRecord.choices : [];
           if (from < 0 || from >= list.length) return el;
           if (to < 0 || to >= list.length) return el;
 
-          return { ...el, choices: arrayMove(list, from, to) };
+          return { ...el, choices: arrayMove(list, from, to) } as BuilderElement;
         })
       };
     })
@@ -256,10 +275,12 @@ export function setChoice(
           if (el.id !== elId) return el;
           if (el.type !== "radiogroup" && el.type !== "checkbox") return el;
 
-          const next = [...(el.choices ?? [])];
+          const elRecord = el as unknown as Record<string, unknown>;
+          const currentChoices = Array.isArray(elRecord.choices) ? elRecord.choices : [];
+          const next = [...currentChoices];
           if (idx < 0 || idx >= next.length) return el;
           next[idx] = text ? { value, text } : { value };
-          return { ...el, choices: next };
+          return { ...el, choices: next } as BuilderElement;
         })
       };
     })
@@ -276,9 +297,12 @@ export function removeChoice(survey: BuilderSurvey, pageId: string, elId: string
         elements: p.elements.map((el) => {
           if (el.id !== elId) return el;
           if (el.type !== "radiogroup" && el.type !== "checkbox") return el;
-          const next = (el.choices ?? []).filter((_, i) => i !== idx);
+
+          const elRecord = el as unknown as Record<string, unknown>;
+          const currentChoices = Array.isArray(elRecord.choices) ? elRecord.choices : [];
+          const next = currentChoices.filter((_, i) => i !== idx);
           const safe = next.length ? next : [{ value: "Item 1" }];
-          return { ...el, choices: safe };
+          return { ...el, choices: safe } as BuilderElement;
         })
       };
     })
