@@ -130,14 +130,61 @@ export default function PollAnalyticsChart({ pollQuestion, responses }: PollAnal
   }, [pollQuestion, responses]);
 
   const questionData = pollQuestion as any;
+  const submittedResponses = responses.filter((r) => r.is_submitted);
 
   // Don't show chart for text or open-ended questions (too many unique responses)
   if (questionData?.type === "text" || questionData?.type === "open-ended") {
-    return null;
+    return (
+      <Box
+        bg={cardBgColor}
+        border="1px solid"
+        borderColor={borderColor}
+        borderRadius="lg"
+        p={6}
+        mb={6}
+      >
+        <VStack align="stretch" gap={2}>
+          <Heading size="md" color={textColor}>
+            Response Analytics
+          </Heading>
+          <Text fontSize="sm" color={textColor} opacity={0.7}>
+            Charts are not available for text/open-ended questions. View individual responses in the table below.
+          </Text>
+          <Text fontSize="sm" color={textColor} opacity={0.7}>
+            Total responses: {submittedResponses.length}
+          </Text>
+        </VStack>
+      </Box>
+    );
   }
 
   if (chartData.length === 0) {
-    return null;
+    return (
+      <Box
+        bg={cardBgColor}
+        border="1px solid"
+        borderColor={borderColor}
+        borderRadius="lg"
+        p={6}
+        mb={6}
+      >
+        <VStack align="stretch" gap={2}>
+          <Heading size="md" color={textColor}>
+            Response Analytics
+          </Heading>
+          <Text fontSize="sm" color={textColor} opacity={0.7}>
+            {submittedResponses.length === 0
+              ? "No responses submitted yet. The chart will appear once students submit responses."
+              : "Unable to generate chart. View individual responses in the table below."}
+          </Text>
+          {submittedResponses.length > 0 && (
+            <Text fontSize="sm" color={textColor} opacity={0.7}>
+              Total responses: {submittedResponses.length}
+            </Text>
+          )}
+        </VStack>
+      </Box>
+    );
   }
 
   return (

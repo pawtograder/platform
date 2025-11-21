@@ -92,7 +92,7 @@ const LinkItems = (courseID: number) => [
     feature_flag: "surveys"
   },
   {
-    name: "Manage Surveys",
+    name: "Surveys",
     icon: FiFileText,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/surveys`,
@@ -106,7 +106,7 @@ const LinkItems = (courseID: number) => [
     feature_flag: "polls"
   },
   {
-    name: "Manage Polls",
+    name: "Polls",
     icon: FiCheckSquare,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/polls`,
