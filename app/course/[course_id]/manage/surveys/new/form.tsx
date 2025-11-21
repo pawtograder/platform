@@ -24,6 +24,9 @@ import {
 // NEW: modal wrapper around your SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
 import { createClient } from "@/utils/supabase/client";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+
+type SurveyTemplateInsert = Database["public"]["Tables"]["survey_templates"]["Insert"];
 
 type SurveyFormData = {
   title: string;
@@ -186,17 +189,18 @@ export default function SurveyForm({
       });
 
       try {
-        const insertData = {
+        const insertData: SurveyTemplateInsert = {
           id: crypto.randomUUID(),
           title: surveyData.title,
-          description: surveyData.description,
-          template: surveyData.json,
+          description: surveyData.description ?? '',
+          template: surveyData.json ?? {},
           created_by: privateProfileId,
           scope,
           created_at: new Date().toISOString(),
-          ...(scope === "course" ? { class_id: Number(course_id) } : {})
+          class_id: Number(course_id),
+          //...(scope === "course" ? { class_id: Number(course_id) } : null)
         };
-        const { error } = await supabase.from("survey_templates").insert(insertData as any);
+        const { error } = await supabase.from("survey_templates").insert(insertData);
 
         toaster.dismiss(loadingToast);
 
