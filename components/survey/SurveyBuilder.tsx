@@ -21,7 +21,7 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { LuChevronUp, LuChevronDown, LuTrash2 } from "react-icons/lu";
 
-import type { BuilderSurvey, BuilderPage, BuilderElement, ElementType } from "./SurveyBuilderDataTypes";
+import type { BuilderSurvey, BuilderElement, ElementType } from "./SurveyBuilderDataTypes";
 import { makeEmptySurvey } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
 
@@ -36,21 +36,6 @@ import {
   moveElement as moveElementOp,
   updateElementPatch as updateElementPatchOp
 } from "./helpers";
-
-import {
-  addChoice as addChoiceOp,
-  setChoice as setChoiceOp,
-  removeChoice as removeChoiceOp,
-  moveChoice as moveChoiceOp
-} from "./helpers";
-
-/** Fallback sample so the component is always usable in isolation */
-const MOCK_JSON = JSON.stringify({
-  pages: [
-    { id: "p1", name: "page1", elements: [] },
-    { id: "p2", name: "page2", elements: [] }
-  ]
-});
 
 /** Normalize any JSON-ish input (string or object) to a stable string for comparisons. */
 const normalizeJSON = (raw?: unknown) => {
@@ -107,7 +92,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
   const allIdsOnPage = useMemo(() => currentPage?.elements?.map((el) => el.id) ?? [], [currentPage]);
   const [openItems, setOpenItems] = useState<string[]>(allIdsOnPage);
 
-  const lastEmittedJSONRef = useRef<string>(normalizeJSON(toJSON(survey) as any));
+  const lastEmittedJSONRef = useRef<string>(normalizeJSON(toJSON(survey)));
   const lastAcceptedPropJSONRef = useRef<string>(normalizeJSON(value ?? initialJson ?? ""));
 
   // Sync page title draft when changing pages/survey
@@ -212,16 +197,16 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
         setOpenItems((ids) => Array.from(new Set([...ids, added.id])));
         const safeName = nameHint ?? added.name ?? `${type}_${page.elements.length}`;
         const withName = updateElementOp(next, currentPageId, added.id, "name" as any, safeName);
-        const withTitle = updateElementOp(withName, currentPageId, added.id, "title" as any, safeName);
+        const withTitle = updateElementOp(withName, currentPageId, added.id, "title", safeName);
         return withTitle;
       }
       return next;
     });
   }
 
-  function updateElementField(elId: string, key: keyof BuilderElement, value: any) {
+  function updateElementField(elId: string, key: keyof BuilderElement, value: string | boolean | Record<string, unknown> | Record<string, unknown>[] | undefined) {
     if (!currentPageId) return;
-    setSurvey((prev) => updateElementOp(prev, currentPageId, elId, key as any, value));
+    setSurvey((prev) => updateElementOp(prev, currentPageId, elId, key, value));
   }
 
   function updateElementFields(elId: string, patch: Partial<BuilderElement>) {
@@ -242,8 +227,8 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
   function updateQuestionName(elId: string, value: string) {
     if (!currentPageId) return;
     setSurvey((prev) => {
-      const afterName = updateElementOp(prev, currentPageId, elId, "name" as keyof BuilderElement, value as any);
-      const afterTitle = updateElementOp(afterName, currentPageId, elId, "title" as keyof BuilderElement, value as any);
+      const afterName = updateElementOp(prev, currentPageId, elId, "name" as keyof BuilderElement, value);
+      const afterTitle = updateElementOp(afterName, currentPageId, elId, "title" as keyof BuilderElement, value);
       return afterTitle;
     });
   }
@@ -304,6 +289,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                         size="xs"
                         variant="ghost"
                         onClick={() => movePageUpById(p.id)}
+                        disabled={atTop}
                       >
                         <LuChevronUp />
                       </IconButton>
@@ -314,6 +300,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                         size="xs"
                         variant="ghost"
                         onClick={() => movePageDownById(p.id)}
+                        disabled={atBottom}
                       >
                         <LuChevronDown />
                       </IconButton>
@@ -399,6 +386,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                   e.stopPropagation();
                                   moveElementById(el.id, -1);
                                 }}
+                                disabled={atTop}
                               >
                                 <LuChevronUp />
                               </IconButton>
@@ -413,6 +401,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                   e.stopPropagation();
                                   moveElementById(el.id, +1);
                                 }}
+                                disabled={atBottom}
                               >
                                 <LuChevronDown />
                               </IconButton>
