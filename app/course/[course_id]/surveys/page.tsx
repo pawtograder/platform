@@ -64,7 +64,7 @@ export default function StudentSurveysPage() {
 
         // Resolve this user's class-specific profile (private_profile_id) for this course
         const { data: roleDataRaw, error: roleError } = await supabase
-          .from("user_roles" as any)
+          .from("user_roles")
           .select("private_profile_id")
           .eq("user_id", user.id)
           .eq("class_id", Number(course_id))
@@ -89,7 +89,7 @@ export default function StudentSurveysPage() {
 
         // Get published surveys for this course (and not soft-deleted)
         const { data: surveysData, error: surveysError } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .select("*")
           .eq("class_id", Number(course_id))
           .eq("status", "published")
@@ -109,12 +109,12 @@ export default function StudentSurveysPage() {
 
         // Get this profile's responses for those surveys
         const { data: responsesData, error: responsesError } = await supabase
-          .from("survey_responses" as any)
+          .from("survey_responses")
           .select("*")
           .eq("profile_id", profileId)
           .in(
             "survey_id",
-            surveysData.map((s: any) => s.id)
+            surveysData.map(s => s.id)
           );
 
         if (responsesError) {
@@ -122,12 +122,12 @@ export default function StudentSurveysPage() {
         }
 
         // Merge surveys with the current profile's response status
-        const surveysWithResponse: SurveyWithResponse[] = surveysData.map((survey: any) => {
-          const response = responsesData?.find((r: any) => r.survey_id === survey.id);
+        const surveysWithResponse: SurveyWithResponse[] = surveysData.map(survey => {
+          const response = responsesData?.find(r => r.survey_id === survey.id);
 
           let response_status: "not_started" | "in_progress" | "completed" = "not_started";
           if (response) {
-            if ((response as any).is_submitted) {
+            if (response.is_submitted) {
               response_status = "completed";
             } else {
               response_status = "in_progress";
@@ -137,8 +137,8 @@ export default function StudentSurveysPage() {
           return {
             ...survey,
             response_status,
-            submitted_at: (response as any)?.submitted_at,
-            is_submitted: (response as any)?.is_submitted
+            submitted_at: response?.submitted_at,
+            is_submitted: response?.is_submitted
           };
         });
 

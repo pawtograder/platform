@@ -18,7 +18,7 @@ export type Survey = DbSurvey;
 
 export type SurveyWithResponse = Survey & {
   response_status: "not_started" | "in_progress" | "completed";
-  submitted_at?: string;
+  submitted_at?: string | null;
   is_submitted?: boolean;
 };
 
