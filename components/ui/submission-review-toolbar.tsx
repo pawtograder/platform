@@ -254,7 +254,10 @@ function CompleteReviewAssignmentDialog({
                 } catch (error) {
                   console.error("Error marking review assignment as complete", error);
                   // Extract error message from Supabase error
-                  const errorMessage = error instanceof Error ? error.message : "An error occurred while marking the review assignment as complete. Please double-check that all required checks are completed and try again.";
+                  const errorMessage =
+                    error instanceof Error
+                      ? error.message
+                      : "An error occurred while marking the review assignment as complete. Please double-check that all required checks are completed and try again.";
                   toaster.error({
                     title: "Cannot complete review assignment",
                     description: errorMessage
