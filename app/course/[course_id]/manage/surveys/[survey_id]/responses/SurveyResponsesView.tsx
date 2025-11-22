@@ -4,64 +4,45 @@ import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Input, Ba
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
-import { differenceInMinutes, isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
+import { isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
 import { useRouter } from "next/navigation";
 import { Model } from "survey-core";
 import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
-
-type SurveyResponse = {
-  id: string;
-  survey_id: string;
-  profile_id: string; // Foreign key to profiles
-  response: Record<string, any>; // Dynamic response data based on survey questions
-  created_at: string;
-  submitted_at: string;
-  updated_at: string;
-  is_submitted: boolean;
-  profiles: {
-    name: string;
-  };
-};
+import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
 
 type SurveyResponsesViewProps = {
   courseId: string;
   surveyId: string; // The UUID
-  surveyTitle: string;
+  surveyTitle: Survey["title"];
   surveyVersion: number;
-  surveyStatus: string;
-  surveyJson: any; // The JSON configuration of the survey
-  surveyDueDate: string | null; // The deadline for the survey
-  responses: SurveyResponse[];
+  surveyStatus: Survey["status"];
+  surveyJson: Survey["json"]; // The JSON configuration of the survey
+  surveyDueDate: Survey["due_date"]; // The deadline for the survey
+  responses: SurveyResponseWithProfile[];
   totalStudents: number;
 };
 
 /**
  * Gets question titles from survey JSON for dynamic column headers
  */
-function getQuestionTitles(surveyJson: any): Record<string, string> {
+function getQuestionTitles(surveyJson: Survey["json"]): Record<string, string> {
   const titles: Record<string, string> = {};
-
   try {
     const survey = new Model(surveyJson);
-
-    // Get all questions from the survey
-    survey.getAllQuestions().forEach((question) => {
-      if (question.name) {
-        titles[question.name] = question.title || question.name;
-      }
+    survey.getAllQuestions().forEach((q) => {
+      if (q.name) titles[q.name] = q.title || q.name;
     });
-  } catch (error) {
-    console.warn("Error parsing survey JSON for question titles:", error);
+  } catch {
+    /* ignore */
   }
-
   return titles;
 }
 
 /**
  * Formats response values for display in the table
  */
-function formatResponseValue(value: any): string {
+function formatResponseValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "—";
   }
@@ -80,13 +61,14 @@ function formatResponseValue(value: any): string {
 
   if (typeof value === "object") {
     // For complex objects, try to extract meaningful data
-    if (value.text) return value.text;
-    if (value.value) return String(value.value);
-    if (value.name) return value.name;
-    if (value.title) return value.title;
+    const obj = value as Record<string, unknown>;
+    if (obj.text && typeof obj.text === "string") return obj.text;
+    if (obj.value) return String(obj.value);
+    if (obj.name && typeof obj.name === "string") return obj.name;
+    if (obj.title && typeof obj.title === "string") return obj.title;
 
     // If it's a simple object with string values, join them
-    const stringValues = Object.values(value).filter((v) => typeof v === "string");
+    const stringValues = Object.values(obj).filter((v) => typeof v === "string");
     if (stringValues.length > 0) {
       return stringValues.join(", ");
     }
@@ -114,17 +96,10 @@ function escapeCSVValue(value: string): string {
   return stringValue;
 }
 
-type QuestionFilter = {
-  questionName: string;
-  value: string;
-};
-
 export default function SurveyResponsesView({
   courseId,
-  surveyId,
   surveyTitle,
   surveyVersion,
-  surveyStatus,
   surveyJson,
   surveyDueDate,
   responses,
@@ -148,6 +123,8 @@ export default function SurveyResponsesView({
   const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
   const emptyStateTextColor = useColorModeValue("#6B7280", "#718096");
   const filterBadgeBg = useColorModeValue("#3B82F6", "#2563EB");
+  const overdueColor = useColorModeValue("#DC2626", "#EF4444");
+  const urgentColor = useColorModeValue("#D97706", "#F59E0B");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -160,7 +137,7 @@ export default function SurveyResponsesView({
   const totalResponses = responses.length;
 
   // Get dynamic question columns from survey JSON
-  const questionTitles = useMemo(() => {
+  const questionTitles = useMemo<Record<string, string>>(() => {
     return getQuestionTitles(surveyJson);
   }, [surveyJson]);
 
@@ -168,11 +145,10 @@ export default function SurveyResponsesView({
   const allQuestionNames = useMemo(() => {
     const questionNames = new Set<string>();
     responses.forEach((response) => {
-      if (response.response) {
-        Object.keys(response.response).forEach((key) => {
-          questionNames.add(key);
-        });
-      }
+      const answers = (response.response ?? {}) as Record<string, unknown>;
+      Object.keys(answers).forEach((key) => {
+        questionNames.add(key);
+      });
     });
     return Array.from(questionNames);
   }, [responses]);
@@ -187,11 +163,13 @@ export default function SurveyResponsesView({
         const startDate = parseISO(dateRangeStart);
         const endDate = parseISO(dateRangeEnd);
         filtered = filtered.filter((response) => {
+          if (!response.submitted_at) return false;
           const submittedDate = parseISO(response.submitted_at);
           return isWithinInterval(submittedDate, { start: startDate, end: endDate });
         });
       } catch (error) {
-        console.warn("Error parsing date range:", error);
+        // Error parsing date range
+        void error;
       }
     }
 
@@ -279,13 +257,14 @@ export default function SurveyResponsesView({
     ];
 
     const csvRows = filteredResponses.map((response) => {
+      const answers = (response.response ?? {}) as Record<string, unknown>;
       const row = [
         response.profiles?.name || "N/A",
         response.submitted_at
           ? formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")
           : "—",
         ...allQuestionNames.map((questionName) => {
-          const value = response.response?.[questionName];
+          const value = answers[questionName];
           return formatResponseValue(value);
         })
       ];
@@ -535,13 +514,7 @@ export default function SurveyResponsesView({
           <Text
             fontSize="2xl"
             fontWeight="bold"
-            color={
-              isOverdue
-                ? useColorModeValue("#DC2626", "#EF4444")
-                : isLessThan24Hours
-                  ? useColorModeValue("#D97706", "#F59E0B")
-                  : textColor
-            }
+            color={isOverdue ? overdueColor : isLessThan24Hours ? urgentColor : textColor}
           >
             {timeRemaining}
           </Text>
@@ -604,36 +577,41 @@ export default function SurveyResponsesView({
                 </Table.Cell>
               </Table.Row>
             ) : (
-              filteredResponses.map((response) => (
-                <Table.Row key={response.id} bg={tableRowBg} borderColor={borderColor}>
-                  {!anonymousMode && (
-                    <>
-                      <Table.Cell py={4} pl={6}>
-                        <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
+              filteredResponses.map((response) => {
+                const answers = (response.response ?? {}) as Record<string, unknown>;
+                return (
+                  <Table.Row key={response.id} bg={tableRowBg} borderColor={borderColor}>
+                    {!anonymousMode && (
+                      <>
+                        <Table.Cell py={4} pl={6}>
+                          <Text color={textColor}>{response.profiles?.name || "N/A"}</Text>
+                        </Table.Cell>
+                        <Table.Cell py={4}>
+                          <Text color={textColor}>
+                            {response.submitted_at
+                              ? formatInTimeZone(
+                                  new TZDate(response.submitted_at),
+                                  "America/New_York",
+                                  "MMM d, yyyy, h:mm a"
+                                )
+                              : "—"}
+                          </Text>
+                        </Table.Cell>
+                      </>
+                    )}
+                    {visibleQuestions.map((questionName, index) => (
+                      <Table.Cell
+                        key={questionName}
+                        py={4}
+                        pl={anonymousMode && index === 0 ? 6 : undefined}
+                        pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
+                      >
+                        <Text color={textColor}>{formatResponseValue(answers[questionName])}</Text>
                       </Table.Cell>
-                      <Table.Cell py={4}>
-                        <Text color={textColor}>
-                          {formatInTimeZone(
-                            new TZDate(response.submitted_at),
-                            "America/New_York",
-                            "MMM d, yyyy, h:mm a"
-                          )}
-                        </Text>
-                      </Table.Cell>
-                    </>
-                  )}
-                  {visibleQuestions.map((questionName, index) => (
-                    <Table.Cell
-                      key={questionName}
-                      py={4}
-                      pl={anonymousMode && index === 0 ? 6 : undefined}
-                      pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
-                    >
-                      <Text color={textColor}>{formatResponseValue(response.response?.[questionName])}</Text>
-                    </Table.Cell>
-                  ))}
-                </Table.Row>
-              ))
+                    ))}
+                  </Table.Row>
+                );
+              })
             )}
           </Table.Body>
         </Table.Root>

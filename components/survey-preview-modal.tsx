@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
+import type { Json } from "@/utils/supabase/SupabaseTypes";
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -31,7 +32,7 @@ interface SurveyPreviewModalProps {
 
 export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }: SurveyPreviewModalProps) {
   const [isValidJson, setIsValidJson] = useState(true);
-  const [parsedJson, setParsedJson] = useState<any>(null);
+  const [parsedJson, setParsedJson] = useState<Json | null>(null);
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");

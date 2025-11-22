@@ -8079,6 +8079,180 @@ export type Database = {
           }
         ];
       };
+      survey_responses: {
+        Row: {
+          created_at: string;
+          deleted_at: string | null;
+          id: string;
+          is_submitted: boolean;
+          profile_id: string;
+          response: Json;
+          submitted_at: string | null;
+          survey_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id?: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_responses_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      survey_templates: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          description: string;
+          id: string;
+          scope: Database["public"]["Enums"]["template_scope"];
+          template: Json;
+          title: string;
+          updated_at: string;
+          version: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title?: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_templates_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      surveys: {
+        Row: {
+          allow_response_editing: boolean;
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          deleted_at: string | null;
+          description: string | null;
+          due_date: string | null;
+          id: string;
+          json: Json;
+          status: Database["public"]["Enums"]["survey_status"];
+          survey_id: string;
+          title: string;
+          updated_at: string;
+          validation_errors: string | null;
+          version: number;
+        };
+        Insert: {
+          allow_response_editing?: boolean;
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title: string;
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Update: {
+          allow_response_editing?: boolean;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title?: string;
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "surveys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
     };
     Views: {
       active_submissions_for_class: {
@@ -10038,6 +10212,8 @@ export type Database = {
         | "request_resolved"
         | "video_joined"
         | "video_left";
+      survey_status: "draft" | "published" | "closed";
+      template_scope: "global" | "course";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -10200,7 +10376,9 @@ export const Constants = {
         "request_resolved",
         "video_joined",
         "video_left"
-      ]
+      ],
+      survey_status: ["draft", "published", "closed"],
+      template_scope: ["global", "course"]
     }
   }
 } as const;

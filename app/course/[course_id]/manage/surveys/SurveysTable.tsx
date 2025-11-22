@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Table, Text, Badge, HStack, Icon } from "@chakra-ui/react";
+import { Box, Table, Text, Badge, Icon } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
@@ -14,24 +14,9 @@ import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import type { Survey, SurveyWithCounts } from "@/types/survey";
 
 type FilterType = "all" | "completed" | "awaiting";
-
-type Survey = {
-  id: string;
-  survey_id?: string;
-  title: string;
-  status: "draft" | "published" | "closed";
-  version: number;
-  created_at: string;
-  class_id: number;
-  json?: string;
-  due_date?: string;
-};
-
-type SurveyWithCounts = Survey & {
-  response_count: number;
-};
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
@@ -162,7 +147,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         let validationErrors = null;
         try {
           if (survey.json) {
-            JSON.parse(survey.json);
+            JSON.parse(survey.json as string);
           }
         } catch (error) {
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
@@ -170,7 +155,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Update survey status to published
         const { data, error } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .update({
             status: validationErrors ? "draft" : "published",
             validation_errors: validationErrors
@@ -201,7 +186,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         }
 
         // Track the publish event
-        trackEvent("survey_published" as any, {
+        trackEvent("survey_published", {
           course_id: Number(courseId),
           survey_id: survey.survey_id,
           has_validation_errors: !!validationErrors
@@ -236,7 +221,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Update survey status to closed
         const { data, error } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .update({
             status: "closed"
           })
@@ -257,7 +242,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         });
 
         // Track the close event
-        trackEvent("survey_closed" as any, {
+        trackEvent("survey_closed", {
           course_id: Number(courseId),
           survey_id: survey.survey_id
         });
@@ -311,7 +296,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Soft delete all survey responses first (set deleted_at timestamp)
         const { error: responsesError } = await supabase
-          .from("survey_responses" as any)
+          .from("survey_responses")
           .update({ deleted_at: now })
           .eq("survey_id", survey.id)
           .is("deleted_at", null); // Only update records that aren't already soft deleted
@@ -322,7 +307,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Soft delete all survey versions (all records with the same survey_id)
         const { error: surveysError } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .update({ deleted_at: now })
           .eq("survey_id", survey.survey_id)
           .is("deleted_at", null); // Only update records that aren't already soft deleted
@@ -340,7 +325,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         });
 
         // Track the delete event
-        trackEvent("survey_deleted" as any, {
+        trackEvent("survey_deleted", {
           course_id: Number(courseId),
           survey_id: survey.survey_id,
           had_responses: survey.response_count > 0,

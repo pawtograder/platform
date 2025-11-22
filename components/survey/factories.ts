@@ -9,7 +9,7 @@ import type {
   RadioGroupElement,
   ChoiceMultiElement,
   BooleanElement
-} from "./SurveyDataTypes";
+} from "./SurveyBuilderDataTypes";
 
 export const DEFAULT_PAGE_NAME = "page";
 export const DEFAULT_SURVEY_TITLE = "Survey Name";
