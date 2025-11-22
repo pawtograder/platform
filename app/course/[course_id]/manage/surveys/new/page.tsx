@@ -20,6 +20,8 @@ type SurveyFormData = {
   status: "draft" | "published";
   due_date?: string;
   allow_response_editing: boolean;
+  assigned_to_all: boolean;
+  assigned_students?: string[];
 };
 
 type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "closed"
@@ -54,7 +56,9 @@ export default function NewSurveyPage() {
       json: "",
       status: "draft",
       due_date: "",
-      allow_response_editing: false
+      allow_response_editing: false,
+      assigned_to_all: true,
+      assigned_students: []
     }
   });
 
@@ -157,6 +161,15 @@ export default function NewSurveyPage() {
               dueDateFormatted = date.toISOString().slice(0, 16);
             }
 
+            // Load existing survey assignments if any
+            const { data: assignmentData } = await supabase
+              .from("survey_assignments")
+              .select("profile_id")
+              .eq("survey_id", data.id);
+
+            const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
+            console.log("[loadLatestDraft] Loaded assignments:", assignedStudents);
+
             // Load the draft data into the form
             const formData = {
               title: data.title || "",
@@ -164,7 +177,9 @@ export default function NewSurveyPage() {
               json: data.json || "",
               status: data.status || "draft",
               due_date: dueDateFormatted,
-              allow_response_editing: Boolean(data.allow_response_editing)
+              allow_response_editing: Boolean(data.allow_response_editing),
+              assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
+              assigned_students: assignedStudents
             };
 
             console.log("[loadLatestDraft] Form data being loaded:", formData);
@@ -272,6 +287,7 @@ export default function NewSurveyPage() {
             allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
             due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
             validation_errors: validationErrors,
+            assigned_to_all: Boolean(values.assigned_to_all),
             updated_at: new Date().toISOString()
           };
 
@@ -301,7 +317,8 @@ export default function NewSurveyPage() {
             created_at: new Date().toISOString(),
             allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
             due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
-            validation_errors: validationErrors
+            validation_errors: validationErrors,
+            assigned_to_all: Boolean(values.assigned_to_all)
           };
 
           console.log("[saveSurvey] creating new survey (returning from preview):", insertPayload);
@@ -332,7 +349,8 @@ export default function NewSurveyPage() {
           created_at: new Date().toISOString(),
           allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
           due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
-          validation_errors: validationErrors
+          validation_errors: validationErrors,
+          assigned_to_all: Boolean(values.assigned_to_all)
         };
 
         console.log("[saveSurvey] creating new survey:", insertPayload);
@@ -355,6 +373,23 @@ export default function NewSurveyPage() {
           description: error?.message || "Failed to save survey"
         });
         throw new Error(error?.message || "Failed to save survey");
+      }
+
+      // Handle survey assignments if not assigned to all students
+      if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
+        console.log("[saveSurvey] creating survey assignments for:", values.assigned_students);
+        const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
+          p_survey_id: data.id,
+          p_profile_ids: values.assigned_students
+        });
+
+        if (assignmentError) {
+          console.error("[saveSurvey] assignment error:", assignmentError);
+          toaster.error({
+            title: "Warning",
+            description: "Survey was created but there was an error assigning it to specific students. Please try editing the survey to reassign."
+          });
+        }
       }
 
       // Track analytics
@@ -431,6 +466,16 @@ export default function NewSurveyPage() {
           });
           return;
         }
+      }
+
+      // Validate student assignments
+      if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
+        toaster.create({
+          title: "Cannot Save Survey",
+          description: "Please select at least one student or change assignment mode to 'all students'.",
+          type: "error"
+        });
+        return;
       }
 
       // Show loading toast

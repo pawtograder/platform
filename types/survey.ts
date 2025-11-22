@@ -26,6 +26,7 @@ export type SurveyWithResponse = Survey & {
 export type SurveyWithCounts = Survey & {
   response_count: number;
   submitted_count: number;
+  assigned_student_count: number;
 };
 
 export type SurveyAssignee = DbSurveyAssignee;
