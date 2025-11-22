@@ -524,6 +524,12 @@ entrypoint = "./functions/autograder-sync-staff-team/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/autograder-sync-staff-team/*.html" ]
 
+[functions.assignment-group-instructor-create]
+enabled = true
+verify_jwt = false
+import_map = "./functions/assignment-group-instructor-create/deno.json"
+entrypoint = "./functions/assignment-group-instructor-create/index.ts"
+
 [functions.assignment-group-instructor-move-student]
 enabled = true
 verify_jwt = false
