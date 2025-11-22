@@ -8184,6 +8184,39 @@ export type Database = {
           }
         ];
       };
+      survey_assignees: {
+        Row: {
+          created_at: string;
+          profile_id: string;
+          survey_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          profile_id: string;
+          survey_id: string;
+        };
+        Update: {
+          created_at?: string;
+          profile_id?: string;
+          survey_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_assignees_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_assignees_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       surveys: {
         Row: {
           allow_response_editing: boolean;
