@@ -174,23 +174,60 @@ CREATE POLICY survey_templates_update ON survey_templates
 -- Survey responses: owners can read
 CREATE POLICY survey_responses_select_owner ON survey_responses
   FOR SELECT
-  USING (authorizeforprofile(profile_id));
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
+    )
+  );
 
 -- Survey responses: staff can read
 CREATE POLICY survey_responses_select_staff ON survey_responses
   FOR SELECT
-  USING (authorizeforclassgrader((SELECT class_id FROM surveys WHERE id = survey_id)));
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM public.surveys s
+      JOIN public.user_privileges up ON up.class_id = s.class_id
+      WHERE s.id = survey_responses.survey_id
+        AND up.user_id = auth.uid()
+        AND up.role IN ('instructor', 'grader')
+    )
+  );
 
 -- Survey responses: owners can create
 CREATE POLICY survey_responses_insert_owner ON survey_responses
   FOR INSERT
-  WITH CHECK (authorizeforprofile(profile_id));
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
+    )
+  );
 
 -- Survey responses: owners can update their own
 CREATE POLICY survey_responses_update_owner ON survey_responses
   FOR UPDATE
-  USING (authorizeforprofile(profile_id))
-  WITH CHECK (authorizeforprofile(profile_id));
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
+    )
+  );
 
 -- If survey is published or closed, only then students have access to a survey
 -- Instructors can view and create new surveys
