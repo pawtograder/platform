@@ -10,7 +10,7 @@ import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
-import { LivePoll, PollResponseData } from "@/types/poll";
+import {PollResponseData } from "@/types/poll";
 
 interface PollQuestion {
     elements: Array<Record<string, unknown>>;

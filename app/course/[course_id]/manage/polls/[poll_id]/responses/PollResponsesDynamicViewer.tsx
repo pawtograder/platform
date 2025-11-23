@@ -5,7 +5,7 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 import { createClient } from "@/utils/supabase/client";
-import { LivePollResponse, PollResponseData } from "@/types/poll";
+import { PollResponseData } from "@/types/poll";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 
 type PollResponse = {

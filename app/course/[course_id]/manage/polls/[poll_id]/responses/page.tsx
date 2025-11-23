@@ -1,7 +1,7 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
 import PollResponsesDynamicViewer from "./PollResponsesDynamicViewer";
-import { LivePoll, LivePollResponse, PollResponseData } from "@/types/poll";
+import {PollResponseData } from "@/types/poll";
 
 type PollResponsesPageProps = {
   params: Promise<{ course_id: string; poll_id: string }>;
