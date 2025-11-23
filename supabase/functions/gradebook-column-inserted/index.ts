@@ -10,6 +10,7 @@ type ColumnRow = {
   slug: string | null;
   score_expression: string | null;
   dependencies: { assignments?: number[]; gradebook_columns?: number[] } | null;
+  max_score?: number | null;
 };
 
 type AssignmentRow = { id: number; slug: string | null };
@@ -120,7 +121,7 @@ Deno.serve(async (req) => {
 
   const { data: allColumns, error: columnsError } = await admin
     .from("gradebook_columns")
-    .select("id, slug, score_expression, dependencies")
+    .select("id, slug, score_expression, dependencies, max_score")
     .eq("gradebook_id", gradebookId);
 
   if (columnsError || !allColumns) {
@@ -128,6 +129,18 @@ Deno.serve(async (req) => {
       headers: { "Content-Type": "application/json" },
       status: 500
     });
+  }
+
+  // Log columns with null or zero max_score to help diagnose issues
+  const columnsWithInvalidMaxScore = (allColumns as Array<ColumnRow & { max_score: number | null }>).filter(
+    (c) => c.max_score === null || c.max_score === 0
+  );
+  if (columnsWithInvalidMaxScore.length > 0) {
+    console.warn(
+      `Found ${columnsWithInvalidMaxScore.length} columns with null or zero max_score: ${JSON.stringify(
+        columnsWithInvalidMaxScore.map((c) => ({ id: c.id, slug: c.slug, max_score: c.max_score }))
+      )}`
+    );
   }
 
   const validColumns: Array<{ id: number; slug: string }> = (allColumns as ColumnRow[])
@@ -146,6 +159,9 @@ Deno.serve(async (req) => {
     const next = normalized(deps);
     const changed = JSON.stringify(current) !== JSON.stringify(next);
     if (changed) {
+      console.log(
+        `Updating dependencies for column ${col.id} (${col.slug}): ${JSON.stringify(current)} -> ${JSON.stringify(next)}`
+      );
       const { error: updateError } = await admin
         .from("gradebook_columns")
         .update({ dependencies: next })
