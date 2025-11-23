@@ -7357,6 +7357,49 @@ export type Database = {
           },
         ]
       }
+      survey_assignments: {
+        Row: {
+          created_at: string
+          id: string
+          profile_id: string
+          survey_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          profile_id: string
+          survey_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          profile_id?: string
+          survey_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "survey_assignments_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "survey_assignments_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment_nice"
+            referencedColumns: ["student_private_profile_id"]
+          },
+          {
+            foreignKeyName: "survey_assignments_survey_id_fkey"
+            columns: ["survey_id"]
+            isOneToOne: false
+            referencedRelation: "surveys"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       survey_responses: {
         Row: {
           created_at: string
@@ -7479,6 +7522,7 @@ export type Database = {
       surveys: {
         Row: {
           allow_response_editing: boolean
+          assigned_to_all: boolean
           class_id: number
           created_at: string
           created_by: string
@@ -7496,6 +7540,7 @@ export type Database = {
         }
         Insert: {
           allow_response_editing?: boolean
+          assigned_to_all?: boolean
           class_id: number
           created_at?: string
           created_by: string
@@ -7513,6 +7558,7 @@ export type Database = {
         }
         Update: {
           allow_response_editing?: boolean
+          assigned_to_all?: boolean
           class_id?: number
           created_at?: string
           created_by?: string
@@ -9578,6 +9624,10 @@ export type Database = {
       }
       create_repos_for_student: {
         Args: { class_id?: number; p_force?: boolean; user_id: string }
+        Returns: undefined
+      }
+      create_survey_assignments: {
+        Args: { p_profile_ids: string[]; p_survey_id: string }
         Returns: undefined
       }
       create_system_notification: {
