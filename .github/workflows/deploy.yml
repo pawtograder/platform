@@ -1,6 +1,10 @@
 name: Deploy Branch Preview
 on:
   push:
+    branches:
+      - main
+      - staging
+  pull_request:
   workflow_dispatch:
 jobs:
   deploy:

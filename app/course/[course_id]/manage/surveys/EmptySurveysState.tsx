@@ -49,7 +49,7 @@ export default function EmptySurveysState({ courseId }: EmptySurveysStateProps) 
             No surveys yet
           </Heading>
           <Text fontSize="md" color={descriptionColor} mb={8}>
-            {isInstructor 
+            {isInstructor
               ? "Create your first survey to gather feedback from students."
               : "No surveys have been created yet."}
           </Text>

@@ -12,7 +12,7 @@ export async function saveResponse(
   try {
     // Upsert to survey_responses table
     const { data, error } = await supabase
-      .from("survey_responses" as any)
+      .from("survey_responses")
       .upsert(
         {
           survey_id: surveyId,
@@ -39,16 +39,12 @@ export async function saveResponse(
   }
 }
 
-
-export async function getResponse(
-  surveyId: string,
-  profileID: string
-): Promise<SurveyResponse | null> {
+export async function getResponse(surveyId: string, profileID: string): Promise<SurveyResponse | null> {
   const supabase = createClient();
 
   try {
     const { data, error } = await supabase
-      .from("survey_responses" as any)
+      .from("survey_responses")
       .select("*")
       .eq("survey_id", surveyId)
       .eq("profile_id", profileID)
@@ -66,15 +62,14 @@ export async function getResponse(
   }
 }
 
-
-
-export async function getAllResponses(surveyId: string, classId: string) {
+// not even being used though, can we delete ?
+export async function getAllResponses(surveyId: string, classId: number) {
   const supabase = createClient();
 
   try {
     // First, get the survey responses
     const { data: responses, error: responsesError } = await supabase
-      .from("survey_responses" as any)
+      .from("survey_responses")
       .select("*")
       .eq("survey_id", surveyId)
       .order("submitted_at", { ascending: false });
@@ -89,13 +84,14 @@ export async function getAllResponses(surveyId: string, classId: string) {
     }
 
     // Get the profile_ids from responses
-    const profileIds = responses.map((r: any) => r.profile_id); 
+    const profileIds = responses.map((r) => r.profile_id);
 
     // Get user_roles to map profile -> profile data (and optionally user_id)
     // We assume survey_responses.profile_id corresponds to user_roles.private_profile_id
     const { data: userRoles, error: userRolesError } = await supabase
-      .from("user_roles" as any)
-      .select(`
+      .from("user_roles")
+      .select(
+        `
         user_id,
         private_profile_id,
         profiles:private_profile_id (
@@ -103,7 +99,8 @@ export async function getAllResponses(surveyId: string, classId: string) {
           name,
           sis_user_id
         )
-      `)
+      `
+      )
       .eq("class_id", classId)
       .in("private_profile_id", profileIds); // ✅ was in("user_id", ...)
 
@@ -114,19 +111,18 @@ export async function getAllResponses(surveyId: string, classId: string) {
 
     // Create a map of profile_id -> profile data
     const profileMap = new Map();
-    userRoles?.forEach((role: any) => {
+    userRoles?.forEach((role) => {
       profileMap.set(role.private_profile_id, role.profiles);
     });
 
     // Combine responses with profile data
-    const responsesWithProfiles = responses.map((response: any) => ({
+    const responsesWithProfiles = responses.map((response) => ({
       ...response,
-      profiles:
-        profileMap.get(response.profile_id) || {
-          id: response.profile_id,
-          name: "Unknown Student",
-          sis_user_id: null
-        }
+      profiles: profileMap.get(response.profile_id) || {
+        id: response.profile_id,
+        name: "Unknown Student",
+        sis_user_id: null
+      }
     }));
 
     return responsesWithProfiles;
@@ -140,10 +136,7 @@ export async function deleteResponse(responseId: string) {
   const supabase = createClient();
 
   try {
-    const { error } = await supabase
-      .from("survey_responses" as any)
-      .delete()
-      .eq("id", responseId);
+    const { error } = await supabase.from("survey_responses").delete().eq("id", responseId);
 
     if (error) {
       throw error;

@@ -64,7 +64,7 @@ export default function StudentSurveysPage() {
 
         // Resolve this user's class-specific profile (private_profile_id) for this course
         const { data: roleDataRaw, error: roleError } = await supabase
-          .from("user_roles" as any)
+          .from("user_roles")
           .select("private_profile_id")
           .eq("user_id", user.id)
           .eq("class_id", Number(course_id))
@@ -89,7 +89,7 @@ export default function StudentSurveysPage() {
 
         // Get published surveys for this course (and not soft-deleted)
         const { data: surveysData, error: surveysError } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .select("*")
           .eq("class_id", Number(course_id))
           .eq("status", "published")
@@ -109,12 +109,12 @@ export default function StudentSurveysPage() {
 
         // Get this profile's responses for those surveys
         const { data: responsesData, error: responsesError } = await supabase
-          .from("survey_responses" as any)
+          .from("survey_responses")
           .select("*")
           .eq("profile_id", profileId)
           .in(
             "survey_id",
-            surveysData.map((s: any) => s.id)
+            surveysData.map((s) => s.id)
           );
 
         if (responsesError) {
@@ -122,12 +122,12 @@ export default function StudentSurveysPage() {
         }
 
         // Merge surveys with the current profile's response status
-        const surveysWithResponse: SurveyWithResponse[] = surveysData.map((survey: any) => {
-          const response = responsesData?.find((r: any) => r.survey_id === survey.id);
+        const surveysWithResponse: SurveyWithResponse[] = surveysData.map((survey) => {
+          const response = responsesData?.find((r) => r.survey_id === survey.id);
 
           let response_status: "not_started" | "in_progress" | "completed" = "not_started";
           if (response) {
-            if ((response as any).is_submitted) {
+            if (response.is_submitted) {
               response_status = "completed";
             } else {
               response_status = "in_progress";
@@ -137,8 +137,8 @@ export default function StudentSurveysPage() {
           return {
             ...survey,
             response_status,
-            submitted_at: (response as any)?.submitted_at,
-            is_submitted: (response as any)?.is_submitted
+            submitted_at: response?.submitted_at,
+            is_submitted: response?.is_submitted
           };
         });
 
@@ -199,8 +199,7 @@ export default function StudentSurveysPage() {
       case "not_started":
         // Show surveys that are not started or in progress (still available to take)
         return surveys.filter(
-          (survey) =>
-            survey.response_status === "not_started" || survey.response_status === "in_progress"
+          (survey) => survey.response_status === "not_started" || survey.response_status === "in_progress"
         );
       case "completed":
         // Show completed surveys
@@ -276,14 +275,7 @@ export default function StudentSurveysPage() {
         {/* Surveys List */}
         <VStack align="stretch" gap={4}>
           {filteredSurveys.length === 0 ? (
-            <Box
-              w="100%"
-              bg={cardBgColor}
-              border="1px solid"
-              borderColor={borderColor}
-              borderRadius="lg"
-              p={8}
-            >
+            <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
               <VStack align="center" gap={2}>
                 <Text color={textColor} fontSize="md" fontWeight="medium">
                   No surveys match the selected filter.
@@ -295,65 +287,65 @@ export default function StudentSurveysPage() {
             </Box>
           ) : (
             filteredSurveys.map((survey) => (
-            <Box
-              key={survey.id}
-              w="100%"
-              bg={cardBgColor}
-              border="1px solid"
-              borderColor={borderColor}
-              borderRadius="lg"
-              p={6}
-            >
-              <VStack align="stretch" gap={4}>
-                <HStack justify="space-between" align="start">
-                  <VStack align="start" gap={2} flex={1}>
-                    <Heading size="md" color={textColor}>
-                      {survey.title}
-                    </Heading>
-                    {survey.description && (
-                      <Text color={textColor} fontSize="sm" opacity={0.8}>
-                        {survey.description}
-                      </Text>
-                    )}
-                  </VStack>
-                </HStack>
-
-                <HStack justify="space-between" align="center">
-                  <HStack gap={4} align="center">
-                    {getStatusBadge(survey)}
-                    <VStack align="start" gap={1}>
-                      {survey.due_date && (
-                        <Text color={textColor} fontSize="sm" fontWeight="medium">
-                          Due: {formatDueDate(survey.due_date)}
-                        </Text>
-                      )}
-                      {survey.submitted_at && (
-                        <Text color={textColor} fontSize="sm" opacity={0.7}>
-                          Submitted: {formatDueDate(survey.submitted_at)}
+              <Box
+                key={survey.id}
+                w="100%"
+                bg={cardBgColor}
+                border="1px solid"
+                borderColor={borderColor}
+                borderRadius="lg"
+                p={6}
+              >
+                <VStack align="stretch" gap={4}>
+                  <HStack justify="space-between" align="start">
+                    <VStack align="start" gap={2} flex={1}>
+                      <Heading size="md" color={textColor}>
+                        {survey.title}
+                      </Heading>
+                      {survey.description && (
+                        <Text color={textColor} fontSize="sm" opacity={0.8}>
+                          {survey.description}
                         </Text>
                       )}
                     </VStack>
                   </HStack>
 
-                  <Link href={`/course/${course_id}/surveys/${survey.id}`}>
-                    <Button
-                      size="sm"
-                      bg={survey.response_status === "completed" ? "#6B7280" : "#22C55E"}
-                      color="white"
-                      _hover={{
-                        bg: survey.response_status === "completed" ? "#4B5563" : "#16A34A"
-                      }}
-                    >
-                      {survey.response_status === "completed"
-                        ? "View Submission"
-                        : survey.response_status === "in_progress"
-                          ? "Continue Survey"
-                          : "Start Survey"}
-                    </Button>
-                  </Link>
-                </HStack>
-              </VStack>
-            </Box>
+                  <HStack justify="space-between" align="center">
+                    <HStack gap={4} align="center">
+                      {getStatusBadge(survey)}
+                      <VStack align="start" gap={1}>
+                        {survey.due_date && (
+                          <Text color={textColor} fontSize="sm" fontWeight="medium">
+                            Due: {formatDueDate(survey.due_date)}
+                          </Text>
+                        )}
+                        {survey.submitted_at && (
+                          <Text color={textColor} fontSize="sm" opacity={0.7}>
+                            Submitted: {formatDueDate(survey.submitted_at)}
+                          </Text>
+                        )}
+                      </VStack>
+                    </HStack>
+
+                    <Link href={`/course/${course_id}/surveys/${survey.id}`}>
+                      <Button
+                        size="sm"
+                        bg={survey.response_status === "completed" ? "#6B7280" : "#22C55E"}
+                        color="white"
+                        _hover={{
+                          bg: survey.response_status === "completed" ? "#4B5563" : "#16A34A"
+                        }}
+                      >
+                        {survey.response_status === "completed"
+                          ? "View Submission"
+                          : survey.response_status === "in_progress"
+                            ? "Continue Survey"
+                            : "Start Survey"}
+                      </Button>
+                    </Link>
+                  </HStack>
+                </VStack>
+              </Box>
             ))
           )}
         </VStack>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Box, Button, HStack, VStack, Heading, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import SurveyBuilder from "@/components/survey/SurveyBuilder";
@@ -12,12 +12,7 @@ type SurveyBuilderModalProps = {
   initialJson?: string;
 };
 
-export default function SurveyBuilderModal({
-  isOpen,
-  onClose,
-  onSave,
-  initialJson,
-}: SurveyBuilderModalProps) {
+export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJson }: SurveyBuilderModalProps) {
   // Colors
   const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
@@ -97,11 +92,7 @@ export default function SurveyBuilderModal({
 
         {/* Body: the builder */}
         <Box flex="1" overflow="auto" p={4}>
-          <SurveyBuilder
-            initialJson={initialJson}
-            value={draftJson}
-            onChange={setDraftJson}
-          />
+          <SurveyBuilder initialJson={initialJson} value={draftJson} onChange={setDraftJson} />
         </Box>
       </Box>
     </Box>

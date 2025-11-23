@@ -7,9 +7,10 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
-import { Box, Heading, Text } from "@chakra-ui/react";
+import { Box, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import type { Tables } from "@/utils/supabase/SupabaseTypes";
 
 type SurveyFormData = {
   title: string;
@@ -20,17 +21,30 @@ type SurveyFormData = {
   allow_response_editing: boolean;
 };
 
+type SurveyRow = Tables<"surveys">;
+
+const toJsonString = (value: SurveyRow["json"]) =>
+  typeof value === "string" ? value : value ? JSON.stringify(value) : "";
+const getFormJsonString = (value: FieldValues["json"]) =>
+  typeof value === "string" ? value : value ? JSON.stringify(value) : "";
+
+const getParam = (value: string | string[] | undefined, name: string): string => {
+  if (typeof value === "string") return value;
+  throw new Error(`Missing route param: ${name}`);
+};
+
 export default function EditSurveyPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
   const trackEvent = useTrackEvent();
   const { private_profile_id } = useClassProfiles();
   const [isLoading, setIsLoading] = useState(true);
-  const [surveyData, setSurveyData] = useState<any>(null);
+  const [surveyData, setSurveyData] = useState<SurveyRow>();
   const { role } = useClassProfiles();
+  const rawSurveyId = getParam(survey_id, "survey_id");
 
   const form = useForm<SurveyFormData>({
-    refineCoreProps: { resource: "surveys", action: "edit", id: survey_id as string },
+    refineCoreProps: { resource: "surveys", action: "edit", id: rawSurveyId },
     defaultValues: {
       title: "",
       description: "",
@@ -41,7 +55,7 @@ export default function EditSurveyPage() {
     }
   });
 
-  const { getValues, setValue, reset } = form;
+  const reset = form.reset;
   const hasLoadedSurvey = useRef(false);
   const loadingPromise = useRef<Promise<void> | null>(null);
 
@@ -76,9 +90,9 @@ export default function EditSurveyPage() {
         setIsLoading(true);
         const supabase = createClient();
         const { data, error } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .select("*")
-          .eq("id", survey_id)
+          .eq("id", rawSurveyId)
           .eq("class_id", Number(course_id))
           .single();
 
@@ -93,25 +107,25 @@ export default function EditSurveyPage() {
           return;
         }
 
-        console.log("[EditSurvey] Survey data loaded successfully:", (data as any).id);
+        console.log("[EditSurvey] Survey data loaded successfully:", data.id);
         setSurveyData(data);
 
         // Convert due_date from ISO string to datetime-local format
         let dueDateFormatted = "";
-        if ((data as any).due_date) {
-          const date = new Date((data as any).due_date);
+        if (data.due_date) {
+          const date = new Date(data.due_date);
           // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
           dueDateFormatted = date.toISOString().slice(0, 16);
         }
 
         // Load the survey data into the form
         reset({
-          title: (data as any).title || "",
-          description: (data as any).description || "",
-          json: (data as any).json || "",
-          status: (data as any).status || "draft",
+          title: data.title || "",
+          description: data.description || "",
+          json: toJsonString(data.json),
+          status: data.status || "draft",
           due_date: dueDateFormatted,
-          allow_response_editing: Boolean((data as any).allow_response_editing)
+          allow_response_editing: Boolean(data.allow_response_editing)
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
@@ -138,7 +152,7 @@ export default function EditSurveyPage() {
 
     // Store the promise to prevent duplicate calls
     loadingPromise.current = loadSurveyData();
-  }, [course_id, survey_id]); // Removed reset and router from dependencies
+  }, [course_id, rawSurveyId]); // Removed reset and router from dependencies
 
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
@@ -147,21 +161,21 @@ export default function EditSurveyPage() {
         try {
           const supabase = createClient();
 
-          // For drafts, we'll store the JSON as-is without validation
-          // If JSON is empty or invalid, we'll store it as empty string
+          const jsonInput = getFormJsonString(values.json);
           let jsonToStore = "";
-          if (values.json && values.json.trim()) {
+
+          if (jsonInput.trim()) {
             try {
-              JSON.parse(values.json as string);
-              jsonToStore = values.json as string;
-            } catch (error) {
-              // For drafts, store invalid JSON as-is (user can fix later)
-              jsonToStore = values.json as string;
+              JSON.parse(jsonInput);
+              jsonToStore = jsonInput;
+            } catch {
+              // keep the raw string for drafts; user can fix later
+              jsonToStore = jsonInput;
             }
           }
 
           const { data, error } = await supabase
-            .from("surveys" as any)
+            .from("surveys")
             .update({
               title: (values.title as string) || "Untitled Survey",
               description: (values.description as string) || null,
@@ -171,7 +185,7 @@ export default function EditSurveyPage() {
               due_date: (values.due_date as string) || null,
               validation_errors: null // No validation errors for draft saves
             })
-            .eq("id", survey_id)
+            .eq("id", rawSurveyId)
             .select("id, survey_id")
             .single();
 
@@ -180,9 +194,9 @@ export default function EditSurveyPage() {
             throw new Error(error?.message || "Failed to save draft");
           }
 
-          trackEvent("survey_updated" as any, {
+          trackEvent("survey_updated", {
             course_id: Number(course_id),
-            survey_id: (data as any).survey_id,
+            survey_id: data.survey_id,
             status: "draft",
             has_due_date: !!values.due_date,
             allow_response_editing: values.allow_response_editing
@@ -217,7 +231,7 @@ export default function EditSurveyPage() {
         if (values.status === "published" && values.due_date) {
           const dueDate = new Date(values.due_date as string);
           const now = new Date();
-          
+
           if (dueDate < now) {
             toaster.create({
               title: "Cannot Publish Survey",
@@ -239,29 +253,22 @@ export default function EditSurveyPage() {
           const supabase = createClient();
 
           // Parse the JSON to ensure it's valid (only for active updates)
-          let parsedJson;
-          let validationErrors = null;
-          try {
-            parsedJson = JSON.parse(values.json as string);
-          } catch (error) {
-            // Instead of throwing, create a draft with validation errors
-            validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
-            parsedJson = values.json as string; // Store the invalid JSON as-is
-          }
+          const parsedJson = toJsonString(values.json);
+          const validationErrors = null;
 
           // Update the survey
           const { data, error } = await supabase
-            .from("surveys" as any)
+            .from("surveys")
             .update({
               title: values.title as string,
               description: (values.description as string) || null,
               json: parsedJson,
-              status: validationErrors ? "draft" : (values.status as string), // Force to draft if validation errors
+              status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]), // Force to draft if validation errors
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: (values.due_date as string) || null,
               validation_errors: validationErrors
             })
-            .eq("id", survey_id)
+            .eq("id", rawSurveyId)
             .select("id, survey_id")
             .single();
 
@@ -269,7 +276,7 @@ export default function EditSurveyPage() {
             // If database error, try to save as draft with error flag
             try {
               const fallbackData = await supabase
-                .from("surveys" as any)
+                .from("surveys")
                 .update({
                   title: values.title as string,
                   description: (values.description as string) || null,
@@ -279,7 +286,7 @@ export default function EditSurveyPage() {
                   due_date: (values.due_date as string) || null,
                   validation_errors: `Database error: ${error?.message || "Unknown error"}`
                 })
-                .eq("id", survey_id)
+                .eq("id", rawSurveyId)
                 .select("id, survey_id")
                 .single();
 
@@ -287,15 +294,15 @@ export default function EditSurveyPage() {
                 throw new Error(fallbackData.error.message);
               }
             } catch (fallbackError) {
-              throw new Error(`Failed to update survey: ${error?.message || "Unknown error"}`);
+              throw new Error(`Failed to update survey: ${error?.message || fallbackError || "Unknown error"}`);
             }
             return;
           }
 
           // Track survey update
-          trackEvent("survey_updated" as any, {
+          trackEvent("survey_updated", {
             course_id: Number(course_id),
-            survey_id: (data as any).survey_id,
+            survey_id: data.survey_id,
             status: validationErrors ? "draft" : values.status,
             has_due_date: !!values.due_date,
             allow_response_editing: values.allow_response_editing,
@@ -365,11 +372,11 @@ export default function EditSurveyPage() {
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
-      <SurveyForm 
-        form={form} 
-        onSubmit={onSubmit} 
-        saveDraftOnly={saveDraftOnly} 
-        isEdit={true} 
+      <SurveyForm
+        form={form}
+        onSubmit={onSubmit}
+        saveDraftOnly={saveDraftOnly}
+        isEdit={true}
         privateProfileId={private_profile_id}
       />
     </Box>

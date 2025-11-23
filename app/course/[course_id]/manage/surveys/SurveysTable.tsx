@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Table, Text, Badge, HStack, Icon } from "@chakra-ui/react";
+import { Box, Table, Text, Badge, Icon } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
@@ -14,24 +14,9 @@ import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import type { Survey, SurveyWithCounts } from "@/types/survey";
 
 type FilterType = "all" | "completed" | "awaiting";
-
-type Survey = {
-  id: string;
-  survey_id?: string;
-  title: string;
-  status: "draft" | "published" | "closed";
-  version: number;
-  created_at: string;
-  class_id: number;
-  json?: string;
-  due_date?: string;
-};
-
-type SurveyWithCounts = Survey & {
-  response_count: number;
-};
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
@@ -76,16 +61,16 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
     if (activeFilter === "all") {
       return surveys;
     }
-    
+
     return surveys.filter((survey) => {
       const completionRate = totalStudents > 0 ? (survey.response_count / totalStudents) * 100 : 0;
-      
+
       if (activeFilter === "completed") {
         return completionRate === 100;
       } else if (activeFilter === "awaiting") {
         return completionRate < 100;
       }
-      
+
       return true;
     });
   }, [surveys, activeFilter, totalStudents]);
@@ -119,7 +104,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
     if (!isInstructor && (survey.status === "published" || survey.status === "closed")) {
       return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
     }
-  
+
     if (survey.status === "draft") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
@@ -132,16 +117,16 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
   const handlePublish = useCallback(
     async (survey: Survey) => {
-
       // Validate due date
       if (survey.due_date) {
         const dueDate = new Date(survey.due_date);
         const now = new Date();
-        
+
         if (dueDate < now) {
           toaster.create({
             title: "Cannot Publish Survey",
-            description: "The due date is in the past. Please edit the survey and update the due date before publishing.",
+            description:
+              "The due date is in the past. Please edit the survey and update the due date before publishing.",
             type: "error"
           });
           return;
@@ -162,7 +147,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         let validationErrors = null;
         try {
           if (survey.json) {
-            JSON.parse(survey.json);
+            JSON.parse(survey.json as string);
           }
         } catch (error) {
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
@@ -170,7 +155,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Update survey status to published
         const { data, error } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .update({
             status: validationErrors ? "draft" : "published",
             validation_errors: validationErrors
@@ -201,7 +186,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         }
 
         // Track the publish event
-        trackEvent("survey_published" as any, {
+        trackEvent("survey_published", {
           course_id: Number(courseId),
           survey_id: survey.survey_id,
           has_validation_errors: !!validationErrors
@@ -236,7 +221,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Update survey status to closed
         const { data, error } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .update({
             status: "closed"
           })
@@ -257,7 +242,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         });
 
         // Track the close event
-        trackEvent("survey_closed" as any, {
+        trackEvent("survey_closed", {
           course_id: Number(courseId),
           survey_id: survey.survey_id
         });
@@ -311,7 +296,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Soft delete all survey responses first (set deleted_at timestamp)
         const { error: responsesError } = await supabase
-          .from("survey_responses" as any)
+          .from("survey_responses")
           .update({ deleted_at: now })
           .eq("survey_id", survey.id)
           .is("deleted_at", null); // Only update records that aren't already soft deleted
@@ -322,7 +307,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
         // Soft delete all survey versions (all records with the same survey_id)
         const { error: surveysError } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .update({ deleted_at: now })
           .eq("survey_id", survey.survey_id)
           .is("deleted_at", null); // Only update records that aren't already soft deleted
@@ -340,7 +325,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         });
 
         // Track the delete event
-        trackEvent("survey_deleted" as any, {
+        trackEvent("survey_deleted", {
           course_id: Number(courseId),
           survey_id: survey.survey_id,
           had_responses: survey.response_count > 0,
@@ -380,183 +365,183 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
       <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
         <Table.Root variant="outline" size="md">
-        <Table.Header>
-          <Table.Row bg={tableHeaderBg}>
-            <Table.ColumnHeader
-              color={tableHeaderTextColor}
-              fontSize="xs"
-              fontWeight="semibold"
-              textTransform="uppercase"
-              py={3}
-              pl={6}
-            >
-              TITLE
-            </Table.ColumnHeader>
-            <Table.ColumnHeader
-              color={tableHeaderTextColor}
-              fontSize="xs"
-              fontWeight="semibold"
-              textTransform="uppercase"
-              py={3}
-            >
-              STATUS
-            </Table.ColumnHeader>
-            <Table.ColumnHeader
-              color={tableHeaderTextColor}
-              fontSize="xs"
-              fontWeight="semibold"
-              textTransform="uppercase"
-              py={3}
-            >
-              VERSION
-            </Table.ColumnHeader>
-            <Table.ColumnHeader
-              color={tableHeaderTextColor}
-              fontSize="xs"
-              fontWeight="semibold"
-              textTransform="uppercase"
-              py={3}
-            >
-              RESPONSES
-            </Table.ColumnHeader>
-            <Table.ColumnHeader
-              color={tableHeaderTextColor}
-              fontSize="xs"
-              fontWeight="semibold"
-              textTransform="uppercase"
-              py={3}
-            >
-              CREATED
-            </Table.ColumnHeader>
-            <Table.ColumnHeader
-              color={tableHeaderTextColor}
-              fontSize="xs"
-              fontWeight="semibold"
-              textTransform="uppercase"
-              py={3}
-              pr={0}
-            >
-              ACTIONS
-            </Table.ColumnHeader>
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {filteredSurveys.map((survey) => (
-            <Table.Row key={survey.id} bg={tableRowBg} borderColor={tableBorderColor}>
-              <Table.Cell py={4} pl={6}>
-                {!isInstructor && survey.status === "draft" ? (
-                  <Text color={textColor}>{survey.title}</Text>
-                ) : (
-                  <Link href={getSurveyLink(survey)} style={{ color: "#3182CE" }}>
-                    {survey.title}
-                  </Link>
-                )}
-              </Table.Cell>
-              <Table.Cell py={4}>{getStatusBadge(survey.status)}</Table.Cell>
-              <Table.Cell py={4}>
-                <Badge
-                  px={2}
-                  py={1}
-                  borderRadius="md"
-                  fontSize="xs"
-                  bg={versionBadgeBg}
-                  border="1px solid"
-                  borderColor={versionBadgeBorder}
-                  color={versionBadgeText}
-                >
-                  v{survey.version}
-                </Badge>
-              </Table.Cell>
-              <Table.Cell py={4}>
-                <Text color={textColor}>
-                  {survey.status === "draft" ? "—" : `${survey.response_count}/${totalStudents} responded`}
-                </Text>
-              </Table.Cell>
-              <Table.Cell py={4}>
-                <Text color={textColor}>
-                  {formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}
-                </Text>
-              </Table.Cell>
-              <Table.Cell pr={3}>
-                <MenuRoot>
-                  <MenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      border="1px solid"
-                      borderColor={actionsButtonBorder}
-                      _focus={{ borderColor: actionsButtonBorder, boxShadow: "none", outline: "none" }}
-                      _active={{ borderColor: actionsButtonBorder, boxShadow: "none", outline: "none" }}
-                    >
-                      <Icon as={HiOutlineDotsHorizontal} color={tableHeaderTextColor} />
-                    </Button>
-                  </MenuTrigger>
-                  <MenuContent>
-                    {survey.status === "draft" && isInstructor && (
-                      <>
-                        <MenuItem value="edit" asChild>
-                          <Link href={getSurveyLink(survey)}>Edit</Link>
-                        </MenuItem>
-                        <MenuItem value="publish" onClick={() => handlePublish(survey)}>
-                          Publish
-                        </MenuItem>
-                        <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
-                          Delete
-                        </MenuItem>
-                      </>
-                    )}
-                    {survey.status === "draft" && !isInstructor && (
-                      <MenuItem value="no-access" disabled>
-                        No Actions Available
-                      </MenuItem>
-                    )}
-                    {survey.status === "published" && (
-                      <>
-                        <MenuItem value="responses" asChild>
-                          <Link href={`/course/${courseId}/manage/surveys/${survey.survey_id}/responses`}>
-                            View Responses
-                          </Link>
-                        </MenuItem>
-                        {isInstructor && (
-                          <>
-                            <MenuItem value="edit" asChild>
-                              <Link href={getSurveyLink(survey)}>Edit (New Version)</Link>
-                            </MenuItem>
-                            <MenuItem value="close" onClick={() => handleClose(survey)}>
-                              Close
-                            </MenuItem>
-                            <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
-                              Delete
-                            </MenuItem>
-                          </>
-                        )}
-                      </>
-                    )}
-                    {survey.status === "closed" && (
-                      <>
-                        <MenuItem value="responses" asChild>
-                          <Link href={`/course/${courseId}/manage/surveys/${survey.survey_id}/responses`}>
-                            View Responses
-                          </Link>
-                        </MenuItem>
-                        {isInstructor && (
-                          <>
-                            <MenuItem value="reopen">Re-open</MenuItem>
-                            <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
-                              Delete
-                            </MenuItem>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </MenuContent>
-                </MenuRoot>
-              </Table.Cell>
+          <Table.Header>
+            <Table.Row bg={tableHeaderBg}>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+                pl={6}
+              >
+                TITLE
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+              >
+                STATUS
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+              >
+                VERSION
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+              >
+                RESPONSES
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+              >
+                CREATED
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
+                pr={0}
+              >
+                ACTIONS
+              </Table.ColumnHeader>
             </Table.Row>
-          ))}
-        </Table.Body>
-      </Table.Root>
-    </Box>
+          </Table.Header>
+          <Table.Body>
+            {filteredSurveys.map((survey) => (
+              <Table.Row key={survey.id} bg={tableRowBg} borderColor={tableBorderColor}>
+                <Table.Cell py={4} pl={6}>
+                  {!isInstructor && survey.status === "draft" ? (
+                    <Text color={textColor}>{survey.title}</Text>
+                  ) : (
+                    <Link href={getSurveyLink(survey)} style={{ color: "#3182CE" }}>
+                      {survey.title}
+                    </Link>
+                  )}
+                </Table.Cell>
+                <Table.Cell py={4}>{getStatusBadge(survey.status)}</Table.Cell>
+                <Table.Cell py={4}>
+                  <Badge
+                    px={2}
+                    py={1}
+                    borderRadius="md"
+                    fontSize="xs"
+                    bg={versionBadgeBg}
+                    border="1px solid"
+                    borderColor={versionBadgeBorder}
+                    color={versionBadgeText}
+                  >
+                    v{survey.version}
+                  </Badge>
+                </Table.Cell>
+                <Table.Cell py={4}>
+                  <Text color={textColor}>
+                    {survey.status === "draft" ? "—" : `${survey.response_count}/${totalStudents} responded`}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell py={4}>
+                  <Text color={textColor}>
+                    {formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell pr={3}>
+                  <MenuRoot>
+                    <MenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        border="1px solid"
+                        borderColor={actionsButtonBorder}
+                        _focus={{ borderColor: actionsButtonBorder, boxShadow: "none", outline: "none" }}
+                        _active={{ borderColor: actionsButtonBorder, boxShadow: "none", outline: "none" }}
+                      >
+                        <Icon as={HiOutlineDotsHorizontal} color={tableHeaderTextColor} />
+                      </Button>
+                    </MenuTrigger>
+                    <MenuContent>
+                      {survey.status === "draft" && isInstructor && (
+                        <>
+                          <MenuItem value="edit" asChild>
+                            <Link href={getSurveyLink(survey)}>Edit</Link>
+                          </MenuItem>
+                          <MenuItem value="publish" onClick={() => handlePublish(survey)}>
+                            Publish
+                          </MenuItem>
+                          <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
+                            Delete
+                          </MenuItem>
+                        </>
+                      )}
+                      {survey.status === "draft" && !isInstructor && (
+                        <MenuItem value="no-access" disabled>
+                          No Actions Available
+                        </MenuItem>
+                      )}
+                      {survey.status === "published" && (
+                        <>
+                          <MenuItem value="responses" asChild>
+                            <Link href={`/course/${courseId}/manage/surveys/${survey.survey_id}/responses`}>
+                              View Responses
+                            </Link>
+                          </MenuItem>
+                          {isInstructor && (
+                            <>
+                              <MenuItem value="edit" asChild>
+                                <Link href={getSurveyLink(survey)}>Edit (New Version)</Link>
+                              </MenuItem>
+                              <MenuItem value="close" onClick={() => handleClose(survey)}>
+                                Close
+                              </MenuItem>
+                              <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
+                                Delete
+                              </MenuItem>
+                            </>
+                          )}
+                        </>
+                      )}
+                      {survey.status === "closed" && (
+                        <>
+                          <MenuItem value="responses" asChild>
+                            <Link href={`/course/${courseId}/manage/surveys/${survey.survey_id}/responses`}>
+                              View Responses
+                            </Link>
+                          </MenuItem>
+                          {isInstructor && (
+                            <>
+                              <MenuItem value="reopen">Re-open</MenuItem>
+                              <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
+                                Delete
+                              </MenuItem>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </MenuContent>
+                  </MenuRoot>
+                </Table.Cell>
+              </Table.Row>
+            ))}
+          </Table.Body>
+        </Table.Root>
+      </Box>
     </>
   );
 }

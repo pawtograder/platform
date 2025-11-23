@@ -13,22 +13,44 @@ type TablesThatHaveAnIDField = {
 // Extend known broadcast tables to include row-level recalculation state
 type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
 
-export type BroadcastMessage = {
-  type: "table_change" | "channel_created" | "system" | "staff_data_change";
-  operation?: "INSERT" | "UPDATE" | "DELETE";
-  table?: KnownBroadcastTables;
-  row_id?: number | string;
-  data?: Record<string, unknown>;
-  submission_id?: number;
+export type GradebookRowRecalcStateBroadcastMessage = {
+  type: "gradebook_row_recalc_state";
+  operation: "INSERT" | "UPDATE" | "DELETE";
+  table: "gradebook_row_recalc_state";
   class_id: number;
-  target_audience?: "user" | "staff";
+  row_id: null;
   timestamp: string;
+  data: null;
+  affected_count: number;
+  affected_rows: Array<{
+    student_id: string;
+    dirty: boolean;
+    is_recalculating: boolean;
+  }>; // Array of affected rows with their state (only private rows included)
+  requires_refetch: false; // Always false since we include the data
 };
+
+export type BroadcastMessage =
+  | {
+      type: "table_change" | "channel_created" | "system" | "staff_data_change";
+      operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
+      table?: KnownBroadcastTables;
+      row_id?: number | string;
+      row_ids?: (number | string)[]; // Array of IDs for bulk operations
+      data?: Record<string, unknown>;
+      submission_id?: number;
+      class_id: number;
+      target_audience?: "user" | "staff";
+      timestamp: string;
+      affected_count?: number; // Number of rows affected in bulk operation
+      requires_refetch?: boolean; // If true, trigger full refetch instead of refetching by IDs
+    }
+  | GradebookRowRecalcStateBroadcastMessage;
 
 type MessageFilter = {
   table?: KnownBroadcastTables;
   submission_id?: number;
-  operation?: "INSERT" | "UPDATE" | "DELETE";
+  operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
 };
 
 type MessageCallback = (message: BroadcastMessage) => void;
@@ -58,6 +80,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
   private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
   private _closed = false;
   private _submissionChannelRefCounts: Map<number, number> = new Map();
+  private _gradebookChannelRefCount: number = 0;
 
   //Realtime reliability features
   private _inactiveTabTimeoutSeconds = 10 * 60; // 10 minutes default
@@ -367,8 +390,8 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
       return false;
     }
 
-    // Check submission_id filter
-    if (filter.submission_id && message.submission_id !== filter.submission_id) {
+    // Check submission_id filter (only if message has submission_id property)
+    if (filter.submission_id && "submission_id" in message && message.submission_id !== filter.submission_id) {
       return false;
     }
 
@@ -404,8 +427,12 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
   /**
    * Subscribe to all messages for a specific table
    */
-  subscribeToTable(table: KnownBroadcastTables, callback: MessageCallback): () => void {
-    return this.subscribe({ table }, callback);
+  subscribeToTable(
+    table: string,
+    callback: (message: import("./TableController").BroadcastMessage) => void
+  ): () => void {
+    // Cast the callback to handle our extended BroadcastMessage type internally
+    return this.subscribe({ table: table as KnownBroadcastTables }, callback as unknown as MessageCallback);
   }
 
   /**
@@ -463,6 +490,168 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
 
   getUserChannelName(): string {
     return `class:${this._classId}:user:${this._profileId}`;
+  }
+
+  /**
+   * Get the gradebook staff channel name
+   */
+  getGradebookStaffChannelName(): string {
+    return `gradebook:${this._classId}:staff`;
+  }
+
+  /**
+   * Get the gradebook student channel name for a specific student
+   */
+  getGradebookStudentChannelName(studentId: string): string {
+    return `gradebook:${this._classId}:student:${studentId}`;
+  }
+
+  /**
+   * Subscribe to gradebook channels (staff or student-specific).
+   * Returns an unsubscribe function that cleans up the subscription.
+   */
+  subscribeToGradebookChannel(callback: MessageCallback): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to channels after they have been closed");
+    }
+
+    // Ensure gradebook channels are created and increment ref count
+    this._ensureGradebookChannels();
+
+    // Create the message filter subscriptions for gradebook tables
+    const filterUnsubscriber1 = this.subscribe({ table: "gradebook_column_students" }, callback);
+    const filterUnsubscriber2 = this.subscribe({ table: "gradebook_row_recalc_state" }, callback);
+
+    // Return unsubscriber that cleans up both filter subscriptions and gradebook channels
+    return () => {
+      filterUnsubscriber1();
+      filterUnsubscriber2();
+      this._cleanupGradebookChannels();
+    };
+  }
+
+  /**
+   * Ensure gradebook channels are created and subscribed to
+   * Increments reference count for tracking
+   */
+  private _ensureGradebookChannels() {
+    const currentRefCount = this._gradebookChannelRefCount;
+
+    // Only create channels if this is the first subscription
+    if (currentRefCount === 0) {
+      if (this._isStaff) {
+        // Staff subscribe to gradebook staff channel
+        const staffChannelKey = `gradebook:${this._classId}:staff`;
+        // Set placeholder unsubscriber immediately
+        this._channelUnsubscribers.set(staffChannelKey, () => {
+          // Placeholder is a no-op, real unsubscriber will be set when async resolves
+        });
+        this._subscribeToGradebookStaffChannel();
+      } else {
+        // Students subscribe to their own gradebook channel
+        const studentChannelKey = `gradebook:${this._classId}:student:${this._profileId}`;
+        // Set placeholder unsubscriber immediately
+        this._channelUnsubscribers.set(studentChannelKey, () => {
+          // Placeholder is a no-op, real unsubscriber will be set when async resolves
+        });
+        this._subscribeToGradebookStudentChannel();
+      }
+    }
+
+    // Increment ref count
+    this._gradebookChannelRefCount = currentRefCount + 1;
+  }
+
+  /**
+   * Clean up gradebook channels when ref count reaches zero
+   */
+  private _cleanupGradebookChannels() {
+    const currentRefCount = this._gradebookChannelRefCount;
+
+    if (currentRefCount <= 1) {
+      // Last subscription, clean up channels
+      if (this._isStaff) {
+        const staffChannelKey = `gradebook:${this._classId}:staff`;
+        const unsubscriber = this._channelUnsubscribers.get(staffChannelKey);
+        if (unsubscriber) {
+          unsubscriber();
+          this._channelUnsubscribers.delete(staffChannelKey);
+        }
+      } else {
+        const studentChannelKey = `gradebook:${this._classId}:student:${this._profileId}`;
+        const unsubscriber = this._channelUnsubscribers.get(studentChannelKey);
+        if (unsubscriber) {
+          unsubscriber();
+          this._channelUnsubscribers.delete(studentChannelKey);
+        }
+      }
+      this._gradebookChannelRefCount = 0;
+    } else {
+      // Decrement ref count
+      this._gradebookChannelRefCount = currentRefCount - 1;
+    }
+  }
+
+  /**
+   * Subscribe to gradebook staff channel
+   */
+  private async _subscribeToGradebookStaffChannel() {
+    if (!this._isStaff) {
+      return;
+    }
+
+    const topic = `gradebook:${this._classId}:staff`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      this._client,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    // Check if refcount is still > 0, if not immediately unsubscribe
+    const currentRefCount = this._gradebookChannelRefCount;
+    if (currentRefCount <= 0) {
+      // Refcount is 0 or negative, immediately unsubscribe and don't store
+      unsubscriber();
+    } else {
+      // Refcount > 0, replace placeholder with real unsubscriber
+      this._channelUnsubscribers.set(topic, unsubscriber);
+    }
+  }
+
+  /**
+   * Subscribe to gradebook student channel
+   */
+  private async _subscribeToGradebookStudentChannel() {
+    if (this._isStaff) {
+      return;
+    }
+
+    const topic = `gradebook:${this._classId}:student:${this._profileId}`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      this._client,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    // Check if refcount is still > 0, if not immediately unsubscribe
+    const currentRefCount = this._gradebookChannelRefCount;
+    if (currentRefCount <= 0) {
+      // Refcount is 0 or negative, immediately unsubscribe and don't store
+      unsubscriber();
+    } else {
+      // Refcount > 0, replace placeholder with real unsubscriber
+      this._channelUnsubscribers.set(topic, unsubscriber);
+    }
   }
 
   /**
@@ -535,6 +724,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     this._subscriptions.clear();
     this._statusChangeListeners = [];
     this._submissionChannelRefCounts.clear();
+    this._gradebookChannelRefCount = 0;
 
     // Clear timers and listeners
     if (this._inactiveTabTimer) {

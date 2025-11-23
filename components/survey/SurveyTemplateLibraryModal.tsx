@@ -11,7 +11,18 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { Box, Input, VStack, HStack, Text, Badge, createListCollection, Textarea, Fieldset, Icon } from "@chakra-ui/react";
+import {
+  Box,
+  Input,
+  VStack,
+  HStack,
+  Text,
+  Badge,
+  createListCollection,
+  Textarea,
+  Fieldset,
+  Icon
+} from "@chakra-ui/react";
 import { SelectRoot, SelectTrigger, SelectValueText, SelectContent, SelectItem } from "@/components/ui/select";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { Field } from "@/components/ui/field";
@@ -29,7 +40,7 @@ type SurveyTemplate = {
   id: string;
   title: string;
   description: string | null;
-  template: any; // JSONB
+  template: Record<string, unknown> | null;
   created_by: string;
   scope: "course" | "global";
   class_id: number | null;
@@ -66,7 +77,7 @@ export function SurveyTemplateLibraryModal({
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [deleteConfirmTemplate, setDeleteConfirmTemplate] = useState<SurveyTemplate | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  
+
   // Edit form state
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -96,7 +107,7 @@ export function SurveyTemplateLibraryModal({
 
       // Fetch global templates
       const { data: globalData, error: globalError } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .select(
           `
           *,
@@ -110,7 +121,7 @@ export function SurveyTemplateLibraryModal({
 
       // Fetch course-specific templates (matching class_id)
       const { data: courseData, error: courseError } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .select(
           `
           *,
@@ -132,7 +143,7 @@ export function SurveyTemplateLibraryModal({
       const allTemplates = [...(globalData || []), ...(courseData || [])];
 
       // Type assertion for the joined data
-      const typedData = allTemplates.map((item: any) => ({
+      const typedData = allTemplates.map((item) => ({
         ...item,
         profiles: Array.isArray(item.profiles) ? item.profiles[0] : item.profiles
       })) as SurveyTemplate[];
@@ -170,9 +181,7 @@ export function SurveyTemplateLibraryModal({
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (t) =>
-          t.title.toLowerCase().includes(query) ||
-          t.description?.toLowerCase().includes(query)
+        (t) => t.title.toLowerCase().includes(query) || t.description?.toLowerCase().includes(query)
       );
     }
 
@@ -220,14 +229,14 @@ export function SurveyTemplateLibraryModal({
 
     try {
       const supabase = createClient();
-      
+
       const { error } = await supabase
-        .from("survey_templates" as any)
+        .from("survey_templates")
         .update({
           title: editTitle,
-          description: editDescription || null,
+          description: editDescription || undefined,
           scope: editScope,
-          class_id: editScope === "course" ? Number(courseId) : null,
+          class_id: editScope === "course" ? Number(courseId) : undefined,
           updated_at: new Date().toISOString()
         })
         .eq("id", editingTemplate.id);
@@ -252,7 +261,7 @@ export function SurveyTemplateLibraryModal({
       setIsEditModalOpen(false);
       setEditingTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch (error) {
+    } catch {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
@@ -278,11 +287,8 @@ export function SurveyTemplateLibraryModal({
 
     try {
       const supabase = createClient();
-      
-      const { error } = await supabase
-        .from("survey_templates" as any)
-        .delete()
-        .eq("id", deleteConfirmTemplate.id);
+
+      const { error } = await supabase.from("survey_templates").delete().eq("id", deleteConfirmTemplate.id);
 
       toaster.dismiss(loadingToast);
 
@@ -304,7 +310,7 @@ export function SurveyTemplateLibraryModal({
       setIsDeleteConfirmOpen(false);
       setDeleteConfirmTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch (error) {
+    } catch {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
@@ -322,9 +328,12 @@ export function SurveyTemplateLibraryModal({
     }
   };
 
-  const isOwner = useCallback((template: SurveyTemplate) => {
-    return template.created_by === private_profile_id;
-  }, [private_profile_id]);
+  const isOwner = useCallback(
+    (template: SurveyTemplate) => {
+      return template.created_by === private_profile_id;
+    },
+    [private_profile_id]
+  );
 
   // Create collection for visibility filter
   const visibilityCollection = useMemo(
@@ -530,7 +539,7 @@ export function SurveyTemplateLibraryModal({
                         >
                           Clone
                         </Button>
-                        
+
                         {/* Show three-dot menu for owned templates */}
                         {isOwner(template) && (
                           <MenuRoot>
@@ -554,7 +563,12 @@ export function SurveyTemplateLibraryModal({
                               <MenuItem value="edit" onClick={() => handleEdit(template)} style={{ cursor: "pointer" }}>
                                 Edit Info
                               </MenuItem>
-                              <MenuItem value="delete" color="red.500" onClick={() => handleDeleteClick(template)} style={{ cursor: "pointer" }}>
+                              <MenuItem
+                                value="delete"
+                                color="red.500"
+                                onClick={() => handleDeleteClick(template)}
+                                style={{ cursor: "pointer" }}
+                              >
                                 Delete
                               </MenuItem>
                             </MenuContent>
@@ -695,7 +709,7 @@ export function SurveyTemplateLibraryModal({
 
           <DialogBody p={6}>
             <Text color={textColor}>
-              Are you sure you want to delete "{deleteConfirmTemplate?.title}"? This action cannot be undone.
+              Are you sure you want to delete &quot;{deleteConfirmTemplate?.title}&quot;? This action cannot be undone.
             </Text>
           </DialogBody>
 

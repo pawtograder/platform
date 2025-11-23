@@ -28,7 +28,6 @@ export default function IndividualResponsePage() {
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
@@ -50,10 +49,10 @@ export default function IndividualResponsePage() {
         // Get response with student info
         console.log("📊 Fetching survey response...");
         const { data: responseData, error: responseError } = await supabase
-          .from("survey_responses" as any)
+          .from("survey_responses")
           .select("*")
-          .eq("id", response_id)
-          .eq("survey_id", survey_id)
+          .eq("id", String(response_id))
+          .eq("survey_id", String(survey_id))
           .single();
 
         console.log("📊 Response query result:", {
@@ -76,9 +75,9 @@ export default function IndividualResponsePage() {
         }
 
         // Get the student's profile via user_roles using profile_id
-        console.log("👤 Fetching user profile for profile_id:", (responseData as any).profile_id);
+        console.log("👤 Fetching user profile for profile_id:", responseData?.profile_id);
         const { data: userRole, error: userRoleError } = await supabase
-          .from("user_roles" as any)
+          .from("user_roles")
           .select(
             `
             user_id,
@@ -91,7 +90,7 @@ export default function IndividualResponsePage() {
           `
           )
           .eq("class_id", Number(course_id))
-          .eq("private_profile_id", (responseData as any).profile_id)
+          .eq("private_profile_id", responseData?.profile_id)
           .single();
 
         console.log("👤 User profile query result:", {
@@ -99,16 +98,16 @@ export default function IndividualResponsePage() {
           hasError: !!userRoleError,
           errorCode: userRoleError?.code,
           errorMessage: userRoleError?.message,
-          profileData: userRole ? (userRole as any).profiles : null
+          profileData: userRole?.profiles ?? null
         });
 
         if (userRoleError || !userRole) {
           console.error("❌ Error getting user profile:", userRoleError);
           // Set response with fallback profile data
           const fallbackResponse = {
-            ...(responseData as any),
+            ...responseData,
             profiles: {
-              id: (responseData as any).profile_id,
+              id: responseData?.profile_id ?? "",
               name: "Unknown Student",
               sis_user_id: null
             }
@@ -117,9 +116,9 @@ export default function IndividualResponsePage() {
           setResponse(fallbackResponse);
         } else {
           const responseWithProfile = {
-            ...(responseData as any),
-            profiles: (userRole as any).profiles
-          } as SurveyResponseWithProfile;
+            ...responseData,
+            profiles: userRole.profiles
+          } as unknown as SurveyResponseWithProfile;
           console.log("✅ Response with profile data:", responseWithProfile);
           setResponse(responseWithProfile);
         }
@@ -127,9 +126,9 @@ export default function IndividualResponsePage() {
         // Get survey info
         console.log("📋 Fetching survey info for survey_id:", survey_id);
         const { data: surveyData, error: surveyError } = await supabase
-          .from("surveys" as any)
+          .from("surveys")
           .select("id, title, description, json, allow_response_editing")
-          .eq("id", survey_id)
+          .eq("id", String(survey_id))
           .eq("class_id", Number(course_id))
           .single();
 
@@ -139,9 +138,9 @@ export default function IndividualResponsePage() {
           errorCode: surveyError?.code,
           errorMessage: surveyError?.message,
           surveyKeys: surveyData ? Object.keys(surveyData) : [],
-          allowResponseEditing: surveyData ? (surveyData as any).allow_response_editing : null,
-          hasJson: surveyData ? !!(surveyData as any).json : false,
-          jsonKeys: surveyData && (surveyData as any).json ? Object.keys((surveyData as any).json) : []
+          allowResponseEditing: surveyData?.allow_response_editing ?? null,
+          hasJson: !!surveyData?.json,
+          jsonKeys: surveyData?.json ? Object.keys(surveyData.json) : []
         });
 
         if (surveyError || !surveyData) {

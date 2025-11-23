@@ -4940,6 +4940,7 @@ export type Database = {
           completed_by: string | null;
           created_at: string;
           due_date: string;
+          hard_deadline: boolean;
           id: number;
           max_allowable_late_tokens: number;
           release_date: string | null;
@@ -4956,6 +4957,7 @@ export type Database = {
           completed_by?: string | null;
           created_at?: string;
           due_date: string;
+          hard_deadline?: boolean;
           id?: number;
           max_allowable_late_tokens?: number;
           release_date?: string | null;
@@ -4972,6 +4974,7 @@ export type Database = {
           completed_by?: string | null;
           created_at?: string;
           due_date?: string;
+          hard_deadline?: boolean;
           id?: number;
           max_allowable_late_tokens?: number;
           release_date?: string | null;
@@ -7348,6 +7351,201 @@ export type Database = {
           }
         ];
       };
+      survey_responses: {
+        Row: {
+          created_at: string;
+          deleted_at: string | null;
+          id: string;
+          is_submitted: boolean;
+          profile_id: string;
+          response: Json;
+          submitted_at: string | null;
+          survey_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id?: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "survey_responses_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      survey_templates: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          description: string;
+          id: string;
+          scope: Database["public"]["Enums"]["template_scope"];
+          template: Json;
+          title: string;
+          updated_at: string;
+          version: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title?: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_templates_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      surveys: {
+        Row: {
+          allow_response_editing: boolean;
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          deleted_at: string | null;
+          description: string | null;
+          due_date: string | null;
+          id: string;
+          json: Json;
+          status: Database["public"]["Enums"]["survey_status"];
+          survey_id: string;
+          title: string;
+          updated_at: string;
+          validation_errors: string | null;
+          version: number;
+        };
+        Insert: {
+          allow_response_editing?: boolean;
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title: string;
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Update: {
+          allow_response_editing?: boolean;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title?: string;
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "surveys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       system_settings: {
         Row: {
           created_at: string;
@@ -9242,6 +9440,23 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      check_can_add_to_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
+      check_can_remove_from_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_profile_id_to_remove: string;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
       check_github_error_threshold: {
         Args: { p_org: string; p_threshold: number; p_window_minutes: number };
         Returns: number;
@@ -9492,6 +9707,10 @@ export type Database = {
         };
         Returns: undefined;
       };
+      enqueue_gradebook_row_recalculation_batch: {
+        Args: { p_rows: Json[] };
+        Returns: undefined;
+      };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
@@ -9534,6 +9753,31 @@ export type Database = {
         Returns: {
           open_until: string;
           state: string;
+        }[];
+      };
+      get_gradebook_column_students_bulk: {
+        Args: {
+          p_gradebook_column_ids: Json;
+          p_limit?: number;
+          p_offset?: number;
+          p_student_ids: Json;
+        };
+        Returns: {
+          class_id: number;
+          created_at: string;
+          gradebook_column_id: number;
+          gradebook_id: number;
+          id: number;
+          incomplete_values: Json;
+          is_droppable: boolean;
+          is_excused: boolean;
+          is_missing: boolean;
+          is_private: boolean;
+          released: boolean;
+          score: number;
+          score_override: number;
+          score_override_note: string;
+          student_id: string;
         }[];
       };
       get_gradebook_records_for_all_students: {
@@ -9900,6 +10144,14 @@ export type Database = {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
+      update_gradebook_column_student_with_recalc: {
+        Args: { p_id: number; p_updates: Json };
+        Returns: undefined;
+      };
+      update_gradebook_column_students_batch_with_recalc: {
+        Args: { p_updates: Json[] };
+        Returns: Json;
+      };
       update_gradebook_row: {
         Args: {
           p_class_id: number;
@@ -9910,6 +10162,10 @@ export type Database = {
           p_updates: Json[];
         };
         Returns: number;
+      };
+      update_gradebook_rows_batch: {
+        Args: { p_batch_updates: Json[] };
+        Returns: Json;
       };
       update_regrade_request_points: {
         Args: {
@@ -9984,6 +10240,8 @@ export type Database = {
         | "request_resolved"
         | "video_joined"
         | "video_left";
+      survey_status: "draft" | "published" | "closed";
+      template_scope: "global" | "course";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -10146,7 +10404,9 @@ export const Constants = {
         "request_resolved",
         "video_joined",
         "video_left"
-      ]
+      ],
+      survey_status: ["draft", "published", "closed"],
+      template_scope: ["global", "course"]
     }
   }
 } as const;

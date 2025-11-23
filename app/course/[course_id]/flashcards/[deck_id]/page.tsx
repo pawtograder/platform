@@ -655,7 +655,7 @@ export default function FlashcardsDeckPage() {
               </Progress.Track>
             </Progress.Root>
           </Box>
-          <Box flexShrink={10} flexGrow={10} overflowY="auto" minH="0">
+          <Box flexShrink={10} flexGrow={10} overflowY="hidden" minH="0">
             {/* Current flashcard */}
             {currentCard && (
               <Flashcard
