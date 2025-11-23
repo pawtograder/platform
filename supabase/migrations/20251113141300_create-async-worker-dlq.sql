@@ -60,6 +60,8 @@ create policy async_worker_dlq_messages_service_role_insert
 
 -- Create RPC function to get async queue sizes and circuit breaker statuses for metrics endpoint
 
+drop function if exists public.get_async_queue_sizes();
+
 create or replace function public.get_async_queue_sizes()
 returns table (
   async_queue_size bigint,

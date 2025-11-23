@@ -255,7 +255,7 @@ async function sendToDeadLetterQueue(
   meta: { msg_id: number; enqueued_at: string },
   error: unknown,
   scope: Sentry.Scope
-) {
+): Promise<boolean> {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errorType = error instanceof Error ? error.constructor.name : "Unknown";
   const retryCount = envelope.retry_count ?? 0;
@@ -273,6 +273,32 @@ async function sendToDeadLetterQueue(
         original_msg_id: meta.msg_id
       });
       Sentry.captureException(dlqResult.error, scope);
+      // Log to Sentry with comprehensive context before returning
+      scope.setTag("dlq", "true");
+      scope.setTag("retry_count", String(retryCount));
+      scope.setContext("dead_letter_queue", {
+        original_msg_id: meta.msg_id,
+        method: envelope.method,
+        retry_count: retryCount,
+        error_message: errorMessage,
+        error_type: errorType,
+        enqueued_at: meta.enqueued_at,
+        class_id: envelope.class_id,
+        debug_id: envelope.debug_id,
+        log_id: envelope.log_id
+      });
+      Sentry.captureMessage(
+        `Failed to send message to dead letter queue after ${retryCount} retries: ${envelope.method}`,
+        {
+          level: "error",
+          tags: {
+            dlq: "true",
+            method: envelope.method,
+            retry_count: String(retryCount)
+          }
+        }
+      );
+      return false;
     }
   } catch (e) {
     scope.setContext("dlq_send_exception", {
@@ -280,6 +306,32 @@ async function sendToDeadLetterQueue(
       original_msg_id: meta.msg_id
     });
     Sentry.captureException(e, scope);
+    // Log to Sentry with comprehensive context before returning
+    scope.setTag("dlq", "true");
+    scope.setTag("retry_count", String(retryCount));
+    scope.setContext("dead_letter_queue", {
+      original_msg_id: meta.msg_id,
+      method: envelope.method,
+      retry_count: retryCount,
+      error_message: errorMessage,
+      error_type: errorType,
+      enqueued_at: meta.enqueued_at,
+      class_id: envelope.class_id,
+      debug_id: envelope.debug_id,
+      log_id: envelope.log_id
+    });
+    Sentry.captureMessage(
+      `Failed to send message to dead letter queue after ${retryCount} retries: ${envelope.method}`,
+      {
+        level: "error",
+        tags: {
+          dlq: "true",
+          method: envelope.method,
+          retry_count: String(retryCount)
+        }
+      }
+    );
+    return false;
   }
 
   // Record in DLQ tracking table
@@ -309,6 +361,32 @@ async function sendToDeadLetterQueue(
         original_msg_id: meta.msg_id
       });
       Sentry.captureException(insertError, scope);
+      // Log to Sentry with comprehensive context before returning
+      scope.setTag("dlq", "true");
+      scope.setTag("retry_count", String(retryCount));
+      scope.setContext("dead_letter_queue", {
+        original_msg_id: meta.msg_id,
+        method: envelope.method,
+        retry_count: retryCount,
+        error_message: errorMessage,
+        error_type: errorType,
+        enqueued_at: meta.enqueued_at,
+        class_id: envelope.class_id,
+        debug_id: envelope.debug_id,
+        log_id: envelope.log_id
+      });
+      Sentry.captureMessage(
+        `Failed to insert message into DLQ tracking table after ${retryCount} retries: ${envelope.method}`,
+        {
+          level: "error",
+          tags: {
+            dlq: "true",
+            method: envelope.method,
+            retry_count: String(retryCount)
+          }
+        }
+      );
+      return false;
     }
   } catch (e) {
     scope.setContext("dlq_table_insert_exception", {
@@ -316,6 +394,32 @@ async function sendToDeadLetterQueue(
       original_msg_id: meta.msg_id
     });
     Sentry.captureException(e, scope);
+    // Log to Sentry with comprehensive context before returning
+    scope.setTag("dlq", "true");
+    scope.setTag("retry_count", String(retryCount));
+    scope.setContext("dead_letter_queue", {
+      original_msg_id: meta.msg_id,
+      method: envelope.method,
+      retry_count: retryCount,
+      error_message: errorMessage,
+      error_type: errorType,
+      enqueued_at: meta.enqueued_at,
+      class_id: envelope.class_id,
+      debug_id: envelope.debug_id,
+      log_id: envelope.log_id
+    });
+    Sentry.captureMessage(
+      `Failed to insert message into DLQ tracking table after ${retryCount} retries: ${envelope.method}`,
+      {
+        level: "error",
+        tags: {
+          dlq: "true",
+          method: envelope.method,
+          retry_count: String(retryCount)
+        }
+      }
+    );
+    return false;
   }
 
   // Log to Sentry with comprehensive context
@@ -341,6 +445,8 @@ async function sendToDeadLetterQueue(
       retry_count: String(retryCount)
     }
   });
+
+  return true;
 }
 
 async function recordGitHubAsyncError(
@@ -480,8 +586,19 @@ export async function processEnvelope(
           const currentRetryCount = envelope.retry_count ?? 0;
           if (currentRetryCount >= 5) {
             const error = new Error(`Circuit breaker open for org ${org} after ${currentRetryCount} retries`);
-            await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
-            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope);
+            } else {
+              console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", {
+                msg_id: meta.msg_id,
+                reason: "DLQ send failed"
+              });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+                level: "error"
+              });
+            }
             return false;
           }
           const delaySeconds = 180; // minimum enforced delay while circuit open
@@ -506,8 +623,19 @@ export async function processEnvelope(
           const currentRetryCount = envelope.retry_count ?? 0;
           if (currentRetryCount >= 5) {
             const error = new Error(`Circuit breaker open for ${envelope.method} after ${currentRetryCount} retries`);
-            await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
-            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope);
+            } else {
+              console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", {
+                msg_id: meta.msg_id,
+                reason: "DLQ send failed"
+              });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+                level: "error"
+              });
+            }
             return false;
           }
           const delaySeconds = 180; // minimum enforced delay while circuit open
@@ -528,9 +656,11 @@ export async function processEnvelope(
   // Test DLQ failure injection - throw error if enabled via environment variable
   // When enabled, if a message has been retried at least once, always fail it again
   // to ensure it reaches the DLQ threshold (5 retries)
+  // Protected: only enabled in non-production environments with explicit flag
+  const nodeEnv = Deno.env.get("NODE_ENV");
   const injectDlqFailure = Deno.env.get("INJECT_DLQ_FAILURE");
   const retryCount = envelope.retry_count ?? 0;
-  if (injectDlqFailure === "true" || injectDlqFailure === "1") {
+  if (nodeEnv !== "production" && injectDlqFailure === "1") {
     if (retryCount >= 1 || Math.random() < 0.5) {
       const error = new Error(`DLQ test failure injection - simulating processing error (retry ${retryCount})`);
       scope.setTag("dlq_test_injection", "true");
@@ -1133,8 +1263,19 @@ export async function processEnvelope(
         // Check retry count - if >= 5, send to DLQ instead of requeuing
         const currentRetryCount = envelope.retry_count ?? 0;
         if (currentRetryCount >= 5) {
-          await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+          if (dlqSuccess) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope);
+          } else {
+            console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+            scope.setContext("dlq_archive_skipped", {
+              msg_id: meta.msg_id,
+              reason: "DLQ send failed"
+            });
+            Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+              level: "error"
+            });
+          }
           return false;
         }
 
@@ -1188,8 +1329,19 @@ export async function processEnvelope(
         // Check retry count - if >= 5, send to DLQ instead of requeuing
         const currentRetryCount = envelope.retry_count ?? 0;
         if (currentRetryCount >= 5) {
-          await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+          if (dlqSuccess) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope);
+          } else {
+            console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+            scope.setContext("dlq_archive_skipped", {
+              msg_id: meta.msg_id,
+              reason: "DLQ send failed"
+            });
+            Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+              level: "error"
+            });
+          }
           return false;
         }
 
@@ -1231,8 +1383,19 @@ export async function processEnvelope(
       // Check retry count - if >= 5, send to DLQ instead of requeuing
       const currentRetryCount = envelope.retry_count ?? 0;
       if (currentRetryCount >= 5) {
-        await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
-        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        if (dlqSuccess) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+        } else {
+          console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+          scope.setContext("dlq_archive_skipped", {
+            msg_id: meta.msg_id,
+            reason: "DLQ send failed"
+          });
+          Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+            level: "error"
+          });
+        }
         return false;
       }
 
