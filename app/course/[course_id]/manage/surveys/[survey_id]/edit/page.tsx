@@ -209,6 +209,32 @@ export default function EditSurveyPage() {
             throw new Error(error?.message || "Failed to save draft");
           }
 
+          // Handle survey assignments for drafts
+          if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
+            console.log("[saveDraftOnly] Updating survey assignments for:", values.assigned_students);
+            const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
+              p_survey_id: data.id,
+              p_profile_ids: values.assigned_students
+            });
+
+            if (assignmentError) {
+              console.error("[saveDraftOnly] Assignment error:", assignmentError);
+              toaster.error({
+                title: "Warning",
+                description: "Draft was saved but there was an error updating student assignments."
+              });
+            }
+          } else if (values.assigned_to_all) {
+            const { error: deleteError } = await supabase
+              .from("survey_assignments")
+              .delete()
+              .eq("survey_id", data.id);
+
+            if (deleteError) {
+              console.error("[saveDraftOnly] Error removing assignments:", deleteError);
+            }
+          }
+
           trackEvent("survey_updated", {
             course_id: Number(course_id),
             survey_id: data.survey_id,

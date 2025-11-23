@@ -513,7 +513,7 @@ export default function SurveyForm({
                             checked={field.value === true}
                             onChange={() => {
                               field.onChange(true);
-                              setValue("assigned_students", []);
+                              // Keep assigned_students in form state so user can switch back
                             }}
                             style={{ accentColor: "#3182ce" }}
                           />
