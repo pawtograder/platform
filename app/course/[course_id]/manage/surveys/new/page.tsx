@@ -387,7 +387,8 @@ export default function NewSurveyPage() {
           console.error("[saveSurvey] assignment error:", assignmentError);
           toaster.error({
             title: "Warning",
-            description: "Survey was created but there was an error assigning it to specific students. Please try editing the survey to reassign."
+            description:
+              "Survey was created but there was an error assigning it to specific students. Please try editing the survey to reassign."
           });
         }
       }

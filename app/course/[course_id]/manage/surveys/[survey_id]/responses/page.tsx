@@ -84,16 +84,16 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
 
   // Calculate the correct total students based on assignment mode
   let assignedStudentCount = 0;
-  
+
   if (survey.assigned_to_all) {
     // Survey is assigned to all students - count all students in the course
     const { count } = await supabase
-    .from("user_roles")
-    .select("*", { count: "exact", head: true })
-    .eq("class_id", Number(course_id))
+      .from("user_roles")
+      .select("*", { count: "exact", head: true })
+      .eq("class_id", Number(course_id))
       .eq("role", "student")
       .eq("disabled", false);
-    
+
     assignedStudentCount = count || 0;
   } else {
     // Survey is assigned to specific students - count assignments
@@ -101,7 +101,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       .from("survey_assignments")
       .select("*", { count: "exact", head: true })
       .eq("survey_id", survey.id);
-    
+
     assignedStudentCount = count || 0;
   }
 

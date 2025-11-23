@@ -225,10 +225,7 @@ export default function EditSurveyPage() {
               });
             }
           } else if (values.assigned_to_all) {
-            const { error: deleteError } = await supabase
-              .from("survey_assignments")
-              .delete()
-              .eq("survey_id", data.id);
+            const { error: deleteError } = await supabase.from("survey_assignments").delete().eq("survey_id", data.id);
 
             if (deleteError) {
               console.error("[saveDraftOnly] Error removing assignments:", deleteError);
@@ -369,10 +366,7 @@ export default function EditSurveyPage() {
             }
           } else if (values.assigned_to_all) {
             // If assigned to all, remove any specific assignments
-            const { error: deleteError } = await supabase
-              .from("survey_assignments")
-              .delete()
-              .eq("survey_id", data.id);
+            const { error: deleteError } = await supabase.from("survey_assignments").delete().eq("survey_id", data.id);
 
             if (deleteError) {
               console.error("[EditSurvey] Error removing assignments:", deleteError);
