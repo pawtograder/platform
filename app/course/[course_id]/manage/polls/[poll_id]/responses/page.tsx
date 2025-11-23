@@ -80,9 +80,6 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
     response: response.response || null,
   }));
 
-  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
-  const timezone = classData?.time_zone || "America/New_York";
-
   return (
     <PollResponsesDynamicViewer
       courseId={course_id}
