@@ -80,13 +80,6 @@ export default function PollRespondPage() {
       // Create Model from JSON config
       const survey = new Model(surveyConfig);
       
-      // Apply SurveyJS theme based on color mode
-      if (isDarkMode) {
-        survey.applyTheme(DefaultDark);
-      } else {
-        survey.applyTheme(DefaultLight);
-      }
-      
       survey.onComplete.add(async (sender) => {
         const supabase = createClient();
 
