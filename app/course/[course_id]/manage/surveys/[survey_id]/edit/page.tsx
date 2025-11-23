@@ -122,7 +122,7 @@ export default function EditSurveyPage() {
         reset({
           title: data.title || "",
           description: data.description || "",
-          json: data.json || "",
+          json: toJsonString(data.json),
           status: data.status || "draft",
           due_date: dueDateFormatted,
           allow_response_editing: Boolean(data.allow_response_editing)
