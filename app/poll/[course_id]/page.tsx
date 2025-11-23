@@ -3,11 +3,12 @@
 import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Box, Container, Heading, Text } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
+import { useColorModeValue, ColorModeButton } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
+import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
 import { LivePoll, PollResponseData } from "@/types/poll";
 
@@ -24,6 +25,7 @@ export default function PollRespondPage() {
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
+  const isDarkMode = useColorModeValue(false, true);
 
   // Fetch the newest live poll and pass directly to SurveyJS
   useEffect(() => {
@@ -77,6 +79,14 @@ export default function PollRespondPage() {
 
       // Create Model from JSON config
       const survey = new Model(surveyConfig);
+      
+      // Apply SurveyJS theme based on color mode
+      if (isDarkMode) {
+        survey.applyTheme(DefaultDark);
+      } else {
+        survey.applyTheme(DefaultLight);
+      }
+      
       survey.onComplete.add(async (sender) => {
         const supabase = createClient();
 
@@ -119,70 +129,74 @@ export default function PollRespondPage() {
     }
   }, [course_id]);
 
-  if (isLoading) {
-    return (
-      <Container py={8} maxW="800px" my={2}>
-        <Box
-          bg={cardBgColor}
-          border="1px solid"
-          borderColor={borderColor}
-          borderRadius="lg"
-          p={8}
-          textAlign="center"
-        >
-          <Text color={textColor}>Loading poll...</Text>
-        </Box>
-      </Container>
-    );
-  }
-
-  if (!surveyModel) {
-    return (
-      <Container py={8} maxW="800px" my={2}>
-        <Box
-          bg={cardBgColor}
-          border="1px solid"
-          borderColor={borderColor}
-          borderRadius="lg"
-          p={8}
-          textAlign="center"
-        >
-          <Heading size="lg" color={textColor} mb={4}>
-            No Live Poll Available
-          </Heading>
-          <Text color={textColor}>
-            There is currently no live poll available for this course.
-          </Text>
-        </Box>
-      </Container>
-    );
-  }
-
-  if (isSubmitted) {
-    return (
-      <Container py={8} maxW="800px" my={2}>
-        <Box
-          bg={cardBgColor}
-          border="1px solid"
-          borderColor={borderColor}
-          borderRadius="lg"
-          p={8}
-          textAlign="center"
-        >
-          <Heading size="lg" color={textColor} mb={4}>
-            Thank You!
-          </Heading>
-          <Text color={textColor}>
-            Your poll response has been submitted successfully. Refresh the page to answer again or to load a new poll.
-          </Text>
-        </Box>
-      </Container>
-    );
-  }
+  // Update survey theme when color mode changes
+  useEffect(() => {
+    if (surveyModel) {
+      if (isDarkMode) {
+        surveyModel.applyTheme(DefaultDark);
+      } else {
+        surveyModel.applyTheme(DefaultLight);
+      }
+    }
+  }, [isDarkMode, surveyModel]);
 
   return (
-    <Container py={8} maxW="800px" my={2}>
-        {surveyModel && <Survey model={surveyModel} />}
-    </Container>
+    <Box position="relative" minH="100vh" py={8}>
+      {/* Color Mode Toggle Button - Top Right */}
+      <Box position="absolute" top={4} right={4} zIndex={1000}>
+        <ColorModeButton colorPalette="gray" variant="outline" />
+      </Box>
+
+      <Container maxW="800px" my={2}>
+        {isLoading ? (
+          <Box
+            bg={cardBgColor}
+            border="1px solid"
+            borderColor={borderColor}
+            borderRadius="lg"
+            p={8}
+            textAlign="center"
+          >
+            <Text color={textColor}>Loading poll...</Text>
+          </Box>
+        ) : isSubmitted ? (
+          <Box
+            bg={cardBgColor}
+            border="1px solid"
+            borderColor={borderColor}
+            borderRadius="lg"
+            p={8}
+            textAlign="center"
+          >
+            <Heading size="lg" color={textColor} mb={4}>
+              Thank You!
+            </Heading>
+            <Text color={textColor}>
+              Your poll response has been submitted successfully. Refresh the page to answer again or to load a new poll.
+            </Text>
+          </Box>
+        ) : !surveyModel ? (
+          <Box
+            bg={cardBgColor}
+            border="1px solid"
+            borderColor={borderColor}
+            borderRadius="lg"
+            p={8}
+            textAlign="center"
+          >
+            <Heading size="lg" color={textColor} mb={4}>
+              No Live Poll Available
+            </Heading>
+            <Text color={textColor}>
+              There is currently no live poll available for this course.
+            </Text>
+          </Box>
+        ) : (
+          <Box display="flex" justifyContent="center" alignItems="center" minH="calc(100vh - 4rem)">
+            <Survey model={surveyModel} />
+          </Box>
+        )}
+      </Container>
+    </Box>
   );
 }
