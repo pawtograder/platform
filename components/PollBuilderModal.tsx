@@ -27,9 +27,9 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
   }, [isOpen, initialJson]);
 
   // Stabilize the onChange callback to prevent unnecessary re-renders
-  const handleJsonChange = useCallback((json: string) => {
+  const handleJsonChange = ( json: string) => {
     setDraftJson(json);
-  }, []);
+  };
 
   const handleUsePoll = () => {
     onSave(draftJson || "");

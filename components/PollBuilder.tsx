@@ -17,32 +17,93 @@ import {
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { LuTrash2, LuPlus } from "react-icons/lu";
 
+// Question type registry
+type QuestionType = "multiple-choice" | "single-choice";
+
+type QuestionTypeConfig = {
+  label: string;
+  surveyJSType: string; // The SurveyJS type (e.g., "checkbox", "radiogroup")
+  requiresChoices: boolean; // Whether this type needs choices
+  defaultData?: Record<string, unknown>; // Additional default data for this type
+};
+
+// Registry of question types - add new types here
+const QUESTION_TYPE_REGISTRY: Record<QuestionType, QuestionTypeConfig> = {
+  "multiple-choice": {
+    label: "Multiple Choice",
+    surveyJSType: "checkbox",
+    requiresChoices: true,
+  },
+  "single-choice": {
+    label: "Single Choice",
+    surveyJSType: "radiogroup",
+    requiresChoices: true,
+  },
+};
+
+// Helper to get all question types for the select dropdown
+const getQuestionTypeItems = () => {
+  return Object.entries(QUESTION_TYPE_REGISTRY).map(([value, config]) => ({
+    label: config.label,
+    value: value as QuestionType,
+  }));
+};
+
 type PollQuestionJSON = {
   prompt: string;
-  type: "multiple-choice" | "single-choice" | "rating" | "text" | "open-ended";
+  type: QuestionType;
   choices?: Array<{ id: string; label: string }>;
-  min?: number;
-  max?: number;
-  minLabel?: string;
-  maxLabel?: string;
+  // Add other fields here as needed for new question types
+  [key: string]: unknown;
 };
 
 type PollBuilderProps = {
   value: string;
-  onChange: (json: string) => void;
+  onChange?: (json: string) => void; // Optional - only called if provided
+  onGetCurrentJson?: (getJson: () => string) => void; // Callback to expose getter function
 };
 
 const pollTypeCollection = createListCollection({
-  items: [
-    { label: "Multiple Choice", value: "multiple-choice" },
-    { label: "Single Choice", value: "single-choice" },
-    { label: "Rating", value: "rating" },
-    { label: "Text", value: "text" },
-    { label: "Open Ended", value: "open-ended" }
-  ]
+  items: getQuestionTypeItems(),
 });
 
-export default function PollBuilder({ value, onChange }: PollBuilderProps) {
+// Helper function to find internal type from SurveyJS type
+const findInternalTypeFromSurveyJS = (surveyType: string): QuestionType => {
+  const entry = Object.entries(QUESTION_TYPE_REGISTRY).find(
+    ([, config]) => config.surveyJSType === surveyType
+  );
+  return entry ? (entry[0] as QuestionType) : "multiple-choice"; // Default fallback
+};
+
+// Helper function to convert internal format to SurveyJS format
+const convertToSurveyJSFormat = (data: PollQuestionJSON): Record<string, unknown> => {
+  const typeConfig = QUESTION_TYPE_REGISTRY[data.type];
+  const element: Record<string, unknown> = {
+    type: typeConfig.surveyJSType,
+    title: data.prompt || "",
+  };
+  
+  // Add choices if this type requires them
+  if (typeConfig.requiresChoices) {
+    const choices = (data.choices || [])
+      .map(choice => choice.label)
+      .filter(label => label.trim() !== "");
+    element.choices = choices.length > 0 ? choices : ["Choice 1"];
+  }
+  
+  // Add any additional fields from the data (for extensibility)
+  Object.keys(data).forEach(key => {
+    if (key !== "prompt" && key !== "type" && key !== "choices") {
+      element[key] = data[key];
+    }
+  });
+  
+  return {
+    elements: [element],
+  };
+};
+
+export default function PollBuilder({ value, onChange, onGetCurrentJson }: PollBuilderProps) {
   const [pollData, setPollData] = useState<PollQuestionJSON>({
     prompt: "",
     type: "multiple-choice",
@@ -53,102 +114,103 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
   const jsonBgColor = useColorModeValue("#F9FAFB", "#1F2937");
   const jsonBorderColor = useColorModeValue("#E5E7EB", "#374151");
   const textColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const secondaryTextColor = useColorModeValue("#6B7280", "#9CA3AF");
 
-  // Track the last normalized JSON we received and emitted to prevent loops
-  const lastReceivedNormalizedRef = React.useRef<string>("");
-  const lastEmittedNormalizedRef = React.useRef<string>("");
-  const isInitialMount = React.useRef(true);
+  // Track if we've initialized from the value prop
+  const hasInitializedRef = React.useRef(false);
 
-  // Helper to normalize JSON for comparison (parse and stringify to remove formatting differences)
-  const normalizeJson = React.useCallback((jsonStr: string): string => {
-    try {
-      const parsed = JSON.parse(jsonStr);
-      return JSON.stringify(parsed);
-    } catch {
-      return jsonStr;
-    }
-  }, []);
-
-  // Parse initial value - only when value prop actually changes from outside
+  // Parse initial value - ONLY ONCE when component mounts
   useEffect(() => {
+    // Only initialize once from the value prop
+    if (hasInitializedRef.current) {
+      return; // Ignore subsequent value prop changes
+    }
+
     if (!value || !value.trim()) {
-      isInitialMount.current = false;
+      // If no initial value, keep defaults
+      hasInitializedRef.current = true;
       return;
     }
 
-    const normalized = normalizeJson(value);
-
-    // Only update if the normalized value actually changed from outside
-    if (normalized !== lastReceivedNormalizedRef.current) {
-      try {
-        const parsed = JSON.parse(value);
+    try {
+      const parsed = JSON.parse(value);
+      
+      // Check if it's SurveyJS format (has elements array)
+      if (parsed.elements && Array.isArray(parsed.elements) && parsed.elements.length > 0) {
+        const firstElement = parsed.elements[0];
+        const surveyType = firstElement.type;
+        
+        // Convert SurveyJS format to internal format using registry
+        const internalType = findInternalTypeFromSurveyJS(surveyType);
+        const typeConfig = QUESTION_TYPE_REGISTRY[internalType];
+        
+        const pollData: PollQuestionJSON = {
+          prompt: firstElement.title || "",
+          type: internalType,
+        };
+        
+        // Handle choices if this type requires them
+        if (typeConfig.requiresChoices) {
+          const choices = Array.isArray(firstElement.choices)
+            ? firstElement.choices.map((choice: string | { value: string; text?: string }, index: number) => ({
+                id: `choice${index + 1}`,
+                label: typeof choice === "string" ? choice : (choice.text || choice.value || "")
+              }))
+            : [{ id: "choice1", label: "" }];
+          
+          pollData.choices = choices.length > 0 ? choices : [{ id: "choice1", label: "" }];
+        }
+        
+        // Merge any additional default data from config
+        if (typeConfig.defaultData) {
+          Object.assign(pollData, typeConfig.defaultData);
+        }
+        
+        setPollData(pollData);
+      } else {
+        // Old format (prompt/type/choices) - use directly
         setPollData(parsed);
-        lastReceivedNormalizedRef.current = normalized;
-        lastEmittedNormalizedRef.current = normalized;
-      } catch {
-        // Invalid JSON, use defaults - don't update
-        lastReceivedNormalizedRef.current = normalized;
       }
+      
+      hasInitializedRef.current = true;
+    } catch {
+      // Invalid JSON, use defaults
+      hasInitializedRef.current = true;
     }
-    isInitialMount.current = false;
-  }, [value, normalizeJson]);
+  }, [value]);
 
-  // Update JSON when pollData changes - but skip on initial mount and if we just received this value
+  // Expose a function to get current JSON (for parent to call when needed)
   useEffect(() => {
-    if (isInitialMount.current) {
-      return; // Skip on initial mount
+    if (onGetCurrentJson) {
+      onGetCurrentJson(() => {
+        const surveyJSFormat = convertToSurveyJSFormat(pollData);
+        return JSON.stringify(surveyJSFormat, null, 2);
+      });
     }
-
-    const jsonString = JSON.stringify(pollData, null, 2);
-    const normalized = normalizeJson(jsonString);
-
-    // Only call onChange if the normalized JSON actually changed and it's different from what we last received
-    if (normalized !== lastEmittedNormalizedRef.current && normalized !== lastReceivedNormalizedRef.current) {
-      lastEmittedNormalizedRef.current = normalized;
-      onChange(jsonString);
-    }
-  }, [pollData, onChange, normalizeJson]);
+  }, [pollData, onGetCurrentJson]);
 
   const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setPollData((prev) => ({ ...prev, prompt: e.target.value }));
   }, []);
 
   const handleTypeChange = useCallback((e: { value: string } | null) => {
-    const newType = (e?.value || "multiple-choice") as PollQuestionJSON["type"];
+    const newType = (e?.value || "multiple-choice") as QuestionType;
     setPollData((prev) => {
+      const typeConfig = QUESTION_TYPE_REGISTRY[newType];
       const updated: PollQuestionJSON = { ...prev, type: newType };
 
-      // Add choices for choice-based types
-      if (newType === "multiple-choice" || newType === "single-choice") {
+      // Initialize choices if this type requires them
+      if (typeConfig.requiresChoices) {
         if (!updated.choices || updated.choices.length === 0) {
           updated.choices = [{ id: "choice1", label: "" }];
         }
       } else {
-        // Remove choices for non-choice types
+        // Remove choices if this type doesn't need them
         delete updated.choices;
       }
 
-      // Open-ended doesn't need any special fields
-      if (newType === "open-ended") {
-        delete updated.choices;
-        delete updated.min;
-        delete updated.max;
-        delete updated.minLabel;
-        delete updated.maxLabel;
-      }
-
-      // Add min/max for rating type
-      if (newType === "rating") {
-        updated.min = updated.min || 1;
-        updated.max = updated.max || 5;
-        updated.minLabel = updated.minLabel || "Poor";
-        updated.maxLabel = updated.maxLabel || "Excellent";
-      } else {
-        delete updated.min;
-        delete updated.max;
-        delete updated.minLabel;
-        delete updated.maxLabel;
+      // Merge default data for this type
+      if (typeConfig.defaultData) {
+        Object.assign(updated, typeConfig.defaultData);
       }
 
       return updated;
@@ -185,12 +247,6 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
     });
   }, []);
 
-  const handleRatingChange = useCallback((field: "min" | "max" | "minLabel" | "maxLabel", value: string | number) => {
-    setPollData((prev) => ({
-      ...prev,
-      [field]: value
-    }));
-  }, []);
 
   return (
     <VStack align="stretch" gap={6} p={4}>
@@ -241,8 +297,8 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         </Select.Root>
       </Box>
 
-      {/* Choices (for multiple-choice and single-choice) */}
-      {(pollData.type === "multiple-choice" || pollData.type === "single-choice") && pollData.choices && (
+      {/* Choices - only show if current type requires them */}
+      {QUESTION_TYPE_REGISTRY[pollData.type]?.requiresChoices && pollData.choices && (
         <Box>
           <HStack justify="space-between" mb={2}>
             <Text fontSize="sm" fontWeight="medium" color={textColor}>
@@ -278,73 +334,6 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         </Box>
       )}
 
-      {/* Rating Options */}
-      {pollData.type === "rating" && (
-        <VStack align="stretch" gap={4}>
-          <HStack gap={4}>
-            <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
-                Minimum Value
-              </Text>
-              <Input
-                type="number"
-                value={pollData.min || 1}
-                onChange={(e) => handleRatingChange("min", parseInt(e.target.value) || 1)}
-              />
-            </Box>
-            <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
-                Maximum Value
-              </Text>
-              <Input
-                type="number"
-                value={pollData.max || 5}
-                onChange={(e) => handleRatingChange("max", parseInt(e.target.value) || 5)}
-              />
-            </Box>
-          </HStack>
-          <HStack gap={4}>
-            <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
-                Minimum Label
-              </Text>
-              <Input
-                value={pollData.minLabel || ""}
-                onChange={(e) => handleRatingChange("minLabel", e.target.value)}
-                placeholder="e.g., Poor"
-              />
-            </Box>
-            <Box flex={1}>
-              <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
-                Maximum Label
-              </Text>
-              <Input
-                value={pollData.maxLabel || ""}
-                onChange={(e) => handleRatingChange("maxLabel", e.target.value)}
-                placeholder="e.g., Excellent"
-              />
-            </Box>
-          </HStack>
-        </VStack>
-      )}
-
-      {/* Text type doesn't need additional options */}
-      {pollData.type === "text" && (
-        <Box>
-          <Text fontSize="sm" color={secondaryTextColor}>
-            Text questions allow free-form responses from students.
-          </Text>
-        </Box>
-      )}
-
-      {/* Open-ended type */}
-      {pollData.type === "open-ended" && (
-        <Box>
-          <Text fontSize="sm" color={secondaryTextColor}>
-            Open-ended questions allow students to provide detailed text responses.
-          </Text>
-        </Box>
-      )}
 
       <Separator />
 
@@ -364,7 +353,9 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
           border="1px solid"
           borderColor={jsonBorderColor}
         >
-          <pre style={{ margin: 0, color: jsonTextColor }}>{JSON.stringify(pollData, null, 2)}</pre>
+          <pre style={{ margin: 0, color: jsonTextColor }}>
+            {JSON.stringify(convertToSurveyJSFormat(pollData), null, 2)}
+          </pre>
         </Box>
       </Box>
     </VStack>
