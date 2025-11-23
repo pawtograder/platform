@@ -143,129 +143,134 @@ export default function NewPollPage() {
 
   const savePoll = async (values: PollFormValues, publish: boolean = false) => {
     if (!course_id) {
+      toaster.create({
+        title: "Missing course",
+        description: "We could not determine which course you're in.",
+        type: "error"
+      });
+      return;
+    }
+
+    if (!public_profile_id) {
+      toaster.create({
+        title: "Profile not found",
+        description: "We could not find your instructor profile for this course.",
+        type: "error"
+      });
+      return;
+    }
+
+    let parsedQuestion: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(values.question);
+
+      // Ensure it has the elements array structure
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray(parsed.elements) ||
+        parsed.elements.length === 0
+      ) {
         toaster.create({
-          title: "Missing course",
-          description: "We could not determine which course you're in.",
+          title: "Invalid Question Format",
+          description: "Question must be an object with an 'elements' array containing at least one element.",
           type: "error"
         });
         return;
       }
 
-      if (!public_profile_id) {
+      // Ensure the first element has required fields
+      const firstElement = parsed.elements[0];
+      if (!firstElement.type || !firstElement.title) {
         toaster.create({
-          title: "Profile not found",
-          description: "We could not find your instructor profile for this course.",
+          title: "Invalid Question Format",
+          description: "The first element in 'elements' must have 'type' and 'title' fields.",
           type: "error"
         });
         return;
       }
 
-      let parsedQuestion: Record<string, unknown>;
-      try {
-        const parsed = JSON.parse(values.question);
+      parsedQuestion = parsed as Record<string, unknown>;
+    } catch (error) {
+      toaster.create({
+        title: "Invalid JSON",
+        description: error instanceof Error ? error.message : "Unable to parse the JSON payload.",
+        type: "error"
+      });
+      return;
+    }
 
-        // Ensure it has the elements array structure
-        if (
-          typeof parsed !== "object" ||
-          parsed === null ||
-          !Array.isArray(parsed.elements) ||
-          parsed.elements.length === 0
-        ) {
-          toaster.create({
-            title: "Invalid Question Format",
-            description: "Question must be an object with an 'elements' array containing at least one element.",
-            type: "error"
-          });
-          return;
-        }
+    setIsSaving(true);
+    const supabase = createClient();
 
-        // Ensure the first element has required fields
-        const firstElement = parsed.elements[0];
-        if (!firstElement.type || !firstElement.title) {
-          toaster.create({
-            title: "Invalid Question Format",
-            description: "The first element in 'elements' must have 'type' and 'title' fields.",
-            type: "error"
-          });
-          return;
-        }
+    try {
+      const isLive = publish;
 
-        parsedQuestion = parsed as Record<string, unknown>;
-      } catch (error) {
-        toaster.create({
-          title: "Invalid JSON",
-          description: error instanceof Error ? error.message : "Unable to parse the JSON payload.",
-          type: "error"
-        });
-        return;
+      // If publishing, set deactivates_at to 1 hour from now
+      const deactivatesAt = isLive
+        ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
+        : null;
+
+      const { error } = await supabase
+        .from("live_polls")
+        .insert({
+          class_id: Number(course_id),
+          created_by: public_profile_id,
+          question: parsedQuestion as Json,
+          is_live: isLive,
+          deactivates_at: deactivatesAt,
+          require_login: values.require_login
+        })
+        .select("id")
+        .single();
+
+      if (error) {
+        throw new Error(error.message);
       }
 
-      setIsSaving(true);
-      const supabase = createClient();
-
-      try {
-        const isLive = publish;
-
-        // If publishing, set deactivates_at to 1 hour from now
-        const deactivatesAt = isLive
-          ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
-          : null;
-
-        const { error } = await supabase
-          .from("live_polls")
-          .insert({
-            class_id: Number(course_id),
-            created_by: public_profile_id,
-            question: parsedQuestion as Json,
-            is_live: isLive,
-            deactivates_at: deactivatesAt,
-            require_login: values.require_login
-          })
-          .select("id")
-          .single();
-
-        if (error) {
-          throw new Error(error.message);
-        }
-
-        if (publish) {
-          toaster.create({
-            title: "Poll published",
-            description: "Your poll has been published and is now live for students.",
-            type: "success"
-          });
-          // Navigate back to polls page after publishing
-          router.push(`/course/${course_id}/manage/polls`);
-        } else {
-          toaster.create({
-            title: "Draft saved",
-            description: "Your poll has been saved as a draft.",
-            type: "success"
-          });
-          // Stay on the page when saving as draft so user can continue editing
-        }
-      } catch (error) {
+      if (publish) {
         toaster.create({
-          title: "Unable to save poll",
-          description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          type: "error"
+          title: "Poll published",
+          description: "Your poll has been published and is now live for students.",
+          type: "success"
         });
-      } finally {
-        setIsSaving(false);
+        // Navigate back to polls page after publishing
+        router.push(`/course/${course_id}/manage/polls`);
+      } else {
+        toaster.create({
+          title: "Draft saved",
+          description: "Your poll has been saved as a draft.",
+          type: "success"
+        });
+        // Stay on the page when saving as draft so user can continue editing
       }
+    } catch (error) {
+      toaster.create({
+        title: "Unable to save poll",
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        type: "error"
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const saveDraft = async (values: PollFormValues) => {
     await savePoll(values, false);
   };
 
-  const publishPoll = async (values: PollFormValues) => {
-    await savePoll(values, true);
-  };
-
   const onSubmit = handleSubmit(async (values) => {
-    // Default to publishing when form is submitted
-    await publishPoll(values);
+    if (!validateJson()) {
+      toaster.create({
+        title: "Invalid poll JSON",
+        description: "Please check your poll question format before submitting.",
+        type: "error"
+      });
+      return;
+    }
+
+    // Default to saving when form is submitted
+    await savePoll(values, true);
   });
 
   return (
@@ -399,7 +404,7 @@ export default function NewPollPage() {
                   If checked, only logged-in students can respond to this poll.
                 </Box>
               </Box>
-              
+
               <HStack gap={4} justify="flex-start" pt={4}>
                 <UIButton
                   type="submit"
