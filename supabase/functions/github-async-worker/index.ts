@@ -530,7 +530,7 @@ export async function processEnvelope(
   // to ensure it reaches the DLQ threshold (5 retries)
   const injectDlqFailure = Deno.env.get("INJECT_DLQ_FAILURE");
   const retryCount = envelope.retry_count ?? 0;
-  if ((injectDlqFailure === "true" || injectDlqFailure === "1")) {
+  if (injectDlqFailure === "true" || injectDlqFailure === "1") {
     if (retryCount >= 1 || Math.random() < 0.5) {
       const error = new Error(`DLQ test failure injection - simulating processing error (retry ${retryCount})`);
       scope.setTag("dlq_test_injection", "true");

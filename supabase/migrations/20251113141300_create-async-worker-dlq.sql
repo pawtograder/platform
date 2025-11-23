@@ -63,7 +63,8 @@ create policy async_worker_dlq_messages_service_role_insert
 create or replace function public.get_async_queue_sizes()
 returns table (
   async_queue_size bigint,
-  dlq_queue_size bigint
+  dlq_queue_size bigint,
+  gradebook_row_recalculate_queue_size bigint
 )
 language plpgsql
 security definer
@@ -73,7 +74,8 @@ begin
   return query
   select 
     (select count(*)::bigint from pgmq.q_async_calls where vt <= now()) as async_queue_size,
-    (select count(*)::bigint from pgmq.q_async_calls_dlq where vt <= now()) as dlq_queue_size;
+    (select count(*)::bigint from pgmq.q_async_calls_dlq where vt <= now()) as dlq_queue_size,
+    (select count(*)::bigint from pgmq.q_gradebook_row_recalculate where vt <= now()) as gradebook_row_recalculate_queue_size;
 end;
 $$;
 

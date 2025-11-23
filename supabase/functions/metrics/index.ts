@@ -30,6 +30,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
 
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
+    const gradebookRowRecalculateQueueCount = queueSizes?.[0]?.gradebook_row_recalculate_queue_size || 0;
 
     // Generate Prometheus metrics format
     const timestamp = Date.now(); // Unix timestamp in milliseconds
@@ -55,6 +56,10 @@ pawtograder_async_queue_size ${asyncQueueCount} ${timestamp}
 # HELP pawtograder_async_dlq_size Current number of messages in the async worker dead letter queue
 # TYPE pawtograder_async_dlq_size gauge
 pawtograder_async_dlq_size ${dlqQueueCount} ${timestamp}
+
+# HELP pawtograder_gradebook_row_recalculate_queue_size Current number of messages in the gradebook row recalculate queue
+# TYPE pawtograder_gradebook_row_recalculate_queue_size gauge
+pawtograder_gradebook_row_recalculate_queue_size ${gradebookRowRecalculateQueueCount} ${timestamp}
 
 # HELP pawtograder_circuit_breaker_open Whether a circuit breaker is currently open (1 = open, 0 = closed)
 # TYPE pawtograder_circuit_breaker_open gauge

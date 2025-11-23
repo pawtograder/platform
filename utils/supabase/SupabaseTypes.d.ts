@@ -9601,6 +9601,7 @@ export type Database = {
         Returns: {
           async_queue_size: number;
           dlq_queue_size: number;
+          gradebook_row_recalculate_queue_size: number;
         }[];
       };
       get_circuit_breaker_statuses: {
