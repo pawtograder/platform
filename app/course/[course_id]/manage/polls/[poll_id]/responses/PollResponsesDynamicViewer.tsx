@@ -42,6 +42,9 @@ export default function PollResponsesDynamicViewer({
     const [pollIsLive, setPollIsLive] = useState(initialPollIsLive);
     const [responses, setResponses] = useState(initialResponses);
     
+    // Define color mode values at the top level (before any conditional returns)
+    const bgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
+    
     const type = parseJsonForType(pollQuestion);
 
     // Fetch responses every 3 seconds
@@ -134,7 +137,7 @@ export default function PollResponsesDynamicViewer({
                 return <MultipleChoiceDynamicViewer pollQuestion={pollQuestion} responses={responses} isFullWindow={true} onExit={handleClosePresent} pollUrl={pollUrl} />;
             default:
                 return (
-                    <Box position="fixed" inset="0" bg={useColorModeValue("#E5E5E5", "#1A1A1A")} zIndex="9999" display="flex" alignItems="center" justifyContent="center">
+                    <Box position="fixed" inset="0" bg={bgColor} zIndex="9999" display="flex" alignItems="center" justifyContent="center">
                         <div>Unsupported poll question type: {type}</div>
                     </Box>
                 );
