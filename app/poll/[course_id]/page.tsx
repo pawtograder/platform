@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { Box, Container, Heading, Text } from "@chakra-ui/react";
+import { useParams, useRouter } from "next/navigation";
+import { Box, Container, Heading, Text, Button, VStack } from "@chakra-ui/react";
 import { useColorModeValue, ColorModeButton } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
@@ -17,10 +17,13 @@ interface PollQuestion {
 }
 export default function PollRespondPage() {
   const params = useParams();
+  const router = useRouter();
   const course_id = params.course_id as string;
   const [surveyModel, setSurveyModel] = useState<Model | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [publicProfileId, setPublicProfileId] = useState<string | null>(null);
+  const [requiresLogin, setRequiresLogin] = useState(false);
 
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
@@ -47,6 +50,47 @@ export default function PollRespondPage() {
       }
 
       const poll = pollData;
+      
+      // Check if require_login is true, and if so, get user and public_profile_id
+      let profileId: string | null = null;
+      if (poll.require_login) {
+        setRequiresLogin(true);
+        const {
+          data: { user }
+        } = await supabase.auth.getUser();
+        
+        if (!user) {
+          setIsLoading(false);
+          return;
+        }
+
+        // Get public_profile_id from user_roles for this course
+        const { data: roleDataRaw, error: roleError } = await supabase
+          .from("user_roles")
+          .select("public_profile_id")
+          .eq("user_id", user.id)
+          .eq("class_id", Number(course_id))
+          .eq("disabled", false)
+          .single();
+
+        const roleData = roleDataRaw as { public_profile_id: string } | null;
+
+        if (roleError || !roleData || !roleData.public_profile_id) {
+          toaster.create({
+            title: "Access Error",
+            description: "Unable to identify your profile for this course.",
+            type: "error"
+          });
+          setRequiresLogin(false); // User is logged in, just doesn't have access
+          setIsLoading(false);
+          return;
+        }
+
+        profileId = roleData.public_profile_id;
+        setPublicProfileId(profileId);
+        setRequiresLogin(false);
+      }
+      
       const pollQuestion = poll.question as unknown as PollQuestion;
 
       if (!pollQuestion?.elements || pollQuestion.elements.length === 0) {
@@ -86,7 +130,7 @@ export default function PollRespondPage() {
 
           const { error } = await supabase.from("live_poll_responses").insert({
             live_poll_id: poll.id,
-            public_profile_id: null,
+            public_profile_id: profileId,
             response: responseData,
             is_submitted: true
           });
@@ -135,6 +179,45 @@ export default function PollRespondPage() {
         {isLoading ? (
           <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
             <Text color={textColor}>Loading poll...</Text>
+          </Box>
+        ) : requiresLogin ? (
+          <Box
+            display="flex"
+            justifyContent="center"
+            alignItems="center"
+            minH="calc(100vh - 4rem)"
+          >
+            <Box
+              bg={cardBgColor}
+              border="1px solid"
+              borderColor={borderColor}
+              borderRadius="md"
+              p={8}
+              maxW="400px"
+              width="100%"
+            >
+              <VStack gap={6} align="stretch">
+                <VStack gap={3} align="center" textAlign="center">
+                  <Heading size="xl" color={textColor}>
+                    Login Required
+                  </Heading>
+                  <Text color={textColor} fontSize="sm">
+                    You need to be logged in to respond to this poll. Please sign in to continue.
+                  </Text>
+                </VStack>
+                <Button
+                  onClick={() => {
+                    const currentUrl = window.location.pathname + window.location.search;
+                    router.push(`/sign-in?redirect=${encodeURIComponent(currentUrl)}`);
+                  }}
+                  colorPalette="blue"
+                  size="lg"
+                  width="100%"
+                >
+                  Sign In
+                </Button>
+              </VStack>
+            </Box>
           </Box>
         ) : isSubmitted ? (
           <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">

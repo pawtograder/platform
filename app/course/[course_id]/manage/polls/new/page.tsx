@@ -1,7 +1,7 @@
 "use client";
 
-import { Box, Textarea, HStack, VStack, Button, Heading } from "@chakra-ui/react";
-import { useForm } from "react-hook-form";
+import { Box, Textarea, HStack, VStack, Button, Heading, Checkbox } from "@chakra-ui/react";
+import { useForm, Controller } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
@@ -17,6 +17,7 @@ import { PollPreviewModal } from "@/components/PollPreviewModal";
 type PollFormValues = {
   question: string;
   allowMultipleResponses: boolean;
+  require_login: boolean;
 };
 
 const samplePollTemplate = `{
@@ -41,11 +42,13 @@ export default function NewPollPage() {
     formState: { errors },
     getValues,
     setValue,
-    watch
+    watch,
+    control
   } = useForm<PollFormValues>({
     defaultValues: {
       question: samplePollTemplate,
-      allowMultipleResponses: false
+      allowMultipleResponses: false,
+      require_login: false
     }
   });
 
@@ -260,7 +263,8 @@ export default function NewPollPage() {
             created_by: public_profile_id,
             question: parsedQuestion as Json,
             is_live: isLive,
-            deactivates_at: deactivatesAt
+            deactivates_at: deactivatesAt,
+            require_login: values.require_login
           })
           .select("id")
           .single();
@@ -449,6 +453,31 @@ export default function NewPollPage() {
                 </Text>
               </Box> */}
 
+              {/* Require Login */}
+              <Box>
+                <Controller
+                  name="require_login"
+                  control={control}
+                  render={({ field }) => (
+                    <Checkbox.Root
+                      checked={field.value}
+                      onCheckedChange={(details) => field.onChange(details.checked === true)}
+                    >
+                      <Checkbox.HiddenInput />
+                      <Checkbox.Control />
+                      <Checkbox.Label>
+                        <Box fontSize="sm" color={textColor}>
+                          Require login to respond
+                        </Box>
+                      </Checkbox.Label>
+                    </Checkbox.Root>
+                  )}
+                />
+                <Box fontSize="xs" color={buttonTextColor} mt={1} ml={6}>
+                  If checked, only logged-in students can respond to this poll.
+                </Box>
+              </Box>
+              
               <HStack gap={4} justify="flex-start" pt={4}>
                 <UIButton
                   type="submit"

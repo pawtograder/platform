@@ -8323,6 +8323,7 @@ export type Database = {
           is_live: boolean;
           created_at: string;
           deactivates_at: string | null;
+          require_login: boolean;
         };
         Insert: {
           id?: string;
@@ -8332,6 +8333,7 @@ export type Database = {
           is_live?: boolean;
           created_at?: string;
           deactivates_at?: string | null;
+          require_login?: boolean;
         };
         Update: {
           id?: string;
@@ -8341,6 +8343,7 @@ export type Database = {
           is_live?: boolean;
           created_at?: string;
           deactivates_at?: string | null;
+          require_login?: boolean;
         };
         Relationships: [
           {
