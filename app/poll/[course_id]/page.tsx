@@ -22,7 +22,6 @@ export default function PollRespondPage() {
   const [surveyModel, setSurveyModel] = useState<Model | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [publicProfileId, setPublicProfileId] = useState<string | null>(null);
   const [requiresLogin, setRequiresLogin] = useState(false);
 
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -50,7 +49,7 @@ export default function PollRespondPage() {
       }
 
       const poll = pollData;
-      
+
       // Check if require_login is true, and if so, get user and public_profile_id
       let profileId: string | null = null;
       if (poll.require_login) {
@@ -58,7 +57,7 @@ export default function PollRespondPage() {
         const {
           data: { user }
         } = await supabase.auth.getUser();
-        
+
         if (!user) {
           setIsLoading(false);
           return;
@@ -90,7 +89,7 @@ export default function PollRespondPage() {
         setPublicProfileId(profileId);
         setRequiresLogin(false);
       }
-      
+
       const pollQuestion = poll.question as unknown as PollQuestion;
 
       if (!pollQuestion?.elements || pollQuestion.elements.length === 0) {
@@ -181,12 +180,7 @@ export default function PollRespondPage() {
             <Text color={textColor}>Loading poll...</Text>
           </Box>
         ) : requiresLogin ? (
-          <Box
-            display="flex"
-            justifyContent="center"
-            alignItems="center"
-            minH="calc(100vh - 4rem)"
-          >
+          <Box display="flex" justifyContent="center" alignItems="center" minH="calc(100vh - 4rem)">
             <Box
               bg={cardBgColor}
               border="1px solid"

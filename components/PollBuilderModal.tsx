@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useEffect, useRef } from "react";
 import { Box, Button, HStack, VStack, Heading, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import PollBuilder from "@/components/PollBuilder";
@@ -19,20 +19,30 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
 
-  // Local JSON buffer (so user can cancel without mutating form)
-  const [draftJson, setDraftJson] = useState<string>(initialJson ?? "");
+  // Ref to get current JSON from PollBuilder
+  const getCurrentJsonRef = useRef<(() => string) | null>(null);
 
   useEffect(() => {
-    if (isOpen) setDraftJson(initialJson ?? "");
-  }, [isOpen, initialJson]);
+    // Reset when modal opens
+    if (isOpen) {
+      getCurrentJsonRef.current = null;
+    }
+  }, [isOpen]);
 
-  // Stabilize the onChange callback to prevent unnecessary re-renders
-  const handleJsonChange = ( json: string) => {
-    setDraftJson(json);
+  // Callback to receive the getter function from PollBuilder
+  const handleGetCurrentJson = (getJson: () => string) => {
+    getCurrentJsonRef.current = getJson;
   };
 
   const handleUsePoll = () => {
-    onSave(draftJson || "");
+    // Get current JSON from PollBuilder when "Use This Poll" is clicked
+    if (getCurrentJsonRef.current) {
+      const currentJson = getCurrentJsonRef.current();
+      onSave(currentJson);
+    } else {
+      // Fallback to initial JSON if getter not available
+      onSave(initialJson || "");
+    }
     onClose();
   };
 
@@ -97,7 +107,11 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
 
         {/* Body: the builder */}
         <Box flex="1" overflow="auto" p={4}>
-          <PollBuilder value={draftJson} onChange={handleJsonChange} />
+          <PollBuilder
+            key={isOpen ? `builder-${initialJson ?? "new"}` : undefined}
+            value={initialJson ?? ""}
+            onGetCurrentJson={handleGetCurrentJson}
+          />
         </Box>
       </Box>
     </Box>

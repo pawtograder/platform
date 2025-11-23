@@ -32,20 +32,20 @@ const QUESTION_TYPE_REGISTRY: Record<QuestionType, QuestionTypeConfig> = {
   "multiple-choice": {
     label: "Multiple Choice",
     surveyJSType: "checkbox",
-    requiresChoices: true,
+    requiresChoices: true
   },
   "single-choice": {
     label: "Single Choice",
     surveyJSType: "radiogroup",
-    requiresChoices: true,
-  },
+    requiresChoices: true
+  }
 };
 
 // Helper to get all question types for the select dropdown
 const getQuestionTypeItems = () => {
   return Object.entries(QUESTION_TYPE_REGISTRY).map(([value, config]) => ({
     label: config.label,
-    value: value as QuestionType,
+    value: value as QuestionType
   }));
 };
 
@@ -59,19 +59,16 @@ type PollQuestionJSON = {
 
 type PollBuilderProps = {
   value: string;
-  onChange?: (json: string) => void; // Optional - only called if provided
   onGetCurrentJson?: (getJson: () => string) => void; // Callback to expose getter function
 };
 
 const pollTypeCollection = createListCollection({
-  items: getQuestionTypeItems(),
+  items: getQuestionTypeItems()
 });
 
 // Helper function to find internal type from SurveyJS type
 const findInternalTypeFromSurveyJS = (surveyType: string): QuestionType => {
-  const entry = Object.entries(QUESTION_TYPE_REGISTRY).find(
-    ([, config]) => config.surveyJSType === surveyType
-  );
+  const entry = Object.entries(QUESTION_TYPE_REGISTRY).find(([, config]) => config.surveyJSType === surveyType);
   return entry ? (entry[0] as QuestionType) : "multiple-choice"; // Default fallback
 };
 
@@ -80,30 +77,28 @@ const convertToSurveyJSFormat = (data: PollQuestionJSON): Record<string, unknown
   const typeConfig = QUESTION_TYPE_REGISTRY[data.type];
   const element: Record<string, unknown> = {
     type: typeConfig.surveyJSType,
-    title: data.prompt || "",
+    title: data.prompt || ""
   };
-  
+
   // Add choices if this type requires them
   if (typeConfig.requiresChoices) {
-    const choices = (data.choices || [])
-      .map(choice => choice.label)
-      .filter(label => label.trim() !== "");
+    const choices = (data.choices || []).map((choice) => choice.label).filter((label) => label.trim() !== "");
     element.choices = choices.length > 0 ? choices : ["Choice 1"];
   }
-  
+
   // Add any additional fields from the data (for extensibility)
-  Object.keys(data).forEach(key => {
+  Object.keys(data).forEach((key) => {
     if (key !== "prompt" && key !== "type" && key !== "choices") {
       element[key] = data[key];
     }
   });
-  
+
   return {
-    elements: [element],
+    elements: [element]
   };
 };
 
-export default function PollBuilder({ value, onChange, onGetCurrentJson }: PollBuilderProps) {
+export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProps) {
   const [pollData, setPollData] = useState<PollQuestionJSON>({
     prompt: "",
     type: "multiple-choice",
@@ -133,44 +128,44 @@ export default function PollBuilder({ value, onChange, onGetCurrentJson }: PollB
 
     try {
       const parsed = JSON.parse(value);
-      
+
       // Check if it's SurveyJS format (has elements array)
       if (parsed.elements && Array.isArray(parsed.elements) && parsed.elements.length > 0) {
         const firstElement = parsed.elements[0];
         const surveyType = firstElement.type;
-        
+
         // Convert SurveyJS format to internal format using registry
         const internalType = findInternalTypeFromSurveyJS(surveyType);
         const typeConfig = QUESTION_TYPE_REGISTRY[internalType];
-        
+
         const pollData: PollQuestionJSON = {
           prompt: firstElement.title || "",
-          type: internalType,
+          type: internalType
         };
-        
+
         // Handle choices if this type requires them
         if (typeConfig.requiresChoices) {
           const choices = Array.isArray(firstElement.choices)
             ? firstElement.choices.map((choice: string | { value: string; text?: string }, index: number) => ({
                 id: `choice${index + 1}`,
-                label: typeof choice === "string" ? choice : (choice.text || choice.value || "")
+                label: typeof choice === "string" ? choice : choice.text || choice.value || ""
               }))
             : [{ id: "choice1", label: "" }];
-          
+
           pollData.choices = choices.length > 0 ? choices : [{ id: "choice1", label: "" }];
         }
-        
+
         // Merge any additional default data from config
         if (typeConfig.defaultData) {
           Object.assign(pollData, typeConfig.defaultData);
         }
-        
+
         setPollData(pollData);
       } else {
         // Old format (prompt/type/choices) - use directly
         setPollData(parsed);
       }
-      
+
       hasInitializedRef.current = true;
     } catch {
       // Invalid JSON, use defaults
@@ -246,7 +241,6 @@ export default function PollBuilder({ value, onChange, onGetCurrentJson }: PollB
       return { ...prev, choices: updated };
     });
   }, []);
-
 
   return (
     <VStack align="stretch" gap={6} p={4}>
@@ -333,7 +327,6 @@ export default function PollBuilder({ value, onChange, onGetCurrentJson }: PollB
           </VStack>
         </Box>
       )}
-
 
       <Separator />
 
