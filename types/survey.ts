@@ -2,6 +2,7 @@ import type { Tables } from "@/utils/supabase/SupabaseTypes";
 
 type DbSurvey = Tables<"surveys">;
 type DbSurveyResponse = Tables<"survey_responses">;
+type DbSurveyAssignee = Tables<"survey_assignees">;
 
 export type ResponseData = DbSurveyResponse["response"];
 
@@ -25,4 +26,11 @@ export type SurveyWithResponse = Survey & {
 export type SurveyWithCounts = Survey & {
   response_count: number;
   submitted_count: number;
+  assigned_student_count: number;
+};
+
+export type SurveyAssignee = DbSurveyAssignee;
+
+export type SurveyWithAssignees = Survey & {
+  assignees: SurveyAssignee[];
 };

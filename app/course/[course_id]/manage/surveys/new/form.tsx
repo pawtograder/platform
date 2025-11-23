@@ -20,6 +20,7 @@ import {
   DialogFooter,
   DialogCloseTrigger
 } from "@/components/ui/dialog";
+import StudentGroupPicker from "@/components/ui/student-group-picker";
 
 // NEW: modal wrapper around your SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
@@ -35,6 +36,8 @@ type SurveyFormData = {
   status: "draft" | "published";
   due_date?: string;
   allow_response_editing: boolean;
+  assigned_to_all: boolean;
+  assigned_students?: string[];
 };
 
 const sampleJsonTemplate = `{
@@ -102,8 +105,11 @@ export default function SurveyForm({
   const [isTemplateLibraryOpen, setIsTemplateLibraryOpen] = useState(false);
   // Cancel confirmation dialog state
   const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
+  // Student selector modal state
+  const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
   const currentJson = watch("json");
+  const assignedStudents = watch("assigned_students") || [];
 
   const validateJson = useCallback(() => {
     const jsonValue = getValues("json");
@@ -490,6 +496,69 @@ export default function SurveyForm({
                 />
               </Fieldset.Content>
 
+              {/* Assignment Mode */}
+              <Fieldset.Content>
+                <Field label="Assignment" required>
+                  <Controller
+                    name="assigned_to_all"
+                    control={control}
+                    defaultValue={true}
+                    render={({ field }) => (
+                      <VStack align="start" gap={3}>
+                        <HStack>
+                          <input
+                            type="radio"
+                            id="assign_all"
+                            checked={field.value === true}
+                            onChange={() => {
+                              field.onChange(true);
+                              // Keep assigned_students in form state so user can switch back
+                            }}
+                            style={{ accentColor: "#3182ce" }}
+                          />
+                          <label htmlFor="assign_all" style={{ color: textColor, cursor: "pointer" }}>
+                            Assign to all students in the course
+                          </label>
+                        </HStack>
+                        <HStack>
+                          <input
+                            type="radio"
+                            id="assign_specific"
+                            checked={field.value === false}
+                            onChange={() => field.onChange(false)}
+                            style={{ accentColor: "#3182ce" }}
+                          />
+                          <label htmlFor="assign_specific" style={{ color: textColor, cursor: "pointer" }}>
+                            Assign to specific students
+                          </label>
+                        </HStack>
+
+                        {field.value === false && (
+                          <Box w="100%" mt={2}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              bg="transparent"
+                              borderColor={buttonBorderColor}
+                              color={buttonTextColor}
+                              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                              onClick={() => setIsStudentSelectorOpen(true)}
+                            >
+                              Select Students ({assignedStudents.length} selected)
+                            </Button>
+                            {assignedStudents.length > 0 && (
+                              <Text fontSize="sm" color={placeholderColor} mt={2}>
+                                {assignedStudents.length} student{assignedStudents.length !== 1 ? "s" : ""} selected
+                              </Text>
+                            )}
+                          </Box>
+                        )}
+                      </VStack>
+                    )}
+                  />
+                </Field>
+              </Fieldset.Content>
+
               {/* Preview Section */}
               <VStack align="stretch" gap={2}>
                 <Text color={textColor} fontWeight="medium">
@@ -679,6 +748,53 @@ export default function SurveyForm({
               </Button>
               <Button bg="#EF4444" color="white" _hover={{ bg: "#DC2626" }} onClick={handleDiscard}>
                 Discard
+              </Button>
+            </HStack>
+          </DialogFooter>
+        </DialogContent>
+      </DialogRoot>
+
+      {/* Student Selector Modal */}
+      <DialogRoot open={isStudentSelectorOpen} onOpenChange={(e) => setIsStudentSelectorOpen(e.open)}>
+        <DialogContent maxW="600px">
+          <DialogHeader>
+            <DialogTitle>Select Students</DialogTitle>
+            <DialogCloseTrigger />
+          </DialogHeader>
+          <DialogBody>
+            <VStack align="stretch" gap={4}>
+              <Text color={textColor} fontSize="sm">
+                Choose which students should have access to this survey. You can search by name and select multiple
+                students.
+              </Text>
+              <StudentGroupPicker
+                selectedStudents={assignedStudents}
+                onSelectionChange={(students) => setValue("assigned_students", students)}
+                placeholder="Search and select students..."
+                label="Students"
+                helperText="Select students who should see this survey"
+              />
+            </VStack>
+          </DialogBody>
+          <DialogFooter>
+            <HStack gap={3} justify="flex-end">
+              <Button
+                variant="outline"
+                borderColor={buttonBorderColor}
+                color={buttonTextColor}
+                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                onClick={() => setIsStudentSelectorOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                bg="#22C55E"
+                color="white"
+                _hover={{ bg: "#16A34A" }}
+                onClick={() => setIsStudentSelectorOpen(false)}
+                disabled={assignedStudents.length === 0}
+              >
+                Confirm ({assignedStudents.length} selected)
               </Button>
             </HStack>
           </DialogFooter>

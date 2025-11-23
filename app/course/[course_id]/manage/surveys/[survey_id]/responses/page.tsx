@@ -10,15 +10,12 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   const { course_id, survey_id } = await params;
   const supabase = await createClient();
 
-  // Fetch survey data to get title, status, version, JSON, and due_date (latest version)
+  // Fetch survey data to get title, status, version, JSON, due_date, and assignment mode (latest version)
   const { data: survey, error: surveyError } = await supabase
     .from("surveys")
-    .select("id, title, status, json, due_date")
-    // .select("id, title, status, version, json") // Temporarily remove version to test
+    .select("id, title, status, json, due_date, assigned_to_all")
     .eq("survey_id", survey_id)
     .eq("class_id", Number(course_id))
-    // .is("deleted_at", null) // Temporarily comment out to test if this column exists
-    // .order("version", { ascending: false }) // Temporarily comment out since we're not selecting version
     .limit(1)
     .single();
 
@@ -85,12 +82,28 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     );
   }
 
-  // Get total enrolled students in the course (only students, not instructors/graders)
-  const { count: totalStudents } = await supabase
-    .from("user_roles")
-    .select("*", { count: "exact", head: true })
-    .eq("class_id", Number(course_id))
-    .eq("role", "student");
+  // Calculate the correct total students based on assignment mode
+  let assignedStudentCount = 0;
+
+  if (survey.assigned_to_all) {
+    // Survey is assigned to all students - count all students in the course
+    const { count } = await supabase
+      .from("user_roles")
+      .select("*", { count: "exact", head: true })
+      .eq("class_id", Number(course_id))
+      .eq("role", "student")
+      .eq("disabled", false);
+
+    assignedStudentCount = count || 0;
+  } else {
+    // Survey is assigned to specific students - count assignments
+    const { count } = await supabase
+      .from("survey_assignments")
+      .select("*", { count: "exact", head: true })
+      .eq("survey_id", survey.id);
+
+    assignedStudentCount = count || 0;
+  }
 
   // Pass data to the client component
   return (
@@ -103,7 +116,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       surveyJson={survey.json}
       surveyDueDate={survey.due_date}
       responses={responses || []}
-      totalStudents={totalStudents || 0}
+      totalStudents={assignedStudentCount}
     />
   );
 }

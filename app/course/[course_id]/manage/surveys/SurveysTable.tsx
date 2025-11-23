@@ -20,12 +20,11 @@ type FilterType = "all" | "completed" | "awaiting";
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
-  totalStudents: number;
   courseId: string;
   timezone: string;
 };
 
-export default function SurveysTable({ surveys, totalStudents, courseId, timezone }: SurveysTableProps) {
+export default function SurveysTable({ surveys, courseId, timezone }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
@@ -63,7 +62,8 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
     }
 
     return surveys.filter((survey) => {
-      const completionRate = totalStudents > 0 ? (survey.response_count / totalStudents) * 100 : 0;
+      const completionRate =
+        survey.assigned_student_count > 0 ? (survey.response_count / survey.assigned_student_count) * 100 : 0;
 
       if (activeFilter === "completed") {
         return completionRate === 100;
@@ -73,7 +73,7 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
 
       return true;
     });
-  }, [surveys, activeFilter, totalStudents]);
+  }, [surveys, activeFilter]);
 
   const getStatusBadge = (status: string) => {
     const statusMap = {
@@ -454,7 +454,9 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                 </Table.Cell>
                 <Table.Cell py={4}>
                   <Text color={textColor}>
-                    {survey.status === "draft" ? "—" : `${survey.response_count}/${totalStudents} responded`}
+                    {survey.status === "draft"
+                      ? "—"
+                      : `${survey.response_count}/${survey.assigned_student_count} responded`}
                   </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
