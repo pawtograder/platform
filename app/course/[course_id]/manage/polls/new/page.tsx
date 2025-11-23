@@ -10,13 +10,12 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import PollBuilderModal from "@/components/PollBuilderModal";
 import { PollPreviewModal } from "@/components/PollPreviewModal";
 
 type PollFormValues = {
   question: string;
-  allowMultipleResponses: boolean;
   require_login: boolean;
 };
 
@@ -47,7 +46,6 @@ export default function NewPollPage() {
   } = useForm<PollFormValues>({
     defaultValues: {
       question: samplePollTemplate,
-      allowMultipleResponses: false,
       require_login: false
     }
   });
@@ -62,7 +60,7 @@ export default function NewPollPage() {
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
 
-  const validateJson = useCallback(() => {
+  const validateJson = (): boolean => {
     const jsonValue = getValues("question");
     if (!jsonValue.trim()) {
       toaster.create({
@@ -70,7 +68,7 @@ export default function NewPollPage() {
         description: "Please enter a JSON payload for your poll question.",
         type: "error"
       });
-      return;
+      return false;
     }
     try {
       const parsed = JSON.parse(jsonValue);
@@ -87,7 +85,7 @@ export default function NewPollPage() {
           description: "Question must be an object with an 'elements' array containing at least one element.",
           type: "error"
         });
-        return;
+        return false;
       }
 
       // Ensure the first element has required fields
@@ -98,7 +96,7 @@ export default function NewPollPage() {
           description: "The first element in 'elements' must have 'type' and 'title' fields.",
           type: "error"
         });
-        return;
+        return false;
       }
 
       toaster.create({
@@ -106,83 +104,45 @@ export default function NewPollPage() {
         description: "Your poll question JSON looks good.",
         type: "success"
       });
+      return true;
     } catch (error) {
       toaster.create({
         title: "Invalid JSON",
         description: error instanceof Error ? error.message : "Unable to parse the JSON payload.",
         type: "error"
       });
+      return false;
     }
-  }, [getValues]);
+  };
 
-  const loadSampleTemplate = useCallback(() => {
+  const loadSampleTemplate = () => {
     setValue("question", samplePollTemplate, { shouldDirty: true });
     toaster.create({
       title: "Sample loaded",
       description: "You can customize the template to match your poll.",
       type: "info"
     });
-  }, [setValue]);
+  };
 
-  const handleBuilderSave = useCallback(
-    (json: string) => {
-      setValue("question", json, { shouldDirty: true });
-      toaster.create({
-        title: "Poll question updated",
-        description: "Your poll question has been updated from the visual builder.",
-        type: "success"
-      });
-    },
-    [setValue]
-  );
+  const handleBuilderSave = (json: string) => {
+    setValue("question", json, { shouldDirty: true });
+    toaster.create({
+      title: "Poll question updated",
+      description: "Your poll question has been updated from the visual builder.",
+      type: "success"
+    });
+  };
 
-  const showPreview = useCallback(() => {
-    const jsonValue = getValues("question");
-    if (!jsonValue.trim()) {
-      toaster.create({
-        title: "No Poll Question",
-        description: "Please enter a poll question JSON before previewing",
-        type: "error"
-      });
+  const showPreview = () => {
+    // Validate JSON first before showing preview
+    if (!validateJson()) {
       return;
     }
-    try {
-      const parsed = JSON.parse(jsonValue);
+    setIsPreviewOpen(true);
+  };
 
-      // Ensure it's a single question object, not an array
-      if (Array.isArray(parsed)) {
-        toaster.create({
-          title: "Invalid Question Format",
-          description:
-            "Polls can only contain a single question. Please provide a single question object, not an array.",
-          type: "error"
-        });
-        return;
-      }
-
-      // Ensure it has required fields
-      if (typeof parsed !== "object" || parsed === null || !parsed.title || !parsed.type) {
-        toaster.create({
-          title: "Invalid Question Format",
-          description: "Question must be an object with 'prompt' and 'type' fields.",
-          type: "error"
-        });
-        return;
-      }
-
-      setIsPreviewOpen(true);
-    } catch {
-      toaster.create({
-        title: "Invalid JSON",
-        description: "Please fix the JSON configuration before previewing",
-        type: "error"
-      });
-    }
-  }, [getValues]);
-
-  const savePoll = useCallback(
-    async (values: PollFormValues, publish: boolean = false) => {
-      if (!course_id) {
+  const savePoll = async (values: PollFormValues, publish: boolean = false) => {
+    if (!course_id) {
         toaster.create({
           title: "Missing course",
           description: "We could not determine which course you're in.",
@@ -231,11 +191,6 @@ export default function NewPollPage() {
         }
 
         parsedQuestion = parsed as Record<string, unknown>;
-        // Add allowMultipleResponses to the first element
-        const elements = parsedQuestion.elements as Array<Record<string, unknown>> | undefined;
-        if (Array.isArray(elements) && elements[0]) {
-          elements[0].allowMultipleResponses = values.allowMultipleResponses;
-        }
       } catch (error) {
         toaster.create({
           title: "Invalid JSON",
@@ -298,23 +253,15 @@ export default function NewPollPage() {
       } finally {
         setIsSaving(false);
       }
-    },
-    [course_id, public_profile_id, router]
-  );
+  };
 
-  const saveDraft = useCallback(
-    async (values: PollFormValues) => {
-      await savePoll(values, false);
-    },
-    [savePoll]
-  );
+  const saveDraft = async (values: PollFormValues) => {
+    await savePoll(values, false);
+  };
 
-  const publishPoll = useCallback(
-    async (values: PollFormValues) => {
-      await savePoll(values, true);
-    },
-    [savePoll]
-  );
+  const publishPoll = async (values: PollFormValues) => {
+    await savePoll(values, true);
+  };
 
   const onSubmit = handleSubmit(async (values) => {
     // Default to publishing when form is submitted
@@ -427,31 +374,6 @@ export default function NewPollPage() {
                   </HStack>
                 </Field>
               </Box>
-
-              {/* Allow Multiple Responses */}
-              {/* <Box>
-                <Controller
-                  name="allowMultipleResponses"
-                  control={control}
-                  render={({ field }) => (
-                    <Checkbox.Root
-                      checked={field.value}
-                      onCheckedChange={(details) => field.onChange(details.checked === true)}
-                    >
-                      <Checkbox.HiddenInput />
-                      <Checkbox.Control />
-                      <Checkbox.Label>
-                        <Text fontSize="sm" color={textColor}>
-                          Allow students to answer multiple times
-                        </Text>
-                      </Checkbox.Label>
-                    </Checkbox.Root>
-                  )}
-                />
-                <Text fontSize="xs" color={buttonTextColor} mt={1} ml={6}>
-                  If unchecked, students can only submit one response. After submitting, they will be redirected.
-                </Text>
-              </Box> */}
 
               {/* Require Login */}
               <Box>
