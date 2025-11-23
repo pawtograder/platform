@@ -253,7 +253,7 @@ export default function EditSurveyPage() {
           const supabase = createClient();
 
           // Parse the JSON to ensure it's valid (only for active updates)
-          let parsedJson = toJsonString(values.json);
+          const parsedJson = toJsonString(values.json);
           let validationErrors: string | null = null;
 
           try {
