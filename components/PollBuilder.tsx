@@ -13,7 +13,6 @@ import {
   Separator,
   Select,
   Portal,
-  Checkbox,
 } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { LuTrash2, LuPlus } from "react-icons/lu";
