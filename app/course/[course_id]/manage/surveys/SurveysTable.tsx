@@ -16,7 +16,7 @@ import { useIsInstructor } from "@/hooks/useClassProfiles";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 
-type FilterType = "all" | "completed" | "awaiting";
+type FilterType = "all" | "closed" | "active" | "draft";
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
@@ -50,30 +50,31 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   const filterOptions = useMemo(
     () => [
       { value: "all" as const, label: "All" },
-      { value: "completed" as const, label: "Completed" },
-      { value: "awaiting" as const, label: "Awaiting Responses" }
+      { value: "active" as const, label: "Active" },
+      { value: "draft" as const, label: "Drafts" },
+      { value: "closed" as const, label: "Closed" }
     ],
     []
   );
 
-  // Filter surveys based on completion status
+  // Filter surveys based on status
   const filteredSurveys = useMemo(() => {
     if (activeFilter === "all") {
       return surveys;
     }
 
     return surveys.filter((survey) => {
-      const completionRate = totalStudents > 0 ? (survey.response_count / totalStudents) * 100 : 0;
-
-      if (activeFilter === "completed") {
-        return completionRate === 100;
-      } else if (activeFilter === "awaiting") {
-        return completionRate < 100;
+      if (activeFilter === "closed") {
+        return survey.status === "closed";
+      } else if (activeFilter === "draft") {
+        return survey.status === "draft";
+      } else if (activeFilter === "active") {
+        return survey.status === "published";
       }
 
       return true;
     });
-  }, [surveys, activeFilter, totalStudents]);
+  }, [surveys, activeFilter]);
 
   const getStatusBadge = (status: string) => {
     const statusMap = {
@@ -419,6 +420,15 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                 fontWeight="semibold"
                 textTransform="uppercase"
                 py={3}
+              >
+                DUE DATE
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
                 pr={0}
               >
                 ACTIONS
@@ -460,6 +470,13 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                 <Table.Cell py={4}>
                   <Text color={textColor}>
                     {formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell py={4}>
+                  <Text color={survey.due_date ? textColor : "gray.500"}>
+                    {survey.due_date
+                      ? formatInTimeZone(new TZDate(survey.due_date), timezone, "MMM d, yyyy h:mm a")
+                      : "—"}
                   </Text>
                 </Table.Cell>
                 <Table.Cell pr={3}>
@@ -526,7 +543,6 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                           </MenuItem>
                           {isInstructor && (
                             <>
-                              <MenuItem value="reopen">Re-open</MenuItem>
                               <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
                                 Delete
                               </MenuItem>

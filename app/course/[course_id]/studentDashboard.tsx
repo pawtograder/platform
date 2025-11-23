@@ -57,7 +57,7 @@ export default async function StudentDashboard({
     .select("*")
     .eq("class_id", course_id)
     .eq("status", "published")
-    .gte("due_date", new Date().toISOString())
+    .or(`due_date.gte.${new Date().toISOString()},due_date.is.null`)
     .order("created_at", { ascending: false })
     .limit(5);
 

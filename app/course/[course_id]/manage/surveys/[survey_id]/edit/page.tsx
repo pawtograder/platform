@@ -253,8 +253,14 @@ export default function EditSurveyPage() {
           const supabase = createClient();
 
           // Parse the JSON to ensure it's valid (only for active updates)
-          const parsedJson = toJsonString(values.json);
-          const validationErrors = null;
+          let parsedJson = toJsonString(values.json);
+          let validationErrors: string | null = null;
+
+          try {
+            JSON.parse(parsedJson);
+          } catch (err) {
+            validationErrors = `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`;
+          }
 
           // Update the survey
           const { data, error } = await supabase
@@ -280,7 +286,7 @@ export default function EditSurveyPage() {
                 .update({
                   title: values.title as string,
                   description: (values.description as string) || null,
-                  questions: values.json as string,
+                  json: values.json as string,
                   status: "draft",
                   allow_response_editing: values.allow_response_editing as boolean,
                   due_date: (values.due_date as string) || null,

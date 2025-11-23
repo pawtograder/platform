@@ -34,6 +34,7 @@ export default function NewSurveyPage() {
   // 🚨 THIS is where we're allowed to call hooks like useClassProfiles
   const { private_profile_id, role } = useClassProfiles();
   const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
+  const [currentSurveyId, setCurrentSurveyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (role.role === "grader") {
@@ -169,6 +170,7 @@ export default function NewSurveyPage() {
 
             console.log("[loadLatestDraft] Form data being loaded:", formData);
             reset(formData);
+            setCurrentSurveyId(data.id);
 
             toaster.create({
               title: "Draft Restored",
@@ -244,12 +246,39 @@ export default function NewSurveyPage() {
 
       // Check if we're returning from preview (indicates continuing work on same survey)
       console.log("[saveSurvey] isReturningFromPreview state:", isReturningFromPreview);
+      console.log("[saveSurvey] currentSurveyId:", currentSurveyId);
 
       let data: Pick<Tables<"surveys">, "id" | "survey_id"> | null;
       let error: PostgrestError | null;
 
-      if (isReturningFromPreview) {
-        // Only update existing draft if returning from preview
+      if (currentSurveyId) {
+        // Update existing survey
+        console.log("[saveSurvey] updating existing survey:", currentSurveyId);
+
+        const updatePayload = {
+          title: (values.title as string) || "Untitled Survey",
+          description: (values.description as string) || null,
+          json: jsonToStore,
+          status: finalStatus,
+          allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
+          due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+          validation_errors: validationErrors,
+          updated_at: new Date().toISOString()
+        };
+
+        const result = await supabase
+          .from("surveys")
+          .update(updatePayload)
+          .eq("id", currentSurveyId)
+          .select("id, survey_id")
+          .single()
+          .returns<SurveyIds>();
+
+        data = result.data;
+        error = result.error;
+      } else if (isReturningFromPreview) {
+        // Fallback for returning from preview if currentSurveyId wasn't set (e.g. network race condition)
+        // Try to find the latest draft
         const { data: existingSurvey, error: surveyError } = await supabase
           .from("surveys")
           .select("id, survey_id")
@@ -261,8 +290,9 @@ export default function NewSurveyPage() {
           .returns<SurveyIds>();
 
         if (existingSurvey && !surveyError) {
-          // Update existing survey
-          console.log("[saveSurvey] updating existing survey:", existingSurvey.id);
+          // Update existing survey found by query
+          console.log("[saveSurvey] updating existing survey found by query:", existingSurvey.id);
+          setCurrentSurveyId(existingSurvey.id); // Set it for next time
 
           const updatePayload = {
             title: (values.title as string) || "Untitled Survey",
@@ -286,9 +316,8 @@ export default function NewSurveyPage() {
           data = result.data;
           error = result.error;
         } else {
-          // No existing survey found, create new one
+          // Should not happen if logic is correct, but treat as new
           const survey_id = crypto.randomUUID();
-
           const insertPayload = {
             survey_id,
             version: 1,
@@ -299,12 +328,10 @@ export default function NewSurveyPage() {
             json: jsonToStore,
             status: finalStatus,
             created_at: new Date().toISOString(),
-            allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
+            allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
             due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
             validation_errors: validationErrors
           };
-
-          console.log("[saveSurvey] creating new survey (returning from preview):", insertPayload);
 
           const result = await supabase
             .from("surveys")
@@ -315,9 +342,10 @@ export default function NewSurveyPage() {
 
           data = result.data;
           error = result.error;
+          if (data) setCurrentSurveyId(data.id);
         }
       } else {
-        // Not returning from preview - always create new survey
+        // Not returning from preview and no current ID - always create new survey
         const survey_id = crypto.randomUUID();
 
         const insertPayload = {
@@ -346,6 +374,7 @@ export default function NewSurveyPage() {
 
         data = result.data;
         error = result.error;
+        if (data) setCurrentSurveyId(data.id);
       }
 
       if (error || !data) {

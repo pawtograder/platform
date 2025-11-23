@@ -104,6 +104,7 @@ export default function SurveyForm({
   const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
 
   const currentJson = watch("json");
+  const currentStatus = watch("status");
 
   const validateJson = useCallback(() => {
     const jsonValue = getValues("json");
@@ -525,11 +526,11 @@ export default function SurveyForm({
                   type="submit"
                   loading={isSubmitting}
                   size="md"
-                  bg="#22C55E"
+                  bg={currentStatus === "published" ? "#22C55E" : "#3182ce"}
                   color="white"
-                  _hover={{ bg: "#16A34A" }}
+                  _hover={{ bg: currentStatus === "published" ? "#16A34A" : "#2b6cb0" }}
                 >
-                  Save Survey
+                  {currentStatus === "published" ? "Publish Survey" : "Save Draft"}
                 </UIButton>
                 <Button
                   variant="outline"
