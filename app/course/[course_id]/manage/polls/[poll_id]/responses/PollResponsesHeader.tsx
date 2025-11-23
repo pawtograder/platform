@@ -41,7 +41,7 @@ export default function PollResponsesHeader({
         return "localhost:3000";
     }, []);
 
-    const pollUrl = `${baseUrl}/livepoll/${courseID}`;
+    const pollUrl = `${baseUrl}/poll/${courseID}`;
 
     const handleToggleLive = useCallback(async () => {
         const nextState = !pollIsLive;
@@ -91,7 +91,7 @@ export default function PollResponsesHeader({
     }, [pollID, pollIsLive, onPollStatusChange]);
 
     return (
-        <Box p={4} borderBottom="1px solid" borderColor={buttonBorderColor}>
+        <Box p={4}>
             <HStack justify="space-between">
                 <Button
                     variant="outline"
@@ -104,7 +104,7 @@ export default function PollResponsesHeader({
                 >
                     ← Back to Polls
                 </Button>
-                <Text fontSize="sm" color={textColor} textAlign="center">
+                <Text fontSize="xl" color={textColor} textAlign="center">
                     Answer Live at:{" "}
                     <Text as="span" fontWeight="semibold" color="#3B82F6">
                         {pollUrl}

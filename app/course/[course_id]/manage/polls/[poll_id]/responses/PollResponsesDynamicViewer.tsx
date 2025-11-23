@@ -1,10 +1,18 @@
 "use client";
-
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { Box } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
+import { createClient } from "@/utils/supabase/client";
+import { LivePollResponse, PollResponseData } from "@/types/poll";
+
+type PollResponse = {
+    id: string;
+    live_poll_id: string;
+    public_profile_id: string;
+    response: PollResponseData | null;
+};
 
 function parseJsonForType(pollQuestion: JSON): "radiogroup" | "checkbox" | "single-choice" | "open-ended" | "rating" | "text" {
     const questionData = (pollQuestion as unknown) as Record<string, unknown> | null;
@@ -20,7 +28,7 @@ type PollResponsesDynamicViewerProps = {
     pollId: string;
     pollQuestion: JSON;
     pollIsLive: boolean;
-    responses: any[];
+    responses: PollResponse[];
 };
 
 export default function PollResponsesDynamicViewer({
@@ -28,21 +36,82 @@ export default function PollResponsesDynamicViewer({
     pollId,
     pollQuestion,
     pollIsLive: initialPollIsLive,
-    responses,
+    responses: initialResponses,
 }: PollResponsesDynamicViewerProps) {
     const [isPresenting, setIsPresenting] = useState(false);
     const [pollIsLive, setPollIsLive] = useState(initialPollIsLive);
+    const [responses, setResponses] = useState(initialResponses);
     
     const type = parseJsonForType(pollQuestion);
+
+    // Fetch responses every 3 seconds
+    useEffect(() => {
+        const fetchResponses = async () => {
+            try {
+                const supabase = createClient();
+                
+                // Fetch responses
+                // Note: live_poll_responses table may not be in generated types
+                const responsesQuery = (supabase as unknown as {
+                    from: (table: string) => {
+                        select: (columns: string) => {
+                            eq: (column: string, value: string) => {
+                                order: (column: string, options: { ascending: boolean }) => Promise<{
+                                    data: LivePollResponse[] | null;
+                                    error: { message: string } | null;
+                                }>;
+                            };
+                        };
+                    };
+                })
+                    .from("live_poll_responses")
+                    .select("id, live_poll_id, public_profile_id, response")
+                    .eq("live_poll_id", pollId)
+                    .order("created_at", { ascending: false });
+                
+                const { data: responsesData, error: responsesError } = (await responsesQuery) as {
+                    data: LivePollResponse[] | null;
+                    error: { message: string } | null;
+                };
+
+                if (responsesError) {
+                    console.error("Error fetching poll responses:", responsesError);
+                    return;
+                }
+
+                const fetchedResponses = responsesData || [];
+
+                const enrichedResponses: PollResponse[] = fetchedResponses.map((response) => ({
+                    id: response.id,
+                    live_poll_id: response.live_poll_id,
+                    public_profile_id: response.public_profile_id,
+                    response: response.response || null,
+                }));
+
+                // Update state - React will only re-render the chart, not the entire page
+                setResponses(enrichedResponses);
+            } catch (error) {
+                console.error("Error in fetchResponses:", error);
+            }
+        };
+
+        // Fetch immediately
+        fetchResponses();
+
+        // Then fetch every 3 seconds
+        const interval = setInterval(fetchResponses, 3000);
+
+        return () => clearInterval(interval);
+    }, [pollId]);
 
     // Calculate poll URL
     const pollUrl = useMemo(() => {
         if (typeof window === "undefined") return "";
         const hostname = window.location.hostname;
         if (hostname === "localhost" || hostname === "127.0.0.1") {
-            return `${hostname}:${window.location.port || 3000}/livepoll/${courseId}`;
+            return `${hostname}:${window.location.port || 3000}/poll/${courseId}`;
         }
-        return `${hostname}/livepoll/${courseId}`;
+        return `${hostname}/poll/${courseId}`;
     }, [courseId]);
 
     const handlePresent = useCallback(() => {

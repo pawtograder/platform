@@ -249,8 +249,8 @@ export default function NewPollPage() {
           ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
           : null;
 
-        const { error } = await supabase
-          .from("live_polls" as any)
+        const insertQuery = supabase
+          .from("live_polls")
           .insert({
             class_id: Number(course_id),
             created_by: public_profile_id,
@@ -260,6 +260,10 @@ export default function NewPollPage() {
           })
           .select("id")
           .single();
+        
+        const { error } = (await insertQuery) as {
+          error: { message: string } | null;
+        };
 
         if (error) {
           throw new Error(error.message);

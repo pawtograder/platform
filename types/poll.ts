@@ -22,11 +22,16 @@ export type LivePoll = {
   deactivates_at?: string | null;
 };
 
+// Poll response format: { "poll_question_0": "Dynamic Programming" }
+// Keys are dynamic (poll_question_0, poll_question_1, etc.)
+// Values can be string (single choice) or string[] (multiple choice)
+export type PollResponseData = Record<string, string | string[]>;
+
 export type LivePollResponse = {
   id: string;
   live_poll_id: string;
   public_profile_id: string;
-  response: Record<string, unknown> | null;
+  response: PollResponseData | null;
   submitted_at: string | null;
   is_submitted: boolean;
   created_at: string;

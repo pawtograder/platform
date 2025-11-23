@@ -9,8 +9,11 @@ import { toaster } from "@/components/ui/toaster";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
 import "survey-core/survey-core.min.css";
-import { LivePoll } from "@/types/poll";
+import { LivePoll, PollResponseData } from "@/types/poll";
 
+interface PollQuestion {
+    elements: Array<Record<string, unknown>>;
+}
 export default function PollRespondPage() {
   const params = useParams();
   const course_id = params.course_id as string;
@@ -27,22 +30,27 @@ export default function PollRespondPage() {
     const fetchPoll = async () => {
       const supabase = createClient();
       
-      const { data: pollData, error } = await supabase
-        .from("live_polls" as any)
+      const pollQuery = supabase
+        .from("live_polls")
         .select("*")
         .eq("class_id", Number(course_id))
         .eq("is_live", true)
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
+      
+      const { data: pollData, error } = (await pollQuery) as {
+        data: LivePoll | null;
+        error: { message: string } | null;
+      };
 
       if (error || !pollData) {
         setIsLoading(false);
         return;
       }
 
-      const poll = pollData as unknown as LivePoll;
-      const pollQuestion = poll.question as any;
+      const poll = pollData;
+      const pollQuestion = poll.question as unknown as PollQuestion;
 
       if (!pollQuestion?.elements || pollQuestion.elements.length === 0) {
         setIsLoading(false);
@@ -50,7 +58,7 @@ export default function PollRespondPage() {
       }
 
       // Add name field to elements if missing
-      const elements = pollQuestion.elements.map((el: any, index: number) => ({
+      const elements = pollQuestion.elements.map((el: Record<string, unknown>, index: number) => ({
         ...el,
         name: el.name || `poll_question_${index}`,
         isRequired: el.isRequired !== false, // Default to required
@@ -69,18 +77,25 @@ export default function PollRespondPage() {
 
       // Create Model from JSON config
       const survey = new Model(surveyConfig);
-      survey.onComplete.add(async (sender,options) => {
+      survey.onComplete.add(async (sender) => {
         const supabase = createClient();
 
         try {
-          const { error } = await supabase
-            .from("live_poll_responses" as any)
+          // sender.data is in format { "poll_question_0": "Dynamic Programming" }
+          const responseData: PollResponseData = sender.data as PollResponseData;
+          
+          const insertQuery = supabase
+            .from("live_poll_responses")
             .insert({
               live_poll_id: poll.id,
               public_profile_id: null,
-              response: sender.data,
+              response: responseData,
               is_submitted: true,
             });
+          
+          const { error } = (await insertQuery) as {
+            error: { message: string } | null;
+          };
 
           if (error) {
             throw new Error(error.message);

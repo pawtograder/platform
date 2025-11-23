@@ -5,17 +5,31 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import { useMemo, useEffect, useRef } from "react";
 import { CloseButton } from "@/components/ui/close-button";
+import { PollResponseData } from "@/types/poll";
+import { getPollAnswer } from "@/utils/pollUtils";
+
+interface FullscreenElement extends Element {
+    webkitRequestFullscreen?: () => Promise<void>;
+    mozRequestFullScreen?: () => Promise<void>;
+    msRequestFullscreen?: () => Promise<void>;
+}
+
+interface FullscreenDocument extends Document {
+    webkitFullscreenElement?: Element | null;
+    mozFullScreenElement?: Element | null;
+    msFullscreenElement?: Element | null;
+    webkitExitFullscreen?: () => Promise<void>;
+    mozCancelFullScreen?: () => Promise<void>;
+    msExitFullscreen?: () => Promise<void>;
+}
 
 type PollResponse = {
     id: string;
     live_poll_id: string;
     public_profile_id: string;
-    response: Record<string, unknown>;
-    submitted_at: string | null;
-    is_submitted: boolean;
-    created_at: string;
-    profile_name: string;
+    response: PollResponseData | null;
 };
+
 
 type MultipleChoiceDynamicViewerProps = {
     pollQuestion: JSON;
@@ -47,17 +61,18 @@ export default function MultipleChoiceDynamicViewer({
         // Enter fullscreen
         const enterFullscreen = async () => {
             try {
-                if (element.requestFullscreen) {
-                    await element.requestFullscreen();
-                } else if ((element as any).webkitRequestFullscreen) {
+                const fullscreenElement = element as FullscreenElement;
+                if (fullscreenElement.requestFullscreen) {
+                    await fullscreenElement.requestFullscreen();
+                } else if (fullscreenElement.webkitRequestFullscreen) {
                     // Safari
-                    await (element as any).webkitRequestFullscreen();
-                } else if ((element as any).mozRequestFullScreen) {
+                    await fullscreenElement.webkitRequestFullscreen();
+                } else if (fullscreenElement.mozRequestFullScreen) {
                     // Firefox
-                    await (element as any).mozRequestFullScreen();
-                } else if ((element as any).msRequestFullscreen) {
+                    await fullscreenElement.mozRequestFullScreen();
+                } else if (fullscreenElement.msRequestFullscreen) {
                     // IE/Edge
-                    await (element as any).msRequestFullscreen();
+                    await fullscreenElement.msRequestFullscreen();
                 }
             } catch (error) {
                 console.error("Error entering fullscreen:", error);
@@ -68,11 +83,12 @@ export default function MultipleChoiceDynamicViewer({
 
         // Handle fullscreen change events (user might exit via browser controls)
         const handleFullscreenChange = () => {
+            const fullscreenDoc = document as FullscreenDocument;
             const isFullscreen = !!(
                 document.fullscreenElement ||
-                (document as any).webkitFullscreenElement ||
-                (document as any).mozFullScreenElement ||
-                (document as any).msFullscreenElement
+                fullscreenDoc.webkitFullscreenElement ||
+                fullscreenDoc.mozFullScreenElement ||
+                fullscreenDoc.msFullscreenElement
             );
 
             if (!isFullscreen && onExit) {
@@ -94,14 +110,15 @@ export default function MultipleChoiceDynamicViewer({
             // Exit fullscreen on cleanup
             const exitFullscreen = async () => {
                 try {
+                    const fullscreenDoc = document as FullscreenDocument;
                     if (document.exitFullscreen) {
                         await document.exitFullscreen();
-                    } else if ((document as any).webkitExitFullscreen) {
-                        await (document as any).webkitExitFullscreen();
-                    } else if ((document as any).mozCancelFullScreen) {
-                        await (document as any).mozCancelFullScreen();
-                    } else if ((document as any).msExitFullscreen) {
-                        await (document as any).msExitFullscreen();
+                    } else if (fullscreenDoc.webkitExitFullscreen) {
+                        await fullscreenDoc.webkitExitFullscreen();
+                    } else if (fullscreenDoc.mozCancelFullScreen) {
+                        await fullscreenDoc.mozCancelFullScreen();
+                    } else if (fullscreenDoc.msExitFullscreen) {
+                        await fullscreenDoc.msExitFullscreen();
                     }
                 } catch (error) {
                     console.error("Error exiting fullscreen:", error);
@@ -121,14 +138,15 @@ export default function MultipleChoiceDynamicViewer({
                 // Exit fullscreen first, then call onExit
                 const exitFullscreen = async () => {
                     try {
+                        const fullscreenDoc = document as FullscreenDocument;
                         if (document.exitFullscreen) {
                             await document.exitFullscreen();
-                        } else if ((document as any).webkitExitFullscreen) {
-                            await (document as any).webkitExitFullscreen();
-                        } else if ((document as any).mozCancelFullScreen) {
-                            await (document as any).mozCancelFullScreen();
-                        } else if ((document as any).msExitFullscreen) {
-                            await (document as any).msExitFullscreen();
+                        } else if (fullscreenDoc.webkitExitFullscreen) {
+                            await fullscreenDoc.webkitExitFullscreen();
+                        } else if (fullscreenDoc.mozCancelFullScreen) {
+                            await fullscreenDoc.mozCancelFullScreen();
+                        } else if (fullscreenDoc.msExitFullscreen) {
+                            await fullscreenDoc.msExitFullscreen();
                         }
                     } catch (error) {
                         console.error("Error exiting fullscreen:", error);
@@ -154,15 +172,14 @@ export default function MultipleChoiceDynamicViewer({
     });
 
     const chartData = useMemo(() => {
-        const submittedResponses = responses.filter((r) => r.is_submitted);
         const choiceCounts: Record<string, number> = {};
 
         choices.forEach((choice) => {
             choiceCounts[choice] = 0;
         });
 
-        submittedResponses.forEach((response) => {
-            const answer = response.response.poll_question;
+        responses.forEach((response) => {
+            const answer = getPollAnswer(response.response);
 
             if (Array.isArray(answer)) {
                 answer.forEach((item: string) => {
@@ -181,6 +198,31 @@ export default function MultipleChoiceDynamicViewer({
         }));
     }, [responses, choices]);
 
+    // Calculate max value for X-axis with padding
+    const xAxisMax = useMemo(() => {
+        if (chartData.length === 0) return 10;
+
+        const maxValue = Math.max(...chartData.map(d => d.value));
+
+        if (maxValue === 0) return 10;
+
+        // Add 20% padding
+        const paddedValue = maxValue * 1.2;
+
+        // Round up to a number based on scale
+        if (paddedValue <= 5) {
+            return Math.ceil(paddedValue);
+        } else if (paddedValue <= 20) {
+            return Math.ceil(paddedValue / 5) * 5;
+        } else if (paddedValue <= 100) {
+            return Math.ceil(paddedValue / 10) * 10;
+        } else if (paddedValue <= 500) {
+            return Math.ceil(paddedValue / 50) * 50;
+        } else {
+            return Math.ceil(paddedValue / 100) * 100;
+        }
+    }, [chartData]);
+
     const containerProps = isFullWindow
         ? {
             w: "100vw",
@@ -192,24 +234,31 @@ export default function MultipleChoiceDynamicViewer({
         }
         : {
             bg: cardBgColor,
-            borderRadius: "lg",
-            p: 6,
+            borderRadius: "2xl",
+            p: 10,
             border: "1px solid",
             borderColor: borderColor,
+            display: "flex",
+            flexDirection: "column" as const,
+            minH: "700px",
+            maxW: "1400px",
+            w: "95%",
+            mx: "auto",
+            boxShadow: "lg",
         };
 
     const handleExit = () => {
-        // Exit fullscreen first
         const exitFullscreen = async () => {
             try {
+                const fullscreenDoc = document as FullscreenDocument;
                 if (document.exitFullscreen) {
                     await document.exitFullscreen();
-                } else if ((document as any).webkitExitFullscreen) {
-                    await (document as any).webkitExitFullscreen();
-                } else if ((document as any).mozCancelFullScreen) {
-                    await (document as any).mozCancelFullScreen();
-                } else if ((document as any).msExitFullscreen) {
-                    await (document as any).msExitFullscreen();
+                } else if (fullscreenDoc.webkitExitFullscreen) {
+                    await fullscreenDoc.webkitExitFullscreen();
+                } else if (fullscreenDoc.mozCancelFullScreen) {
+                    await fullscreenDoc.mozCancelFullScreen();
+                } else if (fullscreenDoc.msExitFullscreen) {
+                    await fullscreenDoc.msExitFullscreen();
                 }
             } catch (error) {
                 console.error("Error exiting fullscreen:", error);
@@ -222,55 +271,66 @@ export default function MultipleChoiceDynamicViewer({
     };
 
     return (
-        <Box {...containerProps} ref={fullscreenRef}>
-            {isFullWindow && (
-                <Box position="absolute" top={4} right={4} zIndex={10000}>
-                    <CloseButton
-                        onClick={handleExit}
-                        aria-label="Exit fullscreen"
-                        size="lg"
-                    />
-                </Box>
-            )}
-            {isFullWindow && pollUrl && (
-                <Box position="absolute" bottom={4} right={4} zIndex={10000}>
-                    <Text fontSize="sm" color={textColor} textAlign="right">
-                        Answer Live at:{" "}
-                        <Text as="span" fontWeight="semibold" color="#3B82F6">
-                            {pollUrl}
+        <Box
+            display={isFullWindow ? "flex" : "flex"}
+            justifyContent={isFullWindow ? "stretch" : "center"}
+            alignItems={isFullWindow ? "stretch" : "center"}
+            minH={isFullWindow ? "100vh" : "82.5vh"}
+            w={isFullWindow ? "100%" : "100%"}
+            //shift the box up by 10px
+            mt={isFullWindow ? 0 : -5}
+        >
+            <Box {...containerProps} ref={fullscreenRef}>
+                {isFullWindow && (
+                    <Box position="absolute" top={4} right={4} zIndex={10000}>
+                        <CloseButton
+                            onClick={handleExit}
+                            aria-label="Exit fullscreen"
+                            size="xl"
+                        />
+                    </Box>
+                )}
+                {isFullWindow && pollUrl && (
+                    <Box position="absolute" bottom={4} right={4} zIndex={10000}>
+                        <Text fontSize="2xl" color={textColor} textAlign="right">
+                            Answer Live at:{" "}
+                            <Text as="span" fontWeight="semibold" color="#3B82F6">
+                                {pollUrl}
+                            </Text>
                         </Text>
-                    </Text>
-                </Box>
-            )}
-            <VStack align="stretch" gap={4} flex="1" minH={isFullWindow ? "0" : "400px"}>
-                <Heading size={isFullWindow ? "xl" : "lg"} color={textColor} textAlign="center">
-                    {questionPrompt}
-                </Heading>
-                <Box flex="1" minH="0">
-                    <ResponsiveContainer width="100%" height={isFullWindow ? "100%" : "400px"}>
-                        <BarChart
-                            data={chartData}
-                            layout="vertical"
-                            margin={{ top: 20, right: 30, left: 150, bottom: 20 }}
-                        >
-                            <XAxis
-                                type="number"
-                                tick={{ fill: tickColor }}
-                                allowDecimals={false}
-                                domain={[0, "dataMax"]}
-                                tickFormatter={(value) => Number.isInteger(value) ? String(value) : ""}
-                            />
-                            <YAxis
-                                type="category"
-                                dataKey="name"
-                                tick={{ fill: tickColor }}
-                                width={140}
-                            />
-                            <Bar dataKey="value" fill="#3B82F6" />
-                        </BarChart>
-                    </ResponsiveContainer>
-                </Box>
-            </VStack>
+                    </Box>
+                )}
+                <VStack align="center" justify="center" gap={4} flex="1" minH="0" w="100%">
+                    <Heading size={isFullWindow ? "xl" : "lg"} color={textColor} textAlign="center">
+                        {questionPrompt}
+                    </Heading>
+                    <Box w="100%" translate="auto" translateX="-20px">
+                        <ResponsiveContainer width="100%" height={isFullWindow ? 700 : 500}>
+                            <BarChart
+                                data={chartData}
+                                layout="vertical"
+                                margin={{ left: 0, right: 100, top: 0, bottom: 0 }}
+                            >
+                                <XAxis
+                                    type="number"
+                                    tick={{ fill: tickColor, fontSize: 10 }}
+                                    allowDecimals={false}
+                                    domain={[0, xAxisMax]}
+                                    tickFormatter={(value) => Number.isInteger(value) ? String(value) : ""}
+                                />
+                                <YAxis
+                                    type="category"
+                                    dataKey="name"
+                                    tick={{ fill: tickColor, fontSize: 12 }}
+                                    width={200}
+                                />
+                                <Bar dataKey="value" fill="#3B82F6" barSize={isFullWindow ? 150 : 100} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </Box>
+                    <Text fontSize="md" color={textColor} textAlign="center">Number of Responses</Text>
+                </VStack>
+            </Box>
         </Box>
     );
 }
