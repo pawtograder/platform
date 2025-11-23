@@ -22,4 +22,3 @@ export default function PollsHeader({ courseId }: PollsHeaderProps) {
     </HStack>
   );
 }
-

@@ -47,10 +47,9 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
   }, [pollRows, activeFilter]);
 
   const getQuestionPrompt = (question: LivePollWithCounts) => {
-    const questionData = (question.question as unknown) as Record<string, unknown> | null;
+    const questionData = question.question as unknown as Record<string, unknown> | null;
     return (questionData?.elements as unknown as { title: string }[])?.[0]?.title || "Poll";
   };
-  
 
   const getStatusBadge = (isLive: boolean) => {
     const colors = isLive
@@ -58,15 +57,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       : { text: "#EF4444", bg: "rgba(239, 68, 68, 0.2)", label: "Closed" };
 
     return (
-      <Badge
-        px={2}
-        py={1}
-        borderRadius="md"
-        fontSize="xs"
-        fontWeight="medium"
-        bg={colors.bg}
-        color={colors.text}
-      >
+      <Badge px={2} py={1} borderRadius="md" fontSize="xs" fontWeight="medium" bg={colors.bg} color={colors.text}>
         {colors.label}
       </Badge>
     );
@@ -85,15 +76,12 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       // If closing poll, clear deactivates_at
       const updateData: { is_live: boolean; deactivates_at: string | null } = {
         is_live: nextState,
-        deactivates_at: nextState 
+        deactivates_at: nextState
           ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
           : null
       };
 
-      const { error } = await supabase
-        .from("live_polls")
-        .update(updateData)
-        .eq("id", pollId);
+      const { error } = await supabase.from("live_polls").update(updateData).eq("id", pollId);
 
       if (error) {
         throw new Error(error.message);
@@ -104,9 +92,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       toaster.dismiss(loadingToast);
       toaster.create({
         title: nextState ? "Poll is Live" : "Poll Closed",
-        description: nextState
-          ? "Students can now answer this poll."
-          : "Students can no longer submit responses.",
+        description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
         type: "success"
       });
     } catch (err) {
@@ -130,10 +116,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     });
     try {
       const supabase = createClient();
-      const { error } = await supabase
-        .from("live_polls")
-        .delete()
-        .eq("id", pollId);
+      const { error } = await supabase.from("live_polls").delete().eq("id", pollId);
 
       if (error) {
         throw new Error(error.message);
@@ -254,11 +237,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                         >
                           View Poll
                         </MenuItem>
-                        <MenuItem
-                          value="delete"
-                          onClick={() => handleDelete(poll.id)}
-                          colorPalette="red"
-                        >
+                        <MenuItem value="delete" onClick={() => handleDelete(poll.id)} colorPalette="red">
                           <FaTrash />
                           Delete Poll
                         </MenuItem>
@@ -274,4 +253,3 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     </>
   );
 }
-

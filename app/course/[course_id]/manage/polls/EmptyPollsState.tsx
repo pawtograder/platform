@@ -56,4 +56,3 @@ export default function EmptyPollsState({ courseId }: EmptyPollsStateProps) {
     </Container>
   );
 }
-

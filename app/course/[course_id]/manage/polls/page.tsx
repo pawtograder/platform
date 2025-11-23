@@ -60,4 +60,3 @@ export default async function ManagePollsPage({ params }: ManagePollsPageProps) 
     </Container>
   );
 }
-

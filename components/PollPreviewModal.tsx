@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogBody,
-  DialogCloseTrigger,
+  DialogCloseTrigger
 } from "@/components/ui/dialog";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { useState, useEffect } from "react";
@@ -42,17 +42,17 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
     try {
       // Parse and validate JSON
       const parsedJson = JSON.parse(pollJson);
-      
+
       // Create SurveyJS model directly
       const model = new Model(parsedJson);
-      
+
       // Apply theme based on color mode
       if (isDarkMode) {
         model.applyTheme(DefaultDark);
       } else {
         model.applyTheme(DefaultLight);
       }
-      
+
       setSurveyModel(model);
       setError(null);
     } catch (error) {
@@ -110,4 +110,3 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
     </DialogRoot>
   );
 }
-

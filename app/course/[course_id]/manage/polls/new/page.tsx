@@ -1,14 +1,7 @@
 "use client";
 
-import {
-  Box,
-  Textarea,
-  HStack,
-  VStack,
-  Button,
-  Heading,
-} from "@chakra-ui/react";
-import { useForm} from "react-hook-form";
+import { Box, Textarea, HStack, VStack, Button, Heading } from "@chakra-ui/react";
+import { useForm } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
@@ -78,9 +71,14 @@ export default function NewPollPage() {
     }
     try {
       const parsed = JSON.parse(jsonValue);
-      
+
       // Ensure it has the elements array structure
-      if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.elements) || parsed.elements.length === 0) {
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray(parsed.elements) ||
+        parsed.elements.length === 0
+      ) {
         toaster.create({
           title: "Invalid Question Format",
           description: "Question must be an object with an 'elements' array containing at least one element.",
@@ -88,7 +86,7 @@ export default function NewPollPage() {
         });
         return;
       }
-      
+
       // Ensure the first element has required fields
       const firstElement = parsed.elements[0];
       if (!firstElement.type || !firstElement.title) {
@@ -99,7 +97,7 @@ export default function NewPollPage() {
         });
         return;
       }
-      
+
       toaster.create({
         title: "JSON valid",
         description: "Your poll question JSON looks good.",
@@ -123,14 +121,17 @@ export default function NewPollPage() {
     });
   }, [setValue]);
 
-  const handleBuilderSave = useCallback((json: string) => {
-    setValue("question", json, { shouldDirty: true });
-    toaster.create({
-      title: "Poll question updated",
-      description: "Your poll question has been updated from the visual builder.",
-      type: "success"
-    });
-  }, [setValue]);
+  const handleBuilderSave = useCallback(
+    (json: string) => {
+      setValue("question", json, { shouldDirty: true });
+      toaster.create({
+        title: "Poll question updated",
+        description: "Your poll question has been updated from the visual builder.",
+        type: "success"
+      });
+    },
+    [setValue]
+  );
 
   const showPreview = useCallback(() => {
     const jsonValue = getValues("question");
@@ -144,17 +145,18 @@ export default function NewPollPage() {
     }
     try {
       const parsed = JSON.parse(jsonValue);
-      
+
       // Ensure it's a single question object, not an array
       if (Array.isArray(parsed)) {
         toaster.create({
           title: "Invalid Question Format",
-          description: "Polls can only contain a single question. Please provide a single question object, not an array.",
+          description:
+            "Polls can only contain a single question. Please provide a single question object, not an array.",
           type: "error"
         });
         return;
       }
-      
+
       // Ensure it has required fields
       if (typeof parsed !== "object" || parsed === null || !parsed.title || !parsed.type) {
         toaster.create({
@@ -164,7 +166,7 @@ export default function NewPollPage() {
         });
         return;
       }
-      
+
       setIsPreviewOpen(true);
     } catch {
       toaster.create({
@@ -198,9 +200,14 @@ export default function NewPollPage() {
       let parsedQuestion: Record<string, unknown>;
       try {
         const parsed = JSON.parse(values.question);
-        
+
         // Ensure it has the elements array structure
-        if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.elements) || parsed.elements.length === 0) {
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          !Array.isArray(parsed.elements) ||
+          parsed.elements.length === 0
+        ) {
           toaster.create({
             title: "Invalid Question Format",
             description: "Question must be an object with an 'elements' array containing at least one element.",
@@ -208,7 +215,7 @@ export default function NewPollPage() {
           });
           return;
         }
-        
+
         // Ensure the first element has required fields
         const firstElement = parsed.elements[0];
         if (!firstElement.type || !firstElement.title) {
@@ -219,7 +226,7 @@ export default function NewPollPage() {
           });
           return;
         }
-        
+
         parsedQuestion = parsed as Record<string, unknown>;
         // Add allowMultipleResponses to the first element
         const elements = parsedQuestion.elements as Array<Record<string, unknown>> | undefined;
@@ -242,7 +249,7 @@ export default function NewPollPage() {
         const isLive = publish;
 
         // If publishing, set deactivates_at to 1 hour from now
-        const deactivatesAt = isLive 
+        const deactivatesAt = isLive
           ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
           : null;
 
@@ -493,11 +500,7 @@ export default function NewPollPage() {
       />
 
       {/* Preview Modal */}
-      <PollPreviewModal
-        isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
-        pollJson={questionValue}
-      />
+      <PollPreviewModal isOpen={isPreviewOpen} onClose={() => setIsPreviewOpen(false)} pollJson={questionValue} />
     </Box>
   );
 }

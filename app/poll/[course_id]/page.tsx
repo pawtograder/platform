@@ -10,10 +10,10 @@ import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
-import {PollResponseData } from "@/types/poll";
+import { PollResponseData } from "@/types/poll";
 
 interface PollQuestion {
-    elements: Array<Record<string, unknown>>;
+  elements: Array<Record<string, unknown>>;
 }
 export default function PollRespondPage() {
   const params = useParams();
@@ -31,7 +31,7 @@ export default function PollRespondPage() {
   useEffect(() => {
     const fetchPoll = async () => {
       const supabase = createClient();
-      
+
       const { data: pollData, error } = await supabase
         .from("live_polls")
         .select("*")
@@ -58,38 +58,38 @@ export default function PollRespondPage() {
       const elements = pollQuestion.elements.map((el: Record<string, unknown>, index: number) => ({
         ...el,
         name: el.name || `poll_question_${index}`,
-        isRequired: el.isRequired !== false, // Default to required
+        isRequired: el.isRequired !== false // Default to required
       }));
 
       // SurveyJS needs pages structure
       const surveyConfig = {
-        pages: [{
-          name: "page1",
-          elements
-        }],
+        pages: [
+          {
+            name: "page1",
+            elements
+          }
+        ],
         showNavigationButtons: "bottom",
         showProgressBar: false,
-        showCompletedPage: false, // Disable default completed page
+        showCompletedPage: false // Disable default completed page
       };
 
       // Create Model from JSON config
       const survey = new Model(surveyConfig);
-      
+
       survey.onComplete.add(async (sender) => {
         const supabase = createClient();
 
         try {
           // sender.data is in format { "poll_question_0": "Dynamic Programming" }
           const responseData: PollResponseData = sender.data as PollResponseData;
-          
-          const { error } = await supabase
-            .from("live_poll_responses")
-            .insert({
-              live_poll_id: poll.id,
-              public_profile_id: null,
-              response: responseData,
-              is_submitted: true,
-            });
+
+          const { error } = await supabase.from("live_poll_responses").insert({
+            live_poll_id: poll.id,
+            public_profile_id: null,
+            response: responseData,
+            is_submitted: true
+          });
 
           if (error) {
             throw new Error(error.message);
@@ -100,7 +100,7 @@ export default function PollRespondPage() {
           toaster.create({
             title: "Error submitting response",
             description: error instanceof Error ? error.message : "An unexpected error occurred.",
-            type: "error",
+            type: "error"
           });
         }
       });
@@ -133,47 +133,25 @@ export default function PollRespondPage() {
 
       <Container maxW="800px" my={2}>
         {isLoading ? (
-          <Box
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={8}
-            textAlign="center"
-          >
+          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
             <Text color={textColor}>Loading poll...</Text>
           </Box>
         ) : isSubmitted ? (
-          <Box
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={8}
-            textAlign="center"
-          >
+          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
             <Heading size="lg" color={textColor} mb={4}>
               Thank You!
             </Heading>
             <Text color={textColor}>
-              Your poll response has been submitted successfully. Refresh the page to answer again or to load a new poll.
+              Your poll response has been submitted successfully. Refresh the page to answer again or to load a new
+              poll.
             </Text>
           </Box>
         ) : !surveyModel ? (
-          <Box
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={8}
-            textAlign="center"
-          >
+          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
             <Heading size="lg" color={textColor} mb={4}>
               No Live Poll Available
             </Heading>
-            <Text color={textColor}>
-              There is currently no live poll available for this course.
-            </Text>
+            <Text color={textColor}>There is currently no live poll available for this course.</Text>
           </Box>
         ) : (
           <Box display="flex" justifyContent="center" alignItems="center" minH="calc(100vh - 4rem)">

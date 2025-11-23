@@ -38,4 +38,3 @@ export type LivePollResponse = {
   is_submitted: boolean;
   created_at: string;
 };
-

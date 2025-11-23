@@ -12,7 +12,7 @@ import {
   createListCollection,
   Separator,
   Select,
-  Portal,
+  Portal
 } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { LuTrash2, LuPlus } from "react-icons/lu";
@@ -38,15 +38,15 @@ const pollTypeCollection = createListCollection({
     { label: "Single Choice", value: "single-choice" },
     { label: "Rating", value: "rating" },
     { label: "Text", value: "text" },
-    { label: "Open Ended", value: "open-ended" },
-  ],
+    { label: "Open Ended", value: "open-ended" }
+  ]
 });
 
 export default function PollBuilder({ value, onChange }: PollBuilderProps) {
   const [pollData, setPollData] = useState<PollQuestionJSON>({
     prompt: "",
     type: "multiple-choice",
-    choices: [{ id: "choice1", label: "" }],
+    choices: [{ id: "choice1", label: "" }]
   });
 
   const jsonTextColor = useColorModeValue("#1A202C", "#FFFFFF");
@@ -78,7 +78,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
     }
 
     const normalized = normalizeJson(value);
-    
+
     // Only update if the normalized value actually changed from outside
     if (normalized !== lastReceivedNormalizedRef.current) {
       try {
@@ -99,10 +99,10 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
     if (isInitialMount.current) {
       return; // Skip on initial mount
     }
-    
+
     const jsonString = JSON.stringify(pollData, null, 2);
     const normalized = normalizeJson(jsonString);
-    
+
     // Only call onChange if the normalized JSON actually changed and it's different from what we last received
     if (normalized !== lastEmittedNormalizedRef.current && normalized !== lastReceivedNormalizedRef.current) {
       lastEmittedNormalizedRef.current = normalized;
@@ -118,7 +118,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
     const newType = (e?.value || "multiple-choice") as PollQuestionJSON["type"];
     setPollData((prev) => {
       const updated: PollQuestionJSON = { ...prev, type: newType };
-      
+
       // Add choices for choice-based types
       if (newType === "multiple-choice" || newType === "single-choice") {
         if (!updated.choices || updated.choices.length === 0) {
@@ -128,7 +128,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         // Remove choices for non-choice types
         delete updated.choices;
       }
-      
+
       // Open-ended doesn't need any special fields
       if (newType === "open-ended") {
         delete updated.choices;
@@ -161,7 +161,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
       const newId = `choice${Date.now()}`;
       return {
         ...prev,
-        choices: [...prev.choices, { id: newId, label: "" }],
+        choices: [...prev.choices, { id: newId, label: "" }]
       };
     });
   }, []);
@@ -171,7 +171,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
       if (!prev.choices || prev.choices.length <= 1) return prev;
       return {
         ...prev,
-        choices: prev.choices.filter((_, i) => i !== index),
+        choices: prev.choices.filter((_, i) => i !== index)
       };
     });
   }, []);
@@ -188,7 +188,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
   const handleRatingChange = useCallback((field: "min" | "max" | "minLabel" | "maxLabel", value: string | number) => {
     setPollData((prev) => ({
       ...prev,
-      [field]: value,
+      [field]: value
     }));
   }, []);
 
@@ -199,11 +199,7 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
         <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
           Question Prompt
         </Text>
-        <Input
-          placeholder="Enter your poll question..."
-          value={pollData.prompt}
-          onChange={handlePromptChange}
-        />
+        <Input placeholder="Enter your poll question..." value={pollData.prompt} onChange={handlePromptChange} />
       </Box>
 
       {/* Type Selection */}
@@ -368,12 +364,9 @@ export default function PollBuilder({ value, onChange }: PollBuilderProps) {
           border="1px solid"
           borderColor={jsonBorderColor}
         >
-          <pre style={{ margin: 0, color: jsonTextColor }}>
-            {JSON.stringify(pollData, null, 2)}
-          </pre>
+          <pre style={{ margin: 0, color: jsonTextColor }}>{JSON.stringify(pollData, null, 2)}</pre>
         </Box>
       </Box>
     </VStack>
   );
 }
-

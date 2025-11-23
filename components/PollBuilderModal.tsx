@@ -12,12 +12,7 @@ type PollBuilderModalProps = {
   initialJson?: string;
 };
 
-export default function PollBuilderModal({
-  isOpen,
-  onClose,
-  onSave,
-  initialJson,
-}: PollBuilderModalProps) {
+export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson }: PollBuilderModalProps) {
   const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const textColor = useColorModeValue("#000000", "#FFFFFF");
@@ -108,4 +103,3 @@ export default function PollBuilderModal({
     </Box>
   );
 }
-

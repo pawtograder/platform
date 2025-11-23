@@ -7,13 +7,12 @@ import { PollResponseData } from "@/types/poll";
  * Values can be string (single choice) or string[] (multiple choice)
  */
 export function getPollAnswer(response: PollResponseData | null): string | string[] | null {
-    if (!response) return null;
-    
-    // Find the key that starts with "poll_question_"
-    const answerKey = Object.keys(response).find(key => key.startsWith("poll_question_"));
-    if (!answerKey) return null;
-    
-    const answer = response[answerKey];
-    return typeof answer === "string" || Array.isArray(answer) ? answer : null;
-}
+  if (!response) return null;
 
+  // Find the key that starts with "poll_question_"
+  const answerKey = Object.keys(response).find((key) => key.startsWith("poll_question_"));
+  if (!answerKey) return null;
+
+  const answer = response[answerKey];
+  return typeof answer === "string" || Array.isArray(answer) ? answer : null;
+}

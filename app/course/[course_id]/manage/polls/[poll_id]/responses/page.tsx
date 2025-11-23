@@ -1,7 +1,7 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
 import PollResponsesDynamicViewer from "./PollResponsesDynamicViewer";
-import {PollResponseData } from "@/types/poll";
+import { PollResponseData } from "@/types/poll";
 
 type PollResponsesPageProps = {
   params: Promise<{ course_id: string; poll_id: string }>;
@@ -67,7 +67,7 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
     id: response.id,
     live_poll_id: response.live_poll_id,
     public_profile_id: response.public_profile_id || "",
-    response: (response.response as PollResponseData) || null,
+    response: (response.response as PollResponseData) || null
   }));
 
   return (
