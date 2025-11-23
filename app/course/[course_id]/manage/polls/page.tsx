@@ -35,6 +35,7 @@ export default async function ManagePollsPage({ params }: ManagePollsPageProps) 
     console.error("Error fetching polls:", {
       message: error.message
     });
+    return <EmptyPollsState courseId={course_id} />;
   }
 
   const polls = pollData || [];
