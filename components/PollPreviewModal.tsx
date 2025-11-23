@@ -9,12 +9,11 @@ import {
   DialogCloseTrigger,
 } from "@/components/ui/dialog";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { useCallback, useEffect, useState } from "react";
-import dynamic from "next/dynamic";
-
-const SurveyComponent = dynamic(() => import("@/components/Survey"), {
-  ssr: false,
-});
+import { useState, useEffect } from "react";
+import { Model } from "survey-core";
+import { Survey } from "survey-react-ui";
+import { DefaultDark, DefaultLight } from "survey-core/themes";
+import "survey-core/survey-core.min.css";
 
 interface PollPreviewModalProps {
   isOpen: boolean;
@@ -23,97 +22,56 @@ interface PollPreviewModalProps {
 }
 
 export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModalProps) {
-  const [isValidJson, setIsValidJson] = useState(true);
-  const [surveyConfig, setSurveyConfig] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [surveyModel, setSurveyModel] = useState<Model | null>(null);
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
+  const isDarkMode = useColorModeValue(false, true);
 
-  const [pollTitle, setPollTitle] = useState<string>("");
-
-  const initializePoll = useCallback(() => {
-    if (!pollJson.trim()) {
-      setIsValidJson(false);
+  useEffect(() => {
+    if (!isOpen || !pollJson.trim()) {
+      setError("Error, please validate JSON");
+      setSurveyModel(null);
       return;
     }
 
     try {
-      const pollData = JSON.parse(pollJson);
-      // Extract prompt from poll data for title
-      setPollTitle(pollData?.prompt || "Poll Preview");
+      // Parse and validate JSON
+      const parsedJson = JSON.parse(pollJson);
       
-      // Convert poll JSON to SurveyJS format for preview
-      const surveyConfig: any = {
-        pages: [
-          {
-            name: "page1",
-            elements: [],
-          },
-        ],
-      };
-
-      // Convert poll question to SurveyJS element
-      if (pollData.type === "multiple-choice" || pollData.type === "single-choice") {
-        surveyConfig.pages[0].elements.push({
-          type: pollData.type === "multiple-choice" ? "checkbox" : "radiogroup",
-          name: "poll_question",
-          title: pollData.prompt,
-          choices: pollData.choices?.map((c: any) => c.label) || [],
-          isRequired: true,
-        });
-      } else if (pollData.type === "open-ended") {
-        surveyConfig.pages[0].elements.push({
-          type: "comment",
-          name: "poll_question",
-          title: pollData.prompt,
-          isRequired: true,
-        });
-      } else if (pollData.type === "rating") {
-        surveyConfig.pages[0].elements.push({
-          type: "rating",
-          name: "poll_question",
-          title: pollData.prompt,
-          rateMin: pollData.min || 1,
-          rateMax: pollData.max || 5,
-          minRateDescription: pollData.minLabel || "",
-          maxRateDescription: pollData.maxLabel || "",
-          isRequired: true,
-        });
-      } else if (pollData.type === "text") {
-        surveyConfig.pages[0].elements.push({
-          type: "text",
-          name: "poll_question",
-          title: pollData.prompt,
-          isRequired: true,
-        });
+      // Create SurveyJS model directly
+      const model = new Model(parsedJson);
+      
+      // Apply theme based on color mode
+      if (isDarkMode) {
+        model.applyTheme(DefaultDark);
+      } else {
+        model.applyTheme(DefaultLight);
       }
-
-      setSurveyConfig(surveyConfig);
-      setIsValidJson(true);
+      
+      setSurveyModel(model);
+      setError(null);
     } catch (error) {
-      console.error("Invalid poll JSON:", error);
-      setIsValidJson(false);
+      console.error("Error creating survey model:", error);
+      setError("Error, please validate JSON");
+      setSurveyModel(null);
     }
-  }, [pollJson]);
+  }, [isOpen, pollJson, isDarkMode]);
 
+  // Update theme when color mode changes
   useEffect(() => {
-    if (isOpen && pollJson) {
-      initializePoll();
+    if (surveyModel) {
+      if (isDarkMode) {
+        surveyModel.applyTheme(DefaultDark);
+      } else {
+        surveyModel.applyTheme(DefaultLight);
+      }
     }
-  }, [isOpen, pollJson, initializePoll]);
-
-  const handleComplete = useCallback((survey: any) => {
-    // In preview mode, we don't actually submit
-    console.log("Poll preview completed", survey);
-  }, []);
-
-  const handleValueChanged = useCallback((survey: any, options: any) => {
-    // Handle value changes if needed
-    console.log("Poll preview value changed", options);
-  }, []);
+  }, [isDarkMode, surveyModel]);
 
   return (
     <DialogRoot open={isOpen} onOpenChange={onClose}>
@@ -128,26 +86,19 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
       >
         <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
           <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
-            Poll Preview: {pollTitle}
+            Poll Preview
           </DialogTitle>
           <DialogCloseTrigger />
         </DialogHeader>
 
         <DialogBody p={6} overflow="auto">
-          {!isValidJson ? (
+          {error ? (
             <div className="text-center py-8">
-              <p className="text-red-500 mb-4">Invalid JSON configuration</p>
-              <p className="text-gray-500">Please check your poll JSON and try again.</p>
+              <p className="text-red-500">{error}</p>
             </div>
-          ) : surveyConfig ? (
+          ) : surveyModel ? (
             <div className="poll-preview-container">
-              <SurveyComponent
-                surveyJson={JSON.stringify(surveyConfig)}
-                onComplete={handleComplete}
-                onValueChanged={handleValueChanged}
-                isPopup={false}
-                readOnly={false}
-              />
+              <Survey model={surveyModel} />
             </div>
           ) : (
             <div className="text-center py-8">
