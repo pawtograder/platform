@@ -88,9 +88,9 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   if (survey.assigned_to_all) {
     // Survey is assigned to all students - count all students in the course
     const { count } = await supabase
-      .from("user_roles")
-      .select("*", { count: "exact", head: true })
-      .eq("class_id", Number(course_id))
+    .from("user_roles")
+    .select("*", { count: "exact", head: true })
+    .eq("class_id", Number(course_id))
       .eq("role", "student")
       .eq("disabled", false);
     

@@ -109,7 +109,6 @@ export default function SurveyForm({
   const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
   const currentJson = watch("json");
-  const assignedToAll = watch("assigned_to_all");
   const assignedStudents = watch("assigned_students") || [];
 
   const validateJson = useCallback(() => {
