@@ -15,6 +15,7 @@ import { Field } from "@/components/ui/field";
 import { Button as UIButton } from "@/components/ui/button";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
+import { Json } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 import { useCallback, useState } from "react";
 import PollBuilderModal from "@/components/PollBuilderModal";
@@ -245,21 +246,17 @@ export default function NewPollPage() {
           ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
           : null;
 
-        const insertQuery = supabase
+        const { error } = await supabase
           .from("live_polls")
           .insert({
             class_id: Number(course_id),
             created_by: public_profile_id,
-            question: parsedQuestion,
+            question: parsedQuestion as Json,
             is_live: isLive,
             deactivates_at: deactivatesAt
           })
           .select("id")
           .single();
-        
-        const { error } = (await insertQuery) as {
-          error: { message: string } | null;
-        };
 
         if (error) {
           throw new Error(error.message);

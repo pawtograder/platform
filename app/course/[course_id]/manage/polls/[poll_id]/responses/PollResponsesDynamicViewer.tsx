@@ -6,15 +6,16 @@ import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 import { createClient } from "@/utils/supabase/client";
 import { LivePollResponse, PollResponseData } from "@/types/poll";
+import { Json } from "@/utils/supabase/SupabaseTypes";
 
 type PollResponse = {
     id: string;
     live_poll_id: string;
-    public_profile_id: string;
+    public_profile_id: string | null;
     response: PollResponseData | null;
 };
 
-function parseJsonForType(pollQuestion: JSON): "radiogroup" | "checkbox" | "single-choice" | "open-ended" | "rating" | "text" {
+function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | "single-choice" | "open-ended" | "rating" | "text" {
     const questionData = (pollQuestion as unknown) as Record<string, unknown> | null;
     const type = (questionData?.elements as unknown as { type: string }[])?.[0]?.type;
     if (!type) {
@@ -26,7 +27,7 @@ function parseJsonForType(pollQuestion: JSON): "radiogroup" | "checkbox" | "sing
 type PollResponsesDynamicViewerProps = {
     courseId: string;
     pollId: string;
-    pollQuestion: JSON;
+    pollQuestion: Json;
     pollIsLive: boolean;
     responses: PollResponse[];
 };
@@ -53,29 +54,11 @@ export default function PollResponsesDynamicViewer({
             try {
                 const supabase = createClient();
                 
-                // Fetch responses
-                // Note: live_poll_responses table may not be in generated types
-                const responsesQuery = (supabase as unknown as {
-                    from: (table: string) => {
-                        select: (columns: string) => {
-                            eq: (column: string, value: string) => {
-                                order: (column: string, options: { ascending: boolean }) => Promise<{
-                                    data: LivePollResponse[] | null;
-                                    error: { message: string } | null;
-                                }>;
-                            };
-                        };
-                    };
-                })
+                const { data: responsesData, error: responsesError } = await supabase
                     .from("live_poll_responses")
                     .select("id, live_poll_id, public_profile_id, response")
                     .eq("live_poll_id", pollId)
                     .order("created_at", { ascending: false });
-                
-                const { data: responsesData, error: responsesError } = (await responsesQuery) as {
-                    data: LivePollResponse[] | null;
-                    error: { message: string } | null;
-                };
 
                 if (responsesError) {
                     console.error("Error fetching poll responses:", responsesError);
@@ -88,7 +71,7 @@ export default function PollResponsesDynamicViewer({
                     id: response.id,
                     live_poll_id: response.live_poll_id,
                     public_profile_id: response.public_profile_id,
-                    response: response.response || null,
+                    response: (response.response as PollResponseData) || null,
                 }));
 
                 // Update state - React will only re-render the chart, not the entire page
@@ -134,7 +117,7 @@ export default function PollResponsesDynamicViewer({
         switch (type) {
             case "radiogroup":
             case "checkbox":
-                return <MultipleChoiceDynamicViewer pollQuestion={pollQuestion} responses={responses} isFullWindow={true} onExit={handleClosePresent} pollUrl={pollUrl} />;
+                return <MultipleChoiceDynamicViewer pollQuestion={pollQuestion as unknown as JSON} responses={responses.filter((r): r is PollResponse & { public_profile_id: string } => r.public_profile_id !== null)} isFullWindow={true} onExit={handleClosePresent} pollUrl={pollUrl} />;
             default:
                 return (
                     <Box position="fixed" inset="0" bg={bgColor} zIndex="9999" display="flex" alignItems="center" justifyContent="center">
@@ -155,7 +138,7 @@ export default function PollResponsesDynamicViewer({
                 onPollStatusChange={handlePollStatusChange}
             />
             {type === "radiogroup" || type === "checkbox" ? (
-                <MultipleChoiceDynamicViewer pollQuestion={pollQuestion} responses={responses} isFullWindow={false} />
+                <MultipleChoiceDynamicViewer pollQuestion={pollQuestion as unknown as JSON} responses={responses.filter((r): r is PollResponse & { public_profile_id: string } => r.public_profile_id !== null)} isFullWindow={false} />
             ) : (
                 <div>Unsupported poll question type: {type}</div>
             )}

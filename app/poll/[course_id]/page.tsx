@@ -32,7 +32,7 @@ export default function PollRespondPage() {
     const fetchPoll = async () => {
       const supabase = createClient();
       
-      const pollQuery = supabase
+      const { data: pollData, error } = await supabase
         .from("live_polls")
         .select("*")
         .eq("class_id", Number(course_id))
@@ -40,11 +40,6 @@ export default function PollRespondPage() {
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
-      
-      const { data: pollData, error } = (await pollQuery) as {
-        data: LivePoll | null;
-        error: { message: string } | null;
-      };
 
       if (error || !pollData) {
         setIsLoading(false);
@@ -87,7 +82,7 @@ export default function PollRespondPage() {
           // sender.data is in format { "poll_question_0": "Dynamic Programming" }
           const responseData: PollResponseData = sender.data as PollResponseData;
           
-          const insertQuery = supabase
+          const { error } = await supabase
             .from("live_poll_responses")
             .insert({
               live_poll_id: poll.id,
@@ -95,10 +90,6 @@ export default function PollRespondPage() {
               response: responseData,
               is_submitted: true,
             });
-          
-          const { error } = (await insertQuery) as {
-            error: { message: string } | null;
-          };
 
           if (error) {
             throw new Error(error.message);

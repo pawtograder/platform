@@ -12,7 +12,6 @@ import { useRouter } from "next/navigation";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { FaTrash } from "react-icons/fa";
 import { LivePollWithCounts } from "./page";
-import { BsPrinterFill } from "react-icons/bs";
 
 type PollsTableProps = {
   polls: LivePollWithCounts[];
@@ -92,7 +91,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       };
 
       const { error } = await supabase
-        .from("live_polls" as any)
+        .from("live_polls")
         .update(updateData)
         .eq("id", pollId);
 
@@ -132,7 +131,7 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
     try {
       const supabase = createClient();
       const { error } = await supabase
-        .from("live_polls" as any)
+        .from("live_polls")
         .delete()
         .eq("id", pollId);
 

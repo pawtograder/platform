@@ -12,11 +12,13 @@ export type MultipleChoicePollQuestion = PollQuestion & {
   correct_choices: string[];
 };
 
+import { Json } from "@/utils/supabase/SupabaseTypes";
+
 export type LivePoll = {
   id: string;
   class_id: number;
   created_by: string;
-  question: JSON;
+  question: Json;
   is_live: boolean;
   created_at: string;
   deactivates_at?: string | null;

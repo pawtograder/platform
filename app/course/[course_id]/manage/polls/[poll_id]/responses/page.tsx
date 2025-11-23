@@ -1,7 +1,7 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
 import PollResponsesDynamicViewer from "./PollResponsesDynamicViewer";
-import { LivePoll, LivePollResponse } from "@/types/poll";
+import { LivePoll, LivePollResponse, PollResponseData } from "@/types/poll";
 
 type PollResponsesPageProps = {
   params: Promise<{ course_id: string; poll_id: string }>;
@@ -12,17 +12,12 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
   const supabase = await createClient();
 
   // Fetch poll data
-  const pollQuery = supabase
+  const { data: pollData, error: pollError } = await supabase
     .from("live_polls")
     .select("*")
     .eq("id", poll_id)
     .eq("class_id", Number(course_id))
     .single();
-  
-  const { data: pollData, error: pollError } = (await pollQuery) as {
-    data: LivePoll | null;
-    error: { message: string } | null;
-  };
 
   if (pollError || !pollData) {
     console.error("Error fetching poll:", pollError);
@@ -48,16 +43,11 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
     );
   }
 
-  const responsesQuery = supabase
+  const { data: responsesData, error: responsesError } = await supabase
     .from("live_poll_responses")
     .select("id, live_poll_id, public_profile_id, response, submitted_at, is_submitted, created_at")
     .eq("live_poll_id", poll_id)
     .order("created_at", { ascending: false });
-  
-  const { data: responsesData, error: responsesError } = (await responsesQuery) as {
-    data: LivePollResponse[] | null;
-    error: { message: string } | null;
-  };
 
   if (responsesError) {
     console.error("Error fetching poll responses:", responsesError);
@@ -76,8 +66,8 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
   const enrichedResponses = responses.map((response) => ({
     id: response.id,
     live_poll_id: response.live_poll_id,
-    public_profile_id: response.public_profile_id,
-    response: response.response || null,
+    public_profile_id: response.public_profile_id || "",
+    response: (response.response as PollResponseData) || null,
   }));
 
   return (
@@ -90,4 +80,3 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
     />
   );
 }
-

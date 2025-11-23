@@ -61,7 +61,7 @@ export default function PollResponsesHeader({
             };
 
             const { error } = await supabase
-                .from("live_polls" as any)
+                .from("live_polls")
                 .update(updateData)
                 .eq("id", pollID);
 

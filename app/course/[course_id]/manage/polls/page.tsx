@@ -20,16 +20,11 @@ export default async function ManagePollsPage({ params }: ManagePollsPageProps) 
   const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
   const timezone = classData?.time_zone || "America/New_York";
 
-  const pollsQuery = supabase
+  const { data: pollData, error } = await supabase
     .from("live_polls")
     .select("*")
     .eq("class_id", Number(course_id))
     .order("created_at", { ascending: false });
-  
-  const { data: pollData, error } = (await pollsQuery) as {
-    data: LivePoll[] | null;
-    error: { message: string } | null;
-  };
 
   if (error) {
     console.error("Error fetching polls:", {
@@ -44,16 +39,12 @@ export default async function ManagePollsPage({ params }: ManagePollsPageProps) 
     return <EmptyPollsState courseId={course_id} />;
   }
 
-  const pollsWithCounts: LivePollWithCounts[] = await Promise.all(
+  const pollsWithCounts = await Promise.all(
     polls.map(async (poll) => {
-      const countQuery = supabase
+      const { count } = await supabase
         .from("live_poll_responses")
         .select("*", { count: "exact", head: true })
         .eq("live_poll_id", poll.id);
-      
-      const { count } = (await countQuery) as {
-        count: number | null;
-      };
 
       return {
         ...poll,
