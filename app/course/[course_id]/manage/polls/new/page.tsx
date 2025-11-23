@@ -2,16 +2,13 @@
 
 import {
   Box,
-  Input,
   Textarea,
-  Text,
   HStack,
   VStack,
   Button,
   Heading,
-  Checkbox
 } from "@chakra-ui/react";
-import { useForm, Controller } from "react-hook-form";
+import { useForm} from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
@@ -47,7 +44,6 @@ export default function NewPollPage() {
   const {
     register,
     handleSubmit,
-    control,
     formState: { errors },
     getValues,
     setValue,
