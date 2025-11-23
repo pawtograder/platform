@@ -122,7 +122,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     left: 0,
     visible: false,
     mode: "select",
-    close: () => {}
+    close: () => { }
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -174,26 +174,26 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   });
   const commentsCSS = showCommentsFeature
     ? {
-        "& .source-code-line": {
-          cursor: "pointer",
-          display: "flex",
-          flexDirection: "row",
-          "&:hover": {
-            bg: "yellow.subtle",
-            width: "100%",
-            cursor: "cell"
-          }
-        },
-        "& .selected": {
-          bg: "yellow.subtle"
+      "& .source-code-line": {
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "row",
+        "&:hover": {
+          bg: "yellow.subtle",
+          width: "100%",
+          cursor: "cell"
         }
+      },
+      "& .selected": {
+        bg: "yellow.subtle"
       }
+    }
     : {
-        "& .source-code-line": {
-          display: "flex",
-          flexDirection: "row"
-        }
-      };
+      "& .source-code-line": {
+        display: "flex",
+        flexDirection: "row"
+      }
+    };
   return (
     <Box
       border="1px solid"
@@ -669,9 +669,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
         )
         .map((check: RubricCheck) => check.rubric_criteria_id);
       // Using the effective rubric (either manually selected or default)
-      criteriaWithAnnotationChecks = rubricCriteria.filter((criteria: RubricCriteria) =>
-        annotationChecks.includes(criteria.id)
-      );
+      criteriaWithAnnotationChecks = rubricCriteria
+        .filter((criteria: RubricCriteria) => annotationChecks.includes(criteria.id))
+        .sort((a, b) => a.ordinal - b.ordinal);
     }
 
     const criteriaOptions: RubricCriteriaSelectGroupOption[] =
@@ -687,6 +687,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 (check.annotation_target === "file" || check.annotation_target === null) &&
                 check.rubric_criteria_id === criteria.id
             )
+            .sort((a, b) => a.ordinal - b.ordinal)
             .map((check) => {
               // Count existing annotations for this specific check
               const existingAnnotationsForCheck = existingComments.filter(
