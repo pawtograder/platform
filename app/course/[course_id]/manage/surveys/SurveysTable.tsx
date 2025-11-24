@@ -20,12 +20,11 @@ type FilterType = "all" | "closed" | "active" | "draft";
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
-  totalStudents: number;
   courseId: string;
   timezone: string;
 };
 
-export default function SurveysTable({ surveys, totalStudents, courseId, timezone }: SurveysTableProps) {
+export default function SurveysTable({ surveys, courseId, timezone }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
@@ -474,7 +473,9 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
                 </Table.Cell>
                 <Table.Cell py={4}>
                   <Text color={textColor}>
-                    {survey.status === "draft" ? "—" : `${survey.response_count}/${totalStudents} responded`}
+                    {survey.status === "draft"
+                      ? "—"
+                      : `${survey.response_count}/${survey.assigned_student_count} responded`}
                   </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>

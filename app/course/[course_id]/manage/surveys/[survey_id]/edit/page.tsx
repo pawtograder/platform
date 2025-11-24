@@ -21,6 +21,8 @@ type SurveyFormData = {
   status: "draft" | "published";
   due_date?: string;
   allow_response_editing: boolean;
+  assigned_to_all: boolean;
+  assigned_students?: string[];
 };
 
 type SurveyRow = Tables<"surveys">;
@@ -76,7 +78,9 @@ export default function EditSurveyPage() {
       json: "",
       status: "draft",
       due_date: "",
-      allow_response_editing: false
+      allow_response_editing: false,
+      assigned_to_all: true,
+      assigned_students: []
     }
   });
 
@@ -142,6 +146,14 @@ export default function EditSurveyPage() {
           dueDateFormatted = formatInTimeZone(new Date(data.due_date), timezone, "yyyy-MM-dd'T'HH:mm");
         }
 
+        // Load existing survey assignments
+        const { data: assignmentData } = await supabase
+          .from("survey_assignments")
+          .select("profile_id")
+          .eq("survey_id", data.id);
+
+        const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
+
         // Load the survey data into the form
         reset({
           title: data.title || "",
@@ -149,7 +161,9 @@ export default function EditSurveyPage() {
           json: toJsonString(data.json),
           status: data.status || "draft",
           due_date: dueDateFormatted,
-          allow_response_editing: Boolean(data.allow_response_editing)
+          allow_response_editing: Boolean(data.allow_response_editing),
+          assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
+          assigned_students: assignedStudents
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
@@ -207,7 +221,8 @@ export default function EditSurveyPage() {
               status: "draft",
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: convertDueDateToISO(values.due_date as string),
-              validation_errors: null // No validation errors for draft saves
+              validation_errors: null, // No validation errors for draft saves
+              assigned_to_all: Boolean(values.assigned_to_all)
             })
             .eq("id", rawSurveyId)
             .select("id, survey_id")
@@ -216,6 +231,29 @@ export default function EditSurveyPage() {
           if (error || !data) {
             console.error("Draft save error:", error);
             throw new Error(error?.message || "Failed to save draft");
+          }
+
+          // Handle survey assignments for drafts
+          if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
+            console.log("[saveDraftOnly] Updating survey assignments for:", values.assigned_students);
+            const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
+              p_survey_id: data.id,
+              p_profile_ids: values.assigned_students
+            });
+
+            if (assignmentError) {
+              console.error("[saveDraftOnly] Assignment error:", assignmentError);
+              toaster.error({
+                title: "Warning",
+                description: "Draft was saved but there was an error updating student assignments."
+              });
+            }
+          } else if (values.assigned_to_all) {
+            const { error: deleteError } = await supabase.from("survey_assignments").delete().eq("survey_id", data.id);
+
+            if (deleteError) {
+              console.error("[saveDraftOnly] Error removing assignments:", deleteError);
+            }
           }
 
           trackEvent("survey_updated", {
@@ -269,6 +307,16 @@ export default function EditSurveyPage() {
           }
         }
 
+        // Validate student assignments
+        if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
+          toaster.create({
+            title: "Cannot Save Survey",
+            description: "Please select at least one student or change assignment mode to 'all students'.",
+            type: "error"
+          });
+          return;
+        }
+
         // Show loading toast before starting the process
         const loadingToast = toaster.create({
           title: "Updating Survey",
@@ -299,7 +347,8 @@ export default function EditSurveyPage() {
               status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]), // Force to draft if validation errors
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: convertDueDateToISO(values.due_date as string),
-              validation_errors: validationErrors
+              validation_errors: validationErrors,
+              assigned_to_all: Boolean(values.assigned_to_all)
             })
             .eq("id", rawSurveyId)
             .select("id, survey_id")
@@ -317,7 +366,8 @@ export default function EditSurveyPage() {
                   status: "draft",
                   allow_response_editing: values.allow_response_editing as boolean,
                   due_date: convertDueDateToISO(values.due_date as string),
-                  validation_errors: `Database error: ${error?.message || "Unknown error"}`
+                  validation_errors: `Database error: ${error?.message || "Unknown error"}`,
+                  assigned_to_all: Boolean(values.assigned_to_all)
                 })
                 .eq("id", rawSurveyId)
                 .select("id, survey_id")
@@ -330,6 +380,30 @@ export default function EditSurveyPage() {
               throw new Error(`Failed to update survey: ${error?.message || fallbackError || "Unknown error"}`);
             }
             return;
+          }
+
+          // Handle survey assignments if not assigned to all students
+          if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
+            console.log("[EditSurvey] Updating survey assignments for:", values.assigned_students);
+            const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
+              p_survey_id: data.id,
+              p_profile_ids: values.assigned_students
+            });
+
+            if (assignmentError) {
+              console.error("[EditSurvey] Assignment error:", assignmentError);
+              toaster.error({
+                title: "Warning",
+                description: "Survey was updated but there was an error assigning it to specific students."
+              });
+            }
+          } else if (values.assigned_to_all) {
+            // If assigned to all, remove any specific assignments
+            const { error: deleteError } = await supabase.from("survey_assignments").delete().eq("survey_id", data.id);
+
+            if (deleteError) {
+              console.error("[EditSurvey] Error removing assignments:", deleteError);
+            }
           }
 
           // Track survey update

@@ -1,4 +1,5 @@
 -- Drop existing objects (tables CASCADE will drop their triggers automatically)
+DROP TABLE IF EXISTS survey_assignees CASCADE;
 DROP TABLE IF EXISTS survey_responses CASCADE;
 DROP TABLE IF EXISTS survey_templates CASCADE;
 DROP TABLE IF EXISTS surveys CASCADE;
@@ -45,6 +46,14 @@ CREATE TABLE survey_templates (
     version INTEGER NOT NULL DEFAULT 1,
     scope template_scope NOT NULL DEFAULT 'course',
     class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE
+);
+
+-- Create survey_assignees table (optional targeted delivery to specific students)
+CREATE TABLE survey_assignees (
+  survey_id UUID NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (survey_id, profile_id)
 );
 
 -- Create survey_responses table
