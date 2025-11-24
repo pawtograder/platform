@@ -227,15 +227,8 @@ export default function PollRespondPage() {
                 <Heading size="lg" color={textColor}>
                   Thank You!
                 </Heading>
-                <Text color={textColor}>
-                  Your poll response has been submitted successfully.
-                </Text>
-                <Button
-                  onClick={() => router.push(`/course/${course_id}`)}
-                  colorPalette="blue"
-                  size="lg"
-                  width="100%"
-                >
+                <Text color={textColor}>Your poll response has been submitted successfully.</Text>
+                <Button onClick={() => router.push(`/course/${course_id}`)} colorPalette="blue" size="lg" width="100%">
                   Return to Course
                 </Button>
               </VStack>
