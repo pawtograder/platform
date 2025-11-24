@@ -7,6 +7,7 @@ import { useMemo, useEffect, useRef } from "react";
 import { CloseButton } from "@/components/ui/close-button";
 import { PollResponseData } from "@/types/poll";
 import { getPollAnswer } from "@/utils/pollUtils";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 interface FullscreenElement extends Element {
   webkitRequestFullscreen?: () => Promise<void>;
@@ -23,16 +24,9 @@ interface FullscreenDocument extends Document {
   msExitFullscreen?: () => Promise<void>;
 }
 
-type PollResponse = {
-  id: string;
-  live_poll_id: string;
-  public_profile_id: string;
-  response: PollResponseData | null;
-};
-
 type MultipleChoiceDynamicViewerProps = {
   pollQuestion: JSON;
-  responses: PollResponse[];
+  responses: Database["public"]["Tables"]["live_poll_responses"]["Row"][];
   isFullWindow?: boolean;
   onExit?: () => void;
   pollUrl?: string;
@@ -183,7 +177,7 @@ export default function MultipleChoiceDynamicViewer({
     });
 
     responses.forEach((response) => {
-      const answer = getPollAnswer(response.response);
+      const answer = getPollAnswer(response.response as PollResponseData);
 
       if (Array.isArray(answer)) {
         answer.forEach((item: string) => {
