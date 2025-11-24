@@ -86,7 +86,6 @@ export default function PollRespondPage() {
         }
 
         profileId = roleData.public_profile_id;
-        setPublicProfileId(profileId);
         setRequiresLogin(false);
       }
 
@@ -214,14 +213,33 @@ export default function PollRespondPage() {
             </Box>
           </Box>
         ) : isSubmitted ? (
-          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
-            <Heading size="lg" color={textColor} mb={4}>
-              Thank You!
-            </Heading>
-            <Text color={textColor}>
-              Your poll response has been submitted successfully. Refresh the page to answer again or to load a new
-              poll.
-            </Text>
+          <Box display="flex" justifyContent="center" alignItems="center" minH="calc(100vh - 4rem)">
+            <Box
+              bg={cardBgColor}
+              border="1px solid"
+              borderColor={borderColor}
+              borderRadius="lg"
+              p={8}
+              maxW="500px"
+              width="100%"
+            >
+              <VStack gap={6} align="center" textAlign="center">
+                <Heading size="lg" color={textColor}>
+                  Thank You!
+                </Heading>
+                <Text color={textColor}>
+                  Your poll response has been submitted successfully.
+                </Text>
+                <Button
+                  onClick={() => router.push(`/course/${course_id}`)}
+                  colorPalette="blue"
+                  size="lg"
+                  width="100%"
+                >
+                  Return to Course
+                </Button>
+              </VStack>
+            </Box>
           </Box>
         ) : !surveyModel ? (
           <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
