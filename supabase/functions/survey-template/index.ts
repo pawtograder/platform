@@ -45,14 +45,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<SurveyT
   });
 
   // Get current user ID
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  const {
+    data: { user },
+    error: userError
+  } = await supabase.auth.getUser();
   if (userError || !user) {
     throw new Error("Unauthorized");
   }
 
   const createTemplate = async () => {
     if (!title || !template || !class_id) {
-        throw new Error("Missing required fields: title, template, class_id");
+      throw new Error("Missing required fields: title, template, class_id");
     }
 
     const { data: savedTemplate, error: templateError } = await supabase
@@ -87,31 +90,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<SurveyT
     if (templatesError) {
       throw new Error(`Failed to get templates: ${templatesError.message}`);
     }
-    
+
     return {
-        success: true,
-        templates: templates
+      success: true,
+      templates: templates
     };
   };
 
   const updateTemplate = async () => {
     if (!template_id) {
-        throw new Error("Missing template_id");
+      throw new Error("Missing template_id");
     }
-    
+
     const updates: any = {};
     if (title) updates.title = title;
     if (template) updates.template = template;
     if (templateScope) updates.scope = templateScope;
     if (description) updates.description = description;
 
-    const { error } = await supabase
-        .from("survey_templates")
-        .update(updates)
-        .eq("id", template_id);
+    const { error } = await supabase.from("survey_templates").update(updates).eq("id", template_id);
 
     if (error) {
-        throw new Error(`Failed to update template: ${error.message}`);
+      throw new Error(`Failed to update template: ${error.message}`);
     }
 
     return { success: true, template_id };
@@ -119,16 +119,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<SurveyT
 
   const deleteTemplate = async () => {
     if (!template_id) {
-        throw new Error("Missing template_id");
+      throw new Error("Missing template_id");
     }
 
-    const { error } = await supabase
-        .from("survey_templates")
-        .delete()
-        .eq("id", template_id);
+    const { error } = await supabase.from("survey_templates").delete().eq("id", template_id);
 
     if (error) {
-        throw new Error(`Failed to delete template: ${error.message}`);
+      throw new Error(`Failed to delete template: ${error.message}`);
     }
 
     return { success: true };

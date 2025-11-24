@@ -4,6 +4,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 
+// Deno types are provided by edge-runtime.d.ts import above
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+  serve: (handler: (req: Request) => Response | Promise<Response>) => void;
+};
+
 //Submit a response to a survey
 
 export type SurveySubmitResponseRequest = {
@@ -41,10 +49,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<SurveyS
   //if the survey response has already been submitted, throw an error
   if (existingResponse.is_submitted) {
     throw new Error("Survey response has already been submitted");
-
-    return {
-      success: false
-    };
   }
 
   //Update the response
