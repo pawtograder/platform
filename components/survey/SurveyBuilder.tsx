@@ -380,49 +380,85 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                             {label}
                           </Badge>
 
-                          <HStack gap="1" mr="1">
+                          <HStack gap="1" mr="1" onClick={(e) => e.stopPropagation()}>
                             <Tooltip content="Move up">
-                              <IconButton
+                              <Box
+                                role="button"
+                                tabIndex={atTop ? -1 : 0}
                                 aria-label="Move question up"
-                                size="xs"
-                                variant="ghost"
+                                cursor={atTop ? "not-allowed" : "pointer"}
+                                opacity={atTop ? 0.5 : 1}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  moveElementById(el.id, -1);
+                                  if (!atTop) moveElementById(el.id, -1);
                                 }}
-                                disabled={atTop}
+                                onKeyDown={(e) => {
+                                  if ((e.key === "Enter" || e.key === " ") && !atTop) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    moveElementById(el.id, -1);
+                                  }
+                                }}
+                                p="1"
+                                borderRadius="sm"
+                                _hover={{ bg: atTop ? "transparent" : "gray.100" }}
+                                _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
                               >
                                 <LuChevronUp />
-                              </IconButton>
+                              </Box>
                             </Tooltip>
 
                             <Tooltip content="Move down">
-                              <IconButton
+                              <Box
+                                role="button"
+                                tabIndex={atBottom ? -1 : 0}
                                 aria-label="Move question down"
-                                size="xs"
-                                variant="ghost"
+                                cursor={atBottom ? "not-allowed" : "pointer"}
+                                opacity={atBottom ? 0.5 : 1}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  moveElementById(el.id, +1);
+                                  if (!atBottom) moveElementById(el.id, +1);
                                 }}
-                                disabled={atBottom}
+                                onKeyDown={(e) => {
+                                  if ((e.key === "Enter" || e.key === " ") && !atBottom) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    moveElementById(el.id, +1);
+                                  }
+                                }}
+                                p="1"
+                                borderRadius="sm"
+                                _hover={{ bg: atBottom ? "transparent" : "gray.100" }}
+                                _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
                               >
                                 <LuChevronDown />
-                              </IconButton>
+                              </Box>
                             </Tooltip>
 
                             <Tooltip content="Delete question">
-                              <IconButton
+                              <Box
+                                role="button"
+                                tabIndex={0}
                                 aria-label="Delete question"
-                                size="xs"
-                                variant="ghost"
+                                cursor="pointer"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   deleteElementById(el.id);
                                 }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    deleteElementById(el.id);
+                                  }
+                                }}
+                                p="1"
+                                borderRadius="sm"
+                                _hover={{ bg: "gray.100" }}
+                                _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
                               >
                                 <LuTrash2 />
-                              </IconButton>
+                              </Box>
                             </Tooltip>
                           </HStack>
 

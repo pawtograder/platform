@@ -109,6 +109,7 @@ export default function SurveyForm({
   const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
   const currentJson = watch("json");
+  const currentStatus = watch("status");
   const assignedStudents = watch("assigned_students") || [];
 
   const validateJson = useCallback(() => {
@@ -179,6 +180,17 @@ export default function SurveyForm({
 
   const handleAddToTemplate = useCallback(
     async (scope: "course" | "global") => {
+      // Run form validation first
+      const isValid = await form.trigger();
+      if (!isValid) {
+        setIsScopeModalOpen(false);
+        toaster.error({
+          title: "Changes not saved",
+          description: "An error occurred while saving the survey. Please try again."
+        });
+        return;
+      }
+
       setIsScopeModalOpen(false);
 
       const supabase = createClient();
@@ -204,7 +216,6 @@ export default function SurveyForm({
           scope,
           created_at: new Date().toISOString(),
           class_id: Number(course_id)
-          //...(scope === "course" ? { class_id: Number(course_id) } : null)
         };
         const { error } = await supabase.from("survey_templates").insert(insertData);
 
@@ -594,18 +605,28 @@ export default function SurveyForm({
                   type="submit"
                   loading={isSubmitting}
                   size="md"
-                  bg="#22C55E"
+                  bg={currentStatus === "published" ? "#22C55E" : "#3182ce"}
                   color="white"
-                  _hover={{ bg: "#16A34A" }}
+                  _hover={{ bg: currentStatus === "published" ? "#16A34A" : "#2b6cb0" }}
                 >
-                  Save Survey
+                  {currentStatus === "published" ? "Publish Survey" : "Save Draft"}
                 </UIButton>
                 <Button
                   variant="outline"
                   borderColor={buttonBorderColor}
                   color={buttonTextColor}
                   _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-                  onClick={() => setIsScopeModalOpen(true)}
+                  onClick={async () => {
+                    const isValid = await form.trigger();
+                    if (isValid) {
+                      setIsScopeModalOpen(true);
+                    } else {
+                      toaster.error({
+                        title: "Changes not saved",
+                        description: "An error occurred while saving the survey. Please try again."
+                      });
+                    }
+                  }}
                   size="md"
                 >
                   Add to Template Library

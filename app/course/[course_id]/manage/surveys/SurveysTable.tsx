@@ -16,7 +16,7 @@ import { useIsInstructor } from "@/hooks/useClassProfiles";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 
-type FilterType = "all" | "completed" | "awaiting";
+type FilterType = "all" | "closed" | "active" | "draft";
 
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
@@ -49,26 +49,26 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
   const filterOptions = useMemo(
     () => [
       { value: "all" as const, label: "All" },
-      { value: "completed" as const, label: "Completed" },
-      { value: "awaiting" as const, label: "Awaiting Responses" }
+      { value: "active" as const, label: "Active" },
+      { value: "draft" as const, label: "Drafts" },
+      { value: "closed" as const, label: "Closed" }
     ],
     []
   );
 
-  // Filter surveys based on completion status
+  // Filter surveys based on status
   const filteredSurveys = useMemo(() => {
     if (activeFilter === "all") {
       return surveys;
     }
 
     return surveys.filter((survey) => {
-      const completionRate =
-        survey.assigned_student_count > 0 ? (survey.response_count / survey.assigned_student_count) * 100 : 0;
-
-      if (activeFilter === "completed") {
-        return completionRate === 100;
-      } else if (activeFilter === "awaiting") {
-        return completionRate < 100;
+      if (activeFilter === "closed") {
+        return survey.status === "closed";
+      } else if (activeFilter === "draft") {
+        return survey.status === "draft";
+      } else if (activeFilter === "active") {
+        return survey.status === "published";
       }
 
       return true;
@@ -101,10 +101,12 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
   };
 
   const getSurveyLink = (survey: Survey) => {
+    // Non-instructors should go to the student survey-taking page for published/closed surveys
     if (!isInstructor && (survey.status === "published" || survey.status === "closed")) {
-      return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
+      return `/course/${courseId}/surveys/${survey.id}`;
     }
 
+    // Instructors: route based on survey status
     if (survey.status === "draft") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
@@ -144,10 +146,18 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
         const supabase = createClient();
 
         // Validate JSON before publishing
+        // survey.json is already a parsed object from Supabase (JSONB columns are auto-deserialized)
         let validationErrors = null;
         try {
           if (survey.json) {
-            JSON.parse(survey.json as string);
+            // If it's already an object, validate by stringifying and parsing
+            // If it's a string, parse it
+            if (typeof survey.json === "string") {
+              JSON.parse(survey.json);
+            } else {
+              // Already an object, validate by ensuring it can be stringified
+              JSON.stringify(survey.json);
+            }
           }
         } catch (error) {
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
@@ -419,6 +429,15 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                 fontWeight="semibold"
                 textTransform="uppercase"
                 py={3}
+              >
+                DUE DATE
+              </Table.ColumnHeader>
+              <Table.ColumnHeader
+                color={tableHeaderTextColor}
+                fontSize="xs"
+                fontWeight="semibold"
+                textTransform="uppercase"
+                py={3}
                 pr={0}
               >
                 ACTIONS
@@ -462,6 +481,13 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                 <Table.Cell py={4}>
                   <Text color={textColor}>
                     {formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell py={4}>
+                  <Text color={survey.due_date ? textColor : "gray.500"}>
+                    {survey.due_date
+                      ? formatInTimeZone(new TZDate(survey.due_date), timezone, "MMM d, yyyy h:mm a")
+                      : "—"}
                   </Text>
                 </Table.Cell>
                 <Table.Cell pr={3}>
@@ -528,7 +554,6 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                           </MenuItem>
                           {isInstructor && (
                             <>
-                              <MenuItem value="reopen">Re-open</MenuItem>
                               <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
                                 Delete
                               </MenuItem>

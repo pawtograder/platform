@@ -11,6 +11,8 @@ import { Box, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
+import { formatInTimeZone } from "date-fns-tz";
 
 type SurveyFormData = {
   title: string;
@@ -44,6 +46,29 @@ export default function EditSurveyPage() {
   const [surveyData, setSurveyData] = useState<SurveyRow>();
   const { role } = useClassProfiles();
   const rawSurveyId = getParam(survey_id, "survey_id");
+  const timezone = role.classes?.time_zone || "America/New_York";
+
+  // Helper function to convert datetime-local string to ISO timestamp with timezone
+  const convertDueDateToISO = (dueDateString: string | null | undefined): string | null => {
+    if (!dueDateString) return null;
+    // Parse datetime-local format (YYYY-MM-DDTHH:MM)
+    const [date, time] = dueDateString.split("T");
+    if (!date || !time) return null;
+    const [year, month, day] = date.split("-");
+    const [hour, minute] = time.split(":");
+    // Create TZDate with these exact values in course timezone
+    const tzDate = new TZDate(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour),
+      parseInt(minute),
+      0,
+      0,
+      timezone
+    );
+    return tzDate.toISOString();
+  };
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "edit", id: rawSurveyId },
@@ -114,12 +139,11 @@ export default function EditSurveyPage() {
         console.log("[EditSurvey] Survey data loaded successfully:", data.id);
         setSurveyData(data);
 
-        // Convert due_date from ISO string to datetime-local format
+        // Convert due_date from ISO string to datetime-local format in course timezone
         let dueDateFormatted = "";
         if (data.due_date) {
-          const date = new Date(data.due_date);
-          // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
-          dueDateFormatted = date.toISOString().slice(0, 16);
+          // Convert ISO timestamp to datetime-local format in course timezone
+          dueDateFormatted = formatInTimeZone(new Date(data.due_date), timezone, "yyyy-MM-dd'T'HH:mm");
         }
 
         // Load existing survey assignments
@@ -196,7 +220,7 @@ export default function EditSurveyPage() {
               json: jsonToStore,
               status: "draft",
               allow_response_editing: values.allow_response_editing as boolean,
-              due_date: (values.due_date as string) || null,
+              due_date: convertDueDateToISO(values.due_date as string),
               validation_errors: null, // No validation errors for draft saves
               assigned_to_all: Boolean(values.assigned_to_all)
             })
@@ -259,7 +283,7 @@ export default function EditSurveyPage() {
       }
       await updateDraft();
     },
-    [course_id, trackEvent, router, survey_id]
+    [course_id, trackEvent, router, survey_id, timezone, rawSurveyId]
   );
 
   const onSubmit = useCallback(
@@ -267,16 +291,19 @@ export default function EditSurveyPage() {
       async function update() {
         // Validate due date if trying to publish
         if (values.status === "published" && values.due_date) {
-          const dueDate = new Date(values.due_date as string);
-          const now = new Date();
+          const dueDateISO = convertDueDateToISO(values.due_date as string);
+          if (dueDateISO) {
+            const dueDate = new Date(dueDateISO);
+            const now = new Date();
 
-          if (dueDate < now) {
-            toaster.create({
-              title: "Cannot Publish Survey",
-              description: "The due date must be in the future. Please update the due date or save as a draft.",
-              type: "error"
-            });
-            return;
+            if (dueDate < now) {
+              toaster.create({
+                title: "Cannot Publish Survey",
+                description: "The due date must be in the future. Please update the due date or save as a draft.",
+                type: "error"
+              });
+              return;
+            }
           }
         }
 
@@ -302,7 +329,13 @@ export default function EditSurveyPage() {
 
           // Parse the JSON to ensure it's valid (only for active updates)
           const parsedJson = toJsonString(values.json);
-          const validationErrors = null;
+          let validationErrors: string | null = null;
+
+          try {
+            JSON.parse(parsedJson);
+          } catch (err) {
+            validationErrors = `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`;
+          }
 
           // Update the survey
           const { data, error } = await supabase
@@ -313,7 +346,7 @@ export default function EditSurveyPage() {
               json: parsedJson,
               status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]), // Force to draft if validation errors
               allow_response_editing: values.allow_response_editing as boolean,
-              due_date: (values.due_date as string) || null,
+              due_date: convertDueDateToISO(values.due_date as string),
               validation_errors: validationErrors,
               assigned_to_all: Boolean(values.assigned_to_all)
             })
@@ -329,10 +362,10 @@ export default function EditSurveyPage() {
                 .update({
                   title: values.title as string,
                   description: (values.description as string) || null,
-                  questions: values.json as string,
+                  json: values.json as string,
                   status: "draft",
                   allow_response_editing: values.allow_response_editing as boolean,
-                  due_date: (values.due_date as string) || null,
+                  due_date: convertDueDateToISO(values.due_date as string),
                   validation_errors: `Database error: ${error?.message || "Unknown error"}`,
                   assigned_to_all: Boolean(values.assigned_to_all)
                 })
@@ -421,7 +454,7 @@ export default function EditSurveyPage() {
       }
       await update();
     },
-    [course_id, router, trackEvent, survey_id]
+    [course_id, router, trackEvent, survey_id, timezone, rawSurveyId]
   );
 
   if (isLoading) {

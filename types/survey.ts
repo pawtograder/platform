@@ -12,6 +12,7 @@ export type SurveyResponseWithProfile = SurveyResponse & {
   profiles: {
     id: string;
     name: string | null;
+    sis_user_id?: string | null;
   };
 };
 

@@ -11,19 +11,30 @@ export async function saveResponse(
 
   try {
     // Upsert to survey_responses table
+    // Set submitted_at timestamp when submitting
+    const upsertData: {
+      survey_id: string;
+      profile_id: string;
+      response: ResponseData;
+      is_submitted: boolean;
+      submitted_at?: string;
+    } = {
+      survey_id: surveyId,
+      profile_id: profileID,
+      response: responseData,
+      is_submitted: isSubmitted
+    };
+
+    // Set submitted_at timestamp when isSubmitted is true
+    if (isSubmitted) {
+      upsertData.submitted_at = new Date().toISOString();
+    }
+
     const { data, error } = await supabase
       .from("survey_responses")
-      .upsert(
-        {
-          survey_id: surveyId,
-          profile_id: profileID,
-          response: responseData,
-          is_submitted: isSubmitted
-        },
-        {
-          onConflict: "survey_id,profile_id"
-        }
-      )
+      .upsert(upsertData, {
+        onConflict: "survey_id,profile_id"
+      })
       .select()
       .single();
 
