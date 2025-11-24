@@ -362,6 +362,8 @@ export async function getChangedFiles(
  * Create a branch and commit changes to a target repository
  * For text files with patches, applies the patch to the content at baseSha
  * For binary files or files with full content, uses the provided content
+ *
+ * @throws {Error} with message "NO_CHANGES" if applying diffs results in no actual changes
  */
 export async function createBranchAndCommit(
   repoFullName: string,
@@ -369,6 +371,7 @@ export async function createBranchAndCommit(
   baseSha: string,
   files: FileChange[],
   commitMessage: string,
+  targetBranch: string = "main",
   scope?: Sentry.Scope
 ): Promise<void> {
   const octokit = await github.getOctoKit(repoFullName, scope);
@@ -390,17 +393,39 @@ export async function createBranchAndCommit(
     await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
       owner,
       repo,
-      ref: `heads/${branchName}`
+      ref: `refs/heads/${branchName}`
     });
   } catch {
     // Branch doesn't exist, which is fine
   }
-  const { data: newRef } = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-    owner,
-    repo,
-    ref: `refs/heads/${branchName}`,
-    sha: baseSha
-  });
+  let newRef;
+  try {
+    const { data } = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+      owner,
+      repo,
+      ref: `refs/heads/${branchName}`,
+      sha: baseSha
+    });
+    newRef = data;
+  } catch (error) {
+    // Branch might already exist due to race condition - check if that's the case
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStatus = (error as { status?: number })?.status;
+
+    // GitHub returns 422 for "Reference already exists"
+    if (errorStatus === 422 || errorMessage.includes("already exists") || errorMessage.includes("Reference")) {
+      // Branch already exists, fetch it instead
+      const { data } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+        owner,
+        repo,
+        ref: `heads/${branchName}`
+      });
+      newRef = data;
+    } else {
+      // Some other error occurred, rethrow it
+      throw error;
+    }
+  }
   scope?.setTag("new_ref", newRef.ref);
 
   const { data: baseCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
@@ -410,17 +435,30 @@ export async function createBranchAndCommit(
   });
   scope?.setTag("base_commit_sha", baseCommit.sha);
 
-  // Create blobs for all changed files
+  // Create blobs for all changed files, checking if diffs result in actual changes
   const treeItems = await Promise.all(
     files.map(async (file) => {
       // Handle removed files
       if (file.status === "removed" || file.content === "") {
-        return {
-          path: file.path,
-          mode: "100644" as const,
-          type: "blob" as const,
-          sha: null as unknown as string
-        };
+        // Check if file actually exists in target branch - if not, it's a no-op
+        try {
+          await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+            owner,
+            repo,
+            path: file.path,
+            ref: targetBranch
+          });
+          // File exists, so removal is a real change
+          return {
+            path: file.path,
+            mode: "100644" as const,
+            type: "blob" as const,
+            sha: null as unknown as string
+          };
+        } catch {
+          // File doesn't exist in target branch, so removal is a no-op
+          return null;
+        }
       }
 
       // Handle files with patches (text files that need to be merged)
@@ -472,6 +510,40 @@ export async function createBranchAndCommit(
           throw patchError;
         }
 
+        // Check if patched content matches what's currently in the target branch
+        try {
+          const { data: targetFileData } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+            owner,
+            repo,
+            path: file.path,
+            ref: targetBranch
+          });
+
+          if ("content" in targetFileData && targetFileData.content) {
+            const targetContent = atob(targetFileData.content);
+            // Normalize line endings for comparison (GitHub may store with different line endings)
+            const normalizedPatched = patchedContent.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+            const normalizedTarget = targetContent.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+            if (normalizedPatched === normalizedTarget) {
+              // No-op: patched content matches target branch
+              scope?.addBreadcrumb({
+                message: `Patch application for ${file.path} results in no changes (matches target branch)`,
+                category: "patch",
+                level: "info"
+              });
+              return null;
+            }
+          }
+        } catch {
+          // File doesn't exist in target branch, so this is a new file (real change)
+          scope?.addBreadcrumb({
+            message: `File ${file.path} doesn't exist in target branch, will be added`,
+            category: "patch",
+            level: "info"
+          });
+        }
+
         // Create blob with patched content
         const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
           owner,
@@ -490,6 +562,8 @@ export async function createBranchAndCommit(
 
       // Handle files with full content (binary files or initial sync)
       if (file.content) {
+        // For binary files, we can't easily compare, so assume it's a change
+        // (binary comparison would require fetching and comparing blobs)
         const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
           owner,
           repo,
@@ -508,11 +582,34 @@ export async function createBranchAndCommit(
     })
   );
 
+  // Filter out null entries (no-op changes)
+  const actualChanges = treeItems.filter((item): item is NonNullable<typeof item> => item !== null);
+
+  // If no actual changes, clean up the branch and throw error to signal no-op
+  if (actualChanges.length === 0) {
+    scope?.addBreadcrumb({
+      message: `All diffs result in no-op changes - no commit needed`,
+      category: "sync",
+      level: "info"
+    });
+    // Clean up the branch we created since we won't be using it
+    try {
+      await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+        owner,
+        repo,
+        ref: `heads/${branchName}`
+      });
+    } catch {
+      // Ignore cleanup errors (branch might not exist or already deleted)
+    }
+    throw new Error("NO_CHANGES");
+  }
+
   const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
     owner,
     repo,
     base_tree: baseCommit.tree.sha,
-    tree: treeItems
+    tree: actualChanges
   });
   const { data: newCommit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
     owner,
@@ -640,9 +737,9 @@ export async function syncRepositoryToHandout(params: {
   const org = params.repositoryFullName.split("/")[0];
   const limiter = getSyncLimiter(org);
   const { adminSupabase } = params;
-  const createContentLimiter = getCreateContentLimiter(org);
   console.log("Waiting for outer sync limiter to be available", org);
   return await limiter.schedule(async () => {
+    const createContentLimiter = getCreateContentLimiter(org);
     console.log("Waiting for inner sync limiter to be available", org);
     return await createContentLimiter.schedule(async () => {
       // Wrap the sync operation in the rate limiter
@@ -694,7 +791,33 @@ changes from the template repository.
 Changed files:
 ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
-        await createBranchAndCommit(repositoryFullName, branchName, syncedRepoSha, changedFiles, commitMessage, scope);
+        try {
+          await createBranchAndCommit(
+            repositoryFullName,
+            branchName,
+            syncedRepoSha,
+            changedFiles,
+            commitMessage,
+            "main",
+            scope
+          );
+        } catch (error) {
+          // Handle case where applying diffs results in no actual changes
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage === "NO_CHANGES") {
+            scope?.addBreadcrumb({
+              message: `Applying diffs resulted in no actual changes - repository already up to date`,
+              category: "sync",
+              level: "info"
+            });
+            return {
+              success: true,
+              no_changes: true
+            };
+          }
+          // Re-throw if it's a different error
+          throw error;
+        }
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
