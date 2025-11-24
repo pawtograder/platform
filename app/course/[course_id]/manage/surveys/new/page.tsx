@@ -12,6 +12,8 @@ import { Box } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
+import { TZDate } from "@date-fns/tz";
+import { formatInTimeZone } from "date-fns-tz";
 
 type SurveyFormData = {
   title: string;
@@ -35,6 +37,29 @@ export default function NewSurveyPage() {
   const { private_profile_id, role } = useClassProfiles();
   const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
   const [currentSurveyId, setCurrentSurveyId] = useState<string | null>(null);
+  const timezone = role.classes?.time_zone || "America/New_York";
+
+  // Helper function to convert datetime-local string to ISO timestamp with timezone
+  const convertDueDateToISO = (dueDateString: string | null | undefined): string | null => {
+    if (!dueDateString) return null;
+    // Parse datetime-local format (YYYY-MM-DDTHH:MM)
+    const [date, time] = dueDateString.split("T");
+    if (!date || !time) return null;
+    const [year, month, day] = date.split("-");
+    const [hour, minute] = time.split(":");
+    // Create TZDate with these exact values in course timezone
+    const tzDate = new TZDate(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour),
+      parseInt(minute),
+      0,
+      0,
+      timezone
+    );
+    return tzDate.toISOString();
+  };
 
   useEffect(() => {
     if (role.role === "grader") {
@@ -150,12 +175,11 @@ export default function NewSurveyPage() {
             console.log("[loadLatestDraft] allow_response_editing:", data.allow_response_editing);
             console.log("[loadLatestDraft] status:", data.status);
 
-            // Convert due_date from ISO string to datetime-local format
+            // Convert due_date from ISO string to datetime-local format in course timezone
             let dueDateFormatted = "";
             if (data.due_date) {
-              const date = new Date(data.due_date);
-              // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
-              dueDateFormatted = date.toISOString().slice(0, 16);
+              // Convert ISO timestamp to datetime-local format in course timezone
+              dueDateFormatted = formatInTimeZone(new Date(data.due_date), timezone, "yyyy-MM-dd'T'HH:mm");
             }
 
             // Load the draft data into the form
@@ -261,7 +285,7 @@ export default function NewSurveyPage() {
           json: jsonToStore,
           status: finalStatus,
           allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
-          due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+          due_date: convertDueDateToISO(values.due_date as string),
           validation_errors: validationErrors,
           updated_at: new Date().toISOString()
         };
@@ -300,7 +324,7 @@ export default function NewSurveyPage() {
             json: jsonToStore,
             status: finalStatus,
             allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
-            due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+            due_date: convertDueDateToISO(values.due_date as string),
             validation_errors: validationErrors,
             updated_at: new Date().toISOString()
           };
@@ -329,7 +353,7 @@ export default function NewSurveyPage() {
             status: finalStatus,
             created_at: new Date().toISOString(),
             allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
-            due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+            due_date: convertDueDateToISO(values.due_date as string),
             validation_errors: validationErrors
           };
 
@@ -359,7 +383,7 @@ export default function NewSurveyPage() {
           status: finalStatus,
           created_at: new Date().toISOString(),
           allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
-          due_date: values.due_date ? new Date(values.due_date as string).toISOString() : null,
+          due_date: convertDueDateToISO(values.due_date as string),
           validation_errors: validationErrors
         };
 
@@ -427,7 +451,7 @@ export default function NewSurveyPage() {
 
       return { data, error };
     },
-    [course_id, private_profile_id, router, trackEvent, isReturningFromPreview]
+    [course_id, private_profile_id, router, trackEvent, isReturningFromPreview, timezone]
   );
 
   // -------- SAVE DRAFT ONLY (WRAPPER) --------
@@ -449,16 +473,19 @@ export default function NewSurveyPage() {
     async (values: FieldValues) => {
       // Validate due date if trying to publish
       if (values.status === "published" && values.due_date) {
-        const dueDate = new Date(values.due_date as string);
-        const now = new Date();
+        const dueDateISO = convertDueDateToISO(values.due_date as string);
+        if (dueDateISO) {
+          const dueDate = new Date(dueDateISO);
+          const now = new Date();
 
-        if (dueDate < now) {
-          toaster.create({
-            title: "Cannot Publish Survey",
-            description: "The due date must be in the future. Please update the due date or save as a draft.",
-            type: "error"
-          });
-          return;
+          if (dueDate < now) {
+            toaster.create({
+              title: "Cannot Publish Survey",
+              description: "The due date must be in the future. Please update the due date or save as a draft.",
+              type: "error"
+            });
+            return;
+          }
         }
       }
 

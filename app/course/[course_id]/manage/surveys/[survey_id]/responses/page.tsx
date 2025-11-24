@@ -10,6 +10,10 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   const { course_id, survey_id } = await params;
   const supabase = await createClient();
 
+  // Fetch class data for timezone
+  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
+  const timezone = classData?.time_zone || "America/New_York";
+
   // Fetch survey data to get title, status, version, JSON, and due_date (latest version)
   const { data: survey, error: surveyError } = await supabase
     .from("surveys")
@@ -52,12 +56,13 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
 
   // Fetch all responses for this survey_id (across all versions)
   // Join with profiles to get student names and emails
+  // profile_id is a foreign key to profiles(id), so we use the foreign key constraint name
   const { data: responses, error: responsesError } = await supabase
     .from("survey_responses")
     .select(
       `
       *,
-      profiles:profiles!profile_id (
+      profiles:profiles!survey_responses_profile_id_fkey (
         id,
         name
       )
@@ -104,6 +109,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       surveyDueDate={survey.due_date}
       responses={responses || []}
       totalStudents={totalStudents || 0}
+      timezone={timezone}
     />
   );
 }

@@ -174,6 +174,17 @@ export default function SurveyForm({
 
   const handleAddToTemplate = useCallback(
     async (scope: "course" | "global") => {
+      // Run form validation first
+      const isValid = await form.trigger();
+      if (!isValid) {
+        setIsScopeModalOpen(false);
+        toaster.error({
+          title: "Changes not saved",
+          description: "An error occurred while saving the survey. Please try again."
+        });
+        return;
+      }
+
       setIsScopeModalOpen(false);
 
       const supabase = createClient();
@@ -199,7 +210,6 @@ export default function SurveyForm({
           scope,
           created_at: new Date().toISOString(),
           class_id: Number(course_id)
-          //...(scope === "course" ? { class_id: Number(course_id) } : null)
         };
         const { error } = await supabase.from("survey_templates").insert(insertData);
 
@@ -537,7 +547,17 @@ export default function SurveyForm({
                   borderColor={buttonBorderColor}
                   color={buttonTextColor}
                   _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-                  onClick={() => setIsScopeModalOpen(true)}
+                  onClick={async () => {
+                    const isValid = await form.trigger();
+                    if (isValid) {
+                      setIsScopeModalOpen(true);
+                    } else {
+                      toaster.error({
+                        title: "Changes not saved",
+                        description: "An error occurred while saving the survey. Please try again."
+                      });
+                    }
+                  }}
                   size="md"
                 >
                   Add to Template Library

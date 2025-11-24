@@ -102,10 +102,12 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
   };
 
   const getSurveyLink = (survey: Survey) => {
+    // Non-instructors should go to the student survey-taking page for published/closed surveys
     if (!isInstructor && (survey.status === "published" || survey.status === "closed")) {
-      return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
+      return `/course/${courseId}/surveys/${survey.id}`;
     }
 
+    // Instructors: route based on survey status
     if (survey.status === "draft") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
@@ -145,10 +147,18 @@ export default function SurveysTable({ surveys, totalStudents, courseId, timezon
         const supabase = createClient();
 
         // Validate JSON before publishing
+        // survey.json is already a parsed object from Supabase (JSONB columns are auto-deserialized)
         let validationErrors = null;
         try {
           if (survey.json) {
-            JSON.parse(survey.json as string);
+            // If it's already an object, validate by stringifying and parsing
+            // If it's a string, parse it
+            if (typeof survey.json === "string") {
+              JSON.parse(survey.json);
+            } else {
+              // Already an object, validate by ensuring it can be stringified
+              JSON.stringify(survey.json);
+            }
           }
         } catch (error) {
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;

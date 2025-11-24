@@ -33,8 +33,8 @@ import { useRouter } from "next/navigation";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 type SurveyTemplate = {
   id: string;
@@ -64,7 +64,8 @@ export function SurveyTemplateLibraryModal({
   onTemplateLoad
 }: SurveyTemplateLibraryModalProps) {
   const router = useRouter();
-  const { private_profile_id } = useClassProfiles();
+  const { allOfMyRoles } = useClassProfiles();
+
   const [templates, setTemplates] = useState<SurveyTemplate[]>([]);
   const [filteredTemplates, setFilteredTemplates] = useState<SurveyTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -105,54 +106,28 @@ export function SurveyTemplateLibraryModal({
     try {
       const supabase = createClient();
 
-      // Fetch global templates
-      const { data: globalData, error: globalError } = await supabase
+      // Fetch all templates - RLS will filter based on:
+      // 1. Course templates: only if user is authorized for that class_id
+      // 2. Global templates: only if user is staff in any class
+      const { data: allTemplatesData, error: templatesError } = await supabase
         .from("survey_templates")
-        .select(
-          `
-          *,
-          profiles:created_by (
-            name
-          )
-        `
-        )
-        .eq("scope", "global")
+        .select("*")
         .order("updated_at", { ascending: false });
 
-      // Fetch course-specific templates (matching class_id)
-      const { data: courseData, error: courseError } = await supabase
-        .from("survey_templates")
-        .select(
-          `
-          *,
-          profiles:created_by (
-            name
-          )
-        `
-        )
-        .eq("scope", "course")
-        .eq("class_id", Number(courseId))
-        .order("updated_at", { ascending: false });
-
-      if (globalError || courseError) {
-        console.error("Error fetching templates:", globalError || courseError);
+      if (templatesError) {
+        console.error("Error fetching templates:", templatesError);
         return;
       }
 
-      // Combine and deduplicate templates
-      const allTemplates = [...(globalData || []), ...(courseData || [])];
-
-      // Type assertion for the joined data
-      const typedData = allTemplates.map((item) => ({
-        ...item,
-        profiles: Array.isArray(item.profiles) ? item.profiles[0] : item.profiles
-      })) as SurveyTemplate[];
+      // RLS already filtered by authorization, but we can do additional client-side filtering
+      // for the visibility filter UI
+      const allTemplates = allTemplatesData || [];
 
       // Sort by updated_at descending
-      typedData.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      allTemplates.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
-      setTemplates(typedData);
-      setFilteredTemplates(typedData);
+      setTemplates(allTemplates as unknown as SurveyTemplate[]);
+      setFilteredTemplates(allTemplates as unknown as SurveyTemplate[]);
     } catch (error) {
       console.error("Error fetching templates:", error);
     } finally {
@@ -164,9 +139,20 @@ export function SurveyTemplateLibraryModal({
   useEffect(() => {
     let filtered = [...templates];
 
+    // Always filter course-scoped templates to only show those for the current course
+    filtered = filtered.filter((t) => {
+      if (t.scope === "course") {
+        return t.class_id === Number(courseId);
+      }
+      // Global templates are shown for all courses
+      return true;
+    });
+
     // Apply ownership filter
     if (ownershipFilter === "my") {
-      filtered = filtered.filter((t) => t.created_by === private_profile_id);
+      filtered = filtered.filter((t) =>
+        allOfMyRoles.some((role: { private_profile_id: string }) => role.private_profile_id === t.created_by)
+      );
     }
 
     // Apply visibility filter
@@ -175,7 +161,7 @@ export function SurveyTemplateLibraryModal({
     } else if (visibilityFilter === "global") {
       filtered = filtered.filter((t) => t.scope === "global");
     }
-    // "all" shows everything
+    // "all" shows everything (already filtered by course above)
 
     // Apply search filter
     if (searchQuery.trim()) {
@@ -186,7 +172,7 @@ export function SurveyTemplateLibraryModal({
     }
 
     setFilteredTemplates(filtered);
-  }, [templates, searchQuery, visibilityFilter, ownershipFilter, courseId, private_profile_id]);
+  }, [templates, searchQuery, visibilityFilter, ownershipFilter, courseId, allOfMyRoles]);
 
   const handlePreview = useCallback((template: SurveyTemplate) => {
     setPreviewTemplate(template);
@@ -330,9 +316,12 @@ export function SurveyTemplateLibraryModal({
 
   const isOwner = useCallback(
     (template: SurveyTemplate) => {
-      return template.created_by === private_profile_id;
+      // Check if the template's creator (private_profile_id) matches any of my roles' private_profile_id
+      return allOfMyRoles.some(
+        (role: { private_profile_id: string }) => role.private_profile_id === template.created_by
+      );
     },
-    [private_profile_id]
+    [allOfMyRoles]
   );
 
   // Create collection for visibility filter

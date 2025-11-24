@@ -21,6 +21,7 @@ type SurveyResponsesViewProps = {
   surveyDueDate: Survey["due_date"]; // The deadline for the survey
   responses: SurveyResponseWithProfile[];
   totalStudents: number;
+  timezone: string; // Course timezone for date formatting
 };
 
 /**
@@ -103,7 +104,8 @@ export default function SurveyResponsesView({
   surveyJson,
   surveyDueDate,
   responses,
-  totalStudents
+  totalStudents,
+  timezone
 }: SurveyResponsesViewProps) {
   const router = useRouter();
 
@@ -261,7 +263,7 @@ export default function SurveyResponsesView({
       const row = [
         response.profiles?.name || "N/A",
         response.submitted_at
-          ? formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "MMM d, yyyy, h:mm a")
+          ? formatInTimeZone(new TZDate(response.submitted_at), timezone, "MMM d, yyyy, h:mm a")
           : "—",
         ...allQuestionNames.map((questionName) => {
           const value = answers[questionName];
@@ -589,11 +591,7 @@ export default function SurveyResponsesView({
                         <Table.Cell py={4}>
                           <Text color={textColor}>
                             {response.submitted_at
-                              ? formatInTimeZone(
-                                  new TZDate(response.submitted_at),
-                                  "America/New_York",
-                                  "MMM d, yyyy, h:mm a"
-                                )
+                              ? formatInTimeZone(new TZDate(response.submitted_at), timezone, "MMM d, yyyy, h:mm a")
                               : "—"}
                           </Text>
                         </Table.Cell>

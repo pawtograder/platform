@@ -32,8 +32,8 @@ The frontend expects the following columns in the `survey_responses` table:
 
 - `id` (UUID) - Primary key
 - `survey_id` (UUID) - Foreign key to surveys.id
-- `student_id` (UUID) - Foreign key to profiles.id
-- `answers` (JSONB) - Student response data
+- `profile_id` (UUID) - Foreign key to profiles.id
+- `response` (JSONB) - Student response data
 - `submitted_at` (TIMESTAMPTZ) - Submission timestamp
 - `updated_at` (TIMESTAMPTZ) - Last update timestamp
 - `is_submitted` (BOOLEAN) - Whether response is submitted
@@ -394,8 +394,8 @@ The frontend implementation requires the following database schema to be in plac
 
 **Survey Responses Table:**
 
-- `student_id` column (renamed from `profile_id`)
-- `answers` JSONB column for response data
+- `profile_id` column (foreign key to profiles.id)
+- `response` JSONB column for response data
 - Soft delete support with `deleted_at` column
 
 **Survey Templates Table:**
@@ -428,7 +428,7 @@ The following database schema must be in place for the frontend to function:
 1. **Core Survey Tables:**
 
    - `surveys` table with all required columns (id, survey_id, version, class_id, created_by, title, description, json, status, created_at, updated_at, allow_response_editing, due_date, validation_errors, deleted_at, is_latest_version)
-   - `survey_responses` table with student_id column (not profile_id)
+   - `survey_responses` table with profile_id column (foreign key to profiles.id)
    - `survey_templates` table for future template functionality
 
 2. **Survey Status Enum:**
