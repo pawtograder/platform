@@ -81,41 +81,39 @@ export default function ImportGradebookColumns() {
       // 1. For new columns, insert them and get their IDs
       const newCols = previewData.previewCols.filter((col) => col.isNew);
       let sortOrder = existingColumnsNotFromHook.length;
-      await Promise.all(
-        newCols.map(async (col) => {
-          const randomChars = Math.random().toString(36).substring(2, 10);
-          const slug =
-            col.name
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, "-")
-              .replace(/(^-|-$)/g, "") +
-            "-" +
-            randomChars;
-          const maxScore = col.maxScore ?? 100;
+      for (const col of newCols) {
+        const randomChars = Math.random().toString(36).substring(2, 10);
+        const slug =
+          col.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "") +
+          "-" +
+          randomChars;
+        const maxScore = col.maxScore ?? 100;
 
-          const insertObj = {
-            name: col.name + ` (Imported ${new Date().toLocaleDateString()} #${randomChars})`,
-            gradebook_id: gradebookController.gradebook_id,
-            class_id: gradebookController.class_id,
-            external_data: {
-              source: "csv",
-              fileName: importJob?.filename,
-              date: new Date().toISOString(),
-              creator: private_profile_id
-            },
-            max_score: maxScore,
-            description: null,
-            dependencies: null,
-            slug,
-            sort_order: sortOrder++
-          };
-          const { data, error } = await supabase.from("gradebook_columns").insert(insertObj).select().single();
-          if (error) {
-            throw new Error(error.message);
-          }
-          col.newColId = data.id;
-        })
-      );
+        const insertObj = {
+          name: col.name,
+          gradebook_id: gradebookController.gradebook_id,
+          class_id: gradebookController.class_id,
+          external_data: {
+            source: "csv",
+            fileName: importJob?.filename,
+            date: new Date().toISOString(),
+            creator: private_profile_id
+          },
+          max_score: maxScore,
+          description: null,
+          dependencies: null,
+          slug,
+          sort_order: sortOrder++
+        };
+        const { data, error } = await supabase.from("gradebook_columns").insert(insertObj).select().single();
+        if (error) {
+          throw new Error(error.message);
+        }
+        col.newColId = data.id;
+      }
       // 1b. For each OLD column that was created by an import, update its expression to refer to the new file
       await Promise.all(
         existingColumnsNotFromHook
@@ -229,6 +227,20 @@ export default function ImportGradebookColumns() {
       toaster.success({
         title: "Import successful!",
         description: "Gradebook columns and scores have been imported."
+      });
+      // Reset all state after successful import
+      setImportJob(undefined);
+      setStep(1);
+      setStudentIdentifierCol(null);
+      setStudentIdentifierType("email");
+      setColumnMappings({});
+      setNewColumnMaxScores({});
+      setPreviewData(null);
+      setExpandedSections({
+        hasChanges: true,
+        noChangesInFile: false,
+        notInFile: false,
+        noRosterMatch: false
       });
       setDialogOpen(false);
     } catch (err: unknown) {
