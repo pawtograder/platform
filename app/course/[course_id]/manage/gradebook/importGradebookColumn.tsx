@@ -66,6 +66,7 @@ export default function ImportGradebookColumns() {
   const [studentIdentifierCol, setStudentIdentifierCol] = useState<number | null>(null);
   const [studentIdentifierType, setStudentIdentifierType] = useState<"email" | "sid">("email");
   const [columnMappings, setColumnMappings] = useState<Record<number, number | "new" | "ignore">>({}); // import col idx -> existing col id or 'new'
+  const [autoMatchedColumns, setAutoMatchedColumns] = useState<Set<number>>(new Set()); // Track which columns were auto-matched
   const [newColumnMaxScores, setNewColumnMaxScores] = useState<Record<number, number>>({}); // import col idx -> max score for new columns
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const studentRoster = useStudentRoster();
@@ -234,6 +235,7 @@ export default function ImportGradebookColumns() {
       setStudentIdentifierCol(null);
       setStudentIdentifierType("email");
       setColumnMappings({});
+      setAutoMatchedColumns(new Set());
       setNewColumnMaxScores({});
       setPreviewData(null);
       setExpandedSections({
@@ -267,13 +269,16 @@ export default function ImportGradebookColumns() {
     reader.onload = (e) => {
       const csvText = e.target?.result as string;
       const parsedRows: string[][] = parse(csvText, {
-        skip_empty_lines: true
+        skip_empty_lines: true,
+        relax_column_count: true
       });
 
-      // Trim all values in all cells and filter out rows where all values are blank or just whitespace
+      // Trim all values in all cells and filter out empty rows (rows where all values are blank or just whitespace)
       const rows = parsedRows
+        .filter((row) => row && row.length > 0) // Skip null/undefined rows and empty arrays
         .map((row) => row.map((cell) => (cell ?? "").trim()))
         .filter((row) => {
+          // Skip rows where all cells are empty or whitespace
           return row.some((cell) => cell.length > 0);
         });
 
@@ -309,6 +314,7 @@ export default function ImportGradebookColumns() {
       // Auto-detect exact matches between CSV columns and existing gradebook columns
       // Default all columns to "ignore" unless they match
       const autoMappings: Record<number, number | "new" | "ignore"> = {};
+      const autoMatchedIndices = new Set<number>();
       header.forEach((csvColName, idx) => {
         if (idx === currentIdCol) return; // Skip identifier column
 
@@ -320,6 +326,7 @@ export default function ImportGradebookColumns() {
 
         if (exactMatch) {
           autoMappings[idx] = exactMatch.id;
+          autoMatchedIndices.add(idx);
         } else {
           // Default to ignored if no match found
           autoMappings[idx] = "ignore";
@@ -330,6 +337,7 @@ export default function ImportGradebookColumns() {
       // Use a ref-like check by getting current state via a function
       setColumnMappings((currentMappings) => {
         if (Object.keys(currentMappings).length === 0) {
+          setAutoMatchedColumns(autoMatchedIndices);
           return autoMappings;
         }
         return currentMappings;
@@ -525,7 +533,7 @@ export default function ImportGradebookColumns() {
                                   >
                                     {col}
                                   </Text>
-                                  {isMapped && isExisting && matchedColumn && (
+                                  {isMapped && isExisting && matchedColumn && autoMatchedColumns.has(idx) && (
                                     <Box
                                       px={2}
                                       py={0.5}
@@ -550,6 +558,12 @@ export default function ImportGradebookColumns() {
                                           ...m,
                                           [idx]: newMapping
                                         }));
+                                        // Remove from auto-matched set when user manually changes
+                                        setAutoMatchedColumns((prev) => {
+                                          const next = new Set(prev);
+                                          next.delete(idx);
+                                          return next;
+                                        });
                                         // Set default max score when selecting "new"
                                         if (e.target.value === "new") {
                                           setNewColumnMaxScores((scores) => ({
@@ -607,7 +621,7 @@ export default function ImportGradebookColumns() {
                                 )}
                                 {isIgnored && (
                                   <Text fontSize="sm" color="fg.muted" ml="120px" fontStyle="italic">
-                                    This column will be ignored
+                                    Map to an existing column or create a new column
                                   </Text>
                                 )}
                               </VStack>
