@@ -3,6 +3,7 @@
 import Markdown from "@/components/ui/markdown";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, Card, HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
+import { useRef } from "react";
 import { FaCheckCircle, FaTimes } from "react-icons/fa";
 import { MdReplay } from "react-icons/md";
 
@@ -56,6 +57,11 @@ export default function Flashcard({
   onBackToQuestion,
   onKeepTrying
 }: FlashcardProps) {
+  const previousCard = useRef<FlashcardRow | null>(null);
+  if (showAnswer) {
+    previousCard.current = currentCard;
+  }
+
   return (
     <Box height="100%" maxW="4xl" mx="auto" style={{ perspective: "1000px" }}>
       {/* Card Container with Flip Animation */}
@@ -167,7 +173,7 @@ export default function Flashcard({
               px={2}
               wordBreak="break-word"
             >
-              Answer: {currentCard.title}
+              Answer: {previousCard.current?.title}
             </Text>
             <Button
               onClick={onBackToQuestion}
@@ -202,7 +208,7 @@ export default function Flashcard({
                 maxHeight="100%"
               >
                 <Box width="100%" fontSize={{ base: "md", md: "2xl" }}>
-                  <Markdown>{currentCard.answer}</Markdown>
+                  <Markdown>{previousCard.current?.answer}</Markdown>
                 </Box>
               </Box>
             </VStack>

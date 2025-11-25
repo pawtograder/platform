@@ -128,6 +128,7 @@
     "sharp": "^0.34.3",
     "styled-components": "^5.3.11",
     "styled-system": "^5.1.5",
+    "survey-core": "^2.3.11",
     "survey-creator-core": "^2.3.11",
     "survey-creator-react": "^2.3.11",
     "survey-react-ui": "^2.3.11",
