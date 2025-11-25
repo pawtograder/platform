@@ -86,7 +86,6 @@ export default function PollRespondPage() {
         }
 
         profileId = roleData.public_profile_id;
-        setPublicProfileId(profileId);
         setRequiresLogin(false);
       }
 
