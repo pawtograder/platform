@@ -23,7 +23,7 @@
     "rubric-schema": "npx typescript-json-schema --required --noExtraProps tsconfig.json YmlRubricType > public/RubricSchema.json",
     "seed": "npx tsx scripts/SeedDB.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
-    "lint": "next lint --max-warnings=10000 && prettier --check .",
+    "lint": "next lint && prettier --check .",
     "format": "prettier --write ."
   },
   "dependencies": {
