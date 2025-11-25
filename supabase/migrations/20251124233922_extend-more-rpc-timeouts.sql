@@ -857,3 +857,121 @@ $$;
 REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "anon";
 REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "service_role";
+
+-- Fix: Update create_gradebook_column_for_assignment to properly set gradebook_column_id
+-- The trigger is AFTER INSERT, so we need to use UPDATE instead of modifying NEW
+CREATE OR REPLACE FUNCTION public.create_gradebook_column_for_assignment()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO public
+AS $$
+DECLARE
+    gradebook_id bigint;
+    new_col_id bigint;
+BEGIN
+    -- Get the gradebook_id for this class
+    SELECT g.id INTO gradebook_id
+    FROM public.gradebooks g
+    WHERE g.class_id = NEW.class_id;
+
+    -- Create the gradebook column
+    INSERT INTO public.gradebook_columns (
+        name,
+        max_score,
+        slug,
+        class_id,
+        gradebook_id,
+        score_expression,
+        released,
+        dependencies
+    ) VALUES (
+        NEW.title,
+        NEW.total_points,
+        'assignment-' || NEW.slug,
+        NEW.class_id,
+        gradebook_id,
+        'assignments("' || NEW.slug || '")',
+        false,
+        jsonb_build_object('assignments', jsonb_build_array(NEW.id))
+    ) RETURNING id into new_col_id;
+
+    -- Since this is an AFTER INSERT trigger, we need to UPDATE the assignments table
+    -- to set the gradebook_column_id
+    UPDATE public.assignments 
+    SET gradebook_column_id = new_col_id
+    WHERE id = NEW.id;
+
+    RETURN NEW;
+END;
+$$;
+
+-- Update trigger function to also recalculate when max_score changes
+-- max_score is used in render_expression and normalization, so changes should trigger recalculation
+CREATE OR REPLACE FUNCTION public.recalculate_gradebook_column_for_all_students_statement()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO public
+AS $$
+DECLARE
+  rows_to_enqueue jsonb[];
+  row_rec RECORD;
+BEGIN
+  RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Trigger fired: operation=%, table=gradebook_columns', TG_OP;
+  
+  -- Collect all affected students into a JSONB array
+  rows_to_enqueue := ARRAY[]::jsonb[];
+  
+  FOR row_rec IN (
+    SELECT DISTINCT gcs.class_id, gcs.gradebook_id, gcs.student_id, gcs.is_private
+    FROM new_table n
+    JOIN old_table o ON n.id = o.id
+    JOIN public.gradebook_column_students gcs ON gcs.gradebook_column_id = n.id
+    WHERE n.score_expression IS DISTINCT FROM o.score_expression
+       OR n.max_score IS DISTINCT FROM o.max_score
+  ) LOOP
+    rows_to_enqueue := array_append(rows_to_enqueue, 
+      jsonb_build_object(
+        'class_id', row_rec.class_id,
+        'gradebook_id', row_rec.gradebook_id,
+        'student_id', row_rec.student_id,
+        'is_private', row_rec.is_private
+      )
+    );
+  END LOOP;
+  
+  RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Collected % rows to enqueue', array_length(rows_to_enqueue, 1);
+  
+  -- Batch enqueue all rows in a single call
+  -- This will result in a single INSERT statement, triggering the broadcast trigger once
+  IF array_length(rows_to_enqueue, 1) > 0 THEN
+    RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Calling batch enqueue function';
+    PERFORM public.enqueue_gradebook_row_recalculation_batch(rows_to_enqueue);
+    RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] Batch enqueue completed';
+  ELSE
+    RAISE NOTICE '[recalculate_gradebook_column_for_all_students_statement] No rows to enqueue';
+  END IF;
+  
+  RETURN NULL;
+END;
+$$;
+
+-- Back-fill gradebook_column_id for existing assignments
+-- Only updates when there is exactly one matching gradebook column with the correct score_expression
+UPDATE public.assignments a
+SET gradebook_column_id = matched_cols.gradebook_column_id
+FROM (
+    SELECT 
+        a.id AS assignment_id,
+        gc.id AS gradebook_column_id,
+        COUNT(*) OVER (PARTITION BY a.id) AS match_count
+    FROM public.assignments a
+    JOIN public.gradebook_columns gc 
+        ON gc.class_id = a.class_id
+        AND gc.score_expression = 'assignments("' || a.slug || '")'
+    WHERE a.gradebook_column_id IS NULL
+        AND a.slug IS NOT NULL
+) matched_cols
+WHERE a.id = matched_cols.assignment_id
+    AND matched_cols.match_count = 1;
