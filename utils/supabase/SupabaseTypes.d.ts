@@ -8308,6 +8308,113 @@ export type Database = {
           }
         ];
       };
+      live_poll_responses: {
+        Row: {
+          id: string;
+          live_poll_id: string;
+          public_profile_id: string | null;
+          response: Json;
+          submitted_at: string | null;
+          is_submitted: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          live_poll_id: string;
+          public_profile_id?: string | null;
+          response?: Json;
+          submitted_at?: string | null;
+          is_submitted?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          live_poll_id?: string;
+          public_profile_id?: string | null;
+          response?: Json;
+          submitted_at?: string | null;
+          is_submitted?: boolean;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "live_poll_responses_live_poll_id_fkey";
+            columns: ["live_poll_id"];
+            isOneToOne: false;
+            referencedRelation: "live_polls";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "live_poll_responses_public_profile_id_fkey";
+            columns: ["public_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["public_profile_id"];
+          },
+          {
+            foreignKeyName: "live_poll_responses_public_profile_id_fkey";
+            columns: ["public_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      live_polls: {
+        Row: {
+          id: string;
+          class_id: number;
+          created_by: string;
+          question: Json;
+          is_live: boolean;
+          created_at: string;
+          deactivates_at: string | null;
+          require_login: boolean;
+        };
+        Insert: {
+          id?: string;
+          class_id: number;
+          created_by: string;
+          question?: Json;
+          is_live?: boolean;
+          created_at?: string;
+          deactivates_at?: string | null;
+          require_login?: boolean;
+        };
+        Update: {
+          id?: string;
+          class_id?: number;
+          created_by?: string;
+          question?: Json;
+          is_live?: boolean;
+          created_at?: string;
+          deactivates_at?: string | null;
+          require_login?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "live_polls_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "live_polls_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["public_profile_id"];
+          },
+          {
+            foreignKeyName: "live_polls_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
     };
     Views: {
       active_submissions_for_class: {
