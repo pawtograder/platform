@@ -416,6 +416,7 @@ export default function AssignmentsTable() {
   const {
     getHeaderGroups,
     getRowModel,
+    getCoreRowModel,
     getState,
     getRowCount,
     setPageIndex,
@@ -630,7 +631,7 @@ export default function AssignmentsTable() {
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                 }}
                                 options={Array.from(
-                                  getRowModel()
+                                  getCoreRowModel()
                                     .rows.reduce((map, row) => {
                                       const name = row.original.name;
                                       if (name && !map.has(name)) {
@@ -653,7 +654,7 @@ export default function AssignmentsTable() {
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getRowModel()
+                                    getCoreRowModel()
                                       .rows.reduce((map, row) => {
                                         const sectionName = row.original.class_section_name;
                                         if (sectionName && !map.has(sectionName)) {
@@ -678,7 +679,7 @@ export default function AssignmentsTable() {
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getRowModel()
+                                    getCoreRowModel()
                                       .rows.reduce((map, row) => {
                                         const sectionName = row.original.lab_section_name;
                                         if (sectionName && !map.has(sectionName)) {
@@ -703,7 +704,7 @@ export default function AssignmentsTable() {
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getRowModel()
+                                    getCoreRowModel()
                                       .rows.reduce((map, row) => {
                                         const graderName = row.original.gradername;
                                         if (graderName && !map.has(graderName)) {
@@ -728,7 +729,7 @@ export default function AssignmentsTable() {
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getRowModel()
+                                    getCoreRowModel()
                                       .rows.reduce((map, row) => {
                                         const checkerName = row.original.checkername;
                                         if (checkerName && !map.has(checkerName)) {
