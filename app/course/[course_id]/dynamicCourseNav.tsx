@@ -25,9 +25,11 @@ import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
   FiBookOpen,
+  FiCheckSquare,
   FiClipboard,
   FiClock,
   FiCompass,
+  FiFileText,
   FiMenu,
   FiMessageSquare,
   FiSettings,
@@ -81,6 +83,34 @@ const LinkItems = (courseID: number) => [
     instructor_only: true,
     target: `/course/${courseID}/manage/gradebook`,
     feature_flag: "gradebook"
+  },
+  {
+    name: "Surveys",
+    icon: FiFileText,
+    student_only: true,
+    target: `/course/${courseID}/surveys`,
+    feature_flag: "surveys"
+  },
+  {
+    name: "Surveys",
+    icon: FiFileText,
+    instructors_or_graders_only: true,
+    target: `/course/${courseID}/manage/surveys`,
+    feature_flag: "surveys"
+  },
+  {
+    name: "Polls",
+    icon: FiCheckSquare,
+    student_only: true,
+    target: `/course/${courseID}/polls`,
+    feature_flag: "polls"
+  },
+  {
+    name: "Polls",
+    icon: FiCheckSquare,
+    instructors_or_graders_only: true,
+    target: `/course/${courseID}/manage/polls`,
+    feature_flag: "polls"
   },
   {
     name: "Course Settings",
