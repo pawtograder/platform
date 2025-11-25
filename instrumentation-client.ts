@@ -46,6 +46,21 @@ Sentry.init({
         ) {
           return null; // Discard chunk load errors
         }
+        if ("message" in exception) {
+          const message = exception.message as string;
+          if (message.includes("Failed to fetch")) {
+            return null; // Discard network errors
+          }
+          if (message.includes("NetworkError when attempting to fetch")) {
+            return null; // Discard network errors
+          }
+          if (message.includes("Fetch is aborted")) {
+            return null; // Discard fetch abort errors
+          }
+          if (message.includes("The operation was aborted")) {
+            return null; // Discard abort errors
+          }
+        }
       }
     }
     return event; // Send other events

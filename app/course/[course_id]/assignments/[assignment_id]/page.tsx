@@ -9,7 +9,6 @@ import SelfReviewNotice from "@/components/ui/self-review-notice";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -18,15 +17,15 @@ import {
   SubmissionWithGraderResultsAndReview,
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
-import { differenceInDays, format, secondsToHours } from "date-fns";
+import { format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -34,8 +33,6 @@ export default function AssignmentPage() {
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
-  const trackEvent = useTrackEvent();
-  const hasTrackedView = useRef(false);
   const autograderData = useRef<Database["public"]["Functions"]["get_submissions_limits"]["Returns"] | null>(null);
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
   const ourAssignmentGroupPredicate = useMemo(() => {
@@ -98,25 +95,6 @@ export default function AssignmentPage() {
 
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
-
-  // Track assignment viewed (once per mount)
-  useEffect(() => {
-    if (assignment && course_id && assignment_id && !hasTrackedView.current) {
-      hasTrackedView.current = true;
-
-      const daysUntilDue = assignment.due_date ? differenceInDays(new Date(assignment.due_date), new Date()) : null;
-      const isGroupAssignment = assignment.group_config !== "individual";
-      const hasSubmissions = (submissions?.length ?? 0) > 0;
-      trackEvent("assignment_viewed", {
-        assignment_id: Number(assignment_id),
-        course_id: Number(course_id),
-        is_group_assignment: isGroupAssignment,
-        days_until_due: daysUntilDue,
-        has_submissions: hasSubmissions,
-        assignment_slug: assignment.slug
-      });
-    }
-  }, [assignment, course_id, assignment_id, submissions, trackEvent]); // Include all values used inside
 
   const autograderRow = autograder?.[0];
   const submissionsPeriod =
