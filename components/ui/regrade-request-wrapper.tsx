@@ -20,6 +20,7 @@ import {
   useSubmissionFileComment,
   useSubmissionRegradeRequestComments
 } from "@/hooks/useSubmission";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
 import type {
@@ -218,6 +219,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   const [isUpdating, setIsUpdating] = useState(false);
   const { regradeRequests } = useAssignmentController();
   const regradeRequest = useRegradeRequest(regradeRequestId);
+  const trackEvent = useTrackEvent();
 
   // Reset adjustment to 0 when popover opens
   useEffect(() => {
@@ -269,6 +271,23 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
       setIsOpen(false);
       await regradeRequests.invalidate(regradeRequestId);
 
+      // Track regrade request resolution
+      if (regradeRequest) {
+        const resolutionTimeHours = regradeRequest.opened_at
+          ? (new Date().getTime() - new Date(regradeRequest.opened_at).getTime()) / (1000 * 60 * 60)
+          : 0;
+
+        trackEvent("regrade_request_resolved", {
+          regrade_request_id: regradeRequestId,
+          assignment_id: regradeRequest.assignment_id,
+          course_id: regradeRequest.class_id,
+          resolution_time_hours: Math.round(resolutionTimeHours * 10) / 10,
+          points_changed: finalScore !== initialPoints,
+          initial_points: initialPoints,
+          resolved_points: finalScore
+        });
+      }
+
       toaster.create({
         title: "Request Resolved",
         description:
@@ -294,7 +313,8 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
     privateProfileId,
     regradeRequests,
     regradeRequest,
-    initialPoints
+    initialPoints,
+    trackEvent
   ]);
 
   return (
@@ -532,6 +552,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
 
   const { regradeRequests } = useAssignmentController();
   const regradeRequest = useRegradeRequest(regradeRequestId);
+  const trackEvent = useTrackEvent();
 
   // Reset adjustment to 0 when popover opens
   useEffect(() => {
@@ -584,6 +605,18 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
       setIsOpen(false);
       await regradeRequests.invalidate(regradeRequestId);
 
+      // Track regrade request closure
+      if (regradeRequest) {
+        const wasAppealGranted = finalScore !== resolvedPoints;
+
+        trackEvent("regrade_request_closed", {
+          regrade_request_id: regradeRequestId,
+          assignment_id: regradeRequest.assignment_id,
+          course_id: regradeRequest.class_id,
+          was_appeal_granted: wasAppealGranted
+        });
+      }
+
       toaster.create({
         title: "Request Closed",
         description:
@@ -609,7 +642,8 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     privateProfileId,
     regradeRequests,
     regradeRequest,
-    resolvedPoints
+    resolvedPoints,
+    trackEvent
   ]);
 
   return (
@@ -940,7 +974,7 @@ export default function RegradeRequestWrapper({
   children: React.ReactNode;
 }) {
   const regradeRequest = useRegradeRequest(regradeRequestId);
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
@@ -950,6 +984,7 @@ export default function RegradeRequestWrapper({
   const isGroupAssignment = useSubmission().assignment_group_id !== null;
   const { submission_regrade_request_comments } = useSubmissionController();
   const { regradeRequests } = useAssignmentController();
+  const trackEvent = useTrackEvent();
 
   const assignee = useUserProfile(regradeRequest?.assignee);
   const resolver = useUserProfile(regradeRequest?.resolved_by);
@@ -1006,6 +1041,16 @@ export default function RegradeRequestWrapper({
         author: private_profile_id
       };
       await submission_regrade_request_comments.create(values);
+
+      // Track regrade request comment
+      const authorRole = role.role === "student" ? "student" : role.role === "instructor" ? "instructor" : "grader";
+      trackEvent("regrade_request_comment_added", {
+        regrade_request_id: regradeRequest.id,
+        submission_id: regradeRequest.submission_id,
+        assignment_id: regradeRequest.assignment_id,
+        course_id: regradeRequest.class_id,
+        author_role: authorRole as "student" | "instructor" | "grader"
+      });
     } catch (error) {
       console.error("Error creating comment or updating regrade request:", error);
       toaster.create({
@@ -1034,6 +1079,13 @@ export default function RegradeRequestWrapper({
       }
 
       await regradeRequests.invalidate(regradeRequest.id);
+
+      // Track regrade request escalation
+      trackEvent("regrade_request_escalated", {
+        regrade_request_id: regradeRequest.id,
+        assignment_id: regradeRequest.assignment_id,
+        course_id: regradeRequest.class_id
+      });
 
       setIsEscalateDialogOpen(false);
       toaster.create({

@@ -10,8 +10,7 @@ import {
   type LabAssignmentConfig,
   type GroupAssignmentConfig,
   type HelpRequestConfig,
-  type DiscussionConfig,
-  type SurveyConfig
+  type DiscussionConfig
 } from "./DatabaseSeedingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -35,7 +34,6 @@ interface SeederConfig {
   groupAssignments?: GroupAssignmentConfig;
   helpRequests?: HelpRequestConfig;
   discussions?: DiscussionConfig;
-  surveyConfig?: SurveyConfig;
   gradingScheme?: "current" | "specification";
   rateLimitOverrides?: Record<string, { maxInsertsPerSecond: number; description: string; batchSize?: number }>;
 }
@@ -82,13 +80,7 @@ const TEMPLATES: Record<string, SeederConfig> = {
       maxRepliesPerRequest: 10,
       maxMembersPerRequest: 3
     },
-    gradingScheme: "specification",
-    surveyConfig: {
-      numSurveys: 3,
-      numTemplates: 2,
-      responseRate: 0.75,
-      submissionRate: 0.85
-    }
+    gradingScheme: "specification"
   },
 
   small: {
@@ -132,13 +124,7 @@ const TEMPLATES: Record<string, SeederConfig> = {
       postsPerTopic: faker.number.int({ min: 5, max: 16 }),
       maxRepliesPerPost: 16
     },
-    gradingScheme: "specification",
-    surveyConfig: {
-      numSurveys: 5,
-      numTemplates: 3,
-      responseRate: 0.75,
-      submissionRate: 0.85
-    }
+    gradingScheme: "specification"
   },
 
   large: {
@@ -188,12 +174,6 @@ const TEMPLATES: Record<string, SeederConfig> = {
         maxInsertsPerSecond: 1,
         description: "Assignment creation (large scale, lots of students, many gradebok columns!)"
       }
-    },
-    surveyConfig: {
-      numSurveys: 15,
-      numTemplates: 8,
-      responseRate: 0.7,
-      submissionRate: 0.8
     }
   },
 
@@ -239,12 +219,6 @@ const TEMPLATES: Record<string, SeederConfig> = {
       maxRepliesPerPost: 10
     },
     gradingScheme: "current",
-    surveyConfig: {
-      numSurveys: 8,
-      numTemplates: 5,
-      responseRate: 0.7,
-      submissionRate: 0.8
-    },
     rateLimitOverrides: {}
   }
 };
@@ -271,7 +245,6 @@ async function runSeeding(config: SeederConfig) {
     .withGroupAssignments(config.groupAssignments!)
     .withHelpRequests(config.helpRequests!)
     .withDiscussions(config.discussions!)
-    .withSurveys(config.surveyConfig!)
     .withGradingScheme(config.gradingScheme!)
     .seed();
 }

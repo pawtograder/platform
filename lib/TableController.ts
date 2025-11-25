@@ -525,30 +525,12 @@ export type PossiblyTentativeResult<T> = T & {
 };
 
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
-export type GradebookRowRecalcStateBroadcastMessage = {
-  type: "gradebook_row_recalc_state";
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table: "gradebook_row_recalc_state";
-  class_id: number;
-  row_id: null;
-  data: null;
-  timestamp: string;
-  affected_count: number;
-  affected_rows: Array<{
-    student_id: string;
-    dirty: boolean;
-    is_recalculating: boolean;
-  }>; // Array of affected rows with their state (only private rows included)
-  requires_refetch: false; // Always false since we include the data
-};
-
 export type BroadcastMessage =
   | {
       type: "table_change" | "channel_created" | "system" | "staff_data_change";
-      operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
-      table?: TablesThatHaveAnIDField | "gradebook_row_recalc_state"; // Include gradebook_row_recalc_state which doesn't have an id field
+      operation?: "INSERT" | "UPDATE" | "DELETE";
+      table?: TablesThatHaveAnIDField;
       row_id?: number | string;
-      row_ids?: (number | string)[]; // Array of IDs for bulk operations
       data?: Record<string, unknown>;
       submission_id?: number;
       help_request_id?: number;
@@ -557,10 +539,7 @@ export type BroadcastMessage =
       student_profile_id?: number;
       target_audience?: "user" | "staff";
       timestamp: string;
-      affected_count?: number; // Number of rows affected in bulk operation
-      requires_refetch?: boolean; // If true, trigger full refetch instead of refetching by IDs
     }
-  | GradebookRowRecalcStateBroadcastMessage
   | OfficeHoursBroadcastMessage;
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
@@ -720,28 +699,10 @@ export default class TableController<
     }
     if (
       !message.operation ||
-      (message.operation !== "INSERT" &&
-        message.operation !== "UPDATE" &&
-        message.operation !== "DELETE" &&
-        message.operation !== "BULK_UPDATE")
+      (message.operation !== "INSERT" && message.operation !== "UPDATE" && message.operation !== "DELETE")
     ) {
       return;
     }
-
-    // Handle bulk operations (BULK_UPDATE or large INSERT/DELETE) immediately
-    // These already represent batched operations from statement-level triggers
-    if (
-      message.operation === "BULK_UPDATE" ||
-      ("requires_refetch" in message &&
-        message.requires_refetch &&
-        "affected_count" in message &&
-        message.affected_count &&
-        message.affected_count >= 50)
-    ) {
-      this._handleBulkUpdate(message);
-      return;
-    }
-
     this._pendingOperations.push(message);
     this._scheduleBatchedOperations();
   }
@@ -796,16 +757,8 @@ export default class TableController<
     for (const operation of operations) {
       if (
         !operation.operation ||
-        (operation.operation !== "INSERT" &&
-          operation.operation !== "UPDATE" &&
-          operation.operation !== "DELETE" &&
-          operation.operation !== "BULK_UPDATE")
+        (operation.operation !== "INSERT" && operation.operation !== "UPDATE" && operation.operation !== "DELETE")
       ) {
-        continue;
-      }
-
-      // BULK_UPDATE messages are handled separately and should not be in the batch queue
-      if (operation.operation === "BULK_UPDATE") {
         continue;
       }
 
@@ -1446,7 +1399,7 @@ export default class TableController<
       try {
         const messageHandler = (message: BroadcastMessage) => {
           this.enqueueBroadcast(message);
-          if (message.type !== "gradebook_row_recalc_state" && message.data) {
+          if (message.data) {
             this._bumpMaxUpdatedAtFrom(message.data);
           }
         };
@@ -1623,12 +1576,10 @@ export default class TableController<
 
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
-      if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
-          messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
-        }
+      if (message.data) {
+        messagesWithData.push(message);
+      } else if (message.row_id) {
+        idsToRefetch.push(message.row_id as IDType);
       }
     }
 
@@ -1682,12 +1633,10 @@ export default class TableController<
 
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
-      if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
-          messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
-        }
+      if (message.data) {
+        messagesWithData.push(message);
+      } else if (message.row_id) {
+        idsToRefetch.push(message.row_id as IDType);
       }
     }
 
@@ -1731,13 +1680,11 @@ export default class TableController<
 
     // Collect all IDs to delete
     for (const message of messages) {
-      if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
-          const data = message.data as Record<string, unknown>;
-          idsToDelete.add(data.id as IDType);
-        } else if (message.row_id) {
-          idsToDelete.add(message.row_id as IDType);
-        }
+      if (message.data) {
+        const data = message.data as Record<string, unknown>;
+        idsToDelete.add(data.id as IDType);
+      } else if (message.row_id) {
+        idsToDelete.add(message.row_id as IDType);
       }
     }
 
@@ -1749,7 +1696,6 @@ export default class TableController<
 
   private _handleInsert(message: BroadcastMessage) {
     if (this._closed) return;
-    if (message.type === "gradebook_row_recalc_state") return; // Handled elsewhere
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -2063,7 +2009,6 @@ export default class TableController<
 
   private _handleUpdate(message: BroadcastMessage) {
     if (this._closed) return;
-    if (message.type === "gradebook_row_recalc_state") return; // Handled elsewhere
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -2141,74 +2086,11 @@ export default class TableController<
 
   private _handleDelete(message: BroadcastMessage) {
     if (this._closed) return;
-    if (message.type === "gradebook_row_recalc_state") return; // Handled elsewhere
     if (message.data) {
       const data = message.data as Record<string, unknown>;
       this._removeRow(data.id as IDType);
     } else if (message.row_id) {
       this._removeRow(message.row_id as IDType);
-    }
-  }
-
-  /**
-   * Handle bulk operations (INSERT, UPDATE, DELETE) from statement-level triggers.
-   * If requires_refetch is true, triggers a full refetch.
-   * Otherwise, refetches only the specified row IDs.
-   */
-  private async _handleBulkUpdate(message: BroadcastMessage): Promise<void> {
-    if (this._closed) return;
-
-    // If refetch is required (large bulk operation), trigger full refetch
-    if ("requires_refetch" in message && message.requires_refetch) {
-      // Use incremental refetch if available, otherwise full refetch
-      await this._refetchAllData();
-      return;
-    }
-
-    // Handle DELETE operations - remove rows by IDs
-    if (message.operation === "DELETE" && "row_ids" in message && message.row_ids && message.row_ids.length > 0) {
-      const idsToDelete = message.row_ids.map((id) => id as IDType);
-      for (const id of idsToDelete) {
-        this._removeRow(id);
-      }
-      return;
-    }
-
-    // Handle INSERT/UPDATE operations - refetch specified row IDs
-    if (
-      message.type !== "gradebook_row_recalc_state" &&
-      "row_ids" in message &&
-      message.row_ids &&
-      message.row_ids.length > 0
-    ) {
-      const idsToRefetch = message.row_ids.map((id) => id as IDType);
-      try {
-        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
-
-        // Update existing rows and add new ones
-        for (const [id, row] of refetchedRows) {
-          const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
-          const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
-
-          if (existingRow && !matchesFilter) {
-            // Row was updated but no longer matches our filter - remove it
-            this._removeRow(id);
-          } else if (existingRow && matchesFilter) {
-            this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
-            this._updateRow(id, row as ResultOne & { id: IDType }, false);
-          } else if (!existingRow && matchesFilter) {
-            this._bumpMaxUpdatedAtFrom(row as unknown as Record<string, unknown>);
-            this._addRow({
-              ...row,
-              __db_pending: false
-            });
-          }
-        }
-      } catch (error) {
-        Sentry.captureException(error);
-        // Fallback to full refetch on error
-        await this._refetchAllData();
-      }
     }
   }
 

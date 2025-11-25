@@ -15,6 +15,8 @@ import { toaster } from "@/components/ui/toaster";
 import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
+
 type VideoCallControlsProps = {
   request: HelpRequest;
   /** Whether the current user can start video calls (TAs/instructors) */
@@ -41,6 +43,7 @@ export default function VideoCallControls({
   const { openMeetingWindow } = useMeetingWindows();
   const { private_profile_id } = useClassProfiles();
   const allHelpRequestStudents = useHelpRequestStudents();
+  const trackEvent = useTrackEvent();
 
   const { mutateAsync: updateRequest } = useUpdate<HelpRequest>({
     resource: "help_requests",
@@ -144,6 +147,12 @@ export default function VideoCallControls({
       // Log video join activity for the instructor/TA who started the call
       await logVideoActivity("video_joined", "Instructor/TA started and joined video call");
 
+      // Track video call started
+      trackEvent("video_call_started", {
+        help_request_id: request.id,
+        course_id: request.class_id
+      });
+
       toaster.success({
         title: "Video call started",
         description: "Video meeting has been initiated for this help request. Please wait for the student(s) to join."
@@ -164,7 +173,7 @@ export default function VideoCallControls({
     } finally {
       setIsStartingCall(false);
     }
-  }, [canStartCall, isStartingCall, updateRequest, request, openMeetingWindow, logVideoActivity]);
+  }, [canStartCall, isStartingCall, updateRequest, request, openMeetingWindow, logVideoActivity, trackEvent]);
 
   /**
    * Joins an existing video call

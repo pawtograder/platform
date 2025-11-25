@@ -1,5 +1,4 @@
 -- Drop existing objects (tables CASCADE will drop their triggers automatically)
-DROP TABLE IF EXISTS survey_assignees CASCADE;
 DROP TABLE IF EXISTS survey_responses CASCADE;
 DROP TABLE IF EXISTS survey_templates CASCADE;
 DROP TABLE IF EXISTS surveys CASCADE;
@@ -11,8 +10,6 @@ DROP TYPE IF EXISTS survey_status CASCADE;
 
 -- Create ENUM type for survey status
 CREATE TYPE survey_status AS ENUM ('draft', 'published', 'closed');
-
-CREATE TYPE template_scope AS ENUM ('global', 'course');
 
 -- Create surveys table
 CREATE TABLE surveys (
@@ -43,17 +40,7 @@ CREATE TABLE survey_templates (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    version INTEGER NOT NULL DEFAULT 1,
-    scope template_scope NOT NULL DEFAULT 'course',
-    class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE
-);
-
--- Create survey_assignees table (optional targeted delivery to specific students)
-CREATE TABLE survey_assignees (
-  survey_id UUID NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
-  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (survey_id, profile_id)
+    version INTEGER NOT NULL DEFAULT 1
 );
 
 -- Create survey_responses table
@@ -139,104 +126,9 @@ CREATE INDEX idx_survey_responses_survey_id_active
 --
 
 -- TODO: ENABLE RLS
-ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
-ALTER TABLE survey_responses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE survey_templates ENABLE ROW LEVEL SECURITY;
-
--- Surveys: staff can see all active surveys
-CREATE POLICY surveys_select_staff ON surveys
-  FOR SELECT
-  USING (authorizeforclassgrader(class_id) AND deleted_at IS NULL);
-
--- Surveys: students see only published/closed, non-deleted surveys
-CREATE POLICY surveys_select_students ON surveys
-  FOR SELECT
-  USING (authorizeforclass(class_id) AND deleted_at IS NULL AND status IN ('published', 'closed'));
-
--- Surveys: only instructors can create
-CREATE POLICY surveys_insert_instructors ON surveys
-  FOR INSERT
-  WITH CHECK (authorizeforclassinstructor(class_id));
-
--- Surveys: only instructors can update
-CREATE POLICY surveys_update_instructors ON surveys
-  FOR UPDATE
-  USING (authorizeforclassinstructor(class_id))
-  WITH CHECK (authorizeforclassinstructor(class_id));
-
--- Survey templates: staff can read
-CREATE POLICY survey_templates_select ON survey_templates
-  FOR SELECT
-  USING (authorizeforclassgrader(class_id));
-
--- Survey templates: instructors can create
-CREATE POLICY survey_templates_insert ON survey_templates
-  FOR INSERT
-  WITH CHECK (authorizeforclassinstructor(class_id));
-
--- Survey templates: instructors can update
-CREATE POLICY survey_templates_update ON survey_templates
-  FOR UPDATE
-  USING (authorizeforclassinstructor(class_id))
-  WITH CHECK (authorizeforclassinstructor(class_id));
-
--- Survey responses: owners can read
-CREATE POLICY survey_responses_select_owner ON survey_responses
-  FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.user_privileges up
-      WHERE up.user_id = auth.uid()
-        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
-    )
-  );
-
--- Survey responses: staff can read
-CREATE POLICY survey_responses_select_staff ON survey_responses
-  FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.surveys s
-      JOIN public.user_privileges up ON up.class_id = s.class_id
-      WHERE s.id = survey_responses.survey_id
-        AND up.user_id = auth.uid()
-        AND up.role IN ('instructor', 'grader')
-    )
-  );
-
--- Survey responses: owners can create
-CREATE POLICY survey_responses_insert_owner ON survey_responses
-  FOR INSERT
-  WITH CHECK (
-    EXISTS (
-      SELECT 1
-      FROM public.user_privileges up
-      WHERE up.user_id = auth.uid()
-        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
-    )
-  );
-
--- Survey responses: owners can update their own
-CREATE POLICY survey_responses_update_owner ON survey_responses
-  FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.user_privileges up
-      WHERE up.user_id = auth.uid()
-        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1
-      FROM public.user_privileges up
-      WHERE up.user_id = auth.uid()
-        AND (up.public_profile_id = profile_id OR up.private_profile_id = profile_id)
-    )
-  );
+-- ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE survey_responses ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE survey_templates ENABLE ROW LEVEL SECURITY;
 
 -- If survey is published or closed, only then students have access to a survey
 -- Instructors can view and create new surveys

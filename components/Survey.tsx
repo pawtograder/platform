@@ -1,19 +1,18 @@
 "use client";
 
-import { Model, ValueChangedEvent } from "survey-core";
+import { Model } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.css";
-import { Json } from "@/utils/supabase/SupabaseTypes";
 
 interface SurveyComponentProps {
-  surveyJson: Json;
+  surveyJson: any;
   isPopup?: boolean;
   isExpanded?: boolean;
   onComplete?: (survey: Model) => void;
-  onValueChanged?: (survey: Model, options: ValueChangedEvent) => void;
-  initialData?: Json;
+  onValueChanged?: (survey: Model, options: any) => void;
+  initialData?: any;
   readOnly?: boolean;
 }
 

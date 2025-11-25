@@ -10,16 +10,15 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   const { course_id, survey_id } = await params;
   const supabase = await createClient();
 
-  // Fetch class data for timezone
-  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
-  const timezone = classData?.time_zone || "America/New_York";
-
-  // Fetch survey data to get title, status, version, JSON, due_date, and assignment mode (latest version)
+  // Fetch survey data to get title, status, version, and JSON (latest version)
   const { data: survey, error: surveyError } = await supabase
-    .from("surveys")
-    .select("id, title, status, json, due_date, assigned_to_all")
+    .from("surveys" as any)
+    .select("id, title, status, json")
+    // .select("id, title, status, version, json") // Temporarily remove version to test
     .eq("survey_id", survey_id)
     .eq("class_id", Number(course_id))
+    // .is("deleted_at", null) // Temporarily comment out to test if this column exists
+    // .order("version", { ascending: false }) // Temporarily comment out since we're not selecting version
     .limit(1)
     .single();
 
@@ -53,26 +52,23 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
 
   // Fetch all responses for this survey_id (across all versions)
   // Join with profiles to get student names and emails
-  // profile_id is a foreign key to profiles(id), so we use the foreign key constraint name
   const { data: responses, error: responsesError } = await supabase
-    .from("survey_responses")
+    .from("survey_responses" as any)
     .select(
       `
       *,
-      profiles:profiles!survey_responses_profile_id_fkey (
-        id,
+      profiles!profile_id (
         name
       )
     `
     )
-    .eq("survey_id", survey.id);
-  // Use the database ID of the latest survey version to fetch responses
+    .eq("survey_id", (survey as any).id); // Use the database ID of the latest survey version to fetch responses
   // .eq("is_submitted", true); // Temporarily comment out to test if this column exists
   // .is("deleted_at", null); // Temporarily comment out to test if this column exists
 
   if (responsesError) {
     console.error("Error fetching responses:", responsesError);
-    console.error("Survey ID used for query:", survey.id);
+    console.error("Survey ID used for query:", (survey as any).id);
     console.error("Course ID:", course_id);
     return (
       <Container py={8} maxW="1200px" my={2}>
@@ -87,42 +83,24 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     );
   }
 
-  // Calculate the correct total students based on assignment mode
-  let assignedStudentCount = 0;
-
-  if (survey.assigned_to_all) {
-    // Survey is assigned to all students - count all students in the course
-    const { count } = await supabase
-      .from("user_roles")
-      .select("*", { count: "exact", head: true })
-      .eq("class_id", Number(course_id))
-      .eq("role", "student")
-      .eq("disabled", false);
-
-    assignedStudentCount = count || 0;
-  } else {
-    // Survey is assigned to specific students - count assignments
-    const { count } = await supabase
-      .from("survey_assignments")
-      .select("*", { count: "exact", head: true })
-      .eq("survey_id", survey.id);
-
-    assignedStudentCount = count || 0;
-  }
+  // Get total enrolled students in the course (only students, not instructors/graders)
+  const { count: totalStudents } = await supabase
+    .from("user_roles")
+    .select("*", { count: "exact", head: true })
+    .eq("class_id", Number(course_id))
+    .eq("role", "student");
 
   // Pass data to the client component
   return (
     <SurveyResponsesView
       courseId={course_id}
       surveyId={survey_id} // The UUID
-      surveyTitle={survey.title}
+      surveyTitle={(survey as any).title}
       surveyVersion={1} // Temporarily hardcode since we're not selecting version
-      surveyStatus={survey.status}
-      surveyJson={survey.json}
-      surveyDueDate={survey.due_date}
-      responses={responses || []}
-      totalStudents={assignedStudentCount}
-      timezone={timezone}
+      surveyStatus={(survey as any).status}
+      surveyJson={(survey as any).json}
+      responses={(responses as any) || []}
+      totalStudents={totalStudents || 0}
     />
   );
 }

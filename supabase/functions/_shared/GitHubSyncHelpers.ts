@@ -67,13 +67,12 @@ function getSyncLimiter(org: string): Bottleneck {
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
-      id: `sync_repo_to_handout:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      id: `sync_repo_to_handout_new:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 30,
       maxConcurrent: 30,
       reservoirRefreshAmount: 30,
       reservoirRefreshInterval: 60_000,
       datastore: "ioredis",
-      timeout: 600000, // 10 minutes
       clearDatastore: false,
       clientOptions: {
         host,
@@ -556,27 +555,30 @@ export async function createPullRequest(
   scope?.setTag("title", title);
   scope?.setTag("body", body);
   scope?.setTag("github_operation", "create_pull_request");
-  //Also check the circuit breaker before we hit this, and fail if we have already bit the big one
-  const circuitKey = `${owner}:sync_repo_to_handout`;
-  const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
-    p_scope: "org_method",
-    p_key: circuitKey
-  });
-  if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
-    // const row = methodCirc.data[0] as { state?: string; open_until?: string };
-    // if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
-    //   throw new UserVisibleError(
-    //     `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
-    //   );
-    // }
-  }
-  const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-    owner,
-    repo,
-    title,
-    body,
-    head: branchName,
-    base: baseBranch
+  const createContentLimiter = getCreateContentLimiter(owner);
+  const { data: pr } = await createContentLimiter.schedule(async () => {
+    //Also check the circuit breaker before we hit this, and fail if we have already bit the big one
+    const circuitKey = `${owner}:sync_repo_to_handout`;
+    const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+      p_scope: "org_method",
+      p_key: circuitKey
+    });
+    if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
+      // const row = methodCirc.data[0] as { state?: string; open_until?: string };
+      // if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+      //   throw new UserVisibleError(
+      //     `GitHub operations temporarily unavailable due to repeated errors. Please try again in 8 hours.`
+      //   );
+      // }
+    }
+    return await octokit.request("POST /repos/{owner}/{repo}/pulls", {
+      owner,
+      repo,
+      title,
+      body,
+      head: branchName,
+      base: baseBranch
+    });
   });
 
   return pr.number;
@@ -641,9 +643,9 @@ export async function syncRepositoryToHandout(params: {
   const limiter = getSyncLimiter(org);
   const { adminSupabase } = params;
   const createContentLimiter = getCreateContentLimiter(org);
-  console.log("Waiting for outer sync limiter to be available", org);
+  console.log("Waiting for sync limiter to be available", org);
   return await limiter.schedule(async () => {
-    console.log("Waiting for inner sync limiter to be available", org);
+    console.log("Waiting for sync limiter to be available", org);
     return await createContentLimiter.schedule(async () => {
       // Wrap the sync operation in the rate limiter
       console.log("syncRepositoryToHandout", params);

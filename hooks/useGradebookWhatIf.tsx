@@ -47,7 +47,7 @@ export type GradebookColumnStudentWithMaxScore = Omit<GradebookColumnStudent, "s
   column_slug: string;
 };
 function isGradebookColumnStudent(value: unknown): value is GradebookColumnStudentWithMaxScore {
-  return (
+  const ret =
     typeof value === "object" &&
     value !== null &&
     "score" in value &&
@@ -56,8 +56,14 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "is_excused" in value &&
     "is_missing" in value &&
     "max_score" in value &&
-    "column_slug" in value
-  );
+    "column_slug" in value;
+  if (typeof value === "number" || value === null || value === undefined) {
+    return false;
+  }
+  if (!ret) {
+    throw new Error(`Value is not a GradebookColumnStudentWithMaxScore: ${JSON.stringify(value, null, 2)}`);
+  }
+  return ret;
 }
 
 type AssignmentForStudentDashboard = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
@@ -675,9 +681,6 @@ class GradebookWhatIfController {
         value: GradebookColumnStudentWithMaxScore[],
         condition: (value: GradebookColumnStudentWithMaxScore) => boolean
       ) => {
-        if (isDenseMatrix(value)) {
-          value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-        }
         if (Array.isArray(value)) {
           const values = value.map((v) => {
             const ret = condition(v) ? 1 : 0;
@@ -697,9 +700,6 @@ class GradebookWhatIfController {
         value: GradebookColumnStudentWithMaxScore[],
         weighted: boolean = true
       ) => {
-        if (isDenseMatrix(value)) {
-          value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-        }
         if (Array.isArray(value)) {
           const valuesToAverage = value.map((v) => {
             if (isGradebookColumnStudent(v)) {
@@ -748,9 +748,6 @@ class GradebookWhatIfController {
         value: GradebookColumnStudentWithMaxScore[],
         count: number
       ) => {
-        if (isDenseMatrix(value)) {
-          value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-        }
         if (Array.isArray(value)) {
           const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
           const ret: GradebookColumnStudentWithMaxScore[] = [];

@@ -1,5 +1,6 @@
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmissionController, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import {
   SubmissionFile,
   SubmissionFileComment,
@@ -39,6 +40,7 @@ export default function LineCommentForm({
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(defaultEventuallyVisible ?? true);
+  const trackEvent = useTrackEvent();
 
   const fetchedSubmissionReview = useSubmissionReviewOrGradingReview(submissionReviewId);
   const isLoadingReviewDetails = submissionReviewId !== undefined && fetchedSubmissionReview === undefined;
@@ -77,6 +79,19 @@ export default function LineCommentForm({
             "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by"
           >
         );
+
+        // Track rubric check application for file comments
+        if (rubricCheckId) {
+          trackEvent("rubric_check_applied", {
+            rubric_check_id: rubricCheckId,
+            submission_id: submission.id,
+            assignment_id: submission.assignment_id,
+            course_id: submission.class_id,
+            is_file_comment: true,
+            points: defaultPoints ?? 0,
+            comment_type: "file"
+          });
+        }
 
         if (onSubmitted) onSubmitted(created as SubmissionFileComment);
         if (onCancel) onCancel();

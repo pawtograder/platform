@@ -211,9 +211,25 @@ export class Redis {
             continue;
           }
 
-          // For UNKNOWN_CLIENT, immediately fail - the only fix is to make a new worker, it seems :(
-          if (errorMessage.includes("UNKNOWN_CLIENT")) {
-            throw new Error("UNKNOWN_CLIENT error, failing immediately");
+          // For UNKNOWN_CLIENT or other transient errors, retry with exponential backoff
+          if (errorMessage.includes("UNKNOWN_CLIENT") || errorMessage.includes("timeout")) {
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Transient error, retrying",
+              data: { name, errorMessage, attempt },
+              level: "warning"
+            });
+            this.client = this.duplicate().client;
+            const pong = await this.client.ping();
+            console.log("Ping pong", { pong });
+
+            // If this is the last attempt, don't wait
+            if (attempt < maxRetries - 1) {
+              const backoffMs = Math.pow(2, attempt) * 2000; // 2000ms, 4000ms, 8000ms
+              console.log("Transient error, retrying", { name, errorMessage, attempt, backoffMs });
+              await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            }
+            continue;
           }
 
           // For non-retryable errors, throw immediately

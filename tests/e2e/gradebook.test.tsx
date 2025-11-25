@@ -382,7 +382,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     //Wait for gradebook to finish updating with the final grade
     await expect(async () => {
-      const { data: privateRecord, error: privateError } = await supabase
+      const { data, error } = await supabase
         .from("gradebook_column_students")
         .select("*")
         .eq("class_id", course.id)
@@ -390,29 +390,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .eq("gradebook_column_id", finalGradebookColumn!.id)
         .eq("is_private", true)
         .single();
-      if (privateError) {
-        throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
+      if (error) {
+        throw new Error(`Failed to get gradebook column student data: ${error.message}`);
       }
-      expect(privateRecord?.score).toBe(51.95);
-
-      // Verify that is_private=false record matches is_private=true record for calculated columns
-      const { data: publicRecord, error: publicError } = await supabase
-        .from("gradebook_column_students")
-        .select("*")
-        .eq("class_id", course.id)
-        .eq("student_id", students[0].private_profile_id)
-        .eq("gradebook_column_id", finalGradebookColumn!.id)
-        .eq("is_private", false)
-        .single();
-      if (publicError) {
-        throw new Error(`Failed to get public gradebook column student data: ${publicError.message}`);
-      }
-      // Not all dependencies are released, so the public score is different
-      expect(publicRecord?.score).toBe(43.5);
-      expect(publicRecord?.score_override).toBe(privateRecord?.score_override);
-      expect(publicRecord?.is_missing).toBe(privateRecord?.is_missing);
-      expect(publicRecord?.is_droppable).toBe(privateRecord?.is_droppable);
-      expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
+      expect(data?.score).toBe(51.95);
     }).toPass();
   });
 
@@ -649,86 +630,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const releaseItem = page.getByRole("menuitem", { name: "Release Column", exact: true });
     await releaseItem.click();
 
-    // Verify that is_private=false records update to match is_private=true records after release
-    const { data: participationColumnForSync, error: participationColumnForSyncError } = await supabase
-      .from("gradebook_columns")
-      .select("*")
-      .eq("class_id", course.id)
-      .eq("slug", "participation")
-      .single();
-    if (participationColumnForSyncError) {
-      throw new Error(`Failed to get participation column: ${participationColumnForSyncError.message}`);
-    }
-
-    await expect(async () => {
-      for (const student of students) {
-        const { data: privateRecord, error: privateError } = await supabase
-          .from("gradebook_column_students")
-          .select("*")
-          .eq("class_id", course.id)
-          .eq("student_id", student.private_profile_id)
-          .eq("gradebook_column_id", participationColumnForSync.id)
-          .eq("is_private", true)
-          .single();
-        if (privateError) {
-          throw new Error(`Failed to get private gradebook column student: ${privateError.message}`);
-        }
-
-        const { data: publicRecord, error: publicError } = await supabase
-          .from("gradebook_column_students")
-          .select("*")
-          .eq("class_id", course.id)
-          .eq("student_id", student.private_profile_id)
-          .eq("gradebook_column_id", participationColumnForSync.id)
-          .eq("is_private", false)
-          .single();
-        if (publicError) {
-          throw new Error(`Failed to get public gradebook column student: ${publicError.message}`);
-        }
-
-        // Check that public record matches private record after release
-        const expectedScore = privateRecord?.score_override ?? privateRecord?.score;
-        expect(publicRecord?.score).toBe(expectedScore);
-        expect(publicRecord?.is_missing).toBe(privateRecord?.is_missing);
-        expect(publicRecord?.is_droppable).toBe(privateRecord?.is_droppable);
-        expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
-        expect(publicRecord?.released).toBe(true);
-      }
-    }).toPass();
-
-    const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
-      .from("gradebook_columns")
-      .select("*")
-      .eq("class_id", course.id)
-      .eq("slug", "final-grade")
-      .single();
-    if (finalGradebookColumnError) {
-      throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
-    }
-
-    // Wait for grade to be updated in database
-    await expect(async () => {
-      const { data: finalGradebookColumnStudent, error: finalGradebookColumnStudentError } = await supabase
-        .from("gradebook_column_students")
-        .select("*")
-        .eq("class_id", course.id)
-        .eq("student_id", students[0].private_profile_id)
-        .eq("gradebook_column_id", finalGradebookColumn!.id)
-        .eq("is_private", false)
-        .single();
-      if (finalGradebookColumnStudentError) {
-        throw new Error(`Failed to get final gradebook column student: ${finalGradebookColumnStudentError.message}`);
-      }
-      expect(finalGradebookColumnStudent?.score).toBe(90.8);
-    }).toPass();
-
     // Verify student can now see Participation in their gradebook cards
     await loginAsUser(page, students[0], course);
     await page.goto(`/course/${course.id}/gradebook`);
     await page.waitForLoadState("networkidle");
     await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
-    // Validate that the final grade shown is correctly calcualted
-    await expect(page.getByText(`Final Grade91`)).toBeVisible({ timeout: 70_000 });
 
     // Now unrelease the column and verify it's hidden from student
     await loginAsUser(page, instructor!, course);

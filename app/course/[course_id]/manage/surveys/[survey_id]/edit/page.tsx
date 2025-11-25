@@ -7,12 +7,8 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
-import { Box, Text } from "@chakra-ui/react";
+import { Box, Heading, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import type { Tables } from "@/utils/supabase/SupabaseTypes";
-import { TZDate } from "@date-fns/tz";
-import { formatInTimeZone } from "date-fns-tz";
 
 type SurveyFormData = {
   title: string;
@@ -21,83 +17,30 @@ type SurveyFormData = {
   status: "draft" | "published";
   due_date?: string;
   allow_response_editing: boolean;
-  assigned_to_all: boolean;
-  assigned_students?: string[];
-};
-
-type SurveyRow = Tables<"surveys">;
-
-const toJsonString = (value: SurveyRow["json"]) =>
-  typeof value === "string" ? value : value ? JSON.stringify(value) : "";
-const getFormJsonString = (value: FieldValues["json"]) =>
-  typeof value === "string" ? value : value ? JSON.stringify(value) : "";
-
-const getParam = (value: string | string[] | undefined, name: string): string => {
-  if (typeof value === "string") return value;
-  throw new Error(`Missing route param: ${name}`);
 };
 
 export default function EditSurveyPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
   const trackEvent = useTrackEvent();
-  const { private_profile_id } = useClassProfiles();
   const [isLoading, setIsLoading] = useState(true);
-  const [surveyData, setSurveyData] = useState<SurveyRow>();
-  const { role } = useClassProfiles();
-  const rawSurveyId = getParam(survey_id, "survey_id");
-  const timezone = role.classes?.time_zone || "America/New_York";
-
-  // Helper function to convert datetime-local string to ISO timestamp with timezone
-  const convertDueDateToISO = (dueDateString: string | null | undefined): string | null => {
-    if (!dueDateString) return null;
-    // Parse datetime-local format (YYYY-MM-DDTHH:MM)
-    const [date, time] = dueDateString.split("T");
-    if (!date || !time) return null;
-    const [year, month, day] = date.split("-");
-    const [hour, minute] = time.split(":");
-    // Create TZDate with these exact values in course timezone
-    const tzDate = new TZDate(
-      parseInt(year),
-      parseInt(month) - 1,
-      parseInt(day),
-      parseInt(hour),
-      parseInt(minute),
-      0,
-      0,
-      timezone
-    );
-    return tzDate.toISOString();
-  };
+  const [surveyData, setSurveyData] = useState<any>(null);
 
   const form = useForm<SurveyFormData>({
-    refineCoreProps: { resource: "surveys", action: "edit", id: rawSurveyId },
+    refineCoreProps: { resource: "surveys", action: "edit", id: survey_id as string },
     defaultValues: {
       title: "",
       description: "",
       json: "",
       status: "draft",
       due_date: "",
-      allow_response_editing: false,
-      assigned_to_all: true,
-      assigned_students: []
+      allow_response_editing: false
     }
   });
 
-  const reset = form.reset;
+  const { getValues, setValue, reset } = form;
   const hasLoadedSurvey = useRef(false);
   const loadingPromise = useRef<Promise<void> | null>(null);
-
-  useEffect(() => {
-    if (role.role === "grader") {
-      toaster.create({
-        title: "Access Denied",
-        description: "Graders cannot edit surveys. Only instructors have this permission.",
-        type: "error"
-      });
-      router.push(`/course/${course_id}/manage/surveys`);
-    }
-  }, [role, router, course_id]);
 
   // Load the survey data when component mounts
   useEffect(() => {
@@ -119,9 +62,9 @@ export default function EditSurveyPage() {
         setIsLoading(true);
         const supabase = createClient();
         const { data, error } = await supabase
-          .from("surveys")
+          .from("surveys" as any)
           .select("*")
-          .eq("id", rawSurveyId)
+          .eq("id", survey_id)
           .eq("class_id", Number(course_id))
           .single();
 
@@ -136,34 +79,25 @@ export default function EditSurveyPage() {
           return;
         }
 
-        console.log("[EditSurvey] Survey data loaded successfully:", data.id);
+        console.log("[EditSurvey] Survey data loaded successfully:", (data as any).id);
         setSurveyData(data);
 
-        // Convert due_date from ISO string to datetime-local format in course timezone
+        // Convert due_date from ISO string to datetime-local format
         let dueDateFormatted = "";
-        if (data.due_date) {
-          // Convert ISO timestamp to datetime-local format in course timezone
-          dueDateFormatted = formatInTimeZone(new Date(data.due_date), timezone, "yyyy-MM-dd'T'HH:mm");
+        if ((data as any).due_date) {
+          const date = new Date((data as any).due_date);
+          // Convert to datetime-local format (YYYY-MM-DDTHH:MM)
+          dueDateFormatted = date.toISOString().slice(0, 16);
         }
-
-        // Load existing survey assignments
-        const { data: assignmentData } = await supabase
-          .from("survey_assignments")
-          .select("profile_id")
-          .eq("survey_id", data.id);
-
-        const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
 
         // Load the survey data into the form
         reset({
-          title: data.title || "",
-          description: data.description || "",
-          json: toJsonString(data.json),
-          status: data.status || "draft",
+          title: (data as any).title || "",
+          description: (data as any).description || "",
+          json: (data as any).json || "",
+          status: (data as any).status || "draft",
           due_date: dueDateFormatted,
-          allow_response_editing: Boolean(data.allow_response_editing),
-          assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
-          assigned_students: assignedStudents
+          allow_response_editing: Boolean((data as any).allow_response_editing)
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
@@ -190,7 +124,7 @@ export default function EditSurveyPage() {
 
     // Store the promise to prevent duplicate calls
     loadingPromise.current = loadSurveyData();
-  }, [course_id, rawSurveyId]); // Removed reset and router from dependencies
+  }, [course_id, survey_id]); // Removed reset and router from dependencies
 
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
@@ -199,32 +133,31 @@ export default function EditSurveyPage() {
         try {
           const supabase = createClient();
 
-          const jsonInput = getFormJsonString(values.json);
+          // For drafts, we'll store the JSON as-is without validation
+          // If JSON is empty or invalid, we'll store it as empty string
           let jsonToStore = "";
-
-          if (jsonInput.trim()) {
+          if (values.json && values.json.trim()) {
             try {
-              JSON.parse(jsonInput);
-              jsonToStore = jsonInput;
-            } catch {
-              // keep the raw string for drafts; user can fix later
-              jsonToStore = jsonInput;
+              JSON.parse(values.json as string);
+              jsonToStore = values.json as string;
+            } catch (error) {
+              // For drafts, store invalid JSON as-is (user can fix later)
+              jsonToStore = values.json as string;
             }
           }
 
           const { data, error } = await supabase
-            .from("surveys")
+            .from("surveys" as any)
             .update({
               title: (values.title as string) || "Untitled Survey",
               description: (values.description as string) || null,
               json: jsonToStore,
               status: "draft",
               allow_response_editing: values.allow_response_editing as boolean,
-              due_date: convertDueDateToISO(values.due_date as string),
-              validation_errors: null, // No validation errors for draft saves
-              assigned_to_all: Boolean(values.assigned_to_all)
+              due_date: (values.due_date as string) || null,
+              validation_errors: null // No validation errors for draft saves
             })
-            .eq("id", rawSurveyId)
+            .eq("id", survey_id)
             .select("id, survey_id")
             .single();
 
@@ -233,32 +166,9 @@ export default function EditSurveyPage() {
             throw new Error(error?.message || "Failed to save draft");
           }
 
-          // Handle survey assignments for drafts
-          if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
-            console.log("[saveDraftOnly] Updating survey assignments for:", values.assigned_students);
-            const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
-              p_survey_id: data.id,
-              p_profile_ids: values.assigned_students
-            });
-
-            if (assignmentError) {
-              console.error("[saveDraftOnly] Assignment error:", assignmentError);
-              toaster.error({
-                title: "Warning",
-                description: "Draft was saved but there was an error updating student assignments."
-              });
-            }
-          } else if (values.assigned_to_all) {
-            const { error: deleteError } = await supabase.from("survey_assignments").delete().eq("survey_id", data.id);
-
-            if (deleteError) {
-              console.error("[saveDraftOnly] Error removing assignments:", deleteError);
-            }
-          }
-
-          trackEvent("survey_updated", {
+          trackEvent("survey_updated" as any, {
             course_id: Number(course_id),
-            survey_id: data.survey_id,
+            survey_id: (data as any).survey_id,
             status: "draft",
             has_due_date: !!values.due_date,
             allow_response_editing: values.allow_response_editing
@@ -283,40 +193,12 @@ export default function EditSurveyPage() {
       }
       await updateDraft();
     },
-    [course_id, trackEvent, router, survey_id, timezone, rawSurveyId]
+    [course_id, trackEvent, router, survey_id]
   );
 
   const onSubmit = useCallback(
     async (values: FieldValues) => {
       async function update() {
-        // Validate due date if trying to publish
-        if (values.status === "published" && values.due_date) {
-          const dueDateISO = convertDueDateToISO(values.due_date as string);
-          if (dueDateISO) {
-            const dueDate = new Date(dueDateISO);
-            const now = new Date();
-
-            if (dueDate < now) {
-              toaster.create({
-                title: "Cannot Publish Survey",
-                description: "The due date must be in the future. Please update the due date or save as a draft.",
-                type: "error"
-              });
-              return;
-            }
-          }
-        }
-
-        // Validate student assignments
-        if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
-          toaster.create({
-            title: "Cannot Save Survey",
-            description: "Please select at least one student or change assignment mode to 'all students'.",
-            type: "error"
-          });
-          return;
-        }
-
         // Show loading toast before starting the process
         const loadingToast = toaster.create({
           title: "Updating Survey",
@@ -328,29 +210,29 @@ export default function EditSurveyPage() {
           const supabase = createClient();
 
           // Parse the JSON to ensure it's valid (only for active updates)
-          const parsedJson = toJsonString(values.json);
-          let validationErrors: string | null = null;
-
+          let parsedJson;
+          let validationErrors = null;
           try {
-            JSON.parse(parsedJson);
-          } catch (err) {
-            validationErrors = `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`;
+            parsedJson = JSON.parse(values.json as string);
+          } catch (error) {
+            // Instead of throwing, create a draft with validation errors
+            validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
+            parsedJson = values.json as string; // Store the invalid JSON as-is
           }
 
           // Update the survey
           const { data, error } = await supabase
-            .from("surveys")
+            .from("surveys" as any)
             .update({
               title: values.title as string,
               description: (values.description as string) || null,
               json: parsedJson,
-              status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]), // Force to draft if validation errors
+              status: validationErrors ? "draft" : (values.status as string), // Force to draft if validation errors
               allow_response_editing: values.allow_response_editing as boolean,
-              due_date: convertDueDateToISO(values.due_date as string),
-              validation_errors: validationErrors,
-              assigned_to_all: Boolean(values.assigned_to_all)
+              due_date: (values.due_date as string) || null,
+              validation_errors: validationErrors
             })
-            .eq("id", rawSurveyId)
+            .eq("id", survey_id)
             .select("id, survey_id")
             .single();
 
@@ -358,18 +240,17 @@ export default function EditSurveyPage() {
             // If database error, try to save as draft with error flag
             try {
               const fallbackData = await supabase
-                .from("surveys")
+                .from("surveys" as any)
                 .update({
                   title: values.title as string,
                   description: (values.description as string) || null,
-                  json: values.json as string,
+                  questions: values.json as string,
                   status: "draft",
                   allow_response_editing: values.allow_response_editing as boolean,
-                  due_date: convertDueDateToISO(values.due_date as string),
-                  validation_errors: `Database error: ${error?.message || "Unknown error"}`,
-                  assigned_to_all: Boolean(values.assigned_to_all)
+                  due_date: (values.due_date as string) || null,
+                  validation_errors: `Database error: ${error?.message || "Unknown error"}`
                 })
-                .eq("id", rawSurveyId)
+                .eq("id", survey_id)
                 .select("id, survey_id")
                 .single();
 
@@ -377,39 +258,15 @@ export default function EditSurveyPage() {
                 throw new Error(fallbackData.error.message);
               }
             } catch (fallbackError) {
-              throw new Error(`Failed to update survey: ${error?.message || fallbackError || "Unknown error"}`);
+              throw new Error(`Failed to update survey: ${error?.message || "Unknown error"}`);
             }
             return;
           }
 
-          // Handle survey assignments if not assigned to all students
-          if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
-            console.log("[EditSurvey] Updating survey assignments for:", values.assigned_students);
-            const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
-              p_survey_id: data.id,
-              p_profile_ids: values.assigned_students
-            });
-
-            if (assignmentError) {
-              console.error("[EditSurvey] Assignment error:", assignmentError);
-              toaster.error({
-                title: "Warning",
-                description: "Survey was updated but there was an error assigning it to specific students."
-              });
-            }
-          } else if (values.assigned_to_all) {
-            // If assigned to all, remove any specific assignments
-            const { error: deleteError } = await supabase.from("survey_assignments").delete().eq("survey_id", data.id);
-
-            if (deleteError) {
-              console.error("[EditSurvey] Error removing assignments:", deleteError);
-            }
-          }
-
           // Track survey update
-          trackEvent("survey_updated", {
+          trackEvent("survey_updated" as any, {
             course_id: Number(course_id),
-            survey_id: data.survey_id,
+            survey_id: (data as any).survey_id,
             status: validationErrors ? "draft" : values.status,
             has_due_date: !!values.due_date,
             allow_response_editing: values.allow_response_editing,
@@ -454,7 +311,7 @@ export default function EditSurveyPage() {
       }
       await update();
     },
-    [course_id, router, trackEvent, survey_id, timezone, rawSurveyId]
+    [course_id, router, trackEvent, survey_id]
   );
 
   if (isLoading) {
@@ -479,13 +336,7 @@ export default function EditSurveyPage() {
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
-      <SurveyForm
-        form={form}
-        onSubmit={onSubmit}
-        saveDraftOnly={saveDraftOnly}
-        isEdit={true}
-        privateProfileId={private_profile_id}
-      />
+      <SurveyForm form={form} onSubmit={onSubmit} saveDraftOnly={saveDraftOnly} isEdit={true} />
     </Box>
   );
 }

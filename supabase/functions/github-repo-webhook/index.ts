@@ -618,21 +618,7 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
               `[CHECK_RUN] Triggering workflow for repo=${payload.repository.full_name} sha=${payload.check_run.head_sha}`
             );
             maybeCrash("check_run.before_trigger_workflow");
-            try {
-              await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
-            } catch (err) {
-              //If we fail to trigger the workflow, mark the check run as failed. This is a non-critical path, so ignore the exception.
-              await adminSupabase
-                .from("repository_check_runs")
-                .update({
-                  status: {
-                    ...(startedStatus as ExtendedCheckRunStatus),
-                    workflow_triggered_at: new Date().toISOString()
-                  } as unknown as Json
-                })
-                .eq("id", checkRun.data.id);
-              return;
-            }
+            await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
             const afterTrigger = {
               ...(startedStatus as ExtendedCheckRunStatus),
               workflow_triggered_at: new Date().toISOString()

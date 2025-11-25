@@ -25,10 +25,10 @@ export default function IndividualResponsePage() {
   const [response, setResponse] = useState<SurveyResponseWithProfile | null>(null);
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [timezone, setTimezone] = useState<string>("America/New_York");
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
+  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
@@ -47,48 +47,13 @@ export default function IndividualResponsePage() {
       try {
         const supabase = createClient();
 
-        // Fetch class data for timezone
-        const { data: classData } = await supabase
-          .from("classes")
-          .select("time_zone")
-          .eq("id", Number(course_id))
-          .single();
-        const courseTimezone = classData?.time_zone || "America/New_York";
-        setTimezone(courseTimezone);
-
-        // First, fetch the survey to get its database ID (not the UUID)
-        // The URL survey_id parameter is surveys.survey_id (UUID), but we need surveys.id
-        console.log("📋 Fetching survey to get database ID...");
-        const { data: surveyData, error: surveyError } = await supabase
-          .from("surveys")
-          .select("id, title, description, json, allow_response_editing")
-          .eq("survey_id", String(survey_id))
-          .eq("class_id", Number(course_id))
-          .limit(1)
-          .single();
-
-        if (surveyError || !surveyData) {
-          toaster.create({
-            title: "Survey Not Found",
-            description: "The survey for this response could not be found.",
-            type: "error"
-          });
-          router.push(`/course/${course_id}/manage/surveys/${survey_id}/responses`);
-          return;
-        }
-
-        const finalSurvey = surveyData as unknown as Survey;
-        console.log("✅ Survey found with database ID:", finalSurvey.id);
-        setSurvey(finalSurvey);
-
-        // Now fetch the response using the survey's database ID
-        // survey_responses.survey_id is a foreign key to surveys.id, not surveys.survey_id
+        // Get response with student info
         console.log("📊 Fetching survey response...");
         const { data: responseData, error: responseError } = await supabase
-          .from("survey_responses")
+          .from("survey_responses" as any)
           .select("*")
-          .eq("id", String(response_id))
-          .eq("survey_id", finalSurvey.id)
+          .eq("id", response_id)
+          .eq("survey_id", survey_id)
           .single();
 
         console.log("📊 Response query result:", {
@@ -111,21 +76,22 @@ export default function IndividualResponsePage() {
         }
 
         // Get the student's profile via user_roles using profile_id
-        console.log("👤 Fetching user profile for profile_id:", responseData?.profile_id);
+        console.log("👤 Fetching user profile for profile_id:", (responseData as any).profile_id);
         const { data: userRole, error: userRoleError } = await supabase
-          .from("user_roles")
+          .from("user_roles" as any)
           .select(
             `
             user_id,
             private_profile_id,
-            profiles:profiles!user_roles_private_profile_id_fkey (
+            profiles:private_profile_id (
               id,
-              name
+              name,
+              sis_user_id
             )
           `
           )
           .eq("class_id", Number(course_id))
-          .eq("private_profile_id", responseData?.profile_id)
+          .eq("private_profile_id", (responseData as any).profile_id)
           .single();
 
         console.log("👤 User profile query result:", {
@@ -133,33 +99,70 @@ export default function IndividualResponsePage() {
           hasError: !!userRoleError,
           errorCode: userRoleError?.code,
           errorMessage: userRoleError?.message,
-          profileData: userRole?.profiles ?? null
+          profileData: userRole ? (userRole as any).profiles : null
         });
 
         if (userRoleError || !userRole) {
           console.error("❌ Error getting user profile:", userRoleError);
           // Set response with fallback profile data
           const fallbackResponse = {
-            ...responseData,
+            ...(responseData as any),
             profiles: {
-              id: responseData?.profile_id ?? "",
-              name: "Unknown Student"
+              id: (responseData as any).profile_id,
+              name: "Unknown Student",
+              sis_user_id: null
             }
           } as SurveyResponseWithProfile;
           console.log("🔄 Using fallback profile data:", fallbackResponse);
           setResponse(fallbackResponse);
         } else {
           const responseWithProfile = {
-            ...responseData,
-            profiles: {
-              id: userRole.profiles?.id ?? "",
-              name: userRole.profiles?.name ?? null,
-              sis_user_id: null // Not available on profiles table
-            }
+            ...(responseData as any),
+            profiles: (userRole as any).profiles
           } as SurveyResponseWithProfile;
           console.log("✅ Response with profile data:", responseWithProfile);
           setResponse(responseWithProfile);
         }
+
+        // Get survey info
+        console.log("📋 Fetching survey info for survey_id:", survey_id);
+        const { data: surveyData, error: surveyError } = await supabase
+          .from("surveys" as any)
+          .select("id, title, description, json, allow_response_editing")
+          .eq("id", survey_id)
+          .eq("class_id", Number(course_id))
+          .single();
+
+        console.log("📋 Survey query result:", {
+          hasData: !!surveyData,
+          hasError: !!surveyError,
+          errorCode: surveyError?.code,
+          errorMessage: surveyError?.message,
+          surveyKeys: surveyData ? Object.keys(surveyData) : [],
+          allowResponseEditing: surveyData ? (surveyData as any).allow_response_editing : null,
+          hasJson: surveyData ? !!(surveyData as any).json : false,
+          jsonKeys: surveyData && (surveyData as any).json ? Object.keys((surveyData as any).json) : []
+        });
+
+        if (surveyError || !surveyData) {
+          toaster.create({
+            title: "Survey Not Found",
+            description: "The survey for this response could not be found.",
+            type: "error"
+          });
+          router.push(`/course/${course_id}/manage/surveys/${survey_id}/responses`);
+          return;
+        }
+
+        const finalSurvey = surveyData as unknown as Survey;
+        console.log("✅ Final survey data:", {
+          id: finalSurvey.id,
+          title: finalSurvey.title,
+          allowResponseEditing: finalSurvey.allow_response_editing,
+          hasJson: !!finalSurvey.json,
+          jsonSample: finalSurvey.json ? JSON.stringify(finalSurvey.json).slice(0, 200) : "No JSON"
+        });
+        setSurvey(finalSurvey);
       } catch (error) {
         console.error("Error loading response:", error);
         toaster.create({
@@ -178,7 +181,7 @@ export default function IndividualResponsePage() {
 
   const formatDate = (dateString: string) => {
     try {
-      return formatInTimeZone(new Date(dateString), timezone, "MMM dd, yyyy 'at' h:mm a");
+      return formatInTimeZone(new Date(dateString), "America/New_York", "MMM dd, yyyy 'at' h:mm a");
     } catch {
       return "Invalid date";
     }
@@ -332,11 +335,9 @@ export default function IndividualResponsePage() {
                 <Text color={textColor} fontWeight="medium">
                   {response.profiles.name}
                 </Text>
-                {response.profiles.sis_user_id && (
-                  <Text color={textColor} fontSize="sm" opacity={0.7}>
-                    {response.profiles.sis_user_id}
-                  </Text>
-                )}
+                <Text color={textColor} fontSize="sm" opacity={0.7}>
+                  {response.profiles.sis_user_id || "No SIS ID"}
+                </Text>
               </VStack>
 
               <VStack align="start" gap={1}>

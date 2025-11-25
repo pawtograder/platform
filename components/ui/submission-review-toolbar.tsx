@@ -1,16 +1,15 @@
 "use client";
 
 import {
-  useAssignmentController,
   useMyReviewAssignments,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
-  useRubricChecksByRubric,
+  useRubricWithParts,
   useRubricCriteriaByRubric,
+  useRubricChecksByRubric,
   useRubricParts,
   useRubrics,
-  useRubricWithParts,
   useSelfReviewSettings
 } from "@/hooks/useAssignment";
 import {
@@ -29,6 +28,7 @@ import {
 
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -46,6 +46,7 @@ import {
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
 import { formatDueDateInTimezone } from "@/lib/utils";
+import { createClient } from "@/utils/supabase/client";
 import { formatDate } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
@@ -180,8 +181,11 @@ function CompleteReviewAssignmentDialog({
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
 }) {
-  const { private_profile_id } = useClassProfiles();
-  const { reviewAssignments } = useAssignmentController();
+  const { private_profile_id, role } = useClassProfiles();
+  const submission = useSubmission();
+  const activeSubmissionReview = useActiveSubmissionReview();
+  const comments = useAllCommentsForReview(activeSubmissionReview?.id);
+  const trackEvent = useTrackEvent();
 
   return (
     <Popover.Content>
@@ -242,10 +246,35 @@ function CompleteReviewAssignmentDialog({
               onClick={async () => {
                 try {
                   setIsLoading(true);
-                  await reviewAssignments.update(reviewAssignment.id, {
-                    completed_at: new Date().toISOString(),
-                    completed_by: private_profile_id
-                  });
+                  const supabase = createClient();
+                  const { error } = await supabase
+                    .from("review_assignments")
+                    .update({
+                      completed_at: new Date().toISOString(),
+                      completed_by: private_profile_id
+                    })
+                    .eq("id", reviewAssignment.id);
+
+                  if (error) {
+                    throw error;
+                  }
+
+                  // Track review assignment completion
+                  if (activeSubmissionReview && submission) {
+                    const fileComments = comments.filter((c) => "submission_file_id" in c);
+                    const graderRole = role.role === "instructor" ? "instructor" : "grader";
+
+                    trackEvent("grading_completed", {
+                      submission_id: submission.id,
+                      assignment_id: submission.assignment_id,
+                      course_id: submission.class_id,
+                      num_comments_added: comments.length,
+                      num_file_comments: fileComments.length,
+                      grader_role: graderRole as "instructor" | "grader",
+                      submission_review_id: activeSubmissionReview.id,
+                      total_score: activeSubmissionReview.total_score
+                    });
+                  }
 
                   toaster.success({
                     title: "Review assignment marked as complete",
@@ -325,10 +354,13 @@ export function CompleteReviewAssignmentButton() {
  */
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
   const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
     useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
+  const submission = useSubmission();
+  const comments = useAllCommentsForReview(activeSubmissionReview?.id);
+  const trackEvent = useTrackEvent();
   const [isLoading, setIsLoading] = useState(false);
 
   if (
@@ -437,6 +469,21 @@ export function CompleteReviewButton() {
                         completed_by: private_profile_id
                       });
 
+                      // Track grading completion
+                      const fileComments = comments.filter((c) => "submission_file_id" in c);
+                      const graderRole = role.role === "instructor" ? "instructor" : "grader";
+
+                      trackEvent("grading_completed", {
+                        submission_id: submission.id,
+                        assignment_id: submission.assignment_id,
+                        course_id: submission.class_id,
+                        num_comments_added: comments.length,
+                        num_file_comments: fileComments.length,
+                        grader_role: graderRole as "instructor" | "grader",
+                        submission_review_id: activeSubmissionReview.id,
+                        total_score: activeSubmissionReview.total_score
+                      });
+
                       toaster.success({
                         title: "Review marked as complete",
                         description: "Your review has been marked as complete."
@@ -499,21 +546,9 @@ function ReviewAssignmentActions() {
     return <></>;
   }
 
-  // If the review assignment is completed, show completion message instead of actions
+  // If the review assignment is already completed, don't show actions
   if (isStudent && activeReviewAssignment && activeReviewAssignment.completed_at) {
-    return (
-      <HStack w="100%" alignItems="center" justifyContent="space-between">
-        {activeReviewAssignment.completed_by && rubric && (
-          <Text>
-            {rubric.name} completed on{" "}
-            <span data-visual-test="blackout">
-              {formatDate(activeReviewAssignment.completed_at, "MM/dd/yyyy hh:mm a")}
-            </span>{" "}
-            by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
-          </Text>
-        )}
-      </HStack>
-    );
+    return <></>;
   }
 
   return (
@@ -591,16 +626,14 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   );
 }
 
-function CompletedReviewHistory({ excludeReviewAssignmentId }: { excludeReviewAssignmentId?: number }) {
+function CompletedReviewHistory() {
   const submission = useSubmission();
   const myAssignedReviews = useMyReviewAssignments(submission?.id);
   return (
     <>
-      {myAssignedReviews
-        .filter((ra) => ra.id !== excludeReviewAssignmentId)
-        .map((ra) => {
-          return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
-        })}
+      {myAssignedReviews.map((ra) => {
+        return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
+      })}
     </>
   );
 }
@@ -634,13 +667,7 @@ export default function SubmissionReviewToolbar() {
         <ReviewAssignmentActions />
       </VStack>
       {/* Only show completed history when NOT actively working on another review */}
-      {!hasActiveIncompleteReview && (
-        <CompletedReviewHistory
-          excludeReviewAssignmentId={
-            activeReviewAssignment && activeReviewAssignment.completed_at ? activeReviewAssignmentId : undefined
-          }
-        />
-      )}
+      {!hasActiveIncompleteReview && <CompletedReviewHistory />}
     </Box>
   );
 }

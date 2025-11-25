@@ -68,12 +68,7 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
 
   // Miscellaneous operations
   assignment_due_date_exceptions: { maxInsertsPerSecond: 10, description: "Due date exceptions", batchSize: 100 },
-  submission_regrade_requests: { maxInsertsPerSecond: 4, description: "Regrade requests", batchSize: 100 },
-
-  // Survey operations
-  surveys: { maxInsertsPerSecond: 5, description: "Survey creation", batchSize: 10 },
-  survey_templates: { maxInsertsPerSecond: 10, description: "Survey template creation", batchSize: 20 },
-  survey_responses: { maxInsertsPerSecond: 20, description: "Survey response creation", batchSize: 100 }
+  submission_regrade_requests: { maxInsertsPerSecond: 4, description: "Regrade requests", batchSize: 100 }
 };
 // Performance tracking
 export interface PerformanceMetrics {

@@ -6,10 +6,11 @@ import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
+import { useDiscussionTopics, useCourseController } from "@/hooks/useCourseController";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
+import { useForm, Controller } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
-import { Controller, useForm } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
 
@@ -25,6 +26,7 @@ type FormData = {
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();
+  const trackEvent = useTrackEvent();
   const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
 
@@ -61,6 +63,17 @@ export default function NewDiscussionThread() {
 
       // Create the thread using TableController
       const createdThread = await discussionThreadTeasers.create(threadData);
+
+      // Track discussion thread creation
+      const isAnonymous = createdThread.author === public_profile_id;
+      trackEvent("discussion_thread_created", {
+        course_id: Number.parseInt(course_id as string),
+        thread_id: createdThread.id,
+        topic_id: createdThread.topic_id,
+        is_question: createdThread.is_question,
+        is_private: createdThread.instructors_only,
+        is_anonymous: isAnonymous
+      });
 
       // Navigate to the new thread
       router.push(`/course/${course_id}/discussion/${createdThread.id}`);

@@ -64,6 +64,7 @@ import {
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
@@ -559,11 +560,6 @@ export function RubricCheckComment({
             </HStack>
           </Box>
           <Box pl={1} pr={1} color="fg.muted">
-            {check && (
-              <Text fontSize="sm" fontWeight="semibold" mb={1} color="fg.default" wordBreak="break-word">
-                {check.name}
-              </Text>
-            )}
             <HStack gap={1}>
               <Box flexShrink={0}>{pointsText}</Box>{" "}
               {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
@@ -1194,6 +1190,7 @@ function SubmissionCommentForm({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const submissionController = useSubmissionController();
+  const trackEvent = useTrackEvent();
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -1254,6 +1251,18 @@ function SubmissionCommentForm({
             throw new Error("Not implemented");
           } else {
             await submissionController.submission_comments.create(values);
+
+            // Track rubric check application
+            const commentType = linkedArtifactId ? "artifact" : "general";
+            trackEvent("rubric_check_applied", {
+              rubric_check_id: check.id,
+              submission_id: submission.id,
+              assignment_id: submission.assignment_id,
+              course_id: submission.class_id,
+              is_file_comment: false,
+              points: values.points ?? 0,
+              comment_type: commentType
+            });
           }
         }}
         defaultSingleLine={true}

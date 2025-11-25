@@ -6,14 +6,13 @@ import { Survey } from "survey-react-ui";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
-import type { Survey as SurveyType, SurveyResponseWithProfile } from "@/types/survey";
 
 interface ViewSurveyResponseProps {
-  surveyJson: SurveyType["json"];
-  responseData: SurveyResponseWithProfile["response"];
+  surveyJson: any;
+  responseData: any;
   readOnly?: boolean;
-  onComplete?: (sender: Model, options: unknown) => void;
-  onValueChanged?: (sender: Model, options: unknown) => void;
+  onComplete?: (sender: Model, options: any) => void;
+  onValueChanged?: (sender: Model, options: any) => void;
 }
 
 export default function ViewSurveyResponse({

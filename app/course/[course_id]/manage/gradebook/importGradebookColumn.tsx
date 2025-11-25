@@ -1,17 +1,18 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import { GradebookColumn, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { parse } from "csv-parse/browser/esm/sync";
 import { useCallback, useEffect, useState } from "react";
 import { FiUpload } from "react-icons/fi";
-import { LuChevronDown, LuChevronRight } from "react-icons/lu";
+import { MdWarning } from "react-icons/md";
 
 type ImportJob = {
   rows: string[][];
@@ -28,7 +29,6 @@ type PreviewStudent = {
   identifier: string;
   oldValue: string | number | null;
   newValue: string | number | null;
-  fullRow: string[]; // Full CSV row data
 };
 
 type PreviewCol = {
@@ -44,20 +44,11 @@ type PreviewData = {
   idType: "email" | "sid";
   idCol: number;
   previewCols: PreviewCol[];
-  csvHeaders: string[]; // Full CSV headers for display
 };
 
 export default function ImportGradebookColumns() {
   const courseController = useCourseController();
   const { private_profile_id } = useClassProfiles();
-
-  // State for managing collapsed/expanded sections in preview
-  const [expandedSections, setExpandedSections] = useState({
-    hasChanges: true,
-    noChangesInFile: false,
-    notInFile: false,
-    noRosterMatch: false
-  });
   const [importJob, setImportJob] = useState<ImportJob>();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const gradebookController = useGradebookController();
@@ -146,7 +137,6 @@ export default function ImportGradebookColumns() {
           })
       );
       // 2. Build a single batched payload and call RPC to update scores server-side
-      let preservedGradesCount = 0;
       const updatesPayload = previewData.previewCols
         .map((col) => {
           const colId = col.isNew ? col.newColId : col.existingCol?.id;
@@ -154,42 +144,33 @@ export default function ImportGradebookColumns() {
           const entries = col.students
             .map((s) => {
               let studentPrivateProfileId: string | null = null;
-              // Trim identifier for lookup (should already be trimmed, but ensure it)
-              const trimmedIdentifier = (s.identifier ?? "").trim();
               if (previewData.idType === "email") {
-                // Normalize email for comparison (lowercase, trimmed)
-                const normalizedEmail = trimmedIdentifier.toLowerCase();
                 studentPrivateProfileId =
-                  courseController
-                    .getRosterWithUserInfo()
-                    .data.find((r) => r.users.email?.trim().toLowerCase() === normalizedEmail)?.private_profile_id ??
-                  null;
+                  courseController.getRosterWithUserInfo().data.find((r) => r.users.email === s.identifier)
+                    ?.private_profile_id ?? null;
               } else if (previewData.idType === "sid") {
+                const trimmedIdentifier = (s.identifier ?? "").trim();
                 const sid = parseInt(trimmedIdentifier, 10);
                 if (!isNaN(sid) && isFinite(sid) && sid > 0) {
                   studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
                 }
               }
               if (!studentPrivateProfileId) return null;
-              // Determine new score - trim before converting
+              // Determine new score
               let newScore: number | null = null;
-              const trimmedNewValue = (s.newValue ?? "").toString().trim();
-              if (trimmedNewValue !== "" && !isNaN(Number(trimmedNewValue))) {
-                newScore = Number(trimmedNewValue);
+              if (s.newValue !== "" && s.newValue !== null && s.newValue !== undefined && !isNaN(Number(s.newValue))) {
+                newScore = Number(s.newValue);
               }
               // Determine old score (effective)
               let oldScore: number | null = null;
-              const trimmedOldValue = (s.oldValue ?? "").toString().trim();
-              if (trimmedOldValue !== "" && !isNaN(Number(trimmedOldValue))) {
-                oldScore = Number(trimmedOldValue);
+              if (
+                s.oldValue !== "" &&
+                s.oldValue !== null &&
+                s.oldValue !== undefined &&
+                !isNaN(Number(s.oldValue as number))
+              ) {
+                oldScore = Number(s.oldValue as number);
               }
-
-              // Preserve existing grades: if student has a grade but no new value in import, skip updating
-              if (newScore === null && oldScore !== null) {
-                preservedGradesCount++;
-                return null; // Skip this update - preserve existing grade
-              }
-
               // Skip no-ops: both null/empty or numerically equal
               const bothNull = newScore === null && oldScore === null;
               const bothEqual = newScore !== null && oldScore !== null && Number(newScore) === Number(oldScore);
@@ -216,15 +197,6 @@ export default function ImportGradebookColumns() {
         });
         if (rpcError) throw new Error(rpcError.message);
       }
-
-      // Show warning if grades were preserved
-      if (preservedGradesCount > 0) {
-        toaster.info({
-          title: "Some grades preserved",
-          description: `${preservedGradesCount} existing grade(s) were preserved because students had no entry in the import for those columns.`
-        });
-      }
-
       gradebookController.gradebook_columns.refetchAll();
       toaster.success({
         title: "Import successful!",
@@ -254,17 +226,9 @@ export default function ImportGradebookColumns() {
     const reader = new FileReader();
     reader.onload = (e) => {
       const csvText = e.target?.result as string;
-      const parsedRows: string[][] = parse(csvText, {
+      const rows: string[][] = parse(csvText, {
         skip_empty_lines: true
       });
-
-      // Trim all values in all cells and filter out rows where all values are blank or just whitespace
-      const rows = parsedRows
-        .map((row) => row.map((cell) => (cell ?? "").trim()))
-        .filter((row) => {
-          return row.some((cell) => cell.length > 0);
-        });
-
       setImportJob((prev) => ({
         ...prev,
         rows,
@@ -287,43 +251,6 @@ export default function ImportGradebookColumns() {
     }
     // Only run when step or importJob changes
   }, [step, importJob]);
-
-  // Auto-detect exact matches when entering step 2
-  useEffect(() => {
-    if (step === 2 && importJob && importJob.rows && importJob.rows[0] && existingColumns.length > 0) {
-      const header = importJob.rows[0];
-      const currentIdCol = studentIdentifierCol;
-
-      // Auto-detect exact matches between CSV columns and existing gradebook columns
-      // Default all columns to "ignore" unless they match
-      const autoMappings: Record<number, number | "new" | "ignore"> = {};
-      header.forEach((csvColName, idx) => {
-        if (idx === currentIdCol) return; // Skip identifier column
-
-        // Try to find exact match (case-insensitive, trimmed)
-        const normalizedCsvName = csvColName.trim();
-        const exactMatch = existingColumns.find(
-          (ec) => ec.name.trim().toLowerCase() === normalizedCsvName.toLowerCase()
-        );
-
-        if (exactMatch) {
-          autoMappings[idx] = exactMatch.id;
-        } else {
-          // Default to ignored if no match found
-          autoMappings[idx] = "ignore";
-        }
-      });
-
-      // Only update mappings if current mappings are empty
-      // Use a ref-like check by getting current state via a function
-      setColumnMappings((currentMappings) => {
-        if (Object.keys(currentMappings).length === 0) {
-          return autoMappings;
-        }
-        return currentMappings;
-      });
-    }
-  }, [step, importJob, existingColumns, studentIdentifierCol]);
   return (
     <Dialog.Root
       size={"md"}
@@ -407,202 +334,71 @@ export default function ImportGradebookColumns() {
                       <Text fontWeight="bold" mt={4}>
                         Map grade columns:
                       </Text>
-                      <Box p={3} borderRadius="md" bg="bg.muted" borderWidth="1px" borderColor="border.muted" mb={3}>
-                        <VStack align="stretch" gap={1} fontSize="sm">
-                          <HStack>
-                            <Box
-                              w="20px"
-                              h="20px"
-                              borderRadius="sm"
-                              borderWidth="2px"
-                              borderColor="border.success"
-                              bg="bg.success"
-                            />
-                            <Text>Will update existing column</Text>
-                          </HStack>
-                          <HStack>
-                            <Box
-                              w="20px"
-                              h="20px"
-                              borderRadius="sm"
-                              borderWidth="2px"
-                              borderColor="border.info"
-                              bg="bg.info"
-                            />
-                            <Text>Will create new column</Text>
-                          </HStack>
-                          <HStack>
-                            <Box
-                              w="20px"
-                              h="20px"
-                              borderRadius="sm"
-                              borderWidth="1px"
-                              borderStyle="dashed"
-                              borderColor="border.warning"
-                              bg="bg.warning"
-                            />
-                            <Text>Unmapped - needs attention</Text>
-                          </HStack>
-                          <HStack>
-                            <Box
-                              w="20px"
-                              h="20px"
-                              borderRadius="sm"
-                              borderWidth="1px"
-                              borderColor="border.muted"
-                              bg="bg.muted"
-                              opacity={0.6}
-                            />
-                            <Text>Will be ignored</Text>
-                          </HStack>
-                        </VStack>
-                      </Box>
-                      <VStack align="stretch" gap={2} mt={2}>
-                        {importJob.rows[0].map((col, idx) => {
-                          if (idx === studentIdentifierCol) return null;
-
-                          const mapping = columnMappings[idx] ?? "ignore";
-                          const isMapped = mapping !== "ignore" && mapping !== undefined;
-                          const isIgnored = mapping === "ignore";
-                          const isNew = mapping === "new";
-                          const isExisting = typeof mapping === "number";
-
-                          // Determine visual styling based on mapping status
-                          let borderColor = "border.muted";
-                          let bgColor = "transparent";
-                          const borderStyle = "solid";
-                          let borderWidth = "1px";
-                          let opacity = 1;
-
-                          if (isMapped && isExisting) {
-                            // Mapped to existing column - success
-                            borderColor = "border.success";
-                            bgColor = "bg.success";
-                            borderWidth = "2px";
-                          } else if (isNew) {
-                            // Creating new column - info
-                            borderColor = "border.info";
-                            bgColor = "bg.info";
-                            borderWidth = "2px";
-                          } else if (isIgnored) {
-                            // Ignored - muted with strikethrough
-                            borderColor = "border.muted";
-                            bgColor = "bg.muted";
-                            opacity = 0.6;
-                          }
-
-                          const matchedColumn = isExisting ? existingColumns.find((ec) => ec.id === mapping) : null;
-
-                          return (
-                            <Box
-                              key={idx}
-                              p={3}
-                              borderRadius="md"
-                              borderWidth={borderWidth}
-                              borderStyle={borderStyle}
-                              borderColor={borderColor}
-                              bg={bgColor}
-                              opacity={opacity}
-                            >
-                              <VStack align="stretch" gap={1}>
-                                <HStack>
-                                  <Text
-                                    minW="120px"
-                                    fontWeight={isMapped ? "semibold" : "normal"}
-                                    textDecoration={isIgnored ? "line-through" : "none"}
-                                  >
-                                    {col}
-                                  </Text>
-                                  {isMapped && isExisting && matchedColumn && (
-                                    <Box
-                                      px={2}
-                                      py={0.5}
-                                      borderRadius="sm"
-                                      bg="bg.success"
-                                      color="fg.success"
-                                      fontSize="xs"
-                                      fontWeight="medium"
-                                    >
-                                      ✓ Auto-matched
-                                    </Box>
-                                  )}
-                                  <NativeSelect.Root>
-                                    <NativeSelect.Field
-                                      value={mapping ?? "ignore"}
-                                      onChange={(e) => {
-                                        const newMapping =
-                                          e.target.value === "new" || e.target.value === "ignore"
-                                            ? e.target.value
-                                            : Number(e.target.value);
-                                        setColumnMappings((m) => ({
-                                          ...m,
-                                          [idx]: newMapping
-                                        }));
-                                        // Set default max score when selecting "new"
-                                        if (e.target.value === "new") {
-                                          setNewColumnMaxScores((scores) => ({
-                                            ...scores,
-                                            [idx]: scores[idx] ?? 100
-                                          }));
-                                        }
-                                      }}
-                                    >
-                                      <option value="ignore">Ignore column</option>
-                                      <option value="new">Create new column</option>
-                                      {existingColumns.map((ec) => (
-                                        <option key={ec.id} value={ec.id}>
-                                          {ec.name}
-                                        </option>
-                                      ))}
-                                    </NativeSelect.Field>
-                                  </NativeSelect.Root>
-                                </HStack>
-                                {isMapped && isExisting && matchedColumn && (
-                                  <Text fontSize="sm" color="fg.success" ml="120px">
-                                    Will update: <strong>{matchedColumn.name}</strong>
-                                  </Text>
-                                )}
-                                {isNew && (
-                                  <>
-                                    <Text fontSize="sm" color="fg.info" ml="120px">
-                                      Will create new column: <strong>{col}</strong>
-                                    </Text>
-                                    <HStack ml="120px">
-                                      <Text fontSize="sm" color="fg.muted" minW="80px">
-                                        Max Score:
-                                      </Text>
-                                      <input
-                                        type="number"
-                                        value={newColumnMaxScores[idx] ?? 100}
-                                        onChange={(e) => {
-                                          const value = Number(e.target.value);
-                                          setNewColumnMaxScores((scores) => ({
-                                            ...scores,
-                                            [idx]: value
-                                          }));
-                                        }}
-                                        style={{
-                                          width: "80px",
-                                          padding: "4px 8px",
-                                          border: "1px solid #ccc",
-                                          borderRadius: "4px"
-                                        }}
-                                        min="0"
-                                        step="0.01"
-                                      />
-                                    </HStack>
-                                  </>
-                                )}
-                                {isIgnored && (
-                                  <Text fontSize="sm" color="fg.muted" ml="120px" fontStyle="italic">
-                                    This column will be ignored
-                                  </Text>
-                                )}
-                              </VStack>
-                            </Box>
-                          );
-                        })}
-                      </VStack>
+                      {importJob.rows[0].map((col, idx) =>
+                        idx === studentIdentifierCol ? null : (
+                          <VStack key={idx} align="stretch" gap={1}>
+                            <HStack>
+                              <Text minW="120px">{col}</Text>
+                              <NativeSelect.Root>
+                                <NativeSelect.Field
+                                  value={columnMappings[idx] ?? ""}
+                                  onChange={(e) => {
+                                    const newMapping =
+                                      e.target.value === "new" || e.target.value === "ignore"
+                                        ? e.target.value
+                                        : Number(e.target.value);
+                                    setColumnMappings((m) => ({
+                                      ...m,
+                                      [idx]: newMapping
+                                    }));
+                                    // Set default max score when selecting "new"
+                                    if (e.target.value === "new") {
+                                      setNewColumnMaxScores((scores) => ({
+                                        ...scores,
+                                        [idx]: scores[idx] ?? 100
+                                      }));
+                                    }
+                                  }}
+                                >
+                                  <option value="ignore">Ignore column</option>
+                                  <option value="new">Create new column</option>
+                                  {existingColumns.map((ec) => (
+                                    <option key={ec.id} value={ec.id}>
+                                      {ec.name}
+                                    </option>
+                                  ))}
+                                </NativeSelect.Field>
+                              </NativeSelect.Root>
+                            </HStack>
+                            {columnMappings[idx] === "new" && (
+                              <HStack ml="120px">
+                                <Text fontSize="sm" color="gray.600" minW="80px">
+                                  Max Score:
+                                </Text>
+                                <input
+                                  type="number"
+                                  value={newColumnMaxScores[idx] ?? 100}
+                                  onChange={(e) => {
+                                    const value = Number(e.target.value);
+                                    setNewColumnMaxScores((scores) => ({
+                                      ...scores,
+                                      [idx]: value
+                                    }));
+                                  }}
+                                  style={{
+                                    width: "80px",
+                                    padding: "4px 8px",
+                                    border: "1px solid #ccc",
+                                    borderRadius: "4px"
+                                  }}
+                                  min="0"
+                                  step="0.01"
+                                />
+                              </HStack>
+                            )}
+                          </VStack>
+                        )
+                      )}
                     </VStack>
                     <HStack mt={4}>
                       <Button onClick={() => setStep(1)} variant="outline" size="sm">
@@ -637,20 +433,17 @@ export default function ImportGradebookColumns() {
                             }
                             // For each student, get identifier and new value
                             const students = dataRows.map((row) => {
-                              // Trim identifier and newValue from CSV
-                              const identifier = (row[idCol] ?? "").trim();
-                              const newValue = (row[col.idx] ?? "").trim();
+                              const identifier = row[idCol];
+                              const newValue = row[col.idx];
                               let studentPrivateProfileId: string | null = null;
                               if (idType === "email") {
-                                // Normalize email for comparison (lowercase, trimmed)
-                                const normalizedEmail = identifier.toLowerCase();
                                 studentPrivateProfileId =
                                   courseController
                                     .getRosterWithUserInfo()
-                                    .data.find((r) => r.users.email?.trim().toLowerCase() === normalizedEmail)
-                                    ?.private_profile_id ?? null;
+                                    .data.find((r) => r.users.email === identifier)?.private_profile_id ?? null;
                               } else if (idType === "sid") {
-                                const sid = parseInt(identifier, 10);
+                                const trimmedIdentifier = (identifier ?? "").trim();
+                                const sid = parseInt(trimmedIdentifier, 10);
                                 if (isNaN(sid)) {
                                   studentPrivateProfileId = null;
                                 } else {
@@ -665,7 +458,7 @@ export default function ImportGradebookColumns() {
                                 );
                                 oldValue = getScore(found) ?? null;
                               }
-                              return { identifier, oldValue, newValue, fullRow: row };
+                              return { identifier, oldValue, newValue };
                             });
                             return {
                               name: col.name,
@@ -678,8 +471,7 @@ export default function ImportGradebookColumns() {
                           setPreviewData({
                             idType,
                             idCol,
-                            previewCols,
-                            csvHeaders: header
+                            previewCols
                           });
                           setStep(3);
                         }}
@@ -691,528 +483,262 @@ export default function ImportGradebookColumns() {
                 )}
                 {step === 3 && previewData && (
                   <>
-                    <Text fontWeight="bold" mb={4}>
-                      Preview Changes
-                    </Text>
-                    {/* Filter out ignored columns for preview */}
+                    {/* Error reporting */}
                     {(() => {
-                      const filteredPreviewCols = previewData.previewCols.filter((col) => col.isNew || col.existingCol);
+                      // Helper function to normalize identifiers
+                      const normalizeIdentifier = (id: string, isEmail: boolean): string => {
+                        const trimmed = id.trim();
+                        return isEmail && trimmed.includes("@") ? trimmed.toLowerCase() : trimmed;
+                      };
+
+                      let importIdentifiers = previewData.previewCols[0]?.students.map((s) => s.identifier) || [];
+                      importIdentifiers = importIdentifiers
+                        .filter((id): id is string => !!id)
+                        .map((id) => normalizeIdentifier(id, previewData.idType === "email"));
+
+                      // Precompute roster data once to avoid repeated lookups
                       const rosterData = courseController.getRosterWithUserInfo().data;
                       const rosterMap = new Map(
                         rosterData.map((rosterEntry) => [rosterEntry.private_profile_id, rosterEntry])
                       );
 
-                      // Helper function to check if a row has changes across all columns
-                      const hasChanges = (identifier: string, cols: PreviewCol[], idType: "email" | "sid"): boolean => {
-                        return cols.some((col) => {
-                          // Normalize identifiers for comparison (emails should be lowercase)
-                          const normalizedIdentifier = idType === "email" ? identifier.toLowerCase() : identifier;
-                          const student = col.students.find((s) => {
-                            const stIdentifier = idType === "email" ? s.identifier.toLowerCase() : s.identifier;
-                            return stIdentifier === normalizedIdentifier;
-                          });
-                          if (!student) return false;
-                          if (col.isNew) return true; // New columns always count as changes
-                          const normalizedOld = String(student.oldValue ?? "").trim();
-                          const normalizedNew = String(student.newValue ?? "").trim();
-                          return normalizedOld !== normalizedNew && normalizedNew !== "" && normalizedNew !== null;
-                        });
-                      };
+                      // Build normalized identifier sets for O(1) membership checks
+                      const rosterIdentifiers = new Set<string>();
+                      const nonDroppedIdentifiers = new Set<string>();
+                      const rosterEmailToId = new Map<string, string>();
+                      const rosterSidToId = new Map<string, string>();
 
-                      // Build list of all rows with their change status
-                      type RowData = {
-                        identifier: string;
-                        student: PreviewStudent | null;
-                        rosterEntry: (typeof rosterData)[0] | null;
-                        profile: UserProfile | null;
-                        hasChange: boolean;
-                        inImport: boolean;
-                      };
-
-                      const allRows: RowData[] = [];
-
-                      // Add rows from roster (students in Ptg)
                       studentRoster?.forEach((s) => {
                         const rosterEntry = rosterMap.get(s.id);
                         if (!rosterEntry) return;
 
-                        let identifier: string | null = null;
-                        if (previewData.idType === "email") {
-                          identifier = rosterEntry.users.email
-                            ? String(rosterEntry.users.email).trim().toLowerCase()
-                            : null;
-                        } else if (previewData.idType === "sid") {
-                          identifier =
-                            rosterEntry.users.sis_user_id != null ? String(rosterEntry.users.sis_user_id).trim() : null;
-                        }
-
-                        if (!identifier) return;
-
-                        // Check if student appears in ANY column (not just the first one)
-                        // Normalize identifiers for comparison (emails should be lowercase)
-                        const inImport = filteredPreviewCols.some((col) =>
-                          col.students.some((st) => {
-                            const stIdentifier =
-                              previewData.idType === "email" ? st.identifier.toLowerCase() : st.identifier;
-                            return stIdentifier === identifier;
-                          })
-                        );
-                        const hasChange = hasChanges(identifier, filteredPreviewCols, previewData.idType);
-
-                        allRows.push({
-                          identifier,
-                          student: null, // Will look up per column instead
-                          rosterEntry,
-                          profile: s,
-                          hasChange,
-                          inImport
-                        });
-                      });
-
-                      // Add rows from import that aren't in roster
-                      const rosterIdentifiers = new Set(
-                        studentRoster
-                          ?.map((s) => {
-                            const rosterEntry = rosterMap.get(s.id);
-                            if (!rosterEntry) return null;
-                            if (previewData.idType === "email") {
-                              return rosterEntry.users.email
-                                ? String(rosterEntry.users.email).trim().toLowerCase()
-                                : null;
-                            } else if (previewData.idType === "sid") {
-                              return rosterEntry.users.sis_user_id != null
-                                ? String(rosterEntry.users.sis_user_id).trim()
-                                : null;
-                            }
-                            return null;
-                          })
-                          .filter((id): id is string => !!id) || []
-                      );
-
-                      filteredPreviewCols[0]?.students.forEach((student) => {
-                        // Normalize identifier for comparison (emails should be lowercase)
-                        const normalizedStudentId =
-                          previewData.idType === "email" ? student.identifier.toLowerCase() : student.identifier;
-                        if (!rosterIdentifiers.has(normalizedStudentId)) {
-                          allRows.push({
-                            identifier: student.identifier,
-                            student,
-                            rosterEntry: null,
-                            profile: null,
-                            hasChange: hasChanges(student.identifier, filteredPreviewCols, previewData.idType),
-                            inImport: true
-                          });
+                        if (previewData.idType === "email" && rosterEntry.users.email) {
+                          const normalizedEmail = normalizeIdentifier(String(rosterEntry.users.email), true);
+                          rosterIdentifiers.add(normalizedEmail);
+                          if (!rosterEntry.disabled) {
+                            nonDroppedIdentifiers.add(normalizedEmail);
+                          }
+                          rosterEmailToId.set(normalizedEmail, s.id);
+                        } else if (previewData.idType === "sid" && rosterEntry.users.sis_user_id != null) {
+                          const normalizedSid = normalizeIdentifier(String(rosterEntry.users.sis_user_id), false);
+                          rosterIdentifiers.add(normalizedSid);
+                          if (!rosterEntry.disabled) {
+                            nonDroppedIdentifiers.add(normalizedSid);
+                          }
+                          rosterSidToId.set(normalizedSid, s.id);
                         }
                       });
 
-                      // Segment rows into categories
-                      const rowsWithChanges = allRows.filter((r) => r.hasChange && r.rosterEntry !== null);
-                      const rowsNoChangesInFile = allRows.filter(
-                        (r) => !r.hasChange && r.inImport && r.rosterEntry !== null
+                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers.has(id));
+                      const notInImport = Array.from(nonDroppedIdentifiers).filter(
+                        (id) => !importIdentifiers.includes(id)
                       );
-                      const rowsNotInFile = allRows.filter(
-                        (r) =>
-                          !r.inImport &&
-                          r.rosterEntry !== null &&
-                          !r.rosterEntry.disabled &&
-                          r.rosterEntry.role === "student"
-                      );
-                      const rowsNoRosterMatch = allRows.filter((r) => r.rosterEntry === null);
-
-                      // Sort each category by identifier
-                      const sortByIdentifier = (a: RowData, b: RowData) => a.identifier.localeCompare(b.identifier);
-                      rowsWithChanges.sort(sortByIdentifier);
-                      rowsNoChangesInFile.sort(sortByIdentifier);
-                      rowsNotInFile.sort(sortByIdentifier);
-                      rowsNoRosterMatch.sort(sortByIdentifier);
-
-                      // Helper to render table rows with consistent column widths
-                      const renderTableRows = (rows: RowData[], sectionStartIdx: number) => {
-                        return rows.map((rowData, idx) => {
-                          const rosterEntry = rowData.rosterEntry;
-                          const profile = rowData.profile;
-                          const globalIdx = sectionStartIdx + idx;
-
-                          return (
-                            <Table.Row
-                              key={`${sectionStartIdx}-${idx}`}
-                              bg={
-                                !rowData.inImport
-                                  ? undefined
-                                  : rowData.hasChange
-                                    ? "bg.warning"
-                                    : globalIdx % 2 === 1
-                                      ? "bg.subtle"
-                                      : undefined
-                              }
-                            >
-                              <Table.Cell style={{ width: identifierColWidth, minWidth: identifierColWidth }}>
-                                <Text truncate title={rowData.identifier}>
-                                  {rowData.identifier}
-                                </Text>
-                              </Table.Cell>
-                              <Table.Cell style={{ width: nameColWidth, minWidth: nameColWidth }}>
-                                <Text truncate title={profile?.name ?? "-"}>
-                                  {profile?.name ?? "-"}
-                                </Text>
-                              </Table.Cell>
-                              {previewData.idType === "sid" ? (
-                                <Table.Cell style={{ width: emailSidColWidth, minWidth: emailSidColWidth }}>
-                                  <Text truncate title={rosterEntry?.users.email ?? "-"}>
-                                    {rosterEntry?.users.email ?? "-"}
-                                  </Text>
-                                </Table.Cell>
-                              ) : (
-                                <Table.Cell style={{ width: emailSidColWidth, minWidth: emailSidColWidth }}>
-                                  <Text
-                                    truncate
-                                    title={
-                                      rosterEntry?.users.sis_user_id != null
-                                        ? String(rosterEntry.users.sis_user_id)
-                                        : "-"
-                                    }
-                                  >
-                                    {rosterEntry?.users.sis_user_id ?? "-"}
-                                  </Text>
-                                </Table.Cell>
-                              )}
-                              {filteredPreviewCols.map((col, colIdx) => {
-                                // Look up student data for this specific column
-                                // Normalize identifiers for comparison (emails should be lowercase)
-                                const normalizedRowId =
-                                  previewData.idType === "email"
-                                    ? rowData.identifier.toLowerCase()
-                                    : rowData.identifier;
-                                const s = col.students.find((st) => {
-                                  const stIdentifier =
-                                    previewData.idType === "email" ? st.identifier.toLowerCase() : st.identifier;
-                                  return stIdentifier === normalizedRowId;
-                                });
-                                if (!s)
-                                  return (
-                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
-                                      -
-                                    </Table.Cell>
-                                  );
-
-                                // Check if this is a preserved grade (has old value but no new value, and not a new column)
-                                const hasOldValue =
-                                  s.oldValue !== null && s.oldValue !== undefined && String(s.oldValue).trim() !== "";
-                                const hasNewValue =
-                                  s.newValue !== null && s.newValue !== undefined && String(s.newValue).trim() !== "";
-                                const isPreserved = !col.isNew && hasOldValue && !hasNewValue;
-
-                                // For preserved grades (has old value but no new value), show old value like other no-changes
-                                if (isPreserved) {
-                                  return (
-                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
-                                      {s.oldValue}
-                                    </Table.Cell>
-                                  );
-                                }
-
-                                // Check if this is a new entry (has new value but no old value)
-                                const isNewEntry = !hasOldValue && hasNewValue;
-
-                                // Check if values are unchanged
-                                const isUnchanged =
-                                  s.oldValue === null ||
-                                  s.oldValue === undefined ||
-                                  String(s.oldValue).trim() === String(s.newValue).trim();
-
-                                if (isNewEntry) {
-                                  // New entry - highlight in green/bold
-                                  return (
-                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
-                                      <Text as="b" color="fg.success">
-                                        {s.newValue}
-                                      </Text>
-                                    </Table.Cell>
-                                  );
-                                } else if (isUnchanged) {
-                                  // Unchanged or no value
-                                  return (
-                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
-                                      {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
-                                        ? s.newValue
-                                        : "-"}
-                                    </Table.Cell>
-                                  );
-                                } else {
-                                  // Updated value - show old value struck through and new value in green/bold
-                                  return (
-                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
-                                      <s>{s.oldValue}</s>{" "}
-                                      <Text as="b" color="fg.success">
-                                        {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
-                                          ? s.newValue
-                                          : "-"}
-                                      </Text>
-                                    </Table.Cell>
-                                  );
-                                }
-                              })}
-                            </Table.Row>
-                          );
-                        });
-                      };
-
-                      // Track row index across sections for alternating row colors
-                      let currentRowIndex = 0;
-
-                      // Define column widths - use fixed widths to prevent email column from expanding
-                      const identifierColWidth = "200px";
-                      const nameColWidth = "200px";
-                      const emailSidColWidth = "150px";
-                      const gradeColWidth = "100px";
 
                       return (
-                        <VStack align="stretch" gap={2}>
-                          <Box overflowX="auto">
-                            <Table.Root width="100%" variant="outline" style={{ tableLayout: "fixed" }}>
-                              <Table.Header>
-                                <Table.Row>
-                                  <Table.ColumnHeader
-                                    align="left"
-                                    style={{ width: identifierColWidth, minWidth: identifierColWidth }}
-                                  >
-                                    {previewData.idType === "email" ? "Email" : "Student ID"}
-                                  </Table.ColumnHeader>
-                                  <Table.ColumnHeader
-                                    align="left"
-                                    style={{ width: nameColWidth, minWidth: nameColWidth }}
-                                  >
-                                    Name
-                                  </Table.ColumnHeader>
-                                  {previewData.idType === "sid" ? (
-                                    <Table.ColumnHeader
-                                      align="left"
-                                      style={{ width: emailSidColWidth, minWidth: emailSidColWidth }}
-                                    >
-                                      Email
-                                    </Table.ColumnHeader>
-                                  ) : (
-                                    <Table.ColumnHeader
-                                      align="left"
-                                      style={{ width: emailSidColWidth, minWidth: emailSidColWidth }}
-                                    >
-                                      Student ID
-                                    </Table.ColumnHeader>
-                                  )}
-                                  {filteredPreviewCols.map((col, colIdx) => (
-                                    <Table.ColumnHeader
-                                      key={colIdx}
-                                      align="left"
-                                      style={{ width: gradeColWidth, minWidth: gradeColWidth }}
-                                    >
-                                      <VStack align="flex-start" gap={1}>
-                                        <Text
-                                          as="span"
-                                          color={col.isNew ? "fg.info" : "fg.success"}
-                                          fontWeight="semibold"
-                                        >
-                                          {col.existingCol ? col.existingCol.name : col.name}
-                                        </Text>
-                                        {col.existingCol?.score_expression && (
-                                          <Text as="span" color="fg.warning" fontSize="xs">
-                                            Update will replace any existing score override
-                                          </Text>
-                                        )}
-                                      </VStack>
-                                    </Table.ColumnHeader>
-                                  ))}
-                                </Table.Row>
-                              </Table.Header>
-
-                              {/* Section 1: Has changes (always expanded) */}
-                              {rowsWithChanges.length > 0 && (
-                                <>
-                                  <Table.Row
-                                    cursor="pointer"
-                                    _hover={{ opacity: 0.8 }}
-                                    transition="opacity 0.2s"
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() =>
-                                      setExpandedSections((prev) => ({ ...prev, hasChanges: !prev.hasChanges }))
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        setExpandedSections((prev) => ({ ...prev, hasChanges: !prev.hasChanges }));
-                                      }
-                                    }}
-                                    fontWeight="semibold"
-                                    color="fg.success"
-                                    bg="bg.subtle"
-                                    borderTop="2px solid"
-                                    borderColor="border.emphasized"
-                                  >
-                                    <Table.Cell colSpan={3 + filteredPreviewCols.length}>
-                                      <HStack>
-                                        <Icon as={expandedSections.hasChanges ? LuChevronDown : LuChevronRight} />
-                                        <Text>Has changes ({rowsWithChanges.length})</Text>
-                                      </HStack>
-                                    </Table.Cell>
-                                  </Table.Row>
-                                  {expandedSections.hasChanges && (
-                                    <Table.Body>
-                                      {(() => {
-                                        const startIdx = currentRowIndex;
-                                        currentRowIndex += rowsWithChanges.length;
-                                        return renderTableRows(rowsWithChanges, startIdx);
-                                      })()}
-                                    </Table.Body>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Section 2: No changes to grades from this file, but in the file (collapsed by default) */}
-                              {rowsNoChangesInFile.length > 0 && (
-                                <>
-                                  <Table.Row
-                                    cursor="pointer"
-                                    _hover={{ opacity: 0.8 }}
-                                    transition="opacity 0.2s"
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() =>
-                                      setExpandedSections((prev) => ({
-                                        ...prev,
-                                        noChangesInFile: !prev.noChangesInFile
-                                      }))
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        setExpandedSections((prev) => ({
-                                          ...prev,
-                                          noChangesInFile: !prev.noChangesInFile
-                                        }));
-                                      }
-                                    }}
-                                    fontWeight="semibold"
-                                    color="fg.muted"
-                                    bg="bg.subtle"
-                                    borderTop="2px solid"
-                                    borderColor="border.emphasized"
-                                  >
-                                    <Table.Cell colSpan={3 + filteredPreviewCols.length}>
-                                      <HStack>
-                                        <Icon as={expandedSections.noChangesInFile ? LuChevronDown : LuChevronRight} />
-                                        <Text>
-                                          No changes to grades from this file, but in the file (
-                                          {rowsNoChangesInFile.length})
-                                        </Text>
-                                      </HStack>
-                                    </Table.Cell>
-                                  </Table.Row>
-                                  {expandedSections.noChangesInFile && (
-                                    <Table.Body>
-                                      {(() => {
-                                        const startIdx = currentRowIndex;
-                                        currentRowIndex += rowsNoChangesInFile.length;
-                                        return renderTableRows(rowsNoChangesInFile, startIdx);
-                                      })()}
-                                    </Table.Body>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Section 3: Not in this file, but in the class (collapsed by default) */}
-                              {rowsNotInFile.length > 0 && (
-                                <>
-                                  <Table.Row
-                                    cursor="pointer"
-                                    _hover={{ opacity: 0.8 }}
-                                    transition="opacity 0.2s"
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() =>
-                                      setExpandedSections((prev) => ({ ...prev, notInFile: !prev.notInFile }))
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        setExpandedSections((prev) => ({ ...prev, notInFile: !prev.notInFile }));
-                                      }
-                                    }}
-                                    fontWeight="semibold"
-                                    color="fg.muted"
-                                    bg="bg.subtle"
-                                    borderTop="2px solid"
-                                    borderColor="border.emphasized"
-                                  >
-                                    <Table.Cell colSpan={3 + filteredPreviewCols.length}>
-                                      <HStack>
-                                        <Icon as={expandedSections.notInFile ? LuChevronDown : LuChevronRight} />
-                                        <Text>Not in this file, but in the class ({rowsNotInFile.length})</Text>
-                                      </HStack>
-                                    </Table.Cell>
-                                  </Table.Row>
-                                  {expandedSections.notInFile && (
-                                    <Table.Body>
-                                      {(() => {
-                                        const startIdx = currentRowIndex;
-                                        currentRowIndex += rowsNotInFile.length;
-                                        return renderTableRows(rowsNotInFile, startIdx);
-                                      })()}
-                                    </Table.Body>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Section 4: In the import file but didn&apos;t match to the roster (collapsed by default) */}
-                              {rowsNoRosterMatch.length > 0 && (
-                                <>
-                                  <Table.Row
-                                    cursor="pointer"
-                                    _hover={{ opacity: 0.8 }}
-                                    transition="opacity 0.2s"
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() =>
-                                      setExpandedSections((prev) => ({ ...prev, noRosterMatch: !prev.noRosterMatch }))
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        setExpandedSections((prev) => ({
-                                          ...prev,
-                                          noRosterMatch: !prev.noRosterMatch
-                                        }));
-                                      }
-                                    }}
-                                    fontWeight="semibold"
-                                    color="fg.warning"
-                                    bg="bg.subtle"
-                                    borderTop="2px solid"
-                                    borderColor="border.emphasized"
-                                  >
-                                    <Table.Cell colSpan={3 + filteredPreviewCols.length}>
-                                      <HStack>
-                                        <Icon as={expandedSections.noRosterMatch ? LuChevronDown : LuChevronRight} />
-                                        <Text>
-                                          In the import file but didn&apos;t match to the roster (
-                                          {rowsNoRosterMatch.length})
-                                        </Text>
-                                      </HStack>
-                                    </Table.Cell>
-                                  </Table.Row>
-                                  {expandedSections.noRosterMatch && (
-                                    <Table.Body>
-                                      {(() => {
-                                        const startIdx = currentRowIndex;
-                                        currentRowIndex += rowsNoRosterMatch.length;
-                                        return renderTableRows(rowsNoRosterMatch, startIdx);
-                                      })()}
-                                    </Table.Body>
-                                  )}
-                                </>
-                              )}
-                            </Table.Root>
-                          </Box>
+                        <VStack mb={2} align="stretch">
+                          {notInRoster.length > 0 && (
+                            <Alert status="warning" variant="subtle">
+                              Warning: {notInRoster.length} student(s) in the import are not in the roster. These
+                              students will not be imported. {notInRoster.join(", ")}
+                            </Alert>
+                          )}
+                          {notInImport && notInImport.length > 0 && (
+                            <Alert status="info" variant="subtle">
+                              Note: {notInImport?.length} student(s) in the roster are not in the import. These students
+                              will receive a &quot;missing&quot; grade for the imported columns.
+                              {notInImport?.join(", ")}
+                            </Alert>
+                          )}
                         </VStack>
+                      );
+                    })()}
+                    <Text fontWeight="bold" mb={2}>
+                      Preview Changes
+                    </Text>
+                    {/* Filter out ignored columns for preview */}
+                    {(() => {
+                      const filteredPreviewCols = previewData.previewCols.filter((col) => col.isNew || col.existingCol);
+                      return (
+                        <Table.Root width="100%" variant="outline">
+                          <Table.Header>
+                            <Table.Row>
+                              <Table.ColumnHeader align="left">
+                                {previewData.idType === "email" ? "Email" : "Student ID"}
+                              </Table.ColumnHeader>
+                              {filteredPreviewCols.map((col, colIdx) => (
+                                <Table.ColumnHeader key={colIdx} align="left">
+                                  <span style={{ color: col.isNew ? "green" : "blue" }}>
+                                    {col.existingCol ? `Update: ${col.existingCol.name}` : `New: ${col.name}`}
+                                  </span>
+                                  {col.existingCol?.score_expression && (
+                                    <Box
+                                      color="fg.warning"
+                                      fontSize="md"
+                                      maxW="300px"
+                                      border="1px solid"
+                                      borderColor="fg.warning"
+                                      borderRadius="md"
+                                      p={1}
+                                      mt={1}
+                                      bg="bg.warning"
+                                    >
+                                      <Icon as={MdWarning} />
+                                      Update will override calculated score. Only do this if you really are sure you
+                                      want to do this!
+                                    </Box>
+                                  )}
+                                </Table.ColumnHeader>
+                              ))}
+                            </Table.Row>
+                          </Table.Header>
+                          <Table.Body>
+                            {(() => {
+                              // Precompute roster data once for the entire table
+                              const rosterData = courseController.getRosterWithUserInfo().data;
+                              const rosterMap = new Map(
+                                rosterData.map((rosterEntry) => [rosterEntry.private_profile_id, rosterEntry])
+                              );
+
+                              // Build normalized identifier sets for O(1) membership checks
+                              const rosterIdentifiers = new Set<string>();
+                              const rosterEmailToId = new Map<string, string>();
+                              const rosterSidToId = new Map<string, string>();
+
+                              studentRoster?.forEach((s) => {
+                                const rosterEntry = rosterMap.get(s.id);
+                                if (!rosterEntry) return;
+
+                                if (previewData.idType === "email" && rosterEntry.users.email) {
+                                  const email = String(rosterEntry.users.email).trim();
+                                  rosterIdentifiers.add(email);
+                                  rosterEmailToId.set(email, s.id);
+                                } else if (previewData.idType === "sid" && rosterEntry.users.sis_user_id != null) {
+                                  const sid = String(rosterEntry.users.sis_user_id).trim();
+                                  rosterIdentifiers.add(sid);
+                                  rosterSidToId.set(sid, s.id);
+                                }
+                              });
+
+                              return studentRoster?.map((student, idx) => {
+                                const rosterEntry = rosterMap.get(student.id);
+                                if (!rosterEntry) return null;
+
+                                let identifier: string | null = null;
+                                if (previewData.idType === "email") {
+                                  identifier = rosterEntry.users.email ? String(rosterEntry.users.email).trim() : null;
+                                } else if (previewData.idType === "sid") {
+                                  identifier =
+                                    rosterEntry.users.sis_user_id != null
+                                      ? String(rosterEntry.users.sis_user_id).trim()
+                                      : null;
+                                }
+
+                                if (!identifier) return null;
+
+                                const importIdx = filteredPreviewCols[0]?.students.findIndex(
+                                  (s) => s.identifier === identifier
+                                );
+                                const inImport = importIdx !== -1 && importIdx !== undefined;
+
+                                return (
+                                  <Table.Row
+                                    key={idx}
+                                    bg={inImport ? (idx % 2 === 1 ? "bg.subtle" : undefined) : undefined}
+                                  >
+                                    <Table.Cell>{identifier}</Table.Cell>
+                                    {filteredPreviewCols.map((col, colIdx) => {
+                                      const s = inImport ? col.students[importIdx] : undefined;
+                                      if (!s) return <Table.Cell key={colIdx}>-</Table.Cell>;
+                                      if (
+                                        col.isNew ||
+                                        s.oldValue === null ||
+                                        s.oldValue === undefined ||
+                                        String(s.oldValue).trim() === String(s.newValue).trim()
+                                      ) {
+                                        return (
+                                          <Table.Cell key={colIdx}>
+                                            {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
+                                              ? s.newValue
+                                              : "-"}
+                                          </Table.Cell>
+                                        );
+                                      } else {
+                                        return (
+                                          <Table.Cell key={colIdx}>
+                                            <s>{s.oldValue}</s>{" "}
+                                            <b style={{ color: "green" }}>
+                                              {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
+                                                ? s.newValue
+                                                : "-"}
+                                            </b>
+                                          </Table.Cell>
+                                        );
+                                      }
+                                    })}
+                                  </Table.Row>
+                                );
+                              });
+                            })()}
+                            {/* Highlight students in the import not in the roster */}
+                            {(() => {
+                              let importIdentifiers = filteredPreviewCols[0]?.students.map((s) => s.identifier) || [];
+                              importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
+                              const rosterIdentifiers =
+                                studentRoster
+                                  ?.map((s) => {
+                                    if (previewData.idType === "email") {
+                                      const rosterEntry = courseController
+                                        .getRosterWithUserInfo()
+                                        .data.find((r) => r.private_profile_id === s.id);
+                                      return rosterEntry?.users.email ?? null;
+                                    } else if (previewData.idType === "sid") {
+                                      const rosterEntry = courseController
+                                        .getRosterWithUserInfo()
+                                        .data.find((r) => r.private_profile_id === s.id);
+                                      return rosterEntry?.users.sis_user_id ?? null;
+                                    }
+                                    return null;
+                                  })
+                                  .filter((id): id is string => !!id) || [];
+                              return importIdentifiers
+                                .filter((id) => !rosterIdentifiers.includes(id))
+                                .map((identifier, idx) => (
+                                  <Table.Row key={"import-missing-" + idx} bg="bg.warning">
+                                    <Table.Cell>{identifier}</Table.Cell>
+                                    {filteredPreviewCols.map((col, colIdx) => {
+                                      const s = col.students.find((s) => s.identifier === identifier);
+                                      if (!s) return <Table.Cell key={colIdx}>-</Table.Cell>;
+                                      if (
+                                        col.isNew ||
+                                        s.oldValue === null ||
+                                        s.oldValue === undefined ||
+                                        String(s.oldValue).trim() === String(s.newValue).trim()
+                                      ) {
+                                        return (
+                                          <Table.Cell key={colIdx}>
+                                            {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
+                                              ? s.newValue
+                                              : "-"}
+                                          </Table.Cell>
+                                        );
+                                      } else {
+                                        return (
+                                          <Table.Cell key={colIdx}>
+                                            <s>{s.oldValue}</s>{" "}
+                                            <b style={{ color: "green" }}>
+                                              {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
+                                                ? s.newValue
+                                                : "-"}
+                                            </b>
+                                          </Table.Cell>
+                                        );
+                                      }
+                                    })}
+                                  </Table.Row>
+                                ));
+                            })()}
+                          </Table.Body>
+                        </Table.Root>
                       );
                     })()}
                     <HStack mt={4}>

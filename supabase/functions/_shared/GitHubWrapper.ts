@@ -657,7 +657,6 @@ export async function createRepo(
     scope?.setTag("head_sha", heads.data.object.sha);
     return heads.data.object.sha as string;
   } catch (e) {
-    console.error("Error creating repo", e);
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
         // Repo already exists, get the head SHA
@@ -1089,74 +1088,6 @@ async function getOrgMembers(
   });
   return members;
 }
-async function updateGitHubUsernameForUser(
-  oldUsername: string,
-  octokit: Octokit,
-  adminSupabase: ReturnType<typeof createClient<Database>>,
-  scope?: Sentry.Scope
-): Promise<{ oldUsername: string; newUsername: string | null }> {
-  // Find the github user id from the public.users table for the given github username
-  const { data: userData, error: userError } = await adminSupabase
-    .from("users")
-    .select("github_user_id, user_id")
-    .eq("github_username", oldUsername)
-    .single();
-
-  if (userError || !userData?.github_user_id) {
-    // User not found or no github_user_id, skip
-    return { oldUsername, newUsername: null };
-  }
-
-  try {
-    // Get the current github user name from that id
-    const gitHubUser = await octokit.request("GET /user/{account_id}", {
-      account_id: Number(userData.github_user_id),
-      headers: {
-        "X-GitHub-Api-Version": "2022-11-28"
-      }
-    });
-
-    if (gitHubUser.status === 200 && gitHubUser.data.login) {
-      const newUsername = gitHubUser.data.login.toLowerCase();
-
-      // Update our users record with that new username
-      const { error: updateError } = await adminSupabase
-        .from("users")
-        .update({
-          github_username: newUsername,
-          last_github_user_sync: new Date().toISOString()
-        })
-        .eq("user_id", userData.user_id);
-
-      if (updateError) {
-        scope?.addBreadcrumb({
-          category: "github",
-          message: `Failed to update username for user ${userData.user_id}: ${updateError.message}`,
-          level: "error"
-        });
-        console.log(`Failed to update username for user ${userData.user_id}: ${updateError.message}`);
-        return { oldUsername, newUsername: null };
-      } else if (newUsername !== oldUsername) {
-        scope?.addBreadcrumb({
-          category: "github",
-          message: `Updated GitHub username from ${oldUsername} to ${newUsername} for user ${userData.user_id}`,
-          level: "info"
-        });
-        console.log(`Updated GitHub username from ${oldUsername} to ${newUsername} for user ${userData.user_id}`);
-        return { oldUsername, newUsername };
-      }
-    }
-  } catch (error) {
-    scope?.addBreadcrumb({
-      category: "github",
-      message: `Error fetching GitHub user for user_id ${userData.user_id}: ${error}`,
-      level: "error"
-    });
-    console.log(`Error fetching GitHub user for user_id ${userData.user_id}:`, error);
-  }
-
-  return { oldUsername, newUsername: null };
-}
 export async function syncRepoPermissions(
   org: string,
   repo: string,
@@ -1204,17 +1135,11 @@ export async function syncRepoPermissions(
   }
   const orgMembers = await orgMembershipCache.get(org);
   const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
-  const existingAccess = await retryWithBackoff(
-    () =>
-      octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-        owner: org,
-        repo,
-        per_page: 100
-      }),
-    5,
-    3000,
-    scope
-  );
+  const existingAccess = await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+    owner: org,
+    repo,
+    per_page: 100
+  });
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
     .map((c) => c.login.toLowerCase());
@@ -1239,42 +1164,6 @@ export async function syncRepoPermissions(
       permission: "maintain"
     });
   }
-  const desiredUsersNotInOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
-  console.log(`${org}/${repo} desired users not in org: ${desiredUsersNotInOrg.join(", ")}`);
-  //The API for PUT /repos/{owner}/{repo}/collaborators/{username} REQUIRES the username, can't be user id.
-  //So, if a student changes their username, we won't be able to sync their repo permissions here because
-  //we have the old username on file. But, we can find those becuase they won't be in the org members list.
-
-  // Update usernames for users who may have changed their GitHub username
-  if (desiredUsersNotInOrg.length > 0) {
-    const adminSupabase = createClient<Database>(
-      Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-    );
-
-    // Create a bottleneck limiter to run no more than 20 at once
-    const limiter = new Bottleneck({
-      maxConcurrent: 20
-    });
-
-    // Use Promise.all with the limiter to update usernames in parallel
-    const updateResults = await Promise.all(
-      desiredUsersNotInOrg.map((oldUsername) =>
-        limiter.schedule(() => updateGitHubUsernameForUser(oldUsername, octokit, adminSupabase, scope))
-      )
-    );
-
-    // Update our local githubUsernames array to use those new names
-    for (const { oldUsername, newUsername } of updateResults) {
-      if (newUsername) {
-        const index = githubUsernames.indexOf(oldUsername);
-        if (index !== -1) {
-          githubUsernames[index] = newUsername;
-        }
-      }
-    }
-  }
-
   const newAccess = githubUsernames.filter(
     (u) => !existingUsernames.includes(u) && allOrgMembers?.includes(u) // && !existingInvitations.some((i) => i.invitee?.login === u)
   );

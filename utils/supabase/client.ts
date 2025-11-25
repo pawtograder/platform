@@ -22,11 +22,5 @@ export const createAdminClient = <DB>() => {
   assert(supabaseUrl, "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL is required");
   assert(supabaseServiceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
 
-  return supabaseCreateClient<DB>(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false
-    }
-  });
+  return supabaseCreateClient<DB>(supabaseUrl, supabaseServiceRoleKey);
 };

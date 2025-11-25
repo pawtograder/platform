@@ -40,15 +40,8 @@ import { PiSignOut } from "react-icons/pi";
 import { RiChatSettingsFill } from "react-icons/ri";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../../actions";
-import { LuCopy, LuCheck } from "react-icons/lu";
 
 function SupportMenu() {
-  // Track whether the build number has been successfully copied
-  const [isCopied, setIsCopied] = useState(false);
-
-  // Store timeout ID to enable cleanup and prevent memory leaks
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-
   const buildNumber = useMemo(() => {
     const str =
       process.env.SENTRY_RELEASE ??
@@ -60,51 +53,7 @@ function SupportMenu() {
     }
     return "Unknown";
   }, []);
-
   const { course_id } = useParams();
-
-  // Cleanup: Clear timeout when component unmounts to prevent memory leaks
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  /**
-   * Copies the build number to clipboard and shows visual feedback.
-   * Prevents menu from closing and displays error toast if copy fails.
-   */
-  const handleCopyBuildNumber = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Clear any existing timeout to prevent multiple timers running
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-
-    try {
-      // Copy build number to clipboard using Clipboard API
-      await navigator.clipboard.writeText(buildNumber);
-      setIsCopied(true);
-
-      // Reset visual feedback after 2 seconds
-      timeoutRef.current = setTimeout(() => {
-        setIsCopied(false);
-        timeoutRef.current = null;
-      }, 2000);
-    } catch (err) {
-      console.error("Failed to copy build number:", err);
-      // Show user-friendly error notification
-      toaster.error({
-        title: "Failed to copy build number",
-        description: err instanceof Error ? err.message : "An unknown error occurred"
-      });
-    }
-  };
-
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
@@ -144,28 +93,15 @@ function SupportMenu() {
               </Link>
             </Menu.Item>
             <Menu.Item value="view-open-bugs">
-              <Link href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen"} target="_blank">
-                View open issues
+              <Link
+                href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen%20type%3ABug"}
+                target="_blank"
+              >
+                View open bugs
               </Link>
             </Menu.Item>
-            <Menu.Item
-              value="current-version"
-              onClick={handleCopyBuildNumber}
-              closeOnSelect={false}
-              cursor="pointer"
-              _hover={{ bg: "bg.subtle" }}
-              aria-label="Copy build number to clipboard"
-            >
-              <HStack gap={2} width="100%" justifyContent="space-between">
-                <Text>Build: {buildNumber}</Text>
-                {isCopied ? (
-                  <Box color="green.500">
-                    <LuCheck size={16} />
-                  </Box>
-                ) : (
-                  <LuCopy size={16} />
-                )}
-              </HStack>
+            <Menu.Item value="current-version">
+              <Text>Build: {buildNumber}</Text>
             </Menu.Item>
           </Menu.Content>
         </Menu.Positioner>

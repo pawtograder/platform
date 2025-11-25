@@ -45,6 +45,7 @@ import {
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
+import { BroadcastMessage } from "@/lib/TableController";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
@@ -438,7 +439,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
 
     const unsubscribe = courseController.classRealTimeController.subscribe(
       { table: "submissions" },
-      (message: import("@/lib/TableController").BroadcastMessage) => {
+      (message: BroadcastMessage) => {
         // Check if this is a new/updated submission for the same student/group
         if (
           (message.operation === "INSERT" || message.operation === "UPDATE") &&

@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
@@ -22,7 +21,6 @@ import { format } from "date-fns";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
-import { useParams } from "next/navigation";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -58,7 +56,6 @@ function csvSafe(value: unknown): string {
 }
 
 export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
-  const { course_id } = useParams();
   const { mutate: deleteReviewAssignment } = useDelete();
   const { role: course } = useClassProfiles();
   const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions } = useCourseController();
@@ -423,13 +420,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               submitterName = `Submission ID: ${submission.id}`;
             }
           }
-
-          // If we have a valid submission, make it clickable
-          if (submission) {
-            const url = `/course/${course_id}/assignments/${assignmentId}/submissions/${submission.id}?review_assignment_id=${row.original.id}`;
-            return <Link href={url}>{submitterName}</Link>;
-          }
-
           return submitterName;
         },
         enableColumnFilter: true,
@@ -548,7 +538,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       }
     ],
-    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, course_id, assignmentId]
+    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
   );
   const joinedSelect =
     "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";

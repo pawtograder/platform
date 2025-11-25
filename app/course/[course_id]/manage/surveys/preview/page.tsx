@@ -5,7 +5,6 @@ import { Suspense, useCallback } from "react";
 import { Box, Button, Heading, VStack, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import dynamic from "next/dynamic";
-import type { SurveyModel, Question } from "survey-core";
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -23,6 +22,7 @@ function SurveyPreviewContent() {
 
   // Color mode values
   const textColor = useColorModeValue("#000000", "#FFFFFF");
+  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
@@ -72,7 +72,7 @@ function SurveyPreviewContent() {
   let surveyJson;
   try {
     surveyJson = JSON.parse(decodeURIComponent(surveyJsonParam));
-  } catch {
+  } catch (error) {
     return (
       <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
         <Box
@@ -107,14 +107,14 @@ function SurveyPreviewContent() {
     );
   }
 
-  const handleComplete = (survey: SurveyModel) => {
+  const handleComplete = (survey: any) => {
     console.log("Survey completed:", survey.data);
-    // survey.data is a Record<string, any> containing all answers
+    // You can add additional logic here for handling survey completion
   };
 
-  const handleValueChanged = (survey: SurveyModel, options: { name: string; question: Question; value: unknown }) => {
+  const handleValueChanged = (survey: any, options: any) => {
     console.log("Survey value changed:", options.name, options.value);
-    // options.value is unknown because it depends on the question type
+    // You can add additional logic here for handling value changes
   };
 
   return (
