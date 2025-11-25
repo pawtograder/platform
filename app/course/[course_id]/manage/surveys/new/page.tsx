@@ -302,6 +302,7 @@ export default function NewSurveyPage() {
           allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
           due_date: convertDueDateToISO(values.due_date as string),
           validation_errors: validationErrors,
+          assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all),
           updated_at: new Date().toISOString()
         };
 

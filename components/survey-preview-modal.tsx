@@ -61,7 +61,12 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
   }, [isOpen, surveyJson]);
 
   return (
-    <DialogRoot open={isOpen} onOpenChange={onClose}>
+    <DialogRoot
+      open={isOpen}
+      onOpenChange={({ open }) => {
+        if (!open) onClose();
+      }}
+    >
       <DialogContent
         maxW="4xl"
         w="90vw"
