@@ -853,3 +853,7 @@ BEGIN
     RETURN affected_rows;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "anon";
+REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "service_role";
