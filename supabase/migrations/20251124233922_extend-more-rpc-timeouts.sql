@@ -854,8 +854,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "anon";
-REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) FROM "authenticated";
 GRANT ALL ON FUNCTION "public"."update_gradebook_rows_batch"("p_batch_updates" "jsonb"[]) TO "service_role";
 
 -- Fix: Update create_gradebook_column_for_assignment to properly set gradebook_column_id
