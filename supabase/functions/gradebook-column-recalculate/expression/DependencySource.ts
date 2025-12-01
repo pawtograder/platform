@@ -960,9 +960,11 @@ export async function addDependencySourceFunctions({
 
       const valuesToAverage = value.map((v) => {
         if (isGradebookColumnStudent(v)) {
-          if (!v.released && !v.is_private) {
-            return undefined;
-          } else if (v.is_missing) {
+          // Assert that we are never leaking across is_private boundaries
+          if(v.is_private !== _context.is_private_calculation) {
+            throw new Error(`Mean called with gradebook column student that is_private mismatch: ${v.is_private} !== ${_context.is_private_calculation}`);
+          }
+          if (v.is_missing) {
             if (v.is_excused) {
               return { score: undefined, max_score: v.max_score };
             }
