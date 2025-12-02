@@ -410,7 +410,7 @@ class GradebookWhatIfController {
             }
 
             //Track not released values
-            if (!ret.released && !ret.is_private) {
+            if (!ret.released && !ret.is_private && (ret.score === null || ret.score === undefined)) {
               if (!context.incomplete_values) {
                 context.incomplete_values = {};
               }
