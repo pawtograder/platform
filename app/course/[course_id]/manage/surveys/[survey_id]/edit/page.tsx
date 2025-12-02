@@ -49,26 +49,29 @@ export default function EditSurveyPage() {
   const timezone = role.classes?.time_zone || "America/New_York";
 
   // Helper function to convert datetime-local string to ISO timestamp with timezone
-  const convertDueDateToISO = (dueDateString: string | null | undefined): string | null => {
-    if (!dueDateString) return null;
-    // Parse datetime-local format (YYYY-MM-DDTHH:MM)
-    const [date, time] = dueDateString.split("T");
-    if (!date || !time) return null;
-    const [year, month, day] = date.split("-");
-    const [hour, minute] = time.split(":");
-    // Create TZDate with these exact values in course timezone
-    const tzDate = new TZDate(
-      parseInt(year),
-      parseInt(month) - 1,
-      parseInt(day),
-      parseInt(hour),
-      parseInt(minute),
-      0,
-      0,
-      timezone
-    );
-    return tzDate.toISOString();
-  };
+  const convertDueDateToISO = useCallback(
+    (dueDateString: string | null | undefined): string | null => {
+      if (!dueDateString) return null;
+      // Parse datetime-local format (YYYY-MM-DDTHH:MM)
+      const [date, time] = dueDateString.split("T");
+      if (!date || !time) return null;
+      const [year, month, day] = date.split("-");
+      const [hour, minute] = time.split(":");
+      // Create TZDate with these exact values in course timezone
+      const tzDate = new TZDate(
+        parseInt(year),
+        parseInt(month) - 1,
+        parseInt(day),
+        parseInt(hour),
+        parseInt(minute),
+        0,
+        0,
+        timezone
+      );
+      return tzDate.toISOString();
+    },
+    [timezone]
+  );
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "edit", id: rawSurveyId },
@@ -190,7 +193,7 @@ export default function EditSurveyPage() {
 
     // Store the promise to prevent duplicate calls
     loadingPromise.current = loadSurveyData();
-  }, [course_id, rawSurveyId]); // Removed reset and router from dependencies
+  }, [course_id, rawSurveyId, reset, router, timezone, survey_id]);
 
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
@@ -283,7 +286,7 @@ export default function EditSurveyPage() {
       }
       await updateDraft();
     },
-    [course_id, trackEvent, router, survey_id, timezone, rawSurveyId]
+    [course_id, trackEvent, router, rawSurveyId, convertDueDateToISO]
   );
 
   const onSubmit = useCallback(
@@ -454,7 +457,7 @@ export default function EditSurveyPage() {
       }
       await update();
     },
-    [course_id, router, trackEvent, survey_id, timezone, rawSurveyId]
+    [course_id, router, trackEvent, rawSurveyId, convertDueDateToISO]
   );
 
   if (isLoading) {

@@ -174,7 +174,7 @@ export default function IndividualResponsePage() {
     };
 
     loadResponseData();
-  }, [course_id, survey_id, response_id]); // Removed router from dependencies
+  }, [course_id, survey_id, response_id, router]);
 
   const formatDate = (dateString: string) => {
     try {
