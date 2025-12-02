@@ -244,7 +244,7 @@ export default function SurveyForm({
         });
       }
     },
-    [getValues, privateProfileId, course_id]
+    [form, getValues, privateProfileId, course_id]
   );
 
   const onSubmitWrapper = useCallback(

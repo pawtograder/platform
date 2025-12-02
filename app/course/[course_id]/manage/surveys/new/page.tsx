@@ -42,26 +42,29 @@ export default function NewSurveyPage() {
   const timezone = role.classes?.time_zone || "America/New_York";
 
   // Helper function to convert datetime-local string to ISO timestamp with timezone
-  const convertDueDateToISO = (dueDateString: string | null | undefined): string | null => {
-    if (!dueDateString) return null;
-    // Parse datetime-local format (YYYY-MM-DDTHH:MM)
-    const [date, time] = dueDateString.split("T");
-    if (!date || !time) return null;
-    const [year, month, day] = date.split("-");
-    const [hour, minute] = time.split(":");
-    // Create TZDate with these exact values in course timezone
-    const tzDate = new TZDate(
-      parseInt(year),
-      parseInt(month) - 1,
-      parseInt(day),
-      parseInt(hour),
-      parseInt(minute),
-      0,
-      0,
-      timezone
-    );
-    return tzDate.toISOString();
-  };
+  const convertDueDateToISO = useCallback(
+    (dueDateString: string | null | undefined): string | null => {
+      if (!dueDateString) return null;
+      // Parse datetime-local format (YYYY-MM-DDTHH:MM)
+      const [date, time] = dueDateString.split("T");
+      if (!date || !time) return null;
+      const [year, month, day] = date.split("-");
+      const [hour, minute] = time.split(":");
+      // Create TZDate with these exact values in course timezone
+      const tzDate = new TZDate(
+        parseInt(year),
+        parseInt(month) - 1,
+        parseInt(day),
+        parseInt(hour),
+        parseInt(minute),
+        0,
+        0,
+        timezone
+      );
+      return tzDate.toISOString();
+    },
+    [timezone]
+  );
 
   useEffect(() => {
     if (role.role === "grader") {
@@ -230,7 +233,7 @@ export default function NewSurveyPage() {
       url.searchParams.delete("from");
       window.history.replaceState({}, "", url.toString());
     }
-  }, [course_id, reset, searchParams, private_profile_id]);
+  }, [course_id, reset, searchParams, private_profile_id, timezone]);
 
   // -------- CENTRALIZED SAVE FUNCTION --------
   const saveSurvey = useCallback(
@@ -488,7 +491,7 @@ export default function NewSurveyPage() {
 
       return { data, error };
     },
-    [course_id, private_profile_id, router, trackEvent, isReturningFromPreview, timezone]
+    [course_id, private_profile_id, router, trackEvent, isReturningFromPreview, convertDueDateToISO, currentSurveyId]
   );
 
   // -------- SAVE DRAFT ONLY (WRAPPER) --------
@@ -564,7 +567,7 @@ export default function NewSurveyPage() {
         throw err;
       }
     },
-    [saveSurvey]
+    [saveSurvey, convertDueDateToISO]
   );
 
   return (

@@ -287,7 +287,7 @@ export default function SurveyResponsesView({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }, [filteredResponses, allQuestionNames, questionTitles, surveyTitle]);
+  }, [filteredResponses, allQuestionNames, questionTitles, surveyTitle, timezone]);
 
   return (
     <Container py={8} maxW="1200px" my={2}>

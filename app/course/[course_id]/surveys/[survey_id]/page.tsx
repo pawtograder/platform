@@ -118,7 +118,7 @@ export default function SurveyTakingPage() {
     };
 
     loadSurveyData();
-  }, [course_id, survey_id, private_profile_id]); // Include private_profile_id from hook
+  }, [course_id, survey_id, private_profile_id, router]); // Include router in dependencies
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model) => {
@@ -155,7 +155,7 @@ export default function SurveyTakingPage() {
         setIsSubmitting(false);
       }
     },
-    [private_profile_id, survey, survey_id, course_id, router]
+    [private_profile_id, survey, course_id, router]
   );
 
   const handleValueChanged = useCallback(
@@ -174,7 +174,7 @@ export default function SurveyTakingPage() {
         // Don't show error toast for auto-save failures to avoid spam
       }
     },
-    [private_profile_id, survey, survey_id]
+    [private_profile_id, survey]
   );
 
   const handleBackToSurveys = useCallback(() => {
