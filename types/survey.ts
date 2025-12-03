@@ -2,7 +2,7 @@ import type { Tables } from "@/utils/supabase/SupabaseTypes";
 
 type DbSurvey = Tables<"surveys">;
 type DbSurveyResponse = Tables<"survey_responses">;
-type DbSurveyAssignee = Tables<"survey_assignees">;
+type DbSurveyAssignee = Tables<"survey_assignments">;
 
 export type ResponseData = DbSurveyResponse["response"];
 
