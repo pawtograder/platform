@@ -9,7 +9,7 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { useColorModeValue } from "@/components/ui/color-mode";
+import { Box, Text, VStack } from "@chakra-ui/react";
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -17,9 +17,9 @@ import type { Json } from "@/utils/supabase/SupabaseTypes";
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
   loading: () => (
-    <div className="text-center py-8">
-      <p className="text-gray-500">Loading survey preview...</p>
-    </div>
+    <Box textAlign="center" py={8}>
+      <Text color="fg.muted">Loading survey preview...</Text>
+    </Box>
   )
 });
 
@@ -33,12 +33,6 @@ interface SurveyPreviewModalProps {
 export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }: SurveyPreviewModalProps) {
   const [isValidJson, setIsValidJson] = useState(true);
   const [parsedJson, setParsedJson] = useState<Json | null>(null);
-
-  // Color mode values
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
 
   useEffect(() => {
     if (!isOpen || !surveyJson) return;
@@ -71,13 +65,13 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
         maxW="4xl"
         w="90vw"
         h="90vh"
-        bg={bgColor}
-        borderColor={borderColor}
+        bg="bg.default"
+        borderColor="border.subtle"
         borderRadius="lg"
         className="flex flex-col"
       >
-        <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
-          <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
+        <DialogHeader bg="bg.subtle" p={4} borderRadius="lg">
+          <DialogTitle color="fg.default" fontSize="xl" fontWeight="bold">
             Survey Preview: {surveyTitle || "Untitled Survey"}
           </DialogTitle>
           <DialogCloseTrigger />
@@ -85,35 +79,28 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
 
         <DialogBody p={6} overflow="auto">
           {!isValidJson ? (
-            <div className="text-center py-8">
-              <p className="text-red-500 mb-4">Invalid JSON configuration</p>
-              <p className="text-gray-500">Please check your survey JSON and try again.</p>
-            </div>
+            <VStack align="center" py={8} gap={4}>
+              <Text color="red.500">Invalid JSON configuration</Text>
+              <Text color="fg.muted">Please check your survey JSON and try again.</Text>
+            </VStack>
           ) : parsedJson ? (
-            <div className="survey-preview-container">
+            <Box className="survey-preview-container">
               <SurveyComponent surveyJson={parsedJson} isPopup={false} readOnly={false} />
-            </div>
+            </Box>
           ) : (
-            <div className="text-center py-8">
-              <p className="text-gray-500">Loading survey preview...</p>
-            </div>
+            <Box textAlign="center" py={8}>
+              <Text color="fg.muted">Loading survey preview...</Text>
+            </Box>
           )}
         </DialogBody>
 
-        <div className="relative p-6 pt-0">
-          <div style={{ display: "flex", justifyContent: "flex-end", marginRight: "1rem", marginBottom: "1rem" }}>
-            <Button
-              variant="outline"
-              onClick={onClose}
-              style={{
-                borderColor: borderColor,
-                color: textColor
-              }}
-            >
+        <Box position="relative" p={6} pt={0}>
+          <Box display="flex" justifyContent="flex-end" mr={4} mb={4}>
+            <Button variant="outline" onClick={onClose} borderColor="border" color="fg.default">
               Close Preview
             </Button>
-          </div>
-        </div>
+          </Box>
+        </Box>
       </DialogContent>
     </DialogRoot>
   );
