@@ -70,7 +70,7 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
         borderRadius="lg"
         className="flex flex-col"
       >
-        <DialogHeader bg="bg.subtle" p={4} borderRadius="lg">
+        <DialogHeader bg="bg.muted" p={4} borderRadius="lg">
           <DialogTitle color="fg.default" fontSize="xl" fontWeight="bold">
             Survey Preview: {surveyTitle || "Untitled Survey"}
           </DialogTitle>

@@ -10,7 +10,6 @@ import {
   DialogFooter
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import {
   Box,
   Input,
@@ -83,16 +82,6 @@ export function SurveyTemplateLibraryModal({
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editScope, setEditScope] = useState<"course" | "global">("course");
-
-  // Color mode values - matching survey components
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-  const placeholderColor = useColorModeValue("#8A8A8A", "#757575");
 
   // Fetch templates
   useEffect(() => {
@@ -356,13 +345,13 @@ export function SurveyTemplateLibraryModal({
           maxW="6xl"
           w="90vw"
           h="90vh"
-          bg={bgColor}
-          borderColor={borderColor}
+          bg="bg.subtle"
+          borderColor="border.default"
           borderRadius="lg"
           className="flex flex-col"
         >
-          <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
-            <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
+          <DialogHeader bg="bg.muted" p={4} borderRadius="lg">
+            <DialogTitle color="fg.default" fontSize="xl" fontWeight="bold">
               Survey Template Library
             </DialogTitle>
             <DialogCloseTrigger />
@@ -374,10 +363,10 @@ export function SurveyTemplateLibraryModal({
               <Button
                 size="sm"
                 variant={ownershipFilter === "all" ? "solid" : "outline"}
-                bg={ownershipFilter === "all" ? "#3B82F6" : "transparent"}
-                color={ownershipFilter === "all" ? "white" : buttonTextColor}
-                borderColor={buttonBorderColor}
-                _hover={{ bg: ownershipFilter === "all" ? "#2563EB" : "rgba(160, 174, 192, 0.1)" }}
+                bg={ownershipFilter === "all" ? "blue.500" : "transparent"}
+                color={ownershipFilter === "all" ? "white" : "fg.default"}
+                borderColor="border.default"
+                _hover={{ bg: ownershipFilter === "all" ? "blue.600" : "bg.muted" }}
                 onClick={() => setOwnershipFilter("all")}
               >
                 All Templates
@@ -385,10 +374,10 @@ export function SurveyTemplateLibraryModal({
               <Button
                 size="sm"
                 variant={ownershipFilter === "my" ? "solid" : "outline"}
-                bg={ownershipFilter === "my" ? "#3B82F6" : "transparent"}
-                color={ownershipFilter === "my" ? "white" : buttonTextColor}
-                borderColor={buttonBorderColor}
-                _hover={{ bg: ownershipFilter === "my" ? "#2563EB" : "rgba(160, 174, 192, 0.1)" }}
+                bg={ownershipFilter === "my" ? "blue.500" : "transparent"}
+                color={ownershipFilter === "my" ? "white" : "fg.default"}
+                borderColor="border.default"
+                _hover={{ bg: ownershipFilter === "my" ? "blue.600" : "bg.muted" }}
                 onClick={() => setOwnershipFilter("my")}
               >
                 My Templates
@@ -402,10 +391,10 @@ export function SurveyTemplateLibraryModal({
                   placeholder="Search by name, or description"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  bg={cardBgColor}
-                  borderColor={borderColor}
-                  color={textColor}
-                  _placeholder={{ color: placeholderColor }}
+                  bg="bg.subtle"
+                  borderColor="border.default"
+                  color="fg.default"
+                  _placeholder={{ color: "fg.muted" }}
                   flex={1}
                 />
                 <Box width="200px">
@@ -417,9 +406,9 @@ export function SurveyTemplateLibraryModal({
                     }
                   >
                     <SelectTrigger
-                      bg={cardBgColor}
-                      borderColor={borderColor}
-                      color={textColor}
+                      bg="bg.subtle"
+                      borderColor="border.default"
+                      color="fg.default"
                       style={{ cursor: "pointer" }}
                     >
                       <SelectValueText placeholder="Filter by visibility" />
@@ -439,14 +428,14 @@ export function SurveyTemplateLibraryModal({
             {/* Loading State */}
             {isLoading && (
               <Box textAlign="center" py={8}>
-                <Text color={textColor}>Loading templates...</Text>
+                <Text color="fg.default">Loading templates...</Text>
               </Box>
             )}
 
             {/* Empty State */}
             {!isLoading && filteredTemplates.length === 0 && (
               <Box textAlign="center" py={8}>
-                <Text color={textColor}>
+                <Text color="fg.default">
                   {searchQuery || visibilityFilter !== "all"
                     ? "No templates match your filters."
                     : "No templates available."}
@@ -464,16 +453,16 @@ export function SurveyTemplateLibraryModal({
                 {filteredTemplates.map((template) => (
                   <Box
                     key={template.id}
-                    bg={cardBgColor}
+                    bg="bg.subtle"
                     border="1px solid"
-                    borderColor={borderColor}
+                    borderColor="border.default"
                     borderRadius="lg"
                     p={4}
                   >
                     <VStack align="stretch" gap={3}>
                       {/* Title and Visibility Badge */}
                       <HStack justify="space-between" align="start">
-                        <Text fontWeight="semibold" fontSize="md" color={textColor} lineClamp={2} flex={1}>
+                        <Text fontWeight="semibold" fontSize="md" color="fg.default" lineClamp={2} flex={1}>
                           {template.title}
                         </Text>
                         <Badge
@@ -482,8 +471,8 @@ export function SurveyTemplateLibraryModal({
                           borderRadius="md"
                           fontSize="xs"
                           fontWeight="medium"
-                          bg={template.scope === "global" ? "rgba(59, 130, 246, 0.2)" : "rgba(34, 197, 94, 0.2)"}
-                          color={template.scope === "global" ? "#3B82F6" : "#22C55E"}
+                          bg={template.scope === "global" ? "blue.subtle" : "green.subtle"}
+                          color={template.scope === "global" ? "blue.500" : "green.500"}
                           textTransform="capitalize"
                         >
                           {template.scope === "global" ? "Shared" : "Class-Only"}
@@ -492,14 +481,14 @@ export function SurveyTemplateLibraryModal({
 
                       {/* Description */}
                       {template.description && (
-                        <Text fontSize="sm" color={textColor} opacity={0.8} lineClamp={2}>
+                        <Text fontSize="sm" color="fg.default" opacity={0.8} lineClamp={2}>
                           {template.description}
                         </Text>
                       )}
 
                       {/* Creator and Date */}
                       <VStack align="start" gap={1}>
-                        <Text fontSize="xs" color={textColor} opacity={0.7}>
+                        <Text fontSize="xs" color="fg.default" opacity={0.7}>
                           Last modified: {formatDate(template.updated_at)}
                         </Text>
                       </VStack>
@@ -510,9 +499,9 @@ export function SurveyTemplateLibraryModal({
                           size="sm"
                           variant="outline"
                           bg="transparent"
-                          borderColor={buttonBorderColor}
-                          color={buttonTextColor}
-                          _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                          borderColor="border.default"
+                          color="fg.default"
+                          _hover={{ bg: "bg.muted" }}
                           onClick={() => handlePreview(template)}
                           flex={1}
                         >
@@ -520,9 +509,9 @@ export function SurveyTemplateLibraryModal({
                         </Button>
                         <Button
                           size="sm"
-                          bg="#22C55E"
+                          bg="green.500"
                           color="white"
-                          _hover={{ bg: "#16A34A" }}
+                          _hover={{ bg: "green.600" }}
                           onClick={() => handleClone(template)}
                           flex={1}
                         >
@@ -537,11 +526,11 @@ export function SurveyTemplateLibraryModal({
                                 size="sm"
                                 variant="ghost"
                                 border="1px solid"
-                                borderColor={buttonBorderColor}
-                                color={buttonTextColor}
-                                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-                                _focus={{ borderColor: buttonBorderColor, boxShadow: "none", outline: "none" }}
-                                _active={{ borderColor: buttonBorderColor, boxShadow: "none", outline: "none" }}
+                                borderColor="border.default"
+                                color="fg.default"
+                                _hover={{ bg: "bg.muted" }}
+                                _focus={{ borderColor: "border.default", boxShadow: "none", outline: "none" }}
+                                _active={{ borderColor: "border.default", boxShadow: "none", outline: "none" }}
                                 px={2}
                                 cursor="pointer"
                               >
@@ -588,9 +577,9 @@ export function SurveyTemplateLibraryModal({
 
       {/* Edit Template Modal */}
       <DialogRoot open={isEditModalOpen} onOpenChange={(e) => setIsEditModalOpen(e.open)}>
-        <DialogContent maxW="2xl" bg={bgColor} borderColor={borderColor} borderRadius="lg">
-          <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
-            <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
+        <DialogContent maxW="2xl" bg="bg.subtle" borderColor="border.default" borderRadius="lg">
+          <DialogHeader bg="bg.muted" p={4} borderRadius="lg">
+            <DialogTitle color="fg.default" fontSize="xl" fontWeight="bold">
               Edit Template Info
             </DialogTitle>
             <DialogCloseTrigger />
@@ -605,10 +594,10 @@ export function SurveyTemplateLibraryModal({
                     <Input
                       value={editTitle}
                       onChange={(e) => setEditTitle(e.target.value)}
-                      bg={cardBgColor}
-                      borderColor={borderColor}
-                      color={textColor}
-                      _placeholder={{ color: placeholderColor }}
+                      bg="bg.subtle"
+                      borderColor="border.default"
+                      color="fg.default"
+                      _placeholder={{ color: "fg.muted" }}
                       placeholder="Template title"
                     />
                   </Field>
@@ -620,10 +609,10 @@ export function SurveyTemplateLibraryModal({
                     <Textarea
                       value={editDescription}
                       onChange={(e) => setEditDescription(e.target.value)}
-                      bg={cardBgColor}
-                      borderColor={borderColor}
-                      color={textColor}
-                      _placeholder={{ color: placeholderColor }}
+                      bg="bg.subtle"
+                      borderColor="border.default"
+                      color="fg.default"
+                      _placeholder={{ color: "fg.muted" }}
                       placeholder="Template description"
                       rows={3}
                     />
@@ -641,9 +630,9 @@ export function SurveyTemplateLibraryModal({
                       }
                     >
                       <SelectTrigger
-                        bg={cardBgColor}
-                        borderColor={borderColor}
-                        color={textColor}
+                        bg="bg.subtle"
+                        borderColor="border.default"
+                        color="fg.default"
                         style={{ cursor: "pointer" }}
                       >
                         <SelectValueText placeholder="Select visibility" />
@@ -659,7 +648,7 @@ export function SurveyTemplateLibraryModal({
                   </Field>
                 </Fieldset.Content>
 
-                <Text fontSize="sm" color={textColor} opacity={0.7}>
+                <Text fontSize="sm" color="fg.default" opacity={0.7}>
                   Note: Editing only updates the template metadata (title, description, visibility). The survey JSON
                   content will not be modified.
                 </Text>
@@ -671,14 +660,14 @@ export function SurveyTemplateLibraryModal({
             <HStack gap={3}>
               <Button
                 variant="outline"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border.default"
+                color="fg.default"
+                _hover={{ bg: "bg.muted" }}
                 onClick={() => setIsEditModalOpen(false)}
               >
                 Cancel
               </Button>
-              <Button bg="#22C55E" color="white" _hover={{ bg: "#16A34A" }} onClick={handleSaveEdit}>
+              <Button bg="green.500" color="white" _hover={{ bg: "green.600" }} onClick={handleSaveEdit}>
                 Save Changes
               </Button>
             </HStack>
@@ -688,16 +677,16 @@ export function SurveyTemplateLibraryModal({
 
       {/* Delete Confirmation Dialog */}
       <DialogRoot open={isDeleteConfirmOpen} onOpenChange={(e) => setIsDeleteConfirmOpen(e.open)}>
-        <DialogContent maxW="md" bg={bgColor} borderColor={borderColor} borderRadius="lg">
-          <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
-            <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
+        <DialogContent maxW="md" bg="bg.subtle" borderColor="border.default" borderRadius="lg">
+          <DialogHeader bg="bg.muted" p={4} borderRadius="lg">
+            <DialogTitle color="fg.default" fontSize="xl" fontWeight="bold">
               Delete Template
             </DialogTitle>
             <DialogCloseTrigger />
           </DialogHeader>
 
           <DialogBody p={6}>
-            <Text color={textColor}>
+            <Text color="fg.default">
               Are you sure you want to delete &quot;{deleteConfirmTemplate?.title}&quot;? This action cannot be undone.
             </Text>
           </DialogBody>
@@ -706,14 +695,14 @@ export function SurveyTemplateLibraryModal({
             <HStack gap={3}>
               <Button
                 variant="outline"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border.default"
+                color="fg.default"
+                _hover={{ bg: "bg.muted" }}
                 onClick={() => setIsDeleteConfirmOpen(false)}
               >
                 Cancel
               </Button>
-              <Button bg="#EF4444" color="white" _hover={{ bg: "#DC2626" }} onClick={handleConfirmDelete}>
+              <Button bg="red.500" color="white" _hover={{ bg: "red.600" }} onClick={handleConfirmDelete}>
                 Delete
               </Button>
             </HStack>
