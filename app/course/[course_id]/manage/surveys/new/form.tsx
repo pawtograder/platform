@@ -4,11 +4,11 @@ import { Box, Input, Textarea, Text, HStack, VStack, Button, Heading, Fieldset, 
 import { Controller, FieldValues } from "react-hook-form";
 import { Button as UIButton } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
+import { Radio, RadioGroup } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useCallback, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 import { SurveyTemplateLibraryModal } from "@/components/survey/SurveyTemplateLibraryModal";
 import {
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 
-// NEW: modal wrapper around your SurveyBuilder
+// New modal wrapper around SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
 import { createClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -70,19 +70,6 @@ export default function SurveyForm({
   isEdit?: boolean;
   privateProfileId: string;
 }) {
-  // Color tokens
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const placeholderColor = useColorModeValue("#8A8A8A", "#757575");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const checkboxBgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const checkboxBorderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const previewButtonTextColor = useColorModeValue("#2D3748", "#A0AEC0");
-  const previewButtonBorderColor = useColorModeValue("#4A5568", "#4A5568");
-
   const {
     handleSubmit,
     register,
@@ -99,7 +86,7 @@ export default function SurveyForm({
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isScopeModalOpen, setIsScopeModalOpen] = useState(false);
 
-  // NEW: open/close state for the Visual Builder modal
+  // Open/close state for the Visual Builder modal
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   // Template Library modal state
   const [isTemplateLibraryOpen, setIsTemplateLibraryOpen] = useState(false);
@@ -276,22 +263,22 @@ export default function SurveyForm({
           variant="outline"
           size="sm"
           bg="transparent"
-          borderColor={buttonBorderColor}
-          color={buttonTextColor}
-          _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+          borderColor="border.emphasized"
+          color="fg.muted"
+          _hover={{ bg: "gray.subtle" }}
           onClick={handleCancelClick}
           alignSelf="flex-start"
         >
           ← Back to Surveys
         </Button>
 
-        <Heading size="xl" color={textColor} textAlign="left">
+        <Heading size="xl" color="fg" textAlign="left">
           {isEdit ? "Edit Survey" : "Create New Survey"}
         </Heading>
       </VStack>
 
       {/* Main Form Card */}
-      <Box w="100%" maxW="800px" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
+      <Box w="100%" maxW="800px" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
         <form onSubmit={handleSubmit(onSubmitWrapper)}>
           <Fieldset.Root>
             <VStack align="stretch" gap={6}>
@@ -305,11 +292,11 @@ export default function SurveyForm({
                 >
                   <Input
                     placeholder="Enter survey title"
-                    bg={bgColor}
-                    borderColor={borderColor}
-                    color={textColor}
-                    _placeholder={{ color: placeholderColor }}
-                    _focus={{ borderColor: "blue.500" }}
+                    bg="bg.subtle"
+                    borderColor="border"
+                    color="fg"
+                    _placeholder={{ color: "fg.subtle" }}
+                    _focus={{ borderColor: "blue.solid" }}
                     {...register("title", {
                       required: "Survey title is required",
                       maxLength: {
@@ -327,11 +314,11 @@ export default function SurveyForm({
                   <Textarea
                     placeholder="Brief description of the survey purpose..."
                     rows={3}
-                    bg={bgColor}
-                    borderColor={borderColor}
-                    color={textColor}
-                    _placeholder={{ color: placeholderColor }}
-                    _focus={{ borderColor: "blue.500" }}
+                    bg="bg.subtle"
+                    borderColor="border"
+                    color="fg"
+                    _placeholder={{ color: "fg.subtle" }}
+                    _focus={{ borderColor: "blue.solid" }}
                     {...register("description")}
                   />
                 </Field>
@@ -350,11 +337,11 @@ export default function SurveyForm({
                     rows={12}
                     fontFamily="mono"
                     fontSize="sm"
-                    bg={bgColor}
-                    borderColor={borderColor}
-                    color={textColor}
-                    _placeholder={{ color: placeholderColor }}
-                    _focus={{ borderColor: "blue.500" }}
+                    bg="bg.subtle"
+                    borderColor="border"
+                    color="fg"
+                    _placeholder={{ color: "fg.subtle" }}
+                    _focus={{ borderColor: "blue.solid" }}
                     {...register("json", {
                       required: "JSON configuration is required",
                       validate: (value) => {
@@ -375,9 +362,9 @@ export default function SurveyForm({
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.emphasized"
+                      color="fg.muted"
+                      _hover={{ bg: "gray.subtle" }}
                       onClick={() => setIsBuilderOpen(true)}
                     >
                       Open Visual Builder
@@ -387,9 +374,9 @@ export default function SurveyForm({
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.emphasized"
+                      color="fg.muted"
+                      _hover={{ bg: "gray.subtle" }}
                       onClick={loadSampleTemplate}
                     >
                       Load Template
@@ -399,9 +386,9 @@ export default function SurveyForm({
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.emphasized"
+                      color="fg.muted"
+                      _hover={{ bg: "gray.subtle" }}
                       onClick={validateJson}
                     >
                       Validate JSON
@@ -418,34 +405,16 @@ export default function SurveyForm({
                     control={control}
                     rules={{ required: "Status is required" }}
                     render={({ field }) => (
-                      <VStack align="start" gap={2}>
-                        <HStack>
-                          <input
-                            type="radio"
-                            id="draft"
-                            value="draft"
-                            checked={field.value === "draft"}
-                            onChange={() => field.onChange("draft")}
-                            style={{ accentColor: "#3182ce" }}
-                          />
-                          <label htmlFor="draft" style={{ color: textColor, cursor: "pointer" }}>
-                            Save as Draft
-                          </label>
-                        </HStack>
-                        <HStack>
-                          <input
-                            type="radio"
-                            id="published"
-                            value="published"
-                            checked={field.value === "published"}
-                            onChange={() => field.onChange("published")}
-                            style={{ accentColor: "#3182ce" }}
-                          />
-                          <label htmlFor="published" style={{ color: textColor, cursor: "pointer" }}>
-                            Publish Now
-                          </label>
-                        </HStack>
-                      </VStack>
+                      <RadioGroup value={field.value} onValueChange={(e) => field.onChange(e.value)} colorPalette="blue">
+                        <VStack align="start" gap={2}>
+                          <Radio value="draft">
+                            <Text color="fg">Save as Draft</Text>
+                          </Radio>
+                          <Radio value="published">
+                            <Text color="fg">Publish Now</Text>
+                          </Radio>
+                        </VStack>
+                      </RadioGroup>
                     )}
                   />
                 </Field>
@@ -463,10 +432,10 @@ export default function SurveyForm({
                         value={field.value || ""}
                         onChange={field.onChange}
                         onBlur={field.onBlur}
-                        bg={bgColor}
-                        borderColor={borderColor}
-                        color={textColor}
-                        _focus={{ borderColor: "blue.500" }}
+                        bg="bg.subtle"
+                        borderColor="border"
+                        color="fg"
+                        _focus={{ borderColor: "blue.solid" }}
                       />
                     )}
                   />
@@ -487,9 +456,9 @@ export default function SurveyForm({
                           left="0"
                           w="5"
                           h="5"
-                          bg={checkboxBgColor}
+                          bg="bg"
                           border="1px solid"
-                          borderColor={checkboxBorderColor}
+                          borderColor="border"
                           borderRadius="xs"
                           zIndex="0"
                         />
@@ -501,7 +470,7 @@ export default function SurveyForm({
                           <Checkbox.Control />
                         </Checkbox.Root>
                       </Box>
-                      <Text color={textColor}>Allow students to edit their responses after submission</Text>
+                      <Text color="fg">Allow students to edit their responses after submission</Text>
                     </HStack>
                   )}
                 />
@@ -516,33 +485,20 @@ export default function SurveyForm({
                     defaultValue={true}
                     render={({ field }) => (
                       <VStack align="start" gap={3}>
-                        <HStack>
-                          <input
-                            type="radio"
-                            id="assign_all"
-                            checked={field.value === true}
-                            onChange={() => {
-                              field.onChange(true);
-                              // Keep assigned_students in form state so user can switch back
-                            }}
-                            style={{ accentColor: "#3182ce" }}
-                          />
-                          <label htmlFor="assign_all" style={{ color: textColor, cursor: "pointer" }}>
-                            Assign to all students in the course
-                          </label>
-                        </HStack>
-                        <HStack>
-                          <input
-                            type="radio"
-                            id="assign_specific"
-                            checked={field.value === false}
-                            onChange={() => field.onChange(false)}
-                            style={{ accentColor: "#3182ce" }}
-                          />
-                          <label htmlFor="assign_specific" style={{ color: textColor, cursor: "pointer" }}>
-                            Assign to specific students
-                          </label>
-                        </HStack>
+                        <RadioGroup
+                          value={field.value ? "all" : "specific"}
+                          onValueChange={(e) => field.onChange(e.value === "all")}
+                          colorPalette="blue"
+                        >
+                          <VStack align="start" gap={2}>
+                            <Radio value="all">
+                              <Text color="fg">Assign to all students in the course</Text>
+                            </Radio>
+                            <Radio value="specific">
+                              <Text color="fg">Assign to specific students</Text>
+                            </Radio>
+                          </VStack>
+                        </RadioGroup>
 
                         {field.value === false && (
                           <Box w="100%" mt={2}>
@@ -550,15 +506,15 @@ export default function SurveyForm({
                               size="sm"
                               variant="outline"
                               bg="transparent"
-                              borderColor={buttonBorderColor}
-                              color={buttonTextColor}
-                              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                              borderColor="border.emphasized"
+                              color="fg.muted"
+                              _hover={{ bg: "gray.subtle" }}
                               onClick={() => setIsStudentSelectorOpen(true)}
                             >
                               Select Students ({assignedStudents.length} selected)
                             </Button>
                             {assignedStudents.length > 0 && (
-                              <Text fontSize="sm" color={placeholderColor} mt={2}>
+                              <Text fontSize="sm" color="fg.subtle" mt={2}>
                                 {assignedStudents.length} student{assignedStudents.length !== 1 ? "s" : ""} selected
                               </Text>
                             )}
@@ -572,26 +528,19 @@ export default function SurveyForm({
 
               {/* Preview Section */}
               <VStack align="stretch" gap={2}>
-                <Text color={textColor} fontWeight="medium">
+                <Text color="fg" fontWeight="medium">
                   Preview
                 </Text>
-                <Box
-                  p={8}
-                  bg={bgColor}
-                  borderRadius="md"
-                  textAlign="center"
-                  border="1px solid"
-                  borderColor={borderColor}
-                >
-                  <Text color={placeholderColor} mb={4}>
+                <Box p={8} bg="bg.subtle" borderRadius="md" textAlign="center" border="1px solid" borderColor="border">
+                  <Text color="fg.subtle" mb={4}>
                     Click &apos;Show Preview&apos; to see how the survey will appear to students.
                   </Text>
                   <Button
                     variant="outline"
                     bg="transparent"
-                    borderColor={previewButtonBorderColor}
-                    color={previewButtonTextColor}
-                    _hover={{ bg: "rgba(34, 197, 94, 0.1)" }}
+                    borderColor="border.emphasized"
+                    color="fg.muted"
+                    _hover={{ bg: "green.subtle" }}
                     onClick={showPreview}
                   >
                     Show Preview
@@ -605,17 +554,18 @@ export default function SurveyForm({
                   type="submit"
                   loading={isSubmitting}
                   size="md"
-                  bg={currentStatus === "published" ? "#22C55E" : "#3182ce"}
+                  colorPalette={currentStatus === "published" ? "green" : "blue"}
+                  bg={currentStatus === "published" ? "green.solid" : "blue.solid"}
                   color="white"
-                  _hover={{ bg: currentStatus === "published" ? "#16A34A" : "#2b6cb0" }}
+                  _hover={{ bg: currentStatus === "published" ? "green.emphasized" : "blue.emphasized" }}
                 >
                   {currentStatus === "published" ? "Publish Survey" : "Save Draft"}
                 </UIButton>
                 <Button
                   variant="outline"
-                  borderColor={buttonBorderColor}
-                  color={buttonTextColor}
-                  _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                  borderColor="border.emphasized"
+                  color="fg.muted"
+                  _hover={{ bg: "gray.subtle" }}
                   onClick={async () => {
                     const isValid = await form.trigger();
                     if (isValid) {
@@ -634,9 +584,9 @@ export default function SurveyForm({
                 <Button
                   variant="outline"
                   bg="transparent"
-                  borderColor={buttonBorderColor}
-                  color={buttonTextColor}
-                  _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                  borderColor="border.emphasized"
+                  color="fg.muted"
+                  _hover={{ bg: "gray.subtle" }}
                   onClick={handleCancelClick}
                   size="md"
                 >
@@ -656,49 +606,51 @@ export default function SurveyForm({
           left="0"
           w="100vw"
           h="100vh"
-          bg="rgba(0,0,0,0.5)"
+          bg="blackAlpha.500"
           zIndex={9999}
           display="flex"
           alignItems="center"
           justifyContent="center"
         >
           <Box
-            bg={cardBgColor}
+            bg="bg.muted"
             p={8}
             borderRadius="lg"
             border="1px solid"
-            borderColor={borderColor}
+            borderColor="border"
             maxW="400px"
             textAlign="center"
           >
-            <Text fontSize="lg" fontWeight="semibold" mb={2} color={textColor}>
+            <Text fontSize="lg" fontWeight="semibold" mb={2} color="fg">
               Save Template Scope
             </Text>
-            <Text mb={6} color={placeholderColor}>
+            <Text mb={6} color="fg.subtle">
               Do you want to save this template for this course only or share it with all instructors?
             </Text>
             <HStack justify="center" gap={3}>
               <Button
-                bg="#22C55E"
+                colorPalette="green"
+                bg="green.solid"
                 color="white"
-                _hover={{ bg: "#16A34A" }}
+                _hover={{ bg: "green.emphasized" }}
                 onClick={() => handleAddToTemplate("course")}
               >
                 Course Only
               </Button>
               <Button
-                bg="#3B82F6"
+                colorPalette="blue"
+                bg="blue.solid"
                 color="white"
-                _hover={{ bg: "#2563EB" }}
+                _hover={{ bg: "blue.emphasized" }}
                 onClick={() => handleAddToTemplate("global")}
               >
                 Global
               </Button>
               <Button
                 variant="outline"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border.emphasized"
+                color="fg.muted"
+                _hover={{ bg: "gray.subtle" }}
                 onClick={() => setIsScopeModalOpen(false)}
               >
                 Cancel
@@ -754,20 +706,20 @@ export default function SurveyForm({
             <DialogCloseTrigger />
           </DialogHeader>
           <DialogBody>
-            <Text color={textColor}>Are you sure you want to cancel? Any unsaved changes will be lost.</Text>
+            <Text color="fg">Are you sure you want to cancel? Any unsaved changes will be lost.</Text>
           </DialogBody>
           <DialogFooter>
             <HStack gap={3} justify="flex-end">
               <Button
                 variant="outline"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border.emphasized"
+                color="fg.muted"
+                _hover={{ bg: "gray.subtle" }}
                 onClick={handleKeepEditing}
               >
                 Keep Editing
               </Button>
-              <Button bg="#EF4444" color="white" _hover={{ bg: "#DC2626" }} onClick={handleDiscard}>
+              <Button colorPalette="red" bg="red.solid" color="white" _hover={{ bg: "red.emphasized" }} onClick={handleDiscard}>
                 Discard
               </Button>
             </HStack>
@@ -784,7 +736,7 @@ export default function SurveyForm({
           </DialogHeader>
           <DialogBody>
             <VStack align="stretch" gap={4}>
-              <Text color={textColor} fontSize="sm">
+              <Text color="fg" fontSize="sm">
                 Choose which students should have access to this survey. You can search by name and select multiple
                 students.
               </Text>
@@ -801,17 +753,18 @@ export default function SurveyForm({
             <HStack gap={3} justify="flex-end">
               <Button
                 variant="outline"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border.emphasized"
+                color="fg.muted"
+                _hover={{ bg: "gray.subtle" }}
                 onClick={() => setIsStudentSelectorOpen(false)}
               >
                 Cancel
               </Button>
               <Button
-                bg="#22C55E"
+                colorPalette="green"
+                bg="green.solid"
                 color="white"
-                _hover={{ bg: "#16A34A" }}
+                _hover={{ bg: "green.emphasized" }}
                 onClick={() => setIsStudentSelectorOpen(false)}
                 disabled={assignedStudents.length === 0}
               >
