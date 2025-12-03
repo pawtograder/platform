@@ -1,7 +1,7 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
 import PollResponsesDynamicViewer from "./PollResponsesDynamicViewer";
-import { PollResponseData } from "@/types/poll";
+import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 
 type PollResponsesPageProps = {
   params: Promise<{ course_id: string; poll_id: string }>;
@@ -63,12 +63,17 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
 
   const responses = responsesData || [];
 
-  const enrichedResponses = responses.map((response) => ({
+  const enrichedResponses: Database["public"]["Tables"]["live_poll_responses"]["Row"][] = responses.map(
+  (response) => ({
     id: response.id,
     live_poll_id: response.live_poll_id,
-    public_profile_id: response.public_profile_id || "",
-    response: (response.response as PollResponseData) || null
-  }));
+    public_profile_id: response.public_profile_id ?? null,
+    response: response.response as Json,
+    submitted_at: response.submitted_at,
+    is_submitted: response.is_submitted ?? false,
+    created_at: response.created_at
+  })
+);
 
   return (
     <PollResponsesDynamicViewer
