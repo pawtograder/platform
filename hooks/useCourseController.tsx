@@ -1799,10 +1799,7 @@ export function useLivePolls() {
  */
 export function useActiveLivePolls() {
   const controller = useCourseController();
-  const predicate = useCallback(
-    (poll: Database["public"]["Tables"]["live_polls"]["Row"]) => poll.is_live === true,
-    []
-  );
+  const predicate = useCallback((poll: Database["public"]["Tables"]["live_polls"]["Row"]) => poll.is_live === true, []);
   const polls = useListTableControllerValues(controller.livePolls, predicate);
   const isLoading = !controller.livePolls.ready;
 

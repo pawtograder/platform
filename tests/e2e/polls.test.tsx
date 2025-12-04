@@ -78,7 +78,10 @@ test.describe("Polls", () => {
     const livePoll = {
       class_id: course.id,
       created_by: instructor.public_profile_id,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Live Poll Question" }] },
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Live Poll Question" }]
+      },
       is_live: true,
       require_login: false,
       deactivates_at: null
@@ -87,7 +90,10 @@ test.describe("Polls", () => {
     const closedPoll = {
       class_id: course.id,
       created_by: instructor.public_profile_id,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Closed Poll Question" }] },
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Closed Poll Question" }]
+      },
       is_live: false,
       require_login: false,
       deactivates_at: null
@@ -129,7 +135,10 @@ test.describe("Polls", () => {
     const { error } = await supabase.from("live_polls").insert({
       class_id: course.id,
       created_by: instructor.public_profile_id,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Hidden Closed Poll" }] },
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Hidden Closed Poll" }]
+      },
       is_live: false,
       require_login: false,
       deactivates_at: null
@@ -157,7 +166,10 @@ test.describe("Polls", () => {
       .insert({
         class_id: course.id,
         created_by: instructor.public_profile_id,
-        question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Menu Poll Question" }] },
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "Menu Poll Question" }]
+        },
         is_live: true,
         require_login: false,
         deactivates_at: null
@@ -191,7 +203,10 @@ test.describe("Polls", () => {
       .insert({
         class_id: course.id,
         created_by: instructor.public_profile_id,
-        question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "View Poll Question" }] },
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "View Poll Question" }]
+        },
         is_live: true,
         require_login: false,
         deactivates_at: null
@@ -209,8 +224,8 @@ test.describe("Polls", () => {
     await pollRow.getByRole("button", { name: /Poll actions/i }).click();
     await page.getByRole("menuitem", { name: /View Poll/i }).click();
 
-      await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/polls/${poll.id}/responses`));
-    });
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/polls/${poll.id}/responses`));
+  });
 
   test("start/stop poll toggles status badge and button label", async ({ page }) => {
     const course = await createClass();
@@ -222,7 +237,10 @@ test.describe("Polls", () => {
     const { error } = await supabase.from("live_polls").insert({
       class_id: course.id,
       created_by: instructor.public_profile_id,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Toggle Poll Question" }] },
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Toggle Poll Question" }]
+      },
       is_live: false,
       require_login: false,
       deactivates_at: null
@@ -256,7 +274,10 @@ test.describe("Polls", () => {
     const { error } = await supabase.from("live_polls").insert({
       class_id: course.id,
       created_by: instructor.public_profile_id,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Login Required Poll" }] },
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Login Required Poll" }]
+      },
       is_live: true,
       require_login: true,
       deactivates_at: null

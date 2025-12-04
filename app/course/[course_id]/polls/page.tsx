@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Heading, Text, VStack, HStack} from "@chakra-ui/react";
+import { Box, Heading, Text, VStack, HStack } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { useParams } from "next/navigation";
 import { useActiveLivePolls } from "@/hooks/useCourseController";
