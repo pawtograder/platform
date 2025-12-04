@@ -2,7 +2,9 @@
 
 import { Box, Table, Text, Button } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { LivePoll } from "@/types/poll";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+
+type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
 
 type StudentPollsTableProps = {
   polls: LivePoll[];

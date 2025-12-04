@@ -381,6 +381,8 @@ export class CourseController {
   private _gradebookColumns?: TableController<"gradebook_columns">;
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
+  private _livePolls?: TableController<"live_polls">;
+  private _livePollResponses?: TableController<"live_poll_responses">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -735,6 +737,38 @@ export class CourseController {
       });
     }
     return this._discussionTopics;
+  }
+
+  get livePolls(): TableController<"live_polls"> {
+    if (!this._livePolls) {
+      this._livePolls = new TableController({
+        client: this.client,
+        table: "live_polls",
+        query: this.client
+          .from("live_polls")
+          .select("*")
+          .eq("class_id", this.courseId)
+          .order("created_at", { ascending: false }),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._livePolls;
+  }
+
+  get livePollResponses(): TableController<"live_poll_responses"> {
+    if (!this._livePollResponses) {
+      // Fetch all responses - filtered by RLS and broadcast channel
+      // Real-time updates come via class:X:staff channel which handles class filtering
+      // Note: Consider adding RLS policy to live_poll_responses for proper security
+      this._livePollResponses = new TableController({
+        client: this.client,
+        table: "live_poll_responses",
+        query: this.client.from("live_poll_responses").select("*"),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._livePollResponses;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1156,6 +1190,8 @@ export class CourseController {
     this._assignments?.close();
     this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
+    this._livePolls?.close();
+    this._livePollResponses?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1733,4 +1769,82 @@ export function useDiscussionTopics() {
   }, [controller]);
 
   return topics;
+}
+
+/**
+ * Hook to get all live polls for the course with real-time updates
+ */
+export function useLivePolls() {
+  const controller = useCourseController();
+  const [polls, setPolls] = useState<Database["public"]["Tables"]["live_polls"]["Row"][]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.livePolls.list((updatedPolls) => {
+      setPolls(updatedPolls);
+      setIsLoading(false);
+    });
+    setPolls(data);
+    if (data.length > 0 || controller.livePolls.ready) {
+      setIsLoading(false);
+    }
+    return unsubscribe;
+  }, [controller]);
+
+  return { polls, isLoading };
+}
+
+/**
+ * Hook to get only live (active) polls for the course with real-time updates
+ */
+export function useActiveLivePolls() {
+  const controller = useCourseController();
+  const predicate = useCallback(
+    (poll: Database["public"]["Tables"]["live_polls"]["Row"]) => poll.is_live === true,
+    []
+  );
+  const polls = useListTableControllerValues(controller.livePolls, predicate);
+  const isLoading = !controller.livePolls.ready;
+
+  return { polls, isLoading };
+}
+
+/**
+ * Hook to get a single poll by ID with real-time updates
+ */
+export function useLivePoll(pollId: string | undefined) {
+  const { livePolls } = useCourseController();
+  const poll = useTableControllerValueById(livePolls, pollId);
+  return poll;
+}
+
+/**
+ * Hook to get poll responses for a specific poll with real-time updates
+ */
+export function usePollResponses(pollId: string | undefined) {
+  const controller = useCourseController();
+  const [responses, setResponses] = useState<Database["public"]["Tables"]["live_poll_responses"]["Row"][]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!pollId) {
+      setResponses([]);
+      setIsLoading(false);
+      return;
+    }
+
+    const { data, unsubscribe } = controller.livePollResponses.list((updatedResponses) => {
+      const filtered = updatedResponses.filter((r) => r.live_poll_id === pollId);
+      setResponses(filtered);
+      setIsLoading(false);
+    });
+    const filtered = data.filter((r) => r.live_poll_id === pollId);
+    setResponses(filtered);
+    if (filtered.length > 0 || controller.livePollResponses.ready) {
+      setIsLoading(false);
+    }
+    return unsubscribe;
+  }, [controller, pollId]);
+
+  return { responses, isLoading };
 }
