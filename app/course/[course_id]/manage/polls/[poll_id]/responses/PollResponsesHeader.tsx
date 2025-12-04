@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import QrCode from "./QrCode";
 
 type PollResponsesHeaderProps = {
   courseID: string;
@@ -14,6 +15,7 @@ type PollResponsesHeaderProps = {
   pollUrl: string;
   onPresent: () => void;
   onPollStatusChange: (isLive: boolean) => void;
+  qrCodeUrl?: string | null;
 };
 
 export default function PollResponsesHeader({
@@ -21,7 +23,8 @@ export default function PollResponsesHeader({
   pollID,
   pollIsLive,
   pollUrl,
-  onPresent
+  onPresent,
+  qrCodeUrl
 }: PollResponsesHeaderProps) {
   const router = useRouter();
 
@@ -82,12 +85,15 @@ export default function PollResponsesHeader({
         >
           ← Back to Polls
         </Button>
-        <Text fontSize="xl" color={textColor} textAlign="center">
-          Answer Live at:{" "}
-          <Text as="span" fontWeight="semibold" color="#3B82F6">
-            {pollUrl}
+        <HStack gap={3} align="center">
+          <Text fontSize="xl" color={textColor} textAlign="center">
+            Answer Live at:{" "}
+            <Text as="span" fontWeight="semibold" color="#3B82F6">
+              {pollUrl}
+            </Text>
           </Text>
-        </Text>
+          <QrCode qrCodeUrl={qrCodeUrl ?? null} pollUrl={pollUrl} />
+        </HStack>
         <HStack gap={2}>
           <Button
             variant="outline"

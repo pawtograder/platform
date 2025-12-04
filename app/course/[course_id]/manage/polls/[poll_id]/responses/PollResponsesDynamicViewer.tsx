@@ -6,6 +6,7 @@ import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 import { useLivePoll, usePollResponses } from "@/hooks/useCourseController";
+import { usePollQrCode } from "@/hooks/usePollQrCode";
 
 function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" {
   const questionData = pollQuestion as unknown as Record<string, unknown> | null;
@@ -40,6 +41,8 @@ export default function PollResponsesDynamicViewer({
 
   // Define color mode values at the top level (before any conditional returns)
   const bgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
+  const qrLightColor = useColorModeValue("#FFFFFF", "#000000");
+  const qrDarkColor = useColorModeValue("#000000", "#FFFFFF");
 
   const type = parseJsonForType(pollQuestion);
 
@@ -53,16 +56,18 @@ export default function PollResponsesDynamicViewer({
     return `${hostname}/poll/${courseId}`;
   }, [courseId]);
 
+  // Generate and upload QR code to storage
+  const { qrCodeUrl } = usePollQrCode(pollId, pollUrl, qrLightColor, qrDarkColor); 
+
   const handlePresent = useCallback(() => {
     setIsPresenting(true);
-  }, []);
+  }, []); 
 
   const handleClosePresent = useCallback(() => {
     setIsPresenting(false);
   }, []);
 
-  const handlePollStatusChange = useCallback(() => {
-  }, []);
+  const handlePollStatusChange = useCallback(() => { }, []);
 
   // Render full window present view
   if (isPresenting) {
@@ -76,6 +81,7 @@ export default function PollResponsesDynamicViewer({
             isFullWindow={true}
             onExit={handleClosePresent}
             pollUrl={pollUrl}
+            qrCodeUrl={qrCodeUrl}
           />
         );
       default:
@@ -105,14 +111,18 @@ export default function PollResponsesDynamicViewer({
         pollIsLive={pollIsLive}
         onPresent={handlePresent}
         onPollStatusChange={handlePollStatusChange}
+        qrCodeUrl={qrCodeUrl}
       />
       {type === "radiogroup" || type === "checkbox" ? (
-        <MultipleChoiceDynamicViewer
-          pollQuestion={pollQuestion as unknown as JSON}
-          responses={responses}
-          isFullWindow={false}
-          pollUrl={pollUrl}
-        />
+        <Box mt={4}>
+          <MultipleChoiceDynamicViewer
+            pollQuestion={pollQuestion as unknown as JSON}
+            responses={responses}
+            isFullWindow={false}
+            pollUrl={pollUrl}
+            qrCodeUrl={qrCodeUrl}
+          />
+        </Box>
       ) : (
         <div>Unsupported poll question type: {type}</div>
       )}

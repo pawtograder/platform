@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, VStack, Heading, Text } from "@chakra-ui/react";
+import { Box, VStack, Heading, Text, HStack } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import { useMemo, useEffect, useRef } from "react";
@@ -8,6 +8,7 @@ import { CloseButton } from "@/components/ui/close-button";
 import { PollResponseData } from "@/types/poll";
 import { getPollAnswer } from "@/utils/pollUtils";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import QrCode from "./QrCode";
 
 interface FullscreenElement extends Element {
   webkitRequestFullscreen?: () => Promise<void>;
@@ -30,6 +31,7 @@ type MultipleChoiceDynamicViewerProps = {
   isFullWindow?: boolean;
   onExit?: () => void;
   pollUrl?: string;
+  qrCodeUrl?: string | null;
 };
 
 export default function MultipleChoiceDynamicViewer({
@@ -37,7 +39,8 @@ export default function MultipleChoiceDynamicViewer({
   responses,
   isFullWindow = false,
   onExit,
-  pollUrl
+  pollUrl,
+  qrCodeUrl
 }: MultipleChoiceDynamicViewerProps) {
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
@@ -273,7 +276,7 @@ export default function MultipleChoiceDynamicViewer({
       display={isFullWindow ? "flex" : "flex"}
       justifyContent={isFullWindow ? "stretch" : "center"}
       alignItems={isFullWindow ? "stretch" : "center"}
-      minH={isFullWindow ? "100vh" : "82.5vh"}
+      minH={isFullWindow ? "100vh" : "80vh"}
       w={isFullWindow ? "100%" : "100%"}
       //shift the box up by 10px
       mt={isFullWindow ? 0 : -5}
@@ -286,12 +289,17 @@ export default function MultipleChoiceDynamicViewer({
         )}
         {isFullWindow && pollUrl && (
           <Box position="absolute" bottom={4} right={4} zIndex={10000}>
-            <Text fontSize="2xl" color={textColor} textAlign="right">
-              Answer Live at:{" "}
-              <Text as="span" fontWeight="semibold" color="#3B82F6">
-                {pollUrl}
-              </Text>
-            </Text>
+            <HStack gap={4} align="center" justify="flex-end">
+              <VStack align="flex-end" gap={1}>
+                <Text fontSize="2xl" color={textColor} textAlign="right">
+                  Answer Live at:{" "}
+                  <Text as="span" fontWeight="semibold" color="#3B82F6">
+                    {pollUrl}
+                  </Text>
+                </Text>
+              </VStack>
+              {qrCodeUrl && <QrCode qrCodeUrl={qrCodeUrl} pollUrl={pollUrl} size="80px" isFullscreen={true} />}
+            </HStack>
           </Box>
         )}
         <VStack align="center" justify="center" gap={4} flex="1" minH="0" w="100%">
