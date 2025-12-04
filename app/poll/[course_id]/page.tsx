@@ -54,7 +54,7 @@ export default function PollRespondPage() {
         const {
           data: { user }
         } = await supabase.auth.getUser();
-        
+
         if (!user) {
           setRequiresLogin(true);
           setIsLoading(false);
