@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
@@ -32,21 +31,6 @@ export default function SurveyTakingPage() {
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [, setIsSubmitting] = useState(false);
-
-  // Color mode values
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-
-  // Status box colors for dark mode
-  const warningBgColor = useColorModeValue("#FEF3C7", "#451A03");
-  const warningBorderColor = useColorModeValue("#F59E0B", "#D97706");
-  const warningTextColor = useColorModeValue("#92400E", "#FCD34D");
-  const successBgColor = useColorModeValue("#D1FAE5", "#064E3B");
-  const successBorderColor = useColorModeValue("#10B981", "#059669");
-  const successTextColor = useColorModeValue("#065F46", "#A7F3D0");
 
   useEffect(() => {
     const loadSurveyData = async () => {
@@ -118,7 +102,7 @@ export default function SurveyTakingPage() {
     };
 
     loadSurveyData();
-  }, [course_id, survey_id, private_profile_id]); // Include private_profile_id from hook
+  }, [course_id, survey_id, private_profile_id, router]); // Include router in dependencies
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model) => {
@@ -155,7 +139,7 @@ export default function SurveyTakingPage() {
         setIsSubmitting(false);
       }
     },
-    [private_profile_id, survey, survey_id, course_id, router]
+    [private_profile_id, survey, course_id, router]
   );
 
   const handleValueChanged = useCallback(
@@ -174,7 +158,7 @@ export default function SurveyTakingPage() {
         // Don't show error toast for auto-save failures to avoid spam
       }
     },
-    [private_profile_id, survey, survey_id]
+    [private_profile_id, survey]
   );
 
   const handleBackToSurveys = useCallback(() => {
@@ -195,28 +179,20 @@ export default function SurveyTakingPage() {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
-          <Box
-            w="100%"
-            maxW="800px"
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={8}
-          >
+          <Box w="100%" maxW="800px" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
             <VStack align="center" gap={4}>
-              <Heading size="xl" color={textColor} textAlign="center">
+              <Heading size="xl" color="fg" textAlign="center">
                 Survey Not Found
               </Heading>
-              <Text color={textColor} textAlign="center">
+              <Text color="fg" textAlign="center">
                 This survey is not available or has been removed.
               </Text>
               <Button
                 variant="outline"
                 bg="transparent"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border.emphasized"
+                color="fg.muted"
+                _hover={{ bg: "gray.subtle" }}
                 onClick={handleBackToSurveys}
               >
                 ← Back to Surveys
@@ -240,36 +216,50 @@ export default function SurveyTakingPage() {
             variant="outline"
             size="sm"
             bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+            borderColor="border.emphasized"
+            color="fg.muted"
+            _hover={{ bg: "gray.subtle" }}
             onClick={handleBackToSurveys}
             alignSelf="flex-start"
           >
             ← Back to Surveys
           </Button>
 
-          <Heading size="xl" color={textColor} textAlign="left">
+          <Heading size="xl" color="fg" textAlign="left">
             {survey.title}
           </Heading>
 
           {survey.description && (
-            <Text color={textColor} fontSize="md" opacity={0.8}>
+            <Text color="fg" fontSize="md" opacity={0.8}>
               {survey.description}
             </Text>
           )}
 
           {isReadOnly && (
-            <Box bg={warningBgColor} border="1px solid" borderColor={warningBorderColor} borderRadius="md" p={3}>
-              <Text color={warningTextColor} fontSize="sm" fontWeight="medium">
+            <Box
+              colorPalette="yellow"
+              bg="yellow.subtle"
+              border="1px solid"
+              borderColor="yellow.emphasized"
+              borderRadius="md"
+              p={3}
+            >
+              <Text color="yellow.fg" fontSize="sm" fontWeight="medium">
                 This survey has been submitted and cannot be edited.
               </Text>
             </Box>
           )}
 
           {existingResponse?.is_submitted && survey.allow_response_editing && (
-            <Box bg={successBgColor} border="1px solid" borderColor={successBorderColor} borderRadius="md" p={3}>
-              <Text color={successTextColor} fontSize="sm" fontWeight="medium">
+            <Box
+              colorPalette="green"
+              bg="green.subtle"
+              border="1px solid"
+              borderColor="green.emphasized"
+              borderRadius="md"
+              p={3}
+            >
+              <Text color="green.fg" fontSize="sm" fontWeight="medium">
                 You can edit your response since editing is allowed for this survey.
               </Text>
             </Box>
@@ -277,7 +267,7 @@ export default function SurveyTakingPage() {
         </VStack>
 
         {/* Survey */}
-        <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
+        <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
           <SurveyComponent
             surveyJson={survey.json}
             initialData={existingResponse?.response}

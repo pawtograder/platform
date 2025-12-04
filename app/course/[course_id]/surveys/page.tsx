@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, Heading, Text, VStack, HStack, Badge, Button } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
@@ -19,26 +18,18 @@ export default function StudentSurveysPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
-  // Color mode values
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-
-  // Status badge colors for dark mode
+  // Status badge configuration
   const statusColors = {
     not_started: {
-      bg: useColorModeValue("#FEE2E2", "#7F1D1D"),
-      color: useColorModeValue("#991B1B", "#FCA5A5"),
+      colorPalette: "red",
       text: "Not Started"
     },
     in_progress: {
-      bg: useColorModeValue("#FEE2E2", "#7F1D1D"),
-      color: useColorModeValue("#991B1B", "#FCA5A5"),
+      colorPalette: "red",
       text: "In Progress"
     },
     completed: {
-      bg: useColorModeValue("#D1FAE5", "#064E3B"),
-      color: useColorModeValue("#065F46", "#A7F3D0"),
+      colorPalette: "green",
       text: "Completed"
     }
   };
@@ -162,7 +153,16 @@ export default function StudentSurveysPage() {
     const status = statusColors[survey.response_status];
 
     return (
-      <Badge bg={status.bg} color={status.color} px={2} py={1} borderRadius="md" fontSize="sm" fontWeight="medium">
+      <Badge
+        colorPalette={status.colorPalette}
+        bg={`${status.colorPalette}.subtle`}
+        color={`${status.colorPalette}.fg`}
+        px={2}
+        py={1}
+        borderRadius="md"
+        fontSize="sm"
+        fontWeight="medium"
+      >
         {status.text}
       </Badge>
     );
@@ -175,12 +175,6 @@ export default function StudentSurveysPage() {
       return "Invalid date";
     }
   };
-
-  const filterButtonActiveBg = useColorModeValue("#3B82F6", "#2563EB");
-  const filterButtonActiveColor = "#FFFFFF";
-  const filterButtonInactiveBg = useColorModeValue("#F2F2F2", "#374151");
-  const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
-  const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
 
   // Filter options for student view
   const filterOptions = useMemo(
@@ -223,20 +217,12 @@ export default function StudentSurveysPage() {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
-          <Box
-            w="100%"
-            maxW="800px"
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={8}
-          >
+          <Box w="100%" maxW="800px" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
             <VStack align="center" gap={4}>
-              <Heading size="xl" color={textColor} textAlign="center">
+              <Heading size="xl" color="fg" textAlign="center">
                 No Surveys Available
               </Heading>
-              <Text color={textColor} textAlign="center">
+              <Text color="fg" textAlign="center">
                 There are no published surveys available for this course at this time.
               </Text>
             </VStack>
@@ -251,10 +237,10 @@ export default function StudentSurveysPage() {
       <VStack align="stretch" gap={6} w="100%">
         {/* Header */}
         <VStack align="stretch" gap={4}>
-          <Heading size="xl" color={textColor} textAlign="left">
+          <Heading size="xl" color="fg" textAlign="left">
             Course Surveys
           </Heading>
-          <Text color={textColor} fontSize="md" opacity={0.8}>
+          <Text color="fg" fontSize="md" opacity={0.8}>
             Complete the surveys assigned to this course. Your responses help improve the learning experience.
           </Text>
         </VStack>
@@ -264,23 +250,23 @@ export default function StudentSurveysPage() {
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
           filterOptions={filterOptions}
-          filterButtonActiveBg={filterButtonActiveBg}
-          filterButtonActiveColor={filterButtonActiveColor}
-          filterButtonInactiveBg={filterButtonInactiveBg}
-          filterButtonInactiveColor={filterButtonInactiveColor}
-          filterButtonHoverBg={filterButtonHoverBg}
-          tableBorderColor={borderColor}
+          filterButtonActiveBg="blue.solid"
+          filterButtonActiveColor="white"
+          filterButtonInactiveBg="bg.subtle"
+          filterButtonInactiveColor="fg.muted"
+          filterButtonHoverBg="gray.subtle"
+          tableBorderColor="border"
         />
 
         {/* Surveys List */}
         <VStack align="stretch" gap={4}>
           {filteredSurveys.length === 0 ? (
-            <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
+            <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
               <VStack align="center" gap={2}>
-                <Text color={textColor} fontSize="md" fontWeight="medium">
+                <Text color="fg" fontSize="md" fontWeight="medium">
                   No surveys match the selected filter.
                 </Text>
-                <Text color={textColor} fontSize="sm" opacity={0.7}>
+                <Text color="fg" fontSize="sm" opacity={0.7}>
                   Try selecting a different filter option.
                 </Text>
               </VStack>
@@ -290,20 +276,20 @@ export default function StudentSurveysPage() {
               <Box
                 key={survey.id}
                 w="100%"
-                bg={cardBgColor}
+                bg="bg.muted"
                 border="1px solid"
-                borderColor={borderColor}
+                borderColor="border"
                 borderRadius="lg"
                 p={6}
               >
                 <VStack align="stretch" gap={4}>
                   <HStack justify="space-between" align="start">
                     <VStack align="start" gap={2} flex={1}>
-                      <Heading size="md" color={textColor}>
+                      <Heading size="md" color="fg">
                         {survey.title}
                       </Heading>
                       {survey.description && (
-                        <Text color={textColor} fontSize="sm" opacity={0.8}>
+                        <Text color="fg" fontSize="sm" opacity={0.8}>
                           {survey.description}
                         </Text>
                       )}
@@ -315,12 +301,12 @@ export default function StudentSurveysPage() {
                       {getStatusBadge(survey)}
                       <VStack align="start" gap={1}>
                         {survey.due_date && (
-                          <Text color={textColor} fontSize="sm" fontWeight="medium">
+                          <Text color="fg" fontSize="sm" fontWeight="medium">
                             Due: {formatDueDate(survey.due_date)}
                           </Text>
                         )}
                         {survey.submitted_at && (
-                          <Text color={textColor} fontSize="sm" opacity={0.7}>
+                          <Text color="fg" fontSize="sm" opacity={0.7}>
                             Submitted: {formatDueDate(survey.submitted_at)}
                           </Text>
                         )}
@@ -330,10 +316,10 @@ export default function StudentSurveysPage() {
                     <Link href={`/course/${course_id}/surveys/${survey.id}`}>
                       <Button
                         size="sm"
-                        bg={survey.response_status === "completed" ? "#6B7280" : "#22C55E"}
-                        color="white"
+                        colorPalette={survey.response_status === "completed" ? "gray" : "green"}
+                        variant="solid"
                         _hover={{
-                          bg: survey.response_status === "completed" ? "#4B5563" : "#16A34A"
+                          bg: survey.response_status === "completed" ? "gray.emphasized" : "green.emphasized"
                         }}
                       >
                         {survey.response_status === "completed"

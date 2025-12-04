@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, Heading, Text, VStack, HStack, Button, Badge } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -26,19 +25,6 @@ export default function IndividualResponsePage() {
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [timezone, setTimezone] = useState<string>("America/New_York");
-
-  // Color mode values
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-
-  // Status badge colors for dark mode
-  const completedBadgeBg = useColorModeValue("#D1FAE5", "#064E3B");
-  const completedBadgeColor = useColorModeValue("#065F46", "#A7F3D0");
-  const partialBadgeBg = useColorModeValue("#FEF3C7", "#451A03");
-  const partialBadgeColor = useColorModeValue("#92400E", "#FCD34D");
 
   useEffect(() => {
     const loadResponseData = async () => {
@@ -174,7 +160,7 @@ export default function IndividualResponsePage() {
     };
 
     loadResponseData();
-  }, [course_id, survey_id, response_id]); // Removed router from dependencies
+  }, [course_id, survey_id, response_id, router]);
 
   const formatDate = (dateString: string) => {
     try {
@@ -188,8 +174,9 @@ export default function IndividualResponsePage() {
     if (isSubmitted) {
       return (
         <Badge
-          bg={completedBadgeBg}
-          color={completedBadgeColor}
+          colorPalette="green"
+          bg="green.subtle"
+          color="green.fg"
           px={3}
           py={1}
           borderRadius="md"
@@ -202,8 +189,9 @@ export default function IndividualResponsePage() {
     } else {
       return (
         <Badge
-          bg={partialBadgeBg}
-          color={partialBadgeColor}
+          colorPalette="yellow"
+          bg="yellow.subtle"
+          color="yellow.fg"
           px={3}
           py={1}
           borderRadius="md"
@@ -234,28 +222,20 @@ export default function IndividualResponsePage() {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
-          <Box
-            w="100%"
-            maxW="800px"
-            bg={cardBgColor}
-            border="1px solid"
-            borderColor={borderColor}
-            borderRadius="lg"
-            p={8}
-          >
+          <Box w="100%" maxW="800px" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
             <VStack align="center" gap={4}>
-              <Heading size="xl" color={textColor} textAlign="center">
+              <Heading size="xl" color="fg" textAlign="center">
                 Response Not Found
               </Heading>
-              <Text color={textColor} textAlign="center">
+              <Text color="fg" textAlign="center">
                 This survey response could not be found.
               </Text>
               <Button
                 variant="outline"
                 bg="transparent"
-                borderColor={buttonBorderColor}
-                color={buttonTextColor}
-                _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                borderColor="border"
+                color="fg.muted"
+                _hover={{ bg: "gray.subtle" }}
                 onClick={handleBackToResponses}
               >
                 ← Back to Responses
@@ -286,30 +266,30 @@ export default function IndividualResponsePage() {
             variant="outline"
             size="sm"
             bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+            borderColor="border"
+            color="fg.muted"
+            _hover={{ bg: "gray.subtle" }}
             onClick={handleBackToResponses}
             alignSelf="flex-start"
           >
             ← Back to Responses
           </Button>
 
-          <Heading size="xl" color={textColor} textAlign="left">
+          <Heading size="xl" color="fg" textAlign="left">
             Survey Response Details
           </Heading>
         </VStack>
 
         {/* Student Info and Metadata */}
-        <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={6}>
+        <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={6}>
           <VStack align="stretch" gap={4}>
             <HStack justify="space-between" align="start">
               <VStack align="start" gap={2}>
-                <Heading size="md" color={textColor}>
+                <Heading size="md" color="fg">
                   {survey.title}
                 </Heading>
                 {survey.description && (
-                  <Text color={textColor} fontSize="sm" opacity={0.8}>
+                  <Text color="fg" fontSize="sm" opacity={0.8}>
                     {survey.description}
                   </Text>
                 )}
@@ -323,42 +303,42 @@ export default function IndividualResponsePage() {
               gap={4}
               pt={4}
               borderTop="1px solid"
-              borderColor={borderColor}
+              borderColor="border"
             >
               <VStack align="start" gap={1}>
-                <Text color={textColor} fontSize="sm" fontWeight="medium" opacity={0.8}>
+                <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Student
                 </Text>
-                <Text color={textColor} fontWeight="medium">
+                <Text color="fg" fontWeight="medium">
                   {response.profiles.name}
                 </Text>
                 {response.profiles.sis_user_id && (
-                  <Text color={textColor} fontSize="sm" opacity={0.7}>
+                  <Text color="fg" fontSize="sm" opacity={0.7}>
                     {response.profiles.sis_user_id}
                   </Text>
                 )}
               </VStack>
 
               <VStack align="start" gap={1}>
-                <Text color={textColor} fontSize="sm" fontWeight="medium" opacity={0.8}>
+                <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Started
                 </Text>
-                <Text color={textColor}>{formatDate(response.created_at || "")}</Text>
+                <Text color="fg">{formatDate(response.created_at || "")}</Text>
               </VStack>
 
               <VStack align="start" gap={1}>
-                <Text color={textColor} fontSize="sm" fontWeight="medium" opacity={0.8}>
+                <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Last Updated
                 </Text>
-                <Text color={textColor}>{formatDate(response.updated_at || "")}</Text>
+                <Text color="fg">{formatDate(response.updated_at || "")}</Text>
               </VStack>
 
               {response.submitted_at && (
                 <VStack align="start" gap={1}>
-                  <Text color={textColor} fontSize="sm" fontWeight="medium" opacity={0.8}>
+                  <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                     Submitted
                   </Text>
-                  <Text color={textColor}>{formatDate(response.submitted_at)}</Text>
+                  <Text color="fg">{formatDate(response.submitted_at)}</Text>
                 </VStack>
               )}
             </Box>
@@ -366,15 +346,16 @@ export default function IndividualResponsePage() {
         </Box>
 
         {/* Survey Response */}
-        <Box w="100%" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
+        <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
           <VStack align="stretch" gap={4}>
             <HStack justify="space-between" align="center">
-              <Heading size="md" color={textColor}>
+              <Heading size="md" color="fg">
                 Response
               </Heading>
               <Badge
-                bg={survey.allow_response_editing ? "#D1FAE5" : "#FEF3C7"}
-                color={survey.allow_response_editing ? "#065F46" : "#92400E"}
+                colorPalette={survey.allow_response_editing ? "green" : "yellow"}
+                bg={survey.allow_response_editing ? "green.subtle" : "yellow.subtle"}
+                color={survey.allow_response_editing ? "green.fg" : "yellow.fg"}
                 px={3}
                 py={1}
                 borderRadius="md"

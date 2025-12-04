@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, Table, Text, Badge, Icon } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
@@ -28,22 +27,6 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
   const trackEvent = useTrackEvent();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
-
-  // Color mode values - same as the form
-  const textColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const tableBorderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const tableHeaderBg = useColorModeValue("#F2F2F2", "#0D0D0D");
-  const tableHeaderTextColor = useColorModeValue("#1A202C", "#9CA3AF");
-  const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const versionBadgeBg = useColorModeValue("#F2F2F2", "#0D0D0D");
-  const versionBadgeBorder = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const versionBadgeText = useColorModeValue("#1A202C", "#A0AEC0");
-  const actionsButtonBorder = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const filterButtonActiveBg = useColorModeValue("#3B82F6", "#2563EB");
-  const filterButtonActiveColor = "#FFFFFF";
-  const filterButtonInactiveBg = useColorModeValue("#F2F2F2", "#374151");
-  const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
-  const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -77,22 +60,23 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
 
   const getStatusBadge = (status: string) => {
     const statusMap = {
-      published: { text: "#22C55E", bg: "rgba(34, 197, 94, 0.2)" },
-      draft: { text: "#FBBF24", bg: "rgba(251, 191, 36, 0.2)" },
-      closed: { text: "#EF4444", bg: "rgba(239, 68, 68, 0.2)" }
+      published: { colorPalette: "green" },
+      draft: { colorPalette: "yellow" },
+      closed: { colorPalette: "red" }
     };
 
     const colors = statusMap[status as keyof typeof statusMap] || statusMap.draft;
 
     return (
       <Badge
+        colorPalette={colors.colorPalette}
+        bg={`${colors.colorPalette}.subtle`}
+        color={`${colors.colorPalette}.fg`}
         px={2}
         py={1}
         borderRadius="md"
         fontSize="xs"
         fontWeight="medium"
-        bg={colors.bg}
-        color={colors.text}
         textTransform="capitalize"
       >
         {status}
@@ -365,20 +349,20 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
         activeFilter={activeFilter}
         setActiveFilter={setActiveFilter}
         filterOptions={filterOptions}
-        filterButtonActiveBg={filterButtonActiveBg}
-        filterButtonActiveColor={filterButtonActiveColor}
-        filterButtonInactiveBg={filterButtonInactiveBg}
-        filterButtonInactiveColor={filterButtonInactiveColor}
-        filterButtonHoverBg={filterButtonHoverBg}
-        tableBorderColor={tableBorderColor}
+        filterButtonActiveBg="blue.solid"
+        filterButtonActiveColor="white"
+        filterButtonInactiveBg="bg.subtle"
+        filterButtonInactiveColor="fg.muted"
+        filterButtonHoverBg="gray.subtle"
+        tableBorderColor="border"
       />
 
-      <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden" overflowX="auto">
+      <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">
         <Table.Root variant="outline" size="md">
           <Table.Header>
-            <Table.Row bg={tableHeaderBg}>
+            <Table.Row bg="bg.subtle">
               <Table.ColumnHeader
-                color={tableHeaderTextColor}
+                color="fg.muted"
                 fontSize="xs"
                 fontWeight="semibold"
                 textTransform="uppercase"
@@ -387,53 +371,23 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
               >
                 TITLE
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={tableHeaderTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 STATUS
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={tableHeaderTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 VERSION
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={tableHeaderTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 RESPONSES
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={tableHeaderTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 CREATED
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color={tableHeaderTextColor}
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 DUE DATE
               </Table.ColumnHeader>
               <Table.ColumnHeader
-                color={tableHeaderTextColor}
+                color="fg.muted"
                 fontSize="xs"
                 fontWeight="semibold"
                 textTransform="uppercase"
@@ -446,12 +400,12 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
           </Table.Header>
           <Table.Body>
             {filteredSurveys.map((survey) => (
-              <Table.Row key={survey.id} bg={tableRowBg} borderColor={tableBorderColor}>
+              <Table.Row key={survey.id} bg="bg.muted" borderColor="border">
                 <Table.Cell py={4} pl={6}>
                   {!isInstructor && survey.status === "draft" ? (
-                    <Text color={textColor}>{survey.title}</Text>
+                    <Text color="fg">{survey.title}</Text>
                   ) : (
-                    <Link href={getSurveyLink(survey)} style={{ color: "#3182CE" }}>
+                    <Link href={getSurveyLink(survey)} style={{ color: "var(--chakra-colors-blue-fg)" }}>
                       {survey.title}
                     </Link>
                   )}
@@ -463,28 +417,26 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                     py={1}
                     borderRadius="md"
                     fontSize="xs"
-                    bg={versionBadgeBg}
+                    bg="bg.subtle"
                     border="1px solid"
-                    borderColor={versionBadgeBorder}
-                    color={versionBadgeText}
+                    borderColor="border"
+                    color="fg.muted"
                   >
                     v{survey.version}
                   </Badge>
                 </Table.Cell>
                 <Table.Cell py={4}>
-                  <Text color={textColor}>
+                  <Text color="fg">
                     {survey.status === "draft"
                       ? "—"
                       : `${survey.response_count}/${survey.assigned_student_count} responded`}
                   </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
-                  <Text color={textColor}>
-                    {formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}
-                  </Text>
+                  <Text color="fg">{formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}</Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
-                  <Text color={survey.due_date ? textColor : "gray.500"}>
+                  <Text color={survey.due_date ? "fg" : "fg.muted"}>
                     {survey.due_date
                       ? formatInTimeZone(new TZDate(survey.due_date), timezone, "MMM d, yyyy h:mm a")
                       : "—"}
@@ -497,11 +449,11 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                         variant="ghost"
                         size="sm"
                         border="1px solid"
-                        borderColor={actionsButtonBorder}
-                        _focus={{ borderColor: actionsButtonBorder, boxShadow: "none", outline: "none" }}
-                        _active={{ borderColor: actionsButtonBorder, boxShadow: "none", outline: "none" }}
+                        borderColor="border"
+                        _focus={{ borderColor: "border", boxShadow: "none", outline: "none" }}
+                        _active={{ borderColor: "border", boxShadow: "none", outline: "none" }}
                       >
-                        <Icon as={HiOutlineDotsHorizontal} color={tableHeaderTextColor} />
+                        <Icon as={HiOutlineDotsHorizontal} color="fg.muted" />
                       </Button>
                     </MenuTrigger>
                     <MenuContent>

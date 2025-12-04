@@ -2,7 +2,7 @@
 
 import { HStack, Button, Box, Text } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
-import { useState, useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { useColorModeValue } from "@/components/ui/color-mode";
@@ -11,6 +11,7 @@ type PollResponsesHeaderProps = {
   courseID: string;
   pollID: string;
   pollIsLive: boolean;
+  pollUrl: string;
   onPresent: () => void;
   onPollStatusChange: (isLive: boolean) => void;
 };
@@ -18,30 +19,15 @@ type PollResponsesHeaderProps = {
 export default function PollResponsesHeader({
   courseID,
   pollID,
-  pollIsLive: initialPollIsLive,
-  onPresent,
-  onPollStatusChange
+  pollIsLive,
+  pollUrl,
+  onPresent
 }: PollResponsesHeaderProps) {
   const router = useRouter();
-  const [pollIsLive, setPollIsLive] = useState(initialPollIsLive);
 
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
   const textColor = useColorModeValue("#1A202C", "#FFFFFF");
-
-  // Get base URL - localhost for dev, pawtograder.com for production
-  const baseUrl = useMemo(() => {
-    if (typeof window !== "undefined") {
-      const hostname = window.location.hostname;
-      if (hostname === "localhost" || hostname === "127.0.0.1") {
-        return `${hostname}:${window.location.port || 3000}`;
-      }
-      return `${hostname}`;
-    }
-    return "localhost:3000";
-  }, []);
-
-  const pollUrl = `${baseUrl}/poll/${courseID}`;
 
   const handleToggleLive = useCallback(async () => {
     const nextState = !pollIsLive;
@@ -64,8 +50,7 @@ export default function PollResponsesHeader({
         throw new Error(error.message);
       }
 
-      setPollIsLive(nextState);
-      onPollStatusChange(nextState);
+      // Status change will be reflected via real-time updates from TableController
 
       toaster.dismiss(loadingToast);
       toaster.create({
@@ -81,11 +66,11 @@ export default function PollResponsesHeader({
         type: "error"
       });
     }
-  }, [pollID, pollIsLive, onPollStatusChange]);
+  }, [pollID, pollIsLive]);
 
   return (
     <Box p={4}>
-      <HStack justify="space-between">
+      <HStack justify="space-between" align="center" gap={4}>
         <Button
           variant="outline"
           size="sm"

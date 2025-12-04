@@ -136,10 +136,12 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
 }
 
 /**
- * Downloads CSV content as a file
+ * Downloads CSV content as a file with UTF-8 BOM for Excel compatibility
  */
-export function downloadCSV(csvContent: string, filename: string) {
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+function downloadCSV(csvContent: string, filename: string) {
+  // Add UTF-8 BOM so Excel properly recognizes encoding
+  const BOM = "\uFEFF";
+  const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
 
   if (link.download !== undefined) {
@@ -155,32 +157,16 @@ export function downloadCSV(csvContent: string, filename: string) {
 }
 
 /**
- * Exports survey responses to Excel format (using a simple approach)
- * Note: For full Excel support, you might want to use a library like xlsx
+ * Main export function that exports survey responses to CSV format
  */
-export function exportResponsesToExcel(responses: SurveyResponse[], survey: Survey): void {
-  // For now, we'll export as CSV with .xlsx extension
-  // In a real implementation, you'd use a library like 'xlsx' to create proper Excel files
-  const csvContent = exportResponsesToCSV(responses, survey);
-  const filename = `${survey.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_responses.xlsx`;
-  downloadCSV(csvContent, filename);
-}
-
-/**
- * Main export function that handles both CSV and Excel formats
- */
-export function exportSurveyResponses(responses: SurveyResponse[], survey: Survey, format: "csv" | "excel" = "csv") {
+export function exportSurveyResponses(responses: SurveyResponse[], survey: Survey) {
   if (responses.length === 0) {
     throw new Error("No responses to export");
   }
 
   const timestamp = new Date().toISOString().split("T")[0];
-  const baseFilename = `${survey.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_responses_${timestamp}`;
+  const filename = `${survey.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_responses_${timestamp}.csv`;
 
-  if (format === "csv") {
-    const csvContent = exportResponsesToCSV(responses, survey);
-    downloadCSV(csvContent, `${baseFilename}.csv`);
-  } else {
-    exportResponsesToExcel(responses, survey);
-  }
+  const csvContent = exportResponsesToCSV(responses, survey);
+  downloadCSV(csvContent, filename);
 }

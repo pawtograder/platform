@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { Box, Button, HStack, VStack, Heading, Text } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import SurveyBuilder from "@/components/survey/SurveyBuilder";
 
 type SurveyBuilderModalProps = {
@@ -13,13 +12,6 @@ type SurveyBuilderModalProps = {
 };
 
 export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJson }: SurveyBuilderModalProps) {
-  // Colors
-  const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-
   // Local JSON buffer (so user can cancel without mutating form)
   const [draftJson, setDraftJson] = useState<string>(initialJson ?? "");
 
@@ -45,9 +37,9 @@ export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJso
       justifyContent="center"
     >
       <Box
-        bg={bgColor}
+        bg="bg.subtle"
         border="1px solid"
-        borderColor={borderColor}
+        borderColor="border.default"
         borderRadius="lg"
         w="95vw"
         h="95vh"
@@ -59,16 +51,16 @@ export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJso
         <Box
           p={4}
           borderBottom="1px solid"
-          borderColor={borderColor}
+          borderColor="border.subtle"
           display="flex"
           justifyContent="space-between"
           alignItems="center"
         >
           <VStack align="start" gap={1}>
-            <Heading size="lg" color={textColor}>
+            <Heading size="lg" color="fg.default">
               Visual Survey Builder
             </Heading>
-            <Text fontSize="sm" color={buttonTextColor}>
+            <Text fontSize="sm" color="fg.muted">
               Build or edit your survey JSON visually
             </Text>
           </VStack>
@@ -77,14 +69,14 @@ export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJso
               variant="outline"
               size="sm"
               bg="transparent"
-              borderColor={buttonBorderColor}
-              color={buttonTextColor}
-              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+              borderColor="border"
+              color="fg"
+              _hover={{ bg: "bg.muted" }}
               onClick={onClose}
             >
               Cancel
             </Button>
-            <Button size="sm" bg="#22C55E" color="white" _hover={{ bg: "#16A34A" }} onClick={handleUseSurvey}>
+            <Button size="sm" colorPalette="green" onClick={handleUseSurvey}>
               Use This Survey
             </Button>
           </HStack>

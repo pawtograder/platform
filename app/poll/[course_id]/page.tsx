@@ -23,7 +23,6 @@ export default function PollRespondPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [requiresLogin, setRequiresLogin] = useState(false);
-
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
@@ -33,7 +32,6 @@ export default function PollRespondPage() {
   useEffect(() => {
     const fetchPoll = async () => {
       const supabase = createClient();
-
       const { data: pollData, error } = await supabase
         .from("live_polls")
         .select("*")
@@ -50,43 +48,38 @@ export default function PollRespondPage() {
 
       const poll = pollData;
 
-      // Check if require_login is true, and if so, get user and public_profile_id
+      // Resolve the profile ID to attach to responses (if login is required)
       let profileId: string | null = null;
       if (poll.require_login) {
-        setRequiresLogin(true);
         const {
           data: { user }
         } = await supabase.auth.getUser();
 
         if (!user) {
+          setRequiresLogin(true);
           setIsLoading(false);
           return;
         }
 
-        // Get public_profile_id from user_roles for this course
-        const { data: roleDataRaw, error: roleError } = await supabase
+        const { data } = await supabase
           .from("user_roles")
           .select("public_profile_id")
           .eq("user_id", user.id)
           .eq("class_id", Number(course_id))
-          .eq("disabled", false)
           .single();
 
-        const roleData = roleDataRaw as { public_profile_id: string } | null;
-
-        if (roleError || !roleData || !roleData.public_profile_id) {
+        if (!data?.public_profile_id) {
           toaster.create({
             title: "Access Error",
-            description: "Unable to identify your profile for this course.",
+            description: "We couldn't find your course profile.",
             type: "error"
           });
-          setRequiresLogin(false); // User is logged in, just doesn't have access
+          setRequiresLogin(true);
           setIsLoading(false);
           return;
         }
 
-        profileId = roleData.public_profile_id;
-        setRequiresLogin(false);
+        profileId = data.public_profile_id;
       }
 
       const pollQuestion = poll.question as unknown as PollQuestion;
