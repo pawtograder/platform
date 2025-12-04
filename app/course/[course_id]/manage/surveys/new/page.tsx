@@ -177,11 +177,6 @@ export default function NewSurveyPage() {
             .single();
 
           if (data && !error) {
-            console.log("[loadLatestDraft] Raw data from DB:", data);
-            console.log("[loadLatestDraft] due_date:", data.due_date);
-            console.log("[loadLatestDraft] allow_response_editing:", data.allow_response_editing);
-            console.log("[loadLatestDraft] status:", data.status);
-
             // Convert due_date from ISO string to datetime-local format in course timezone
             let dueDateFormatted = "";
             if (data.due_date) {
@@ -196,7 +191,6 @@ export default function NewSurveyPage() {
               .eq("survey_id", data.id);
 
             const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
-            console.log("[loadLatestDraft] Loaded assignments:", assignedStudents);
 
             // Load the draft data into the form
             const formData = {
@@ -210,7 +204,6 @@ export default function NewSurveyPage() {
               assigned_students: assignedStudents
             };
 
-            console.log("[loadLatestDraft] Form data being loaded:", formData);
             reset(formData);
             setCurrentSurveyId(data.id);
 
@@ -221,8 +214,8 @@ export default function NewSurveyPage() {
             });
           }
         } catch (error) {
+          console.error(error);
           // Silently fail - this is just for convenience
-          console.log("No draft found or error loading draft:", error);
         }
       };
 
@@ -255,11 +248,6 @@ export default function NewSurveyPage() {
         //toastDescription = "Your survey has been saved."
       } = options;
 
-      console.log("[saveSurvey] Input values:", values);
-      console.log("[saveSurvey] due_date:", values.due_date);
-      console.log("[saveSurvey] allow_response_editing:", values.allow_response_editing);
-      console.log("[saveSurvey] status:", values.status);
-
       const supabase = createClient();
 
       // Process JSON based on validation requirement
@@ -286,17 +274,11 @@ export default function NewSurveyPage() {
           ? (values.status as SurveyStatus)
           : "draft";
 
-      // Check if we're returning from preview (indicates continuing work on same survey)
-      console.log("[saveSurvey] isReturningFromPreview state:", isReturningFromPreview);
-      console.log("[saveSurvey] currentSurveyId:", currentSurveyId);
-
       let data: Pick<Tables<"surveys">, "id" | "survey_id"> | null;
       let error: PostgrestError | null;
 
       if (currentSurveyId) {
         // Update existing survey
-        console.log("[saveSurvey] updating existing survey:", currentSurveyId);
-
         const updatePayload = {
           title: (values.title as string) || "Untitled Survey",
           description: (values.description as string) || null,
@@ -334,7 +316,6 @@ export default function NewSurveyPage() {
 
         if (existingSurvey && !surveyError) {
           // Update existing survey found by query
-          console.log("[saveSurvey] updating existing survey found by query:", existingSurvey.id);
           setCurrentSurveyId(existingSurvey.id); // Set it for next time
 
           const updatePayload = {
@@ -409,8 +390,6 @@ export default function NewSurveyPage() {
           assigned_to_all: Boolean(values.assigned_to_all)
         };
 
-        console.log("[saveSurvey] creating new survey:", insertPayload);
-
         const result = await supabase
           .from("surveys")
           .insert(insertPayload)
@@ -434,7 +413,6 @@ export default function NewSurveyPage() {
 
       // Handle survey assignments if not assigned to all students
       if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
-        console.log("[saveSurvey] creating survey assignments for:", values.assigned_students);
         const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
           p_survey_id: data.id,
           p_profile_ids: values.assigned_students

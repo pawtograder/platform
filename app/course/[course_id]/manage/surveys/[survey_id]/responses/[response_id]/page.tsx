@@ -28,8 +28,6 @@ export default function IndividualResponsePage() {
 
   useEffect(() => {
     const loadResponseData = async () => {
-      console.log("🚀 Loading response data:", { course_id, survey_id, response_id });
-
       try {
         const supabase = createClient();
 
@@ -44,7 +42,6 @@ export default function IndividualResponsePage() {
 
         // First, fetch the survey to get its database ID (not the UUID)
         // The URL survey_id parameter is surveys.survey_id (UUID), but we need surveys.id
-        console.log("📋 Fetching survey to get database ID...");
         const { data: surveyData, error: surveyError } = await supabase
           .from("surveys")
           .select("id, title, description, json, allow_response_editing")
@@ -64,27 +61,16 @@ export default function IndividualResponsePage() {
         }
 
         const finalSurvey = surveyData as unknown as Survey;
-        console.log("✅ Survey found with database ID:", finalSurvey.id);
         setSurvey(finalSurvey);
 
         // Now fetch the response using the survey's database ID
         // survey_responses.survey_id is a foreign key to surveys.id, not surveys.survey_id
-        console.log("📊 Fetching survey response...");
         const { data: responseData, error: responseError } = await supabase
           .from("survey_responses")
           .select("*")
           .eq("id", String(response_id))
           .eq("survey_id", finalSurvey.id)
           .single();
-
-        console.log("📊 Response query result:", {
-          hasData: !!responseData,
-          hasError: !!responseError,
-          errorCode: responseError?.code,
-          errorMessage: responseError?.message,
-          responseKeys: responseData ? Object.keys(responseData) : [],
-          responseSample: responseData ? JSON.stringify(responseData).slice(0, 200) : "No data"
-        });
 
         if (responseError || !responseData) {
           toaster.create({
@@ -97,7 +83,6 @@ export default function IndividualResponsePage() {
         }
 
         // Get the student's profile via user_roles using profile_id
-        console.log("👤 Fetching user profile for profile_id:", responseData?.profile_id);
         const { data: userRole, error: userRoleError } = await supabase
           .from("user_roles")
           .select(
@@ -114,14 +99,6 @@ export default function IndividualResponsePage() {
           .eq("private_profile_id", responseData?.profile_id)
           .single();
 
-        console.log("👤 User profile query result:", {
-          hasData: !!userRole,
-          hasError: !!userRoleError,
-          errorCode: userRoleError?.code,
-          errorMessage: userRoleError?.message,
-          profileData: userRole?.profiles ?? null
-        });
-
         if (userRoleError || !userRole) {
           console.error("❌ Error getting user profile:", userRoleError);
           // Set response with fallback profile data
@@ -132,7 +109,6 @@ export default function IndividualResponsePage() {
               name: "Unknown Student"
             }
           } as SurveyResponseWithProfile;
-          console.log("🔄 Using fallback profile data:", fallbackResponse);
           setResponse(fallbackResponse);
         } else {
           const responseWithProfile = {
@@ -143,7 +119,6 @@ export default function IndividualResponsePage() {
               sis_user_id: null // Not available on profiles table
             }
           } as SurveyResponseWithProfile;
-          console.log("✅ Response with profile data:", responseWithProfile);
           setResponse(responseWithProfile);
         }
       } catch (error) {
@@ -246,16 +221,6 @@ export default function IndividualResponsePage() {
       </Box>
     );
   }
-
-  console.log("🎨 Rendering IndividualResponsePage with:", {
-    isLoading,
-    hasResponse: !!response,
-    hasSurvey: !!survey,
-    responseData: response?.response ? "Present" : "Missing",
-    surveyJson: survey?.json ? "Present" : "Missing",
-    allowResponseEditing: survey?.allow_response_editing,
-    readOnly: survey ? !survey.allow_response_editing : true
-  });
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
