@@ -35,7 +35,7 @@ export default function NewSurveyPage() {
   const searchParams = useSearchParams();
   const trackEvent = useTrackEvent();
 
-  // 🚨 THIS is where we're allowed to call hooks like useClassProfiles
+  // THIS is where we're allowed to call hooks like useClassProfiles
   const { private_profile_id, role } = useClassProfiles();
   const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
   const [currentSurveyId, setCurrentSurveyId] = useState<string | null>(null);
