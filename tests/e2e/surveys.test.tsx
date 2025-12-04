@@ -1,4 +1,6 @@
 import { test, expect } from "../global-setup";
+import fs from "fs/promises";
+import path from "path";
 import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
 
 test.describe("Surveys Page", () => {
@@ -395,6 +397,29 @@ test.describe("Surveys Page", () => {
     await expect(editableCard.getByText("Submitted (editable)")).toBeVisible();
   });
 
+  test.skip("survey builder saves default JSON on create", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
+    ]);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    await page.getByRole("button", { name: "Open Visual Builder" }).click();
+    await page.getByRole("button", { name: "Use This Survey" }).click();
+
+    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    const parsed = JSON.parse(jsonValue);
+
+    expect(parsed.meta?.title).toBe("Survey Name");
+    expect(Array.isArray(parsed.pages)).toBe(true);
+    expect(parsed.pages.length).toBe(1);
+    expect(parsed.pages[0].name).toBeTruthy();
+    expect(Array.isArray(parsed.pages[0].elements)).toBe(true);
+  });
+
   test("publishing a draft survey updates status", async ({ page }) => {
     const course = await createClass();
     const [, instructor] = await createUsersInClass([
@@ -487,5 +512,326 @@ test.describe("Surveys Page", () => {
       }
       return updated?.status;
     }, { timeout: 5000, message: "survey should close" }).toBe("closed");
+  });
+
+  test("instructor can view survey responses analytics", async ({ page }) => {
+    const course = await createClass();
+    const [student, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Responses Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Responses Instructor", useMagicLink: true }
+    ]);
+
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: "Responses Test Survey",
+        description: "Responses analytics",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: surveyJson,
+        version: 1
+      })
+      .select("id, survey_id")
+      .single();
+    if (error || !survey) {
+      throw new Error(`Failed to seed survey: ${error?.message}`);
+    }
+
+    const { error: respError } = await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student.private_profile_id,
+      response: { q1: "My feedback" },
+      is_submitted: true,
+      submitted_at: new Date().toISOString()
+    });
+    if (respError) {
+      throw new Error(`Failed to seed survey response: ${respError.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
+
+    await expect(page.getByRole("heading", { name: /Survey Responses/i })).toBeVisible();
+    await expect(page.getByText("Question 1")).toBeVisible();
+    await expect(page.getByText("My feedback")).toBeVisible();
+  });
+
+  test("grader can view survey responses analytics", async ({ page }) => {
+    const course = await createClass();
+    const [student, instructor, grader] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Responses Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Responses Instructor", useMagicLink: true },
+      { role: "grader", class_id: course.id, name: "Responses Grader", useMagicLink: true }
+    ]);
+
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: "Responses Test Survey",
+        description: "Responses analytics",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: surveyJson,
+        version: 1
+      })
+      .select("id, survey_id")
+      .single();
+    if (error || !survey) {
+      throw new Error(`Failed to seed survey: ${error?.message}`);
+    }
+
+    const { error: respError } = await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student.private_profile_id,
+      response: { q1: "Grader can view" },
+      is_submitted: true,
+      submitted_at: new Date().toISOString()
+    });
+    if (respError) {
+      throw new Error(`Failed to seed survey response: ${respError.message}`);
+    }
+
+    await loginAsUser(page, grader, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
+
+    await expect(page.getByRole("heading", { name: /Survey Responses/i })).toBeVisible();
+    await expect(page.getByText("Question 1")).toBeVisible();
+    await expect(page.getByText("Grader can view")).toBeVisible();
+  });
+
+  test("instructor can apply filters on responses", async ({ page }) => {
+    const course = await createClass();
+    const [student1, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Filter Student 1", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Filter Instructor", useMagicLink: true }
+    ]);
+
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: "Filter Responses Survey",
+        description: "Filters and CSV",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: surveyJson,
+        version: 1
+      })
+      .select("id, survey_id")
+      .single();
+    if (error || !survey) {
+      throw new Error(`Failed to seed survey: ${error?.message}`);
+    }
+
+    // Two responses on distinct dates
+    const oldDate = "2025-01-01T00:00:00.000Z";
+    const newDate = "2025-02-01T00:00:00.000Z";
+    await supabase.from("survey_responses").insert([
+      {
+        survey_id: survey.id,
+        profile_id: student1.private_profile_id,
+        response: { q1: "Old response" },
+        is_submitted: true,
+        submitted_at: oldDate
+      },
+      {
+        survey_id: survey.id,
+        profile_id: student1.private_profile_id,
+        response: { q1: "New response" },
+        is_submitted: true,
+        submitted_at: newDate
+      }
+    ]);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
+
+    // Open filters and apply date range to include only the newer response
+    await page.getByRole("button", { name: /Filters/i }).click();
+    const dateInputs = page.locator('input[type="date"]');
+    await dateInputs.nth(0).fill("2025-02-01");
+    await dateInputs.nth(1).fill("2025-02-01");
+
+    // Expect active filter chips to show date range
+    await expect(page.getByText(/Date: 2025-02-01 to 2025-02-01/)).toBeVisible();
+  });
+
+  test("instructor sees export CSV button", async ({ page }) => {
+    const course = await createClass();
+    const [student1, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "CSV Student 1", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "CSV Instructor", useMagicLink: true }
+    ]);
+
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: "CSV Responses Survey",
+        description: "CSV export",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: surveyJson,
+        version: 1
+      })
+      .select("id, survey_id")
+      .single();
+    if (error || !survey) {
+      throw new Error(`Failed to seed survey: ${error?.message}`);
+    }
+
+    await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student1.private_profile_id,
+      response: { q1: "CSV response" },
+      is_submitted: true,
+      submitted_at: "2025-02-01T00:00:00.000Z"
+    });
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
+
+    await expect(page.getByRole("button", { name: /Export to CSV/i })).toBeVisible();
+  });
+
+  test.skip("response question filter hides unselected columns", async ({ page }) => {
+    const course = await createClass();
+    const [student1, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Filter Student Columns", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Filter Instructor Columns", useMagicLink: true }
+    ]);
+
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1", title: "Question 1" },
+            { type: "text", name: "q2", title: "Question 2" }
+          ]
+        }
+      ]
+    };
+
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: "Filter Columns Survey",
+        description: "Column filter test",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: surveyJson,
+        version: 1
+      })
+      .select("id, survey_id")
+      .single();
+    if (error || !survey) {
+      throw new Error(`Failed to seed survey: ${error?.message}`);
+    }
+
+    await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student1.private_profile_id,
+      response: { q1: "Answer 1", q2: "Answer 2" },
+      is_submitted: true,
+      submitted_at: "2025-02-01T00:00:00.000Z"
+    });
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
+
+    await page.getByRole("button", { name: /Filters/i }).click();
+    const q2Checkbox = page.getByText("Question 2").locator("..").locator("input[type='checkbox']");
+    await q2Checkbox.click();
+
+    await expect(page.getByText("Question 1")).toBeVisible();
+    await expect(page.getByText("Answer 1")).toBeVisible();
+    await expect(page.getByText("Question 2")).not.toBeVisible();
+    await expect(page.getByText("Answer 2")).not.toBeVisible();
+  });
+
+  test("grader cannot create or edit surveys but can view results menu", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor, grader] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Grader Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor Owner", useMagicLink: true },
+      { role: "grader", class_id: course.id, name: "Grader User", useMagicLink: true }
+    ]);
+
+    const { error } = await supabase.from("surveys").insert({
+      class_id: course.id,
+      title: "Grader Published Survey",
+      description: "Published survey",
+      status: "published",
+      assigned_to_all: true,
+      allow_response_editing: false,
+      created_by: instructor.public_profile_id,
+      json: {},
+      version: 1
+    });
+    if (error) {
+      throw new Error(`Failed to seed draft survey: ${error.message}`);
+    }
+
+    await loginAsUser(page, grader, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+
+    await expect(page.getByRole("link", { name: /\+ Create New Survey/ })).not.toBeVisible();
+
+    const row = page.getByRole("row", { name: /Grader Published Survey/ }).first();
+    await row.getByRole("button").first().click();
+    await expect(page.getByRole("menuitem", { name: /View Responses/i })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /Edit/ })).not.toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /Close/ })).not.toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /Delete/ })).not.toBeVisible();
   });
 });
