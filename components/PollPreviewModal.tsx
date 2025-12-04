@@ -8,7 +8,8 @@ import {
   DialogBody,
   DialogCloseTrigger
 } from "@/components/ui/dialog";
-import { useColorModeValue } from "@/components/ui/color-mode";
+import { Box, Text, VStack } from "@chakra-ui/react";
+import { useColorMode } from "@/components/ui/color-mode";
 import { useState, useEffect } from "react";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
@@ -24,13 +25,7 @@ interface PollPreviewModalProps {
 export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [surveyModel, setSurveyModel] = useState<Model | null>(null);
-
-  // Color mode values
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
-  const isDarkMode = useColorModeValue(false, true);
+  const { colorMode } = useColorMode();
 
   useEffect(() => {
     if (!isOpen || !pollJson.trim()) {
@@ -47,7 +42,7 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
       const model = new Model(parsedJson);
 
       // Apply theme based on color mode
-      if (isDarkMode) {
+      if (colorMode === "dark") {
         model.applyTheme(DefaultDark);
       } else {
         model.applyTheme(DefaultLight);
@@ -60,18 +55,18 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
       setError("Error, please validate JSON");
       setSurveyModel(null);
     }
-  }, [isOpen, pollJson, isDarkMode]);
+  }, [isOpen, pollJson, colorMode]);
 
   // Update theme when color mode changes
   useEffect(() => {
     if (surveyModel) {
-      if (isDarkMode) {
+      if (colorMode === "dark") {
         surveyModel.applyTheme(DefaultDark);
       } else {
         surveyModel.applyTheme(DefaultLight);
       }
     }
-  }, [isDarkMode, surveyModel]);
+  }, [colorMode, surveyModel]);
 
   return (
     <DialogRoot open={isOpen} onOpenChange={onClose}>
@@ -79,13 +74,13 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
         maxW="4xl"
         w="90vw"
         h="90vh"
-        bg={bgColor}
-        borderColor={borderColor}
+        bg="bg.default"
+        borderColor="border.subtle"
         borderRadius="lg"
         className="flex flex-col"
       >
-        <DialogHeader bg={headerBgColor} p={4} borderRadius="lg">
-          <DialogTitle color={textColor} fontSize="xl" fontWeight="bold">
+        <DialogHeader bg="bg.muted" p={4} borderRadius="lg">
+          <DialogTitle color="fg.default" fontSize="xl" fontWeight="bold">
             Poll Preview
           </DialogTitle>
           <DialogCloseTrigger />
@@ -93,17 +88,17 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
 
         <DialogBody p={6} overflow="auto">
           {error ? (
-            <div className="text-center py-8">
-              <p className="text-red-500">{error}</p>
-            </div>
+            <VStack align="center" py={8} gap={4}>
+              <Text color="red.500">{error}</Text>
+            </VStack>
           ) : surveyModel ? (
-            <div className="poll-preview-container">
+            <Box className="poll-preview-container">
               <Survey model={surveyModel} />
-            </div>
+            </Box>
           ) : (
-            <div className="text-center py-8">
-              <p className="text-gray-500">Loading poll preview...</p>
-            </div>
+            <Box textAlign="center" py={8}>
+              <Text color="fg.muted">Loading poll preview...</Text>
+            </Box>
           )}
         </DialogBody>
       </DialogContent>
