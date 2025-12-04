@@ -3,7 +3,6 @@
 import { useSearchParams, useRouter, useParams } from "next/navigation";
 import { Suspense, useCallback } from "react";
 import { Box, Button, Heading, VStack, Text } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import dynamic from "next/dynamic";
 import type { SurveyModel, Question } from "survey-core";
 
