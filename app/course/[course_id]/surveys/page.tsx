@@ -273,7 +273,15 @@ export default function StudentSurveysPage() {
             </Box>
           ) : (
             filteredSurveys.map((survey) => (
-              <Box key={survey.id} w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={6}>
+              <Box
+                key={survey.id}
+                w="100%"
+                bg="bg.muted"
+                border="1px solid"
+                borderColor="border"
+                borderRadius="lg"
+                p={6}
+              >
                 <VStack align="stretch" gap={4}>
                   <HStack justify="space-between" align="start">
                     <VStack align="start" gap={2} flex={1}>

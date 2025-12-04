@@ -14,7 +14,9 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(page.getByText("There are no published surveys available for this course at this time.")).toBeVisible();
+    await expect(
+      page.getByText("There are no published surveys available for this course at this time.")
+    ).toBeVisible();
   });
 
   test("student sees published survey and updated status", async ({ page }) => {
@@ -77,7 +79,9 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(page.getByText("There are no published surveys available for this course at this time.")).toBeVisible();
+    await expect(
+      page.getByText("There are no published surveys available for this course at this time.")
+    ).toBeVisible();
     await expect(page.getByText("Draft Survey")).not.toBeVisible();
   });
 
@@ -107,7 +111,9 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(page.getByText("There are no published surveys available for this course at this time.")).toBeVisible();
+    await expect(
+      page.getByText("There are no published surveys available for this course at this time.")
+    ).toBeVisible();
     await expect(page.getByText("Closed Survey")).not.toBeVisible();
   });
 
@@ -225,7 +231,6 @@ test.describe("Surveys Page", () => {
     await expect(page.getByText("Specific Student Survey")).toBeVisible();
   });
 
-
   test("instructor can open create survey form from manage page", async ({ page }) => {
     const course = await createClass();
     const [, instructor] = await createUsersInClass([
@@ -236,7 +241,10 @@ test.describe("Surveys Page", () => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/surveys`);
 
-    await page.getByRole("link", { name: /\+ Create New Survey/ }).first().click();
+    await page
+      .getByRole("link", { name: /\+ Create New Survey/ })
+      .first()
+      .click();
     await expect(page.getByRole("heading", { name: "Create New Survey" })).toBeVisible();
   });
 
@@ -454,17 +462,22 @@ test.describe("Surveys Page", () => {
     await row.getByRole("button").first().click();
     await page.getByRole("menuitem", { name: "Publish" }).click();
 
-    await expect.poll(async () => {
-      const { data: updated, error: fetchError } = await supabase
-        .from("surveys")
-        .select("status")
-        .eq("id", draftSurvey.id)
-        .single();
-      if (fetchError) {
-        throw new Error(`Failed to fetch updated survey: ${fetchError.message}`);
-      }
-      return updated?.status;
-    }, { timeout: 5000, message: "survey should publish" }).toBe("published");
+    await expect
+      .poll(
+        async () => {
+          const { data: updated, error: fetchError } = await supabase
+            .from("surveys")
+            .select("status")
+            .eq("id", draftSurvey.id)
+            .single();
+          if (fetchError) {
+            throw new Error(`Failed to fetch updated survey: ${fetchError.message}`);
+          }
+          return updated?.status;
+        },
+        { timeout: 5000, message: "survey should publish" }
+      )
+      .toBe("published");
   });
 
   test("closing a published survey updates status", async ({ page }) => {
@@ -501,17 +514,22 @@ test.describe("Surveys Page", () => {
     await row.getByRole("button").first().click();
     await page.getByRole("menuitem", { name: "Close" }).click();
 
-    await expect.poll(async () => {
-      const { data: updated, error: fetchError } = await supabase
-        .from("surveys")
-        .select("status")
-        .eq("id", publishedSurvey.id)
-        .single();
-      if (fetchError) {
-        throw new Error(`Failed to fetch updated survey: ${fetchError.message}`);
-      }
-      return updated?.status;
-    }, { timeout: 5000, message: "survey should close" }).toBe("closed");
+    await expect
+      .poll(
+        async () => {
+          const { data: updated, error: fetchError } = await supabase
+            .from("surveys")
+            .select("status")
+            .eq("id", publishedSurvey.id)
+            .single();
+          if (fetchError) {
+            throw new Error(`Failed to fetch updated survey: ${fetchError.message}`);
+          }
+          return updated?.status;
+        },
+        { timeout: 5000, message: "survey should close" }
+      )
+      .toBe("closed");
   });
 
   test("instructor can view survey responses analytics", async ({ page }) => {

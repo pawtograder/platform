@@ -179,15 +179,7 @@ export default function SurveyTakingPage() {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
-          <Box
-            w="100%"
-            maxW="800px"
-            bg="bg.muted"
-            border="1px solid"
-            borderColor="border"
-            borderRadius="lg"
-            p={8}
-          >
+          <Box w="100%" maxW="800px" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
             <VStack align="center" gap={4}>
               <Heading size="xl" color="fg" textAlign="center">
                 Survey Not Found
@@ -244,7 +236,14 @@ export default function SurveyTakingPage() {
           )}
 
           {isReadOnly && (
-            <Box colorPalette="yellow" bg="yellow.subtle" border="1px solid" borderColor="yellow.emphasized" borderRadius="md" p={3}>
+            <Box
+              colorPalette="yellow"
+              bg="yellow.subtle"
+              border="1px solid"
+              borderColor="yellow.emphasized"
+              borderRadius="md"
+              p={3}
+            >
               <Text color="yellow.fg" fontSize="sm" fontWeight="medium">
                 This survey has been submitted and cannot be edited.
               </Text>
@@ -252,7 +251,14 @@ export default function SurveyTakingPage() {
           )}
 
           {existingResponse?.is_submitted && survey.allow_response_editing && (
-            <Box colorPalette="green" bg="green.subtle" border="1px solid" borderColor="green.emphasized" borderRadius="md" p={3}>
+            <Box
+              colorPalette="green"
+              bg="green.subtle"
+              border="1px solid"
+              borderColor="green.emphasized"
+              borderRadius="md"
+              p={3}
+            >
               <Text color="green.fg" fontSize="sm" fontWeight="medium">
                 You can edit your response since editing is allowed for this survey.
               </Text>

@@ -453,15 +453,7 @@ export default function SurveyResponsesView({
 
       {/* Summary Cards */}
       <HStack gap={4} mb={8} justify="flex-start" wrap="wrap">
-        <Box
-          bg="bg.muted"
-          border="1px solid"
-          borderColor="border"
-          borderRadius="lg"
-          p={4}
-          minW="200px"
-          flex="1"
-        >
+        <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={4} minW="200px" flex="1">
           <Text fontSize="sm" color="fg.muted" mb={1}>
             TOTAL RESPONSES
           </Text>
@@ -474,15 +466,7 @@ export default function SurveyResponsesView({
             )}
           </Text>
         </Box>
-        <Box
-          bg="bg.muted"
-          border="1px solid"
-          borderColor="border"
-          borderRadius="lg"
-          p={4}
-          minW="200px"
-          flex="1"
-        >
+        <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={4} minW="200px" flex="1">
           <Text fontSize="sm" color="fg.muted" mb={1}>
             RESPONSE RATE
           </Text>
@@ -490,23 +474,11 @@ export default function SurveyResponsesView({
             {responseRate}%
           </Text>
         </Box>
-        <Box
-          bg="bg.muted"
-          border="1px solid"
-          borderColor="border"
-          borderRadius="lg"
-          p={4}
-          minW="200px"
-          flex="1"
-        >
+        <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={4} minW="200px" flex="1">
           <Text fontSize="sm" color="fg.muted" mb={1}>
             TIME REMAINING
           </Text>
-          <Text
-            fontSize="2xl"
-            fontWeight="bold"
-            color={isOverdue ? "red.fg" : isLessThan24Hours ? "orange.fg" : "fg"}
-          >
+          <Text fontSize="2xl" fontWeight="bold" color={isOverdue ? "red.fg" : isLessThan24Hours ? "orange.fg" : "fg"}>
             {timeRemaining}
           </Text>
         </Box>

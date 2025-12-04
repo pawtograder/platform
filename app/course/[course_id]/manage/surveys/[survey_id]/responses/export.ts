@@ -166,7 +166,7 @@ export function exportSurveyResponses(responses: SurveyResponse[], survey: Surve
 
   const timestamp = new Date().toISOString().split("T")[0];
   const filename = `${survey.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_responses_${timestamp}.csv`;
-  
+
   const csvContent = exportResponsesToCSV(responses, survey);
   downloadCSV(csvContent, filename);
 }

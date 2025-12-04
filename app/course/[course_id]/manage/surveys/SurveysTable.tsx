@@ -371,49 +371,19 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
               >
                 TITLE
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color="fg.muted"
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 STATUS
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color="fg.muted"
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 VERSION
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color="fg.muted"
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 RESPONSES
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color="fg.muted"
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 CREATED
               </Table.ColumnHeader>
-              <Table.ColumnHeader
-                color="fg.muted"
-                fontSize="xs"
-                fontWeight="semibold"
-                textTransform="uppercase"
-                py={3}
-              >
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 DUE DATE
               </Table.ColumnHeader>
               <Table.ColumnHeader
@@ -463,9 +433,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                   </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
-                  <Text color="fg">
-                    {formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}
-                  </Text>
+                  <Text color="fg">{formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}</Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
                   <Text color={survey.due_date ? "fg" : "fg.muted"}>

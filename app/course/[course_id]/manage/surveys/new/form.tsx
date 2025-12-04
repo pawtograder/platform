@@ -405,7 +405,11 @@ export default function SurveyForm({
                     control={control}
                     rules={{ required: "Status is required" }}
                     render={({ field }) => (
-                      <RadioGroup value={field.value} onValueChange={(e) => field.onChange(e.value)} colorPalette="blue">
+                      <RadioGroup
+                        value={field.value}
+                        onValueChange={(e) => field.onChange(e.value)}
+                        colorPalette="blue"
+                      >
                         <VStack align="start" gap={2}>
                           <Radio value="draft">
                             <Text color="fg">Save as Draft</Text>
@@ -719,7 +723,13 @@ export default function SurveyForm({
               >
                 Keep Editing
               </Button>
-              <Button colorPalette="red" bg="red.solid" color="white" _hover={{ bg: "red.emphasized" }} onClick={handleDiscard}>
+              <Button
+                colorPalette="red"
+                bg="red.solid"
+                color="white"
+                _hover={{ bg: "red.emphasized" }}
+                onClick={handleDiscard}
+              >
                 Discard
               </Button>
             </HStack>

@@ -63,8 +63,7 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
 
   const responses = responsesData || [];
 
-  const enrichedResponses: Database["public"]["Tables"]["live_poll_responses"]["Row"][] = responses.map(
-  (response) => ({
+  const enrichedResponses: Database["public"]["Tables"]["live_poll_responses"]["Row"][] = responses.map((response) => ({
     id: response.id,
     live_poll_id: response.live_poll_id,
     public_profile_id: response.public_profile_id ?? null,
@@ -72,8 +71,7 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
     submitted_at: response.submitted_at,
     is_submitted: response.is_submitted ?? false,
     created_at: response.created_at
-  })
-);
+  }));
 
   return (
     <PollResponsesDynamicViewer
