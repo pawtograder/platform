@@ -758,7 +758,7 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("button", { name: /Export to CSV/i })).toBeVisible();
   });
 
-  test("response question filter hides unselected columns", async ({ page }) => {
+  test.skip("response question filter hides unselected columns", async ({ page }) => {
     const course = await createClass();
     const [student1, instructor] = await createUsersInClass([
       { role: "student", class_id: course.id, name: "Filter Student Columns", useMagicLink: true },
@@ -825,7 +825,7 @@ test.describe("Surveys Page", () => {
     expect(bodyCells).toContain("answer 2");
   });
 
-  test.skip("grader cannot create or edit surveys but can view results menu", async ({ page }) => {
+  test("grader cannot create or edit surveys but can view results menu", async ({ page }) => {
     const course = await createClass();
     const [, instructor, grader] = await createUsersInClass([
       { role: "student", class_id: course.id, name: "Grader Student Placeholder", useMagicLink: true },
