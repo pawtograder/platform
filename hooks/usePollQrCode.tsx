@@ -1,7 +1,5 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { createClient } from "@/utils/supabase/client";
 import qrcodegen from "nayuki-qr-code-generator";
 
 // Helper function to convert QR code to SVG string
@@ -23,93 +21,29 @@ function toSvgString(qr: qrcodegen.QrCode, border: number, lightColor: string, d
 }
 
 /**
- * Hook to manage QR code generation and storage for polls
- * Generates QR code SVG and uploads to Supabase storage if it doesn't exist
- * QR codes are stored per course since the poll URL is the same for all polls in a course
+ * Hook to generate QR code as a data URL
+ * Generates QR code SVG and converts it to a data URL that can be used directly in img tags
+ * Generates fresh every time the component loads - no memoization
  */
 export function usePollQrCode(courseId: string, pollUrl: string, lightColor: string, darkColor: string) {
-  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  if (!pollUrl || !courseId) {
+    return { qrCodeUrl: null, isLoading: false, error: null };
+  }
 
-  // Store QR code per course since pollUrl is the same for all polls in a course
-  const storagePath = useMemo(() => `courses/${courseId}/poll-qr-code.svg`, [courseId]);
+  try {
+    // Generate QR code SVG
+    const QRC = qrcodegen.QrCode;
+    const qr = QRC.encodeText(pollUrl, QRC.Ecc.MEDIUM);
+    const svgString = toSvgString(qr, 4, lightColor, darkColor);
 
-  useEffect(() => {
-    if (!pollUrl || !courseId) {
-      setIsLoading(false);
-      return;
-    }
+    // Convert SVG string to data URL
+    const encodedSvg = encodeURIComponent(svgString);
+    const qrCodeUrl = `data:image/svg+xml;charset=utf-8,${encodedSvg}`;
 
-    const uploadQrCode = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        const supabase = createClient();
-
-        // Get public URL first (this always works, doesn't check if file exists)
-        const { data: existingUrlData } = supabase.storage
-          .from("uploads")
-          .getPublicUrl(storagePath);
-
-        // Try to fetch the file to see if it exists
-        const { error: checkError } = await supabase.storage
-          .from("uploads")
-          .download(storagePath);
-
-        if (!checkError) {
-          // File exists, use the public URL
-          setQrCodeUrl(existingUrlData.publicUrl);
-          setIsLoading(false);
-          return;
-        }
-
-        // Generate QR code SVG
-        const QRC = qrcodegen.QrCode;
-        const qr = QRC.encodeText(pollUrl, QRC.Ecc.MEDIUM);
-        const svgString = toSvgString(qr, 4, lightColor, darkColor);
-
-        // Convert SVG string to Blob
-        const svgBlob = new Blob([svgString], { type: "image/svg+xml" });
-
-        // Upload to Supabase storage
-        const { error: uploadError, data: uploadData } = await supabase.storage
-          .from("uploads")
-          .upload(storagePath, svgBlob, {
-            contentType: "image/svg+xml",
-            upsert: true // Replace if exists
-          });
-
-        if (uploadError) {
-          console.error("Upload error details:", uploadError);
-          throw new Error(`Failed to upload QR code: ${uploadError.message}`);
-        }
-
-        // Verify upload was successful
-        if (!uploadData) {
-          throw new Error("Upload succeeded but no data returned");
-        }
-
-        // Get public URL using Supabase's method after successful upload
-        const { data: urlData } = supabase.storage
-          .from("uploads")
-          .getPublicUrl(storagePath);
-        
-        console.log("QR code uploaded successfully, public URL:", urlData.publicUrl);
-        setQrCodeUrl(urlData.publicUrl);
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error("Failed to generate QR code"));
-        console.error("Error uploading QR code:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    uploadQrCode();
-    // Only depend on courseId and pollUrl - colors don't affect the QR code data, so we don't regenerate on theme changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courseId, pollUrl, storagePath]);
-
-  return { qrCodeUrl, isLoading, error };
+    return { qrCodeUrl, isLoading: false, error: null };
+  } catch (err) {
+    console.error("Error generating QR code:", err);
+    return { qrCodeUrl: null, isLoading: false, error: err instanceof Error ? err : new Error("Failed to generate QR code") };
+  }
 }
 
