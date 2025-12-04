@@ -51,9 +51,9 @@ export default function PollResponsesDynamicViewer({
     if (typeof window === "undefined") return "";
     const hostname = window.location.hostname;
     if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return `https://pawtograder-poll-test-4an4yfxki-koyohashis-projects.vercel.app/poll/${courseId}`;
+      return `${hostname}/poll/${courseId}`;
     }
-    return `https://pawtograder-poll-test-4an4yfxki-koyohashis-projects.vercel.app/poll/${courseId}`;
+    return `https://${hostname}/poll/${courseId}`;
   }, [courseId]);
 
   // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
