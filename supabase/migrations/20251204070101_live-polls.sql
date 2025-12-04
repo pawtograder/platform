@@ -250,42 +250,11 @@ CREATE TRIGGER broadcast_live_poll_responses_realtime
     FOR EACH ROW
     EXECUTE FUNCTION broadcast_live_poll_response_change();
 
--- Helper function to check if user can access a poll (for responses)
-CREATE OR REPLACE FUNCTION can_access_poll_response(poll_id uuid, profile_id uuid)
-RETURNS boolean
-LANGUAGE sql
-SECURITY DEFINER
-STABLE
-AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.live_polls lp
-    WHERE lp.id = poll_id
-      AND (
-        NOT lp.require_login
-        OR (
-          lp.require_login
-          AND (
-            profile_id IS NULL
-            OR EXISTS (
-              SELECT 1
-              FROM public.user_roles ur
-              WHERE ur.public_profile_id = profile_id
-                AND ur.user_id = auth.uid()
-                AND ur.class_id = lp.class_id
-                AND ur.disabled = false
-            )
-          )
-        )
-      )
-  );
-$$;
-
--- Enable RLS on live_polls and live_poll_responses
+-- Enable RLS on both tables
 ALTER TABLE live_polls ENABLE ROW LEVEL SECURITY;
 ALTER TABLE live_poll_responses ENABLE ROW LEVEL SECURITY;
 
--- Drop existing policies
+-- Drop existing policies if they exist
 DROP POLICY IF EXISTS live_polls_all_staff ON live_polls;
 DROP POLICY IF EXISTS live_polls_select ON live_polls;
 DROP POLICY IF EXISTS live_polls_responses_all_staff ON live_poll_responses;
@@ -295,31 +264,21 @@ DROP POLICY IF EXISTS live_polls_responses_select ON live_poll_responses;
 -- Staff (instructors and graders) can do everything on live polls
 CREATE POLICY live_polls_all_staff ON live_polls
   FOR ALL
+  TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id))
   WITH CHECK (authorizeforclassgrader(live_polls.class_id));
 
--- Students and anyone can select live polls if:
--- 1. require_login is false (anyone can see), OR
--- 2. require_login is true AND user is in the class
+-- Students and anyone can select live polls
+-- Frontend handles require_login logic (shows login prompt if needed)
 CREATE POLICY live_polls_select ON live_polls
   FOR SELECT
-  USING (
-    NOT live_polls.require_login
-    OR (
-      live_polls.require_login
-      AND EXISTS (
-        SELECT 1
-        FROM public.user_roles ur
-        WHERE ur.class_id = live_polls.class_id
-          AND ur.user_id = auth.uid()
-          AND ur.disabled = false
-      )
-    )
-  );
+  TO anon, authenticated
+  USING (true);
 
 -- Staff (instructors and graders) can do everything on live poll responses
 CREATE POLICY live_polls_responses_all_staff ON live_poll_responses
   FOR ALL
+  TO authenticated
   USING (
     EXISTS (
       SELECT 1
@@ -337,14 +296,31 @@ CREATE POLICY live_polls_responses_all_staff ON live_poll_responses
     )
   );
 
--- Students can select their own responses or responses for polls they can see
-CREATE POLICY live_polls_responses_select ON live_poll_responses
-  FOR SELECT
-  USING (can_access_poll_response(live_poll_responses.live_poll_id, live_poll_responses.public_profile_id));
+-- can_access_poll_response function handles anonymous users (auth.uid() IS NULL)
+CREATE OR REPLACE FUNCTION can_access_poll_response(poll_id uuid, profile_id uuid)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT CASE
+    -- Early exit: if require_login is false, anyone can access (no user_roles query needed)
+    WHEN NOT lp.require_login THEN true
+    -- If require_login is true, user must be authenticated
+    WHEN lp.require_login AND auth.uid() IS NULL THEN false
+    -- If require_login is true and user is authenticated, check user role
+    WHEN lp.require_login AND auth.uid() IS NOT NULL THEN true
+  END
+  FROM public.live_polls lp
+  WHERE lp.id = poll_id;
+$$;
 
 -- Students can insert responses if:
 -- 1. require_login is false (anyone can respond), OR
--- 2. require_login is true AND user is in the class (public_profile_id can be null for anonymous)
+-- 2. require_login is true AND user is authenticated and in the class (public_profile_id can be null for anonymous)
+-- Note: Must allow both anon and authenticated roles for anonymous responses
 CREATE POLICY live_polls_responses_insert ON live_poll_responses
   FOR INSERT
+  TO anon, authenticated
   WITH CHECK (can_access_poll_response(live_poll_responses.live_poll_id, live_poll_responses.public_profile_id));

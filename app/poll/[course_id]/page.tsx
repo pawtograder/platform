@@ -11,6 +11,7 @@ import { Survey } from "survey-react-ui";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
 import { PollResponseData } from "@/types/poll";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface PollQuestion {
   elements: Array<Record<string, unknown>>;
@@ -23,6 +24,9 @@ export default function PollRespondPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [requiresLogin, setRequiresLogin] = useState(false);
+  
+  // Get public_profile_id from useClassProfiles hook
+  const { public_profile_id } = useClassProfiles();
 
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
@@ -63,18 +67,10 @@ export default function PollRespondPage() {
           return;
         }
 
-        // Get public_profile_id from user_roles for this course
-        const { data: roleDataRaw, error: roleError } = await supabase
-          .from("user_roles")
-          .select("public_profile_id")
-          .eq("user_id", user.id)
-          .eq("class_id", Number(course_id))
-          .eq("disabled", false)
-          .single();
-
-        const roleData = roleDataRaw as { public_profile_id: string } | null;
-
-        if (roleError || !roleData || !roleData.public_profile_id) {
+        // Use public_profile_id from useClassProfiles hook
+        if (public_profile_id) {
+          profileId = public_profile_id;
+        } else {
           toaster.create({
             title: "Access Error",
             description: "Unable to identify your profile for this course.",
@@ -84,8 +80,6 @@ export default function PollRespondPage() {
           setIsLoading(false);
           return;
         }
-
-        profileId = roleData.public_profile_id;
         setRequiresLogin(false);
       }
 
