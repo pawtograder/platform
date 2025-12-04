@@ -1,11 +1,11 @@
 "use client";
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Box } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
-import { createClient } from "@/utils/supabase/client";
-import { Json, Database } from "@/utils/supabase/SupabaseTypes";
+import { Json } from "@/utils/supabase/SupabaseTypes";
+import { useLivePoll, usePollResponses } from "@/hooks/useCourseController";
 
 function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" {
   const questionData = pollQuestion as unknown as Record<string, unknown> | null;
@@ -21,57 +21,27 @@ type PollResponsesDynamicViewerProps = {
   pollId: string;
   pollQuestion: Json;
   pollIsLive: boolean;
-  responses: Database["public"]["Tables"]["live_poll_responses"]["Row"][];
 };
 
 export default function PollResponsesDynamicViewer({
   courseId,
   pollId,
   pollQuestion,
-  pollIsLive: initialPollIsLive,
-  responses: initialResponses
+  pollIsLive: initialPollIsLive
 }: PollResponsesDynamicViewerProps) {
   const [isPresenting, setIsPresenting] = useState(false);
-  const [pollIsLive, setPollIsLive] = useState(initialPollIsLive);
-  const [responses, setResponses] = useState(initialResponses);
+
+  // Use real-time hooks for poll data and responses
+  const poll = useLivePoll(pollId);
+  const { responses } = usePollResponses(pollId);
+
+  // Use real-time poll status if available, otherwise fallback to initial
+  const pollIsLive = poll?.is_live ?? initialPollIsLive;
 
   // Define color mode values at the top level (before any conditional returns)
   const bgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
 
   const type = parseJsonForType(pollQuestion);
-
-  // Fetch responses every 3 seconds
-  useEffect(() => {
-    const fetchResponses = async () => {
-      try {
-        const supabase = createClient();
-
-        const { data: responsesData, error: responsesError } = await supabase
-          .from("live_poll_responses")
-          .select("*")
-          .eq("live_poll_id", pollId)
-          .order("created_at", { ascending: false });
-
-        if (responsesError) {
-          console.error("Error fetching poll responses:", responsesError);
-          return;
-        }
-
-        // Update state - React will only re-render the chart, not the entire page
-        setResponses(responsesData || []);
-      } catch (error) {
-        console.error("Error in fetchResponses:", error);
-      }
-    };
-
-    // Fetch immediately
-    fetchResponses();
-
-    // Then fetch every 3 seconds
-    const interval = setInterval(fetchResponses, 3000);
-
-    return () => clearInterval(interval);
-  }, [pollId]);
 
   // Calculate poll URL
   const pollUrl = useMemo(() => {
@@ -91,8 +61,9 @@ export default function PollResponsesDynamicViewer({
     setIsPresenting(false);
   }, []);
 
-  const handlePollStatusChange = useCallback((isLive: boolean) => {
-    setPollIsLive(isLive);
+  const handlePollStatusChange = useCallback(() => {
+    // Status changes are handled automatically by real-time updates
+    // This callback is kept for API compatibility with PollResponsesHeader
   }, []);
 
   // Render full window present view

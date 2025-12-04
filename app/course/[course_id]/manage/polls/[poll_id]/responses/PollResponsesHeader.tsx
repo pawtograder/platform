@@ -2,7 +2,7 @@
 
 import { HStack, Button, Box, Text } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { useColorModeValue } from "@/components/ui/color-mode";
@@ -18,12 +18,10 @@ type PollResponsesHeaderProps = {
 export default function PollResponsesHeader({
   courseID,
   pollID,
-  pollIsLive: initialPollIsLive,
-  onPresent,
-  onPollStatusChange
+  pollIsLive,
+  onPresent
 }: PollResponsesHeaderProps) {
   const router = useRouter();
-  const [pollIsLive, setPollIsLive] = useState(initialPollIsLive);
 
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
@@ -64,8 +62,7 @@ export default function PollResponsesHeader({
         throw new Error(error.message);
       }
 
-      setPollIsLive(nextState);
-      onPollStatusChange(nextState);
+      // Status change will be reflected via real-time updates from TableController
 
       toaster.dismiss(loadingToast);
       toaster.create({
@@ -81,7 +78,7 @@ export default function PollResponsesHeader({
         type: "error"
       });
     }
-  }, [pollID, pollIsLive, onPollStatusChange]);
+  }, [pollID, pollIsLive]);
 
   return (
     <Box p={4}>
