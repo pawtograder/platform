@@ -228,10 +228,6 @@ export default async function StudentDashboard({
                     buttonLabel = "View";
                     colorScheme = "gray";
                   }
-                } else {
-                  statusLabel = "In progress";
-                  buttonLabel = "Continue";
-                  colorScheme = "yellow";
                 }
               }
 

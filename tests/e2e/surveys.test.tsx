@@ -223,7 +223,69 @@ test.describe("Surveys Page", () => {
     await expect(page.getByText("Specific Student Survey")).toBeVisible();
   });
 
-  test("student dashboard active surveys states and buttons", async ({ page }) => {
+
+  test("instructor can open create survey form from manage page", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
+    ]);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+
+    await page.getByRole("link", { name: /\+ Create New Survey/ }).first().click();
+    await expect(page.getByRole("heading", { name: "Create New Survey" })).toBeVisible();
+  });
+
+  test("instructor can open edit page from draft survey menu", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
+    ]);
+
+    const draftTitle = "Draft Manage Survey";
+    const { error } = await supabase.from("surveys").insert({
+      class_id: course.id,
+      title: draftTitle,
+      description: "Draft for edit test",
+      status: "draft",
+      assigned_to_all: true,
+      allow_response_editing: false,
+      created_by: instructor.public_profile_id,
+      json: {},
+      version: 1
+    });
+    if (error) {
+      throw new Error(`Failed to seed draft survey: ${error.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+
+    const row = page.getByRole("row", { name: new RegExp(draftTitle) }).first();
+    await row.getByRole("button").first().click();
+    await page.getByRole("menuitem", { name: "Edit" }).click();
+
+    await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
+  });
+
+  test("student dashboard shows no active surveys when none exist", async ({ page }) => {
+    const course = await createClass();
+    const [student] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Dashboard No Surveys Student", useMagicLink: true }
+    ]);
+
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}`);
+
+    await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
+    await expect(page.getByText("No active surveys")).toBeVisible();
+    await expect(page.getByText("There are no published, active surveys for this course right now.")).toBeVisible();
+  });
+
+  test("student dashboard active surveys show correct actions", async ({ page }) => {
     const course = await createClass();
     const [student, instructor] = await createUsersInClass([
       { role: "student", class_id: course.id, name: "Dashboard Student", useMagicLink: true },
@@ -232,62 +294,23 @@ test.describe("Surveys Page", () => {
 
     const nowIso = new Date().toISOString();
 
-    // Survey with no response yet -> Start
-    const { data: startSurvey, error: startError } = await supabase
-      .from("surveys")
-      .insert({
-        class_id: course.id,
-        title: "Dashboard Start Survey",
-        description: "Should show Start",
-        status: "published",
-        assigned_to_all: true,
-        allow_response_editing: false,
-        created_by: instructor.public_profile_id,
-        json: {},
-        version: 1,
-        due_date: null,
-        created_at: nowIso
-      })
-      .select("id")
-      .single();
+    const { error: startError } = await supabase.from("surveys").insert({
+      class_id: course.id,
+      title: "Dashboard Start Survey",
+      description: "Should show Start",
+      status: "published",
+      assigned_to_all: true,
+      allow_response_editing: false,
+      created_by: instructor.public_profile_id,
+      json: {},
+      version: 1,
+      due_date: null,
+      created_at: nowIso
+    });
     if (startError) {
       throw new Error(`Failed to seed start survey: ${startError.message}`);
     }
 
-    // Survey with in-progress response -> Continue
-    const { data: progressSurvey, error: progressError } = await supabase
-      .from("surveys")
-      .insert({
-        class_id: course.id,
-        title: "Dashboard In Progress Survey",
-        description: "Should show Continue",
-        status: "published",
-        assigned_to_all: true,
-        allow_response_editing: false,
-        created_by: instructor.public_profile_id,
-        json: {},
-        version: 1,
-        due_date: null,
-        created_at: nowIso
-      })
-      .select("id")
-      .single();
-    if (progressError) {
-      throw new Error(`Failed to seed in-progress survey: ${progressError.message}`);
-    }
-    const { error: progressResponseError } = await supabase.from("survey_responses").insert({
-      survey_id: progressSurvey.id,
-      profile_id: student.private_profile_id,
-      response: {},
-      is_submitted: false,
-      created_at: nowIso,
-      updated_at: nowIso
-    });
-    if (progressResponseError) {
-      throw new Error(`Failed to seed in-progress response: ${progressResponseError.message}`);
-    }
-
-    // Survey submitted and locked -> View
     const { data: lockedSurvey, error: lockedError } = await supabase
       .from("surveys")
       .insert({
@@ -305,8 +328,8 @@ test.describe("Surveys Page", () => {
       })
       .select("id")
       .single();
-    if (lockedError) {
-      throw new Error(`Failed to seed locked survey: ${lockedError.message}`);
+    if (lockedError || !lockedSurvey) {
+      throw new Error(`Failed to seed locked survey: ${lockedError?.message}`);
     }
     const { error: lockedResponseError } = await supabase.from("survey_responses").insert({
       survey_id: lockedSurvey.id,
@@ -321,7 +344,6 @@ test.describe("Surveys Page", () => {
       throw new Error(`Failed to seed locked response: ${lockedResponseError.message}`);
     }
 
-    // Survey submitted but editable -> Edit
     const { data: editableSurvey, error: editableError } = await supabase
       .from("surveys")
       .insert({
@@ -339,8 +361,8 @@ test.describe("Surveys Page", () => {
       })
       .select("id")
       .single();
-    if (editableError) {
-      throw new Error(`Failed to seed editable survey: ${editableError.message}`);
+    if (editableError || !editableSurvey) {
+      throw new Error(`Failed to seed editable survey: ${editableError?.message}`);
     }
     const { error: editableResponseError } = await supabase.from("survey_responses").insert({
       survey_id: editableSurvey.id,
@@ -361,37 +383,109 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
 
     const startCard = page.locator("div").filter({ hasText: "Dashboard Start Survey" }).first();
-    await expect(startCard).toBeVisible();
     await expect(startCard.getByRole("button", { name: "Start" })).toBeVisible();
     await expect(startCard.getByText("Not started")).toBeVisible();
 
-    const progressCard = page.locator("div").filter({ hasText: "Dashboard In Progress Survey" }).first();
-    await expect(progressCard).toBeVisible();
-    await expect(progressCard.getByRole("button", { name: "Continue" })).toBeVisible();
-    await expect(progressCard.getByText("In progress")).toBeVisible();
-
     const lockedCard = page.locator("div").filter({ hasText: "Dashboard Submitted Locked" }).first();
-    await expect(lockedCard).toBeVisible();
     await expect(lockedCard.getByRole("button", { name: "View" })).toBeVisible();
     await expect(lockedCard.getByText("Submitted (locked)")).toBeVisible();
 
     const editableCard = page.locator("div").filter({ hasText: "Dashboard Submitted Editable" }).first();
-    await expect(editableCard).toBeVisible();
     await expect(editableCard.getByRole("button", { name: "Edit" })).toBeVisible();
     await expect(editableCard.getByText("Submitted (editable)")).toBeVisible();
   });
 
-  test("student dashboard shows no active surveys when none exist", async ({ page }) => {
+  test("publishing a draft survey updates status", async ({ page }) => {
     const course = await createClass();
-    const [student] = await createUsersInClass([
-      { role: "student", class_id: course.id, name: "Dashboard No Surveys Student", useMagicLink: true }
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
     ]);
 
-    await loginAsUser(page, student, course);
-    await page.goto(`/course/${course.id}`);
+    const draftTitle = "Draft To Publish";
+    const { data: draftSurvey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: draftTitle,
+        description: "Draft publish test",
+        status: "draft",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: {},
+        version: 1
+      })
+      .select("id")
+      .single();
+    if (error || !draftSurvey) {
+      throw new Error(`Failed to seed draft survey: ${error?.message}`);
+    }
 
-    await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
-    await expect(page.getByText("No active surveys")).toBeVisible();
-    await expect(page.getByText("There are no published, active surveys for this course right now.")).toBeVisible();
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+
+    const row = page.getByRole("row", { name: new RegExp(draftTitle) }).first();
+    await row.getByRole("button").first().click();
+    await page.getByRole("menuitem", { name: "Publish" }).click();
+
+    await expect.poll(async () => {
+      const { data: updated, error: fetchError } = await supabase
+        .from("surveys")
+        .select("status")
+        .eq("id", draftSurvey.id)
+        .single();
+      if (fetchError) {
+        throw new Error(`Failed to fetch updated survey: ${fetchError.message}`);
+      }
+      return updated?.status;
+    }, { timeout: 5000, message: "survey should publish" }).toBe("published");
+  });
+
+  test("closing a published survey updates status", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
+    ]);
+
+    const title = "Published To Close";
+    const { data: publishedSurvey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title,
+        description: "Close test",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: {},
+        version: 1
+      })
+      .select("id")
+      .single();
+    if (error || !publishedSurvey) {
+      throw new Error(`Failed to seed published survey: ${error?.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+
+    const row = page.getByRole("row", { name: new RegExp(title) }).first();
+    await row.getByRole("button").first().click();
+    await page.getByRole("menuitem", { name: "Close" }).click();
+
+    await expect.poll(async () => {
+      const { data: updated, error: fetchError } = await supabase
+        .from("surveys")
+        .select("status")
+        .eq("id", publishedSurvey.id)
+        .single();
+      if (fetchError) {
+        throw new Error(`Failed to fetch updated survey: ${fetchError.message}`);
+      }
+      return updated?.status;
+    }, { timeout: 5000, message: "survey should close" }).toBe("closed");
   });
 });
