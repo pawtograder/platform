@@ -13,7 +13,7 @@ DROP TYPE IF EXISTS survey_status CASCADE;
 CREATE TYPE survey_status AS ENUM ('draft', 'published', 'closed');
 
 CREATE TYPE template_scope AS ENUM ('global', 'course');
-CREATE TYPE survey_type AS ENUM('assign_all', 'specific', 'peer')
+CREATE TYPE survey_type AS ENUM('assign_all', 'specific', 'peer');
 
 -- Create surveys table
 CREATE TABLE surveys (
