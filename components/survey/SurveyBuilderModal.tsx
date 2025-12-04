@@ -30,7 +30,7 @@ export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJso
     <Box
       position="fixed"
       inset="0"
-      bg="rgba(0,0,0,0.8)"
+      bg="bg.muted"
       zIndex="9999"
       display="flex"
       alignItems="center"
