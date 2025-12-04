@@ -62,8 +62,6 @@ export default function PollResponsesDynamicViewer({
   }, []);
 
   const handlePollStatusChange = useCallback(() => {
-    // Status changes are handled automatically by real-time updates
-    // This callback is kept for API compatibility with PollResponsesHeader
   }, []);
 
   // Render full window present view
@@ -102,6 +100,7 @@ export default function PollResponsesDynamicViewer({
     <div>
       <PollResponsesHeader
         courseID={courseId}
+        pollUrl={pollUrl}
         pollID={pollId}
         pollIsLive={pollIsLive}
         onPresent={handlePresent}
@@ -112,6 +111,7 @@ export default function PollResponsesDynamicViewer({
           pollQuestion={pollQuestion as unknown as JSON}
           responses={responses}
           isFullWindow={false}
+          pollUrl={pollUrl}
         />
       ) : (
         <div>Unsupported poll question type: {type}</div>
