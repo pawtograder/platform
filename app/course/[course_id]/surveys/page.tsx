@@ -309,8 +309,7 @@ export default function StudentSurveysPage() {
                       <Button
                         size="sm"
                         colorPalette={survey.response_status === "completed" ? "gray" : "green"}
-                        bg={survey.response_status === "completed" ? "gray.solid" : "green.solid"}
-                        color="white"
+                        variant="solid"
                         _hover={{
                           bg: survey.response_status === "completed" ? "gray.emphasized" : "green.emphasized"
                         }}
