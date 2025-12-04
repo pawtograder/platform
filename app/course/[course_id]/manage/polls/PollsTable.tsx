@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Table, Text, Badge, HStack, IconButton, Button } from "@chakra-ui/react";
+import { Box, Table, Text, Badge, HStack, IconButton, Button, Spinner } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
@@ -11,19 +11,22 @@ import { useCallback, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { FaTrash } from "react-icons/fa";
-import { LivePollWithCounts } from "./page";
+import { useLivePolls, useCourse } from "@/hooks/useCourseController";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
-type PollsTableProps = {
-  polls: LivePollWithCounts[];
-  courseId: string;
-  timezone: string;
-};
+type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
 
 type FilterType = "all" | "live" | "closed";
 
-export default function PollsTable({ polls, courseId, timezone }: PollsTableProps) {
+type PollsTableProps = {
+  courseId: string;
+};
+
+export default function PollsTable({ courseId }: PollsTableProps) {
   const router = useRouter();
-  const [pollRows, setPollRows] = useState<LivePollWithCounts[]>(polls);
+  const { polls, isLoading: pollsLoading } = useLivePolls();
+  const course = useCourse();
+  const timezone = course?.time_zone || "America/New_York";
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   const textColor = useColorModeValue("#1A202C", "#FFFFFF");
@@ -40,14 +43,15 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
   const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
 
   const filteredPolls = useMemo(() => {
+    if (!Array.isArray(polls)) return [];
     if (activeFilter === "all") {
-      return pollRows;
+      return polls;
     }
-    return pollRows.filter((poll) => (activeFilter === "live" ? poll.is_live : !poll.is_live));
-  }, [pollRows, activeFilter]);
+    return polls.filter((poll) => (activeFilter === "live" ? poll.is_live : !poll.is_live));
+  }, [polls, activeFilter]);
 
-  const getQuestionPrompt = (question: LivePollWithCounts) => {
-    const questionData = question.question as unknown as Record<string, unknown> | null;
+  const getQuestionPrompt = (poll: LivePoll) => {
+    const questionData = poll.question as unknown as Record<string, unknown> | null;
     return (questionData?.elements as unknown as { title: string }[])?.[0]?.title || "Poll";
   };
 
@@ -87,8 +91,6 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
         throw new Error(error.message);
       }
 
-      setPollRows((prev) => prev.map((poll) => (poll.id === pollId ? { ...poll, is_live: nextState } : poll)));
-
       toaster.dismiss(loadingToast);
       toaster.create({
         title: nextState ? "Poll is Live" : "Poll Closed",
@@ -122,8 +124,6 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
         throw new Error(error.message);
       }
 
-      setPollRows((prev) => prev.filter((poll) => poll.id !== pollId));
-
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Poll Deleted",
@@ -147,6 +147,18 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
       return dateString;
     }
   };
+
+  if (pollsLoading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" p={8}>
+        <Spinner />
+      </Box>
+    );
+  }
+
+  if (!polls || polls.length === 0) {
+    return null; // Parent component will show empty state
+  }
 
   return (
     <>
@@ -180,9 +192,6 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                 Status
               </Table.ColumnHeader>
               <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
-                Responses
-              </Table.ColumnHeader>
-              <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
                 Created
               </Table.ColumnHeader>
               <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold" textAlign="center">
@@ -201,11 +210,6 @@ export default function PollsTable({ polls, courseId, timezone }: PollsTableProp
                   </Link>
                 </Table.Cell>
                 <Table.Cell>{getStatusBadge(poll.is_live)}</Table.Cell>
-                <Table.Cell>
-                  <Text fontSize="sm" color={textColor}>
-                    {poll.response_count}
-                  </Text>
-                </Table.Cell>
                 <Table.Cell>
                   <Text fontSize="xs" color={secondaryTextColor}>
                     {formatDate(poll.created_at)}
