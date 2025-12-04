@@ -1,32 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { VStack, Text } from "@chakra-ui/react";
+import { VStack } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import {
     DialogRoot,
     DialogContent,
-    DialogHeader,
-    DialogTitle,
     DialogBody,
     DialogCloseTrigger
 } from "@/components/ui/dialog";
 
 type QrCodeProps = {
     qrCodeUrl: string | null;
-    pollUrl: string;
     size?: string;
     isFullscreen?: boolean;
 };
 
-export default function QrCode({ qrCodeUrl, pollUrl, size = "40px", isFullscreen = false }: QrCodeProps) {
+export default function QrCode({ qrCodeUrl, size = "40px", isFullscreen = false }: QrCodeProps) {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
-    const textColor = useColorModeValue("#1A202C", "#FFFFFF");
     const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
     const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-    const headerBgColor = useColorModeValue("#F8F9FA", "#2D2D2D");
-    const mutedTextColor = useColorModeValue("#6B7280", "#A0AEC0");
 
     if (!qrCodeUrl) {
         return null;
