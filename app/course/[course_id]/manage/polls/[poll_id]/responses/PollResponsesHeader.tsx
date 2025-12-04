@@ -92,7 +92,7 @@ export default function PollResponsesHeader({
               {pollUrl}
             </Text>
           </Text>
-          <QrCode qrCodeUrl={qrCodeUrl ?? null} pollUrl={pollUrl} />
+          <QrCode qrCodeUrl={qrCodeUrl ?? null} />
         </HStack>
         <HStack gap={2}>
           <Button

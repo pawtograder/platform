@@ -56,8 +56,8 @@ export default function PollResponsesDynamicViewer({
     return `${hostname}/poll/${courseId}`;
   }, [courseId]);
 
-  // Generate and upload QR code to storage
-  const { qrCodeUrl } = usePollQrCode(pollId, pollUrl, qrLightColor, qrDarkColor); 
+  // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
+  const { qrCodeUrl } = usePollQrCode(courseId, pollUrl, qrLightColor, qrDarkColor); 
 
   const handlePresent = useCallback(() => {
     setIsPresenting(true);

@@ -298,7 +298,7 @@ export default function MultipleChoiceDynamicViewer({
                   </Text>
                 </Text>
               </VStack>
-              {qrCodeUrl && <QrCode qrCodeUrl={qrCodeUrl} pollUrl={pollUrl} size="80px" isFullscreen={true} />}
+              {qrCodeUrl && <QrCode qrCodeUrl={qrCodeUrl} size="80px" isFullscreen={true} />}
             </HStack>
           </Box>
         )}

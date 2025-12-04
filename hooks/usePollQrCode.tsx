@@ -25,16 +25,18 @@ function toSvgString(qr: qrcodegen.QrCode, border: number, lightColor: string, d
 /**
  * Hook to manage QR code generation and storage for polls
  * Generates QR code SVG and uploads to Supabase storage if it doesn't exist
+ * QR codes are stored per course since the poll URL is the same for all polls in a course
  */
-export function usePollQrCode(pollId: string, pollUrl: string, lightColor: string, darkColor: string) {
+export function usePollQrCode(courseId: string, pollUrl: string, lightColor: string, darkColor: string) {
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const storagePath = useMemo(() => `polls/${pollId}/qr-code.svg`, [pollId]);
+  // Store QR code per course since pollUrl is the same for all polls in a course
+  const storagePath = useMemo(() => `courses/${courseId}/poll-qr-code.svg`, [courseId]);
 
   useEffect(() => {
-    if (!pollUrl || !pollId) {
+    if (!pollUrl || !courseId) {
       setIsLoading(false);
       return;
     }
@@ -104,7 +106,9 @@ export function usePollQrCode(pollId: string, pollUrl: string, lightColor: strin
     };
 
     uploadQrCode();
-  }, [pollId, pollUrl, lightColor, darkColor, storagePath]);
+    // Only depend on courseId and pollUrl - colors don't affect the QR code data, so we don't regenerate on theme changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId, pollUrl, storagePath]);
 
   return { qrCodeUrl, isLoading, error };
 }
