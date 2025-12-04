@@ -14,7 +14,6 @@ import {
   Select,
   Portal
 } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { LuTrash2, LuPlus } from "react-icons/lu";
 
 // Question type registry
@@ -105,11 +104,6 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
     choices: [{ id: "choice1", label: "" }]
   });
 
-  const jsonTextColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const jsonBgColor = useColorModeValue("#F9FAFB", "#1F2937");
-  const jsonBorderColor = useColorModeValue("#E5E7EB", "#374151");
-  const textColor = useColorModeValue("#1A202C", "#FFFFFF");
-
   // Track if we've initialized from the value prop
   const hasInitializedRef = React.useRef(false);
 
@@ -147,9 +141,9 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
         if (typeConfig.requiresChoices) {
           const choices = Array.isArray(firstElement.choices)
             ? firstElement.choices.map((choice: string | { value: string; text?: string }, index: number) => ({
-                id: `choice${index + 1}`,
-                label: typeof choice === "string" ? choice : choice.text || choice.value || ""
-              }))
+              id: `choice${index + 1}`,
+              label: typeof choice === "string" ? choice : choice.text || choice.value || ""
+            }))
             : [{ id: "choice1", label: "" }];
 
           pollData.choices = choices.length > 0 ? choices : [{ id: "choice1", label: "" }];
@@ -246,7 +240,7 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
     <VStack align="stretch" gap={6} p={4}>
       {/* Prompt */}
       <Box>
-        <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
+        <Text fontSize="sm" fontWeight="medium" mb={2} color="fg.default">
           Question Prompt
         </Text>
         <Input placeholder="Enter your poll question..." value={pollData.prompt} onChange={handlePromptChange} />
@@ -254,7 +248,7 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
 
       {/* Type Selection */}
       <Box>
-        <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
+        <Text fontSize="sm" fontWeight="medium" mb={2} color="fg.default">
           Question Type
         </Text>
         <Select.Root
@@ -295,7 +289,7 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
       {QUESTION_TYPE_REGISTRY[pollData.type]?.requiresChoices && pollData.choices && (
         <Box>
           <HStack justify="space-between" mb={2}>
-            <Text fontSize="sm" fontWeight="medium" color={textColor}>
+            <Text fontSize="sm" fontWeight="medium" color="fg.default">
               Choices
             </Text>
             <Button size="sm" onClick={handleAddChoice}>
@@ -332,21 +326,21 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
 
       {/* JSON Preview */}
       <Box>
-        <Text fontSize="sm" fontWeight="medium" mb={2} color={textColor}>
+        <Text fontSize="sm" fontWeight="medium" mb={2} color="fg.default">
           JSON Preview
         </Text>
         <Box
           p={3}
-          bg={jsonBgColor}
+          bg="bg.subtle"
           borderRadius="md"
           fontSize="xs"
           fontFamily="mono"
           overflow="auto"
           maxH="200px"
           border="1px solid"
-          borderColor={jsonBorderColor}
+          borderColor="border.default"
         >
-          <pre style={{ margin: 0, color: jsonTextColor }}>
+          <pre style={{ margin: 0, color: "var(--chakra-colors-fg-default)" }}>
             {JSON.stringify(convertToSurveyJSFormat(pollData), null, 2)}
           </pre>
         </Box>
