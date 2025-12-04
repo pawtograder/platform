@@ -20,14 +20,6 @@ function SurveyPreviewContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { course_id } = useParams();
-
-  // Color mode values
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-
   const surveyJsonParam = searchParams.get("json");
 
   const handleBackToForm = useCallback(() => {
@@ -40,25 +32,25 @@ function SurveyPreviewContent() {
         <Box
           w="100%"
           maxW="800px"
-          bg={cardBgColor}
+          bg="bg.subtle"
           border="1px solid"
-          borderColor={borderColor}
+          borderColor="border.default"
           borderRadius="lg"
           p={8}
         >
           <VStack align="center" gap={4}>
-            <Heading size="xl" color={textColor} textAlign="center">
+            <Heading size="xl" color="fg.default" textAlign="center">
               No Survey Data
             </Heading>
-            <Text color={textColor} textAlign="center">
+            <Text color="fg.default" textAlign="center">
               Please provide survey JSON data to display the survey preview.
             </Text>
             <Button
               variant="outline"
               bg="transparent"
-              borderColor={buttonBorderColor}
-              color={buttonTextColor}
-              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+              borderColor="border.default"
+              color="fg.default"
+              _hover={{ bg: "bg.muted" }}
               onClick={handleBackToForm}
             >
               ← Back to Survey Form
@@ -78,14 +70,14 @@ function SurveyPreviewContent() {
         <Box
           w="100%"
           maxW="800px"
-          bg={cardBgColor}
+          bg="bg.subtle"
           border="1px solid"
-          borderColor={borderColor}
+          borderColor="border.default"
           borderRadius="lg"
           p={8}
         >
           <VStack align="center" gap={4}>
-            <Heading size="xl" color={textColor} textAlign="center">
+            <Heading size="xl" color="fg.default" textAlign="center">
               Invalid Survey Data
             </Heading>
             <Text color="red.500" textAlign="center">
@@ -94,9 +86,9 @@ function SurveyPreviewContent() {
             <Button
               variant="outline"
               bg="transparent"
-              borderColor={buttonBorderColor}
-              color={buttonTextColor}
-              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+              borderColor="border.default"
+              color="fg.default"
+              _hover={{ bg: "bg.muted" }}
               onClick={handleBackToForm}
             >
               ← Back to Survey Form
@@ -126,25 +118,25 @@ function SurveyPreviewContent() {
             variant="outline"
             size="sm"
             bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+            borderColor="border.default"
+            color="fg.default"
+            _hover={{ bg: "bg.muted" }}
             onClick={handleBackToForm}
           >
             ← Back to Form
           </Button>
         </Box>
 
-        <Heading size="xl" color={textColor} textAlign="left">
+        <Heading size="xl" color="fg.default" textAlign="left">
           Survey Preview
         </Heading>
-        <Text color={textColor} fontSize="sm" opacity={0.8}>
+        <Text color="fg.default" fontSize="sm" opacity={0.8}>
           This is how your survey will appear to students. You can interact with it to test the functionality.
         </Text>
       </VStack>
 
       {/* Survey Preview */}
-      <Box w="100%" maxW="1000px" bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8}>
+      <Box w="100%" maxW="1000px" bg="bg.subtle" border="1px solid" borderColor="border.default" borderRadius="lg" p={8}>
         <SurveyComponent surveyJson={surveyJson} onComplete={handleComplete} onValueChanged={handleValueChanged} />
       </Box>
     </VStack>
