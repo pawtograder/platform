@@ -53,8 +53,6 @@ export default function PollResponsesHeader({
         throw new Error(error.message);
       }
 
-      // Status change will be reflected via real-time updates from TableController
-
       toaster.dismiss(loadingToast);
       toaster.create({
         title: nextState ? "Poll is Live" : "Poll Closed",
