@@ -9,6 +9,8 @@ import { Json } from "@/utils/supabase/SupabaseTypes";
 import { useLivePoll, usePollResponses } from "@/hooks/useCourseController";
 import { usePollQrCode } from "@/hooks/usePollQrCode";
 import { CloseButton } from "@/components/ui/close-button";
+import { createClient } from "@/utils/supabase/client";
+import { toaster } from "@/components/ui/toaster";
 
 interface FullscreenElement extends Element {
   webkitRequestFullscreen?: () => Promise<void>;
@@ -55,7 +57,14 @@ export default function PollResponsesDynamicViewer({
   const { responses } = usePollResponses(pollId);
 
   // Use real-time poll status if available, otherwise fallback to initial
-  const pollIsLive = poll?.is_live ?? initialPollIsLive;
+  const [pollIsLive, setPollIsLive] = useState(poll?.is_live ?? initialPollIsLive);
+
+  // Sync local state when real-time data changes
+  useEffect(() => {
+    if (poll?.is_live !== undefined) {
+      setPollIsLive(poll.is_live);
+    }
+  }, [poll?.is_live]);
 
   // Define color mode values at the top level (before any conditional returns)
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
@@ -79,7 +88,44 @@ export default function PollResponsesDynamicViewer({
   // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
   const { qrCodeUrl } = usePollQrCode(courseId, pollUrl, qrLightColor, qrDarkColor);
 
-  const handlePollStatusChange = useCallback(() => { }, []);
+  const handleToggleLive = useCallback(async () => {
+    const nextState = !pollIsLive;
+    setPollIsLive(nextState);
+    const supabase = createClient();
+    const loadingToast = toaster.create({
+      title: nextState ? "Starting Poll" : "Closing Poll",
+      description: nextState ? "Making poll available to students..." : "Closing poll for students...",
+      type: "loading"
+    });
+
+    try {
+      const updateData: { is_live: boolean; deactivates_at: string | null } = {
+        is_live: nextState,
+        deactivates_at: nextState ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null
+      };
+
+      const { error } = await supabase.from("live_polls").update(updateData).eq("id", pollId);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      toaster.dismiss(loadingToast);
+      toaster.create({
+        title: nextState ? "Poll is Live" : "Poll Closed",
+        description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
+        type: "success"
+      });
+    } catch (err) {
+      toaster.dismiss(loadingToast);
+      toaster.create({
+        title: "Unable to update poll",
+        description: err instanceof Error ? err.message : "An unexpected error occurred",
+        type: "error"
+      });
+      setPollIsLive(pollIsLive);
+    }
+  }, [pollId, pollIsLive]);
 
   // Exit fullscreen helper
   const exitFullscreen = useCallback(async () => {
@@ -188,7 +234,7 @@ export default function PollResponsesDynamicViewer({
         pollID={pollId}
         pollIsLive={pollIsLive}
         onPresent={handlePresent}
-        onPollStatusChange={handlePollStatusChange}
+        onToggleLive={handleToggleLive}
         qrCodeUrl={qrCodeUrl}
       />
       <Box
