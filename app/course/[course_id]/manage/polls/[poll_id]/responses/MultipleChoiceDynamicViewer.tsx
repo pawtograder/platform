@@ -3,159 +3,31 @@
 import { Box, VStack, Heading, Text, HStack } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
-import { useMemo, useEffect, useRef } from "react";
-import { CloseButton } from "@/components/ui/close-button";
+import { useMemo } from "react";
 import { PollResponseData } from "@/types/poll";
 import { getPollAnswer } from "@/utils/pollUtils";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import QrCode from "./QrCode";
 
-interface FullscreenElement extends Element {
-  webkitRequestFullscreen?: () => Promise<void>;
-  mozRequestFullScreen?: () => Promise<void>;
-  msRequestFullscreen?: () => Promise<void>;
-}
-
-interface FullscreenDocument extends Document {
-  webkitFullscreenElement?: Element | null;
-  mozFullScreenElement?: Element | null;
-  msFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void>;
-  mozCancelFullScreen?: () => Promise<void>;
-  msExitFullscreen?: () => Promise<void>;
-}
-
 type MultipleChoiceDynamicViewerProps = {
   pollQuestion: JSON;
   responses: Database["public"]["Tables"]["live_poll_responses"]["Row"][];
-  isFullWindow?: boolean;
-  onExit?: () => void;
   pollUrl?: string;
   qrCodeUrl?: string | null;
+  isFullscreen?: boolean;
 };
 
 export default function MultipleChoiceDynamicViewer({
   pollQuestion,
   responses,
-  isFullWindow = false,
-  onExit,
   pollUrl,
-  qrCodeUrl
+  qrCodeUrl,
+  isFullscreen = false
 }: MultipleChoiceDynamicViewerProps) {
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
   const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
   const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const fullscreenRef = useRef<HTMLDivElement>(null);
-
-  // Handle fullscreen API
-  useEffect(() => {
-    if (!isFullWindow || !fullscreenRef.current) return;
-
-    const element = fullscreenRef.current;
-
-    // Enter fullscreen
-    const enterFullscreen = async () => {
-      try {
-        const fullscreenElement = element as FullscreenElement;
-        if (fullscreenElement.requestFullscreen) {
-          await fullscreenElement.requestFullscreen();
-        } else if (fullscreenElement.webkitRequestFullscreen) {
-          // Safari
-          await fullscreenElement.webkitRequestFullscreen();
-        } else if (fullscreenElement.mozRequestFullScreen) {
-          // Firefox
-          await fullscreenElement.mozRequestFullScreen();
-        } else if (fullscreenElement.msRequestFullscreen) {
-          // IE/Edge
-          await fullscreenElement.msRequestFullscreen();
-        }
-      } catch (error) {
-        console.error("Error entering fullscreen:", error);
-      }
-    };
-
-    enterFullscreen();
-
-    // Handle fullscreen change events (user might exit via browser controls)
-    const handleFullscreenChange = () => {
-      const fullscreenDoc = document as FullscreenDocument;
-      const isFullscreen = !!(
-        document.fullscreenElement ||
-        fullscreenDoc.webkitFullscreenElement ||
-        fullscreenDoc.mozFullScreenElement ||
-        fullscreenDoc.msFullscreenElement
-      );
-
-      if (!isFullscreen && onExit) {
-        onExit();
-      }
-    };
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
-    document.addEventListener("mozfullscreenchange", handleFullscreenChange);
-    document.addEventListener("MSFullscreenChange", handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
-      document.removeEventListener("mozfullscreenchange", handleFullscreenChange);
-      document.removeEventListener("MSFullscreenChange", handleFullscreenChange);
-
-      // Exit fullscreen on cleanup
-      const exitFullscreen = async () => {
-        try {
-          const fullscreenDoc = document as FullscreenDocument;
-          if (document.exitFullscreen) {
-            await document.exitFullscreen();
-          } else if (fullscreenDoc.webkitExitFullscreen) {
-            await fullscreenDoc.webkitExitFullscreen();
-          } else if (fullscreenDoc.mozCancelFullScreen) {
-            await fullscreenDoc.mozCancelFullScreen();
-          } else if (fullscreenDoc.msExitFullscreen) {
-            await fullscreenDoc.msExitFullscreen();
-          }
-        } catch (error) {
-          console.error("Error exiting fullscreen:", error);
-        }
-      };
-
-      exitFullscreen();
-    };
-  }, [isFullWindow, onExit]);
-
-  // Handle Escape key to exit full window mode
-  useEffect(() => {
-    if (!isFullWindow || !onExit) return;
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        // Exit fullscreen first, then call onExit
-        const exitFullscreen = async () => {
-          try {
-            const fullscreenDoc = document as FullscreenDocument;
-            if (document.exitFullscreen) {
-              await document.exitFullscreen();
-            } else if (fullscreenDoc.webkitExitFullscreen) {
-              await fullscreenDoc.webkitExitFullscreen();
-            } else if (fullscreenDoc.mozCancelFullScreen) {
-              await fullscreenDoc.mozCancelFullScreen();
-            } else if (fullscreenDoc.msExitFullscreen) {
-              await fullscreenDoc.msExitFullscreen();
-            }
-          } catch (error) {
-            console.error("Error exiting fullscreen:", error);
-          }
-        };
-        exitFullscreen();
-        onExit();
-      }
-    };
-
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [isFullWindow, onExit]);
 
   const questionData = pollQuestion as unknown as Record<string, unknown> | null;
   const firstElement = (
@@ -224,10 +96,10 @@ export default function MultipleChoiceDynamicViewer({
     }
   }, [chartData]);
 
-  const containerProps = isFullWindow
+  const containerProps = isFullscreen
     ? {
-        w: "100vw",
-        h: "100vh",
+        w: "100%",
+        h: "100%",
         bg: cardBgColor,
         display: "flex",
         flexDirection: "column" as const,
@@ -248,46 +120,18 @@ export default function MultipleChoiceDynamicViewer({
         boxShadow: "lg"
       };
 
-  const handleExit = () => {
-    const exitFullscreen = async () => {
-      try {
-        const fullscreenDoc = document as FullscreenDocument;
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if (fullscreenDoc.webkitExitFullscreen) {
-          await fullscreenDoc.webkitExitFullscreen();
-        } else if (fullscreenDoc.mozCancelFullScreen) {
-          await fullscreenDoc.mozCancelFullScreen();
-        } else if (fullscreenDoc.msExitFullscreen) {
-          await fullscreenDoc.msExitFullscreen();
-        }
-      } catch (error) {
-        console.error("Error exiting fullscreen:", error);
-      }
-    };
-    exitFullscreen();
-    if (onExit) {
-      onExit();
-    }
-  };
-
   return (
     <Box
-      display={isFullWindow ? "flex" : "flex"}
-      justifyContent={isFullWindow ? "stretch" : "center"}
-      alignItems={isFullWindow ? "stretch" : "center"}
-      minH={isFullWindow ? "100vh" : "80vh"}
-      w={isFullWindow ? "100%" : "100%"}
-      //shift the box up by 10px
-      mt={isFullWindow ? 0 : -5}
+      display="flex"
+      justifyContent={isFullscreen ? "stretch" : "center"}
+      alignItems={isFullscreen ? "stretch" : "center"}
+      minH={isFullscreen ? "100%" : "80vh"}
+      w="100%"
+      h={isFullscreen ? "100%" : "auto"}
+      mt={isFullscreen ? 0 : -5}
     >
-      <Box {...containerProps} ref={fullscreenRef}>
-        {isFullWindow && (
-          <Box position="absolute" top={4} right={4} zIndex={10000}>
-            <CloseButton onClick={handleExit} aria-label="Exit fullscreen" size="xl" />
-          </Box>
-        )}
-        {isFullWindow && pollUrl && (
+      <Box {...containerProps}>
+        {isFullscreen && pollUrl && (
           <Box position="absolute" bottom={4} right={4} zIndex={10000}>
             <HStack gap={4} align="center" justify="flex-end">
               <VStack align="flex-end" gap={1}>
@@ -303,11 +147,11 @@ export default function MultipleChoiceDynamicViewer({
           </Box>
         )}
         <VStack align="center" justify="center" gap={4} flex="1" minH="0" w="100%">
-          <Heading size={isFullWindow ? "xl" : "lg"} color={textColor} textAlign="center">
+          <Heading size={isFullscreen ? "xl" : "lg"} color={textColor} textAlign="center">
             {questionPrompt}
           </Heading>
           <Box w="100%" translate="auto" translateX="-20px">
-            <ResponsiveContainer width="100%" height={isFullWindow ? 700 : 500}>
+            <ResponsiveContainer width="100%" height={isFullscreen ? 700 : 500}>
               <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 100, top: 0, bottom: 0 }}>
                 <XAxis
                   type="number"
@@ -317,7 +161,7 @@ export default function MultipleChoiceDynamicViewer({
                   tickFormatter={(value) => (Number.isInteger(value) ? String(value) : "")}
                 />
                 <YAxis type="category" dataKey="name" tick={{ fill: tickColor, fontSize: 12 }} width={200} />
-                <Bar dataKey="value" fill="#3B82F6" barSize={isFullWindow ? 150 : 100} />
+                <Bar dataKey="value" fill="#3B82F6" barSize={isFullscreen ? 150 : 100} />
               </BarChart>
             </ResponsiveContainer>
           </Box>
