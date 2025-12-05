@@ -2,7 +2,7 @@
 
 import { Box, VStack, Heading, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 import { useMemo, useState, useEffect } from "react";
 import { usePollResponseCounts } from "@/hooks/useCourseController";
 
@@ -100,16 +100,31 @@ export default function MultipleChoiceDynamicViewer({
       </Heading>
       <Box w="100%" translate="auto" translateX="-20px">
         <ResponsiveContainer width="100%" height={chartHeight}>
-          <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 100, top: 0, bottom: 0 }}>
+          <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 150, top: 0, bottom: 0 }}>
             <XAxis
               type="number"
               tick={{ fill: tickColor, fontSize: 10 }}
+              axisLine={{ stroke: tickColor, strokeWidth: 2 }}
+              tickLine={{ stroke: tickColor, strokeWidth: 2 }}
               allowDecimals={false}
               domain={[0, xAxisMax]}
               tickFormatter={(value) => (Number.isInteger(value) ? String(value) : "")}
             />
-            <YAxis type="category" dataKey="name" tick={{ fill: tickColor, fontSize: 12 }} width={200} />
-            <Bar dataKey="value" fill="#3B82F6" barSize={barSize} />
+            <YAxis
+              type="category"
+              dataKey="name"
+              tick={{ fill: tickColor, fontSize: 12 }}
+              axisLine={{ stroke: tickColor, strokeWidth: 2 }}
+              tickLine={{ stroke: tickColor, strokeWidth: 2 }}
+              width={150}
+            />
+            <Tooltip
+              cursor={{ fill: "rgba(255, 255, 255, 0.1)" }}
+              contentStyle={{ backgroundColor: "#1A1A1A", border: "1px solid #333", borderRadius: "8px" }}
+              labelStyle={{ color: "#FFFFFF" }}
+              formatter={(value: number) => [value, "Responses"]}
+            />
+            <Bar dataKey="value" fill="#3B82F6" barSize={barSize} radius={[0, 8, 8, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </Box>
