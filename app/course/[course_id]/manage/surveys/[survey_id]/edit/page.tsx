@@ -104,21 +104,12 @@ export default function EditSurveyPage() {
 
   // Load the survey data when component mounts
   useEffect(() => {
-    console.log("[EditSurvey] useEffect triggered", {
-      hasLoadedSurvey: hasLoadedSurvey.current,
-      survey_id,
-      course_id,
-      hasLoadingPromise: !!loadingPromise.current
-    });
-
     if (hasLoadedSurvey.current || loadingPromise.current) {
-      console.log("[EditSurvey] Skipping load - already loaded or loading");
       return; // Prevent duplicate loading
     }
 
     const loadSurveyData = async () => {
       try {
-        console.log("[EditSurvey] Starting to load survey data");
         setIsLoading(true);
         const supabase = createClient();
         const { data, error } = await supabase
@@ -129,7 +120,6 @@ export default function EditSurveyPage() {
           .single();
 
         if (error || !data) {
-          console.log("[EditSurvey] Survey not found:", error);
           toaster.create({
             title: "Survey Not Found",
             description: "The survey you're trying to edit could not be found.",
@@ -139,7 +129,6 @@ export default function EditSurveyPage() {
           return;
         }
 
-        console.log("[EditSurvey] Survey data loaded successfully:", data.id);
         setSurveyData(data);
 
         // Convert due_date from ISO string to datetime-local format in course timezone
@@ -170,7 +159,6 @@ export default function EditSurveyPage() {
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
-        console.log("[EditSurvey] Survey loaded and form reset completed");
 
         toaster.create({
           title: "Survey Loaded",
@@ -238,7 +226,6 @@ export default function EditSurveyPage() {
 
           // Handle survey assignments for drafts
           if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
-            console.log("[saveDraftOnly] Updating survey assignments for:", values.assigned_students);
             const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
               p_survey_id: data.id,
               p_profile_ids: values.assigned_students
@@ -387,7 +374,6 @@ export default function EditSurveyPage() {
 
           // Handle survey assignments if not assigned to all students
           if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
-            console.log("[EditSurvey] Updating survey assignments for:", values.assigned_students);
             const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
               p_survey_id: data.id,
               p_profile_ids: values.assigned_students
