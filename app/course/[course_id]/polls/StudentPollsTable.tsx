@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, Table, Text, Button } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
 type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
@@ -12,11 +11,6 @@ type StudentPollsTableProps = {
 };
 
 export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTableProps) {
-  const textColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const tableBorderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const tableHeaderBg = useColorModeValue("#F2F2F2", "#0D0D0D");
-  const tableHeaderTextColor = useColorModeValue("#1A202C", "#9CA3AF");
-  const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
 
   const getQuestionPrompt = (poll: LivePoll) => {
     const questionData = poll.question as unknown as Record<string, unknown> | null;
@@ -24,12 +18,12 @@ export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTa
   };
 
   return (
-    <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden">
+    <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden">
       <Table.Root size="sm">
-        <Table.Header bg={tableHeaderBg}>
+        <Table.Header bg="bg.muted">
           <Table.Row>
             <Table.ColumnHeader
-              color={tableHeaderTextColor}
+              color="fg.muted"
               fontWeight="semibold"
               textAlign="left"
               pl={4}
@@ -39,7 +33,7 @@ export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTa
               Question
             </Table.ColumnHeader>
             <Table.ColumnHeader
-              color={tableHeaderTextColor}
+              color="fg.muted"
               fontWeight="semibold"
               textAlign="right"
               pl={2}
@@ -52,14 +46,14 @@ export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTa
         </Table.Header>
         <Table.Body>
           {polls.map((poll) => (
-            <Table.Row key={poll.id} bg={tableRowBg}>
+            <Table.Row key={poll.id} bg="bg.subtle">
               <Table.Cell pl={4} pr={4} py={3}>
-                <Text fontWeight="medium" color={textColor}>
+                <Text fontWeight="medium" color="fg">
                   {getQuestionPrompt(poll)}
                 </Text>
               </Table.Cell>
               <Table.Cell pl={2} pr={4} py={3} textAlign="right">
-                <Button size="sm" bg="#22C55E" color="white" _hover={{ bg: "#16A34A" }} onClick={onPollClick}>
+                <Button size="sm" bg="green.500" color="white" _hover={{ bg: "green.600" }} onClick={onPollClick}>
                   Answer Poll
                 </Button>
               </Table.Cell>
