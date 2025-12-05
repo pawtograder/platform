@@ -6,7 +6,7 @@ import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 import QrCode from "./QrCode";
 import { Json } from "@/utils/supabase/SupabaseTypes";
-import { useLivePoll, usePollResponses } from "@/hooks/useCourseController";
+import { useLivePoll } from "@/hooks/useCourseController";
 import { usePollQrCode } from "@/hooks/usePollQrCode";
 import { CloseButton } from "@/components/ui/close-button";
 import { createClient } from "@/utils/supabase/client";
@@ -52,9 +52,8 @@ export default function PollResponsesDynamicViewer({
   const [isPresenting, setIsPresenting] = useState(false);
   const fullscreenRef = useRef<HTMLDivElement>(null);
 
-  // Use real-time hooks for poll data and responses
+  // Use real-time hook for poll data
   const poll = useLivePoll(pollId);
-  const { responses } = usePollResponses(pollId);
 
   // Use real-time poll status if available, otherwise fallback to initial
   const [pollIsLive, setPollIsLive] = useState(poll?.is_live ?? initialPollIsLive);
@@ -79,8 +78,9 @@ export default function PollResponsesDynamicViewer({
   const pollUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
     const hostname = window.location.hostname;
+    const port = window.location.port;
     if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return `${hostname}/poll/${courseId}`;
+      return `${hostname}:${port}/poll/${courseId}`;
     }
     return `https://${hostname}/poll/${courseId}`;
   }, [courseId]);
@@ -99,12 +99,8 @@ export default function PollResponsesDynamicViewer({
     });
 
     try {
-      const updateData: { is_live: boolean; deactivates_at: string | null } = {
-        is_live: nextState,
-        deactivates_at: nextState ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null
-      };
 
-      const { error } = await supabase.from("live_polls").update(updateData).eq("id", pollId);
+      const { error } = await supabase.from("live_polls").update({ is_live: nextState }).eq("id", pollId);
 
       if (error) {
         throw new Error(error.message);
@@ -175,7 +171,7 @@ export default function PollResponsesDynamicViewer({
     setIsPresenting(false);
   }, [exitFullscreen]);
 
-  // Handle fullscreen change events (user might exit via browser controls)
+  // Handle fullscreen change events
   useEffect(() => {
     const handleFullscreenChange = () => {
       const fullscreenDoc = document as FullscreenDocument;
@@ -274,8 +270,8 @@ export default function PollResponsesDynamicViewer({
         )}
         {type === "radiogroup" || type === "checkbox" ? (
           <MultipleChoiceDynamicViewer
+            pollId={pollId}
             pollQuestion={pollQuestion as unknown as JSON}
-            responses={responses}
           />
         ) : (
           <div>Unsupported poll question type: {type}</div>

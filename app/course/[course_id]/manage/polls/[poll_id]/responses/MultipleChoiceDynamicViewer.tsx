@@ -4,18 +4,16 @@ import { Box, VStack, Heading, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import { useMemo, useState, useEffect } from "react";
-import { PollResponseData } from "@/types/poll";
-import { getPollAnswer } from "@/utils/pollUtils";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { usePollResponseCounts } from "@/hooks/useCourseController";
 
 type MultipleChoiceDynamicViewerProps = {
+  pollId: string;
   pollQuestion: JSON;
-  responses: Database["public"]["Tables"]["live_poll_responses"]["Row"][];
 };
 
 export default function MultipleChoiceDynamicViewer({
-  pollQuestion,
-  responses
+  pollId,
+  pollQuestion
 }: MultipleChoiceDynamicViewerProps) {
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
@@ -33,47 +31,23 @@ export default function MultipleChoiceDynamicViewer({
     return () => window.removeEventListener("resize", updateViewportSize);
   }, []);
 
+  // Extract question title for display
   const questionData = pollQuestion as unknown as Record<string, unknown> | null;
   const firstElement = (
-    questionData?.elements as unknown as Array<{
-      title: string;
-      choices: string[] | Array<{ text?: string; label?: string; value?: string }>;
-    }>
+    questionData?.elements as unknown as Array<{ title: string }>
   )?.[0];
   const questionPrompt = firstElement?.title || "Poll";
-  // Handle choices as either string array or object array
-  const choicesRaw = firstElement?.choices || [];
-  const choices = choicesRaw.map((choice) => {
-    if (typeof choice === "string") return choice;
-    return choice.text || choice.label || choice.value || String(choice);
-  });
 
+  // Get counts directly from hook - all logic is handled internally
+  const { counts: choiceCounts } = usePollResponseCounts(pollId, pollQuestion);
+
+  // Transform counts to chart data format
   const chartData = useMemo(() => {
-    const choiceCounts: Record<string, number> = {};
-
-    choices.forEach((choice) => {
-      choiceCounts[choice] = 0;
-    });
-
-    responses.forEach((response) => {
-      const answer = getPollAnswer(response.response as PollResponseData);
-
-      if (Array.isArray(answer)) {
-        answer.forEach((item: string) => {
-          if (!item.startsWith("other:") && choiceCounts.hasOwnProperty(item)) {
-            choiceCounts[item]++;
-          }
-        });
-      } else if (typeof answer === "string" && !answer.startsWith("other:") && choiceCounts.hasOwnProperty(answer)) {
-        choiceCounts[answer]++;
-      }
-    });
-
     return Object.entries(choiceCounts).map(([name, value]) => ({
       name,
       value
     }));
-  }, [responses, choices]);
+  }, [choiceCounts]);
 
   // Calculate max value for X-axis with padding
   const xAxisMax = useMemo(() => {
