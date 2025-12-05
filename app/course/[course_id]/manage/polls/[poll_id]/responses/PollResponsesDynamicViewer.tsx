@@ -1,9 +1,10 @@
 "use client";
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { Box } from "@chakra-ui/react";
+import { Box, Text, Link } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
+import QrCode from "./QrCode";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 import { useLivePoll, usePollResponses } from "@/hooks/useCourseController";
 import { usePollQrCode } from "@/hooks/usePollQrCode";
@@ -57,7 +58,9 @@ export default function PollResponsesDynamicViewer({
   const pollIsLive = poll?.is_live ?? initialPollIsLive;
 
   // Define color mode values at the top level (before any conditional returns)
-  const bgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
+  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
+  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
+  const textColor = useColorModeValue("#000000", "#FFFFFF");
   const qrLightColor = useColorModeValue("#FFFFFF", "#000000");
   const qrDarkColor = useColorModeValue("#000000", "#FFFFFF");
 
@@ -188,31 +191,50 @@ export default function PollResponsesDynamicViewer({
         onPollStatusChange={handlePollStatusChange}
         qrCodeUrl={qrCodeUrl}
       />
-      {type === "radiogroup" || type === "checkbox" ? (
-        <Box
-          ref={fullscreenRef}
-          mt={isPresenting ? 0 : 4}
-          bg={isPresenting ? bgColor : "transparent"}
-          w={isPresenting ? "100vw" : "100%"}
-          h={isPresenting ? "100vh" : "auto"}
-          position="relative"
-        >
-          {isPresenting && (
+      <Box
+        ref={fullscreenRef}
+        mt={isPresenting ? 0 : 4}
+        bg={cardBgColor}
+        w={isPresenting ? "100vw" : "95%"}
+        h={isPresenting ? "100vh" : "100%"}
+        maxW={isPresenting ? "100%" : "1400px"}
+        mx="auto"
+        borderRadius={isPresenting ? "none" : "2xl"}
+        border={isPresenting ? "none" : "1px solid"}
+        borderColor={borderColor}
+        boxShadow={isPresenting ? "none" : "lg"}
+        p={isPresenting ? 8 : 10}
+        display="flex"
+        flexDirection="column"
+        justifyContent="center"
+        alignItems="center"
+        position="relative"
+      >
+        {isPresenting && (
+          <>
             <Box position="absolute" top={4} right={4} zIndex={10000}>
               <CloseButton onClick={handleClosePresent} aria-label="Exit fullscreen" size="xl" />
             </Box>
-          )}
+            <Box position="absolute" bottom={4} right={4} zIndex={10000} display="flex" alignItems="center" gap={3}>
+              <Text color={textColor} fontSize="lg" fontWeight="medium">
+                Answer at:{" "}
+                <Link href={pollUrl} target="_blank" color="blue.500" textDecoration="underline">
+                  {pollUrl}
+                </Link>
+              </Text>
+              <QrCode qrCodeUrl={qrCodeUrl} size="60px" isFullscreen={true} />
+            </Box>
+          </>
+        )}
+        {type === "radiogroup" || type === "checkbox" ? (
           <MultipleChoiceDynamicViewer
             pollQuestion={pollQuestion as unknown as JSON}
             responses={responses}
-            pollUrl={pollUrl}
-            qrCodeUrl={qrCodeUrl}
-            isFullscreen={isPresenting}
           />
-        </Box>
-      ) : (
-        <div>Unsupported poll question type: {type}</div>
-      )}
+        ) : (
+          <div>Unsupported poll question type: {type}</div>
+        )}
+      </Box>
     </div>
   );
 }

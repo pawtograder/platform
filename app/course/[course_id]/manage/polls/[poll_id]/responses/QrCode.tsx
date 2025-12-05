@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { VStack } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
+import { Box } from "@chakra-ui/react";
 import {
     DialogRoot,
     DialogContent,
@@ -18,9 +17,6 @@ type QrCodeProps = {
 
 export default function QrCode({ qrCodeUrl, size = "40px", isFullscreen = false }: QrCodeProps) {
     const [isModalOpen, setIsModalOpen] = useState(false);
-
-    const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-    const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
 
     if (!qrCodeUrl) {
         return null;
@@ -53,19 +49,12 @@ export default function QrCode({ qrCodeUrl, size = "40px", isFullscreen = false 
             {/* Full Screen Modal */}
             <DialogRoot open={isModalOpen} onOpenChange={(e) => setIsModalOpen(e.open)}>
                 <DialogContent
-                    maxW="2xl"
-                    w="90vw"
-                    maxH="90vh"
-                    bg={bgColor}
-                    borderColor={borderColor}
-                    borderRadius="lg"
-                    className="flex flex-col"
+                    bg="transparent"
+                    boxShadow="none"
                     portalled={!isFullscreen}
                 >
-
-                    <DialogCloseTrigger />
-                    <DialogBody p={6} overflow="auto" display="flex" alignItems="center" justifyContent="center">
-                        <VStack gap={4} align="center">
+                    <DialogBody p={0} display="flex" alignItems="center" justifyContent="center">
+                        <Box position="relative" display="inline-block">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                                 src={qrCodeUrl}
@@ -78,7 +67,16 @@ export default function QrCode({ qrCodeUrl, size = "40px", isFullscreen = false 
                                     objectFit: "contain"
                                 }}
                             />
-                        </VStack>
+                            <DialogCloseTrigger
+                                position="absolute"
+                                top="8px"
+                                right="8px"
+                                bg="black"
+                                color="white"
+                                borderRadius="full"
+                                _hover={{ bg: "gray.800" }}
+                            />
+                        </Box>
                     </DialogBody>
                 </DialogContent>
             </DialogRoot>

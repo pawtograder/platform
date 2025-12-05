@@ -85,7 +85,7 @@ export default function PollResponsesHeader({
         </Button>
         <HStack gap={3} align="center">
           <Text fontSize="xl" color={textColor} textAlign="center">
-            Answer Live at:{" "}
+            Answer at:{" "}
             <Text as="span" fontWeight="semibold" color="#3B82F6">
               {pollUrl}
             </Text>
