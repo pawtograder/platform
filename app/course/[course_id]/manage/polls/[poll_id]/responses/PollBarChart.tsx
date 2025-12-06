@@ -117,4 +117,3 @@ export default function PollBarChart({ chartData, questionPrompt }: PollBarChart
     </VStack>
   );
 }
-

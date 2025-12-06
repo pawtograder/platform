@@ -9,15 +9,10 @@ type MultipleChoiceDynamicViewerProps = {
   pollQuestion: JSON;
 };
 
-export default function MultipleChoiceDynamicViewer({
-  pollId,
-  pollQuestion
-}: MultipleChoiceDynamicViewerProps) {
+export default function MultipleChoiceDynamicViewer({ pollId, pollQuestion }: MultipleChoiceDynamicViewerProps) {
   // Extract question title for display
   const questionData = pollQuestion as unknown as Record<string, unknown> | null;
-  const firstElement = (
-    questionData?.elements as unknown as Array<{ title: string }>
-  )?.[0];
+  const firstElement = (questionData?.elements as unknown as Array<{ title: string }>)?.[0];
   const questionPrompt = firstElement?.title || "Poll";
 
   // Get counts directly from hook - all logic is handled internally
@@ -31,7 +26,5 @@ export default function MultipleChoiceDynamicViewer({
     }));
   }, [choiceCounts]);
 
-  return (
-    <PollBarChart chartData={chartData} questionPrompt={questionPrompt} />
-  );
+  return <PollBarChart chartData={chartData} questionPrompt={questionPrompt} />;
 }

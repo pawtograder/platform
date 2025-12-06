@@ -1808,7 +1808,7 @@ function extractChoicesFromPollQuestion(pollQuestion: unknown): string[] {
       choices?: string[] | Array<{ text?: string; label?: string; value?: string }>;
     }>
   )?.[0];
-  
+
   const choicesRaw = firstElement?.choices || [];
   return choicesRaw.map((choice) => {
     if (typeof choice === "string") return choice;
@@ -1827,7 +1827,7 @@ function extractPollAnswer(response: unknown): string | string[] | null {
   const data = response as Record<string, unknown>;
   const key = Object.keys(data).find((k) => k.startsWith("poll_question_"));
   if (!key) return null;
-  
+
   const value = data[key];
   if (typeof value === "string") return value;
   if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
@@ -1839,14 +1839,11 @@ function extractPollAnswer(response: unknown): string | string[] | null {
 /**
  * Hook to get poll response counts with instant real-time updates.
  * Directly increments counts when new responses arrive - no intermediate array processing.
- * 
+ *
  * @param pollId - The poll ID to count responses for
  * @param pollQuestion - The poll question JSON containing choices
  */
-export function usePollResponseCounts(
-  pollId: string | undefined,
-  pollQuestion: unknown
-) {
+export function usePollResponseCounts(pollId: string | undefined, pollQuestion: unknown) {
   const controller = useCourseController();
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -1865,10 +1862,12 @@ export function usePollResponseCounts(
 
     // Reset state when pollId changes
     seenIdsRef.current.clear();
-    
+
     // Initialize counts for all choices
     const initialCounts: Record<string, number> = {};
-    choices.forEach(choice => { initialCounts[choice] = 0; });
+    choices.forEach((choice) => {
+      initialCounts[choice] = 0;
+    });
 
     // Fetch initial data and count
     const fetchInitial = async () => {
@@ -1876,62 +1875,63 @@ export function usePollResponseCounts(
         .from("live_poll_responses")
         .select("*")
         .eq("live_poll_id", pollId);
-      
+
       if (!error && data) {
-        data.forEach(response => {
+        data.forEach((response) => {
           seenIdsRef.current.add(response.id);
           const answer = extractPollAnswer(response.response);
-          
+
           if (Array.isArray(answer)) {
             answer.forEach((item: string) => {
               if (!item.startsWith("other:") && initialCounts.hasOwnProperty(item)) {
                 initialCounts[item]++;
               }
             });
-          } else if (typeof answer === "string" && !answer.startsWith("other:") && initialCounts.hasOwnProperty(answer)) {
+          } else if (
+            typeof answer === "string" &&
+            !answer.startsWith("other:") &&
+            initialCounts.hasOwnProperty(answer)
+          ) {
             initialCounts[answer]++;
           }
         });
       }
-      
+
       setCounts(initialCounts);
       setIsLoading(false);
     };
     fetchInitial();
 
     // Subscribe directly to ClassRealTimeController for instant count updates
-    const unsubscribe = controller.classRealTimeController.subscribe(
-      { table: "live_poll_responses" },
-      (message) => {
-        if (message.operation === "INSERT" && message.data) {
-          const responseData = message.data as Database["public"]["Tables"]["live_poll_responses"]["Row"];
-          
-          // Only count if it matches our poll and we haven't seen it
-          if (responseData.live_poll_id === pollId && !seenIdsRef.current.has(responseData.id)) {
-            seenIdsRef.current.add(responseData.id);
-            
-            const answer = extractPollAnswer(responseData.response);
-            
-            // Increment counts directly - instant update!
-            setCounts(prev => {
-              const updated = { ...prev };
-              
-              if (Array.isArray(answer)) {
-                answer.forEach((item: string) => {
-                  if (!item.startsWith("other:") && updated.hasOwnProperty(item)) {
-                    updated[item]++;
-                  }
-                });
-              } else if (typeof answer === "string" && !answer.startsWith("other:") && updated.hasOwnProperty(answer)) {
-                updated[answer]++;
-              }
-              
-              return updated;
-            });
-          }
+    const unsubscribe = controller.classRealTimeController.subscribe({ table: "live_poll_responses" }, (message) => {
+      if (message.operation === "INSERT" && message.data) {
+        const responseData = message.data as Database["public"]["Tables"]["live_poll_responses"]["Row"];
+
+        // Only count if it matches our poll and we haven't seen it
+        if (responseData.live_poll_id === pollId && !seenIdsRef.current.has(responseData.id)) {
+          seenIdsRef.current.add(responseData.id);
+
+          const answer = extractPollAnswer(responseData.response);
+
+          // Increment counts directly - instant update!
+          setCounts((prev) => {
+            const updated = { ...prev };
+
+            if (Array.isArray(answer)) {
+              answer.forEach((item: string) => {
+                if (!item.startsWith("other:") && updated.hasOwnProperty(item)) {
+                  updated[item]++;
+                }
+              });
+            } else if (typeof answer === "string" && !answer.startsWith("other:") && updated.hasOwnProperty(answer)) {
+              updated[answer]++;
+            }
+
+            return updated;
+          });
         }
       }
-    );
+    });
 
     return () => {
       unsubscribe();

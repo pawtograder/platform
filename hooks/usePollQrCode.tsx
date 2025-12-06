@@ -43,7 +43,10 @@ export function usePollQrCode(courseId: string, pollUrl: string, lightColor: str
     return { qrCodeUrl, isLoading: false, error: null };
   } catch (err) {
     console.error("Error generating QR code:", err);
-    return { qrCodeUrl: null, isLoading: false, error: err instanceof Error ? err : new Error("Failed to generate QR code") };
+    return {
+      qrCodeUrl: null,
+      isLoading: false,
+      error: err instanceof Error ? err : new Error("Failed to generate QR code")
+    };
   }
 }
-

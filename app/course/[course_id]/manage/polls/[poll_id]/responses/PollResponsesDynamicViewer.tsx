@@ -99,7 +99,6 @@ export default function PollResponsesDynamicViewer({
     });
 
     try {
-
       const { error } = await supabase.from("live_polls").update({ is_live: nextState }).eq("id", pollId);
 
       if (error) {
@@ -269,10 +268,7 @@ export default function PollResponsesDynamicViewer({
           </>
         )}
         {type === "radiogroup" || type === "checkbox" ? (
-          <MultipleChoiceDynamicViewer
-            pollId={pollId}
-            pollQuestion={pollQuestion as unknown as JSON}
-          />
+          <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion as unknown as JSON} />
         ) : (
           <div>Unsupported poll question type: {type}</div>
         )}
