@@ -108,12 +108,13 @@ function SurveyPreviewContent() {
   }
 
   const handleComplete = (survey: SurveyModel) => {
-    console.log("Survey completed:", survey.data);
+    void survey;
     // survey.data is a Record<string, any> containing all answers
   };
 
   const handleValueChanged = (survey: SurveyModel, options: { name: string; question: Question; value: unknown }) => {
-    console.log("Survey value changed:", options.name, options.value);
+    void survey;
+    void options;
     // options.value is unknown because it depends on the question type
   };
 

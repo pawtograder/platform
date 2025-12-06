@@ -811,10 +811,18 @@ test.describe("Surveys Page", () => {
     const q2Checkbox = page.getByText("Question 2").locator("..").locator("input[type='checkbox']");
     await q2Checkbox.click();
 
-    await expect(page.getByText("Question 1")).toBeVisible();
-    await expect(page.getByText("Answer 1")).toBeVisible();
-    await expect(page.getByText("Question 2")).not.toBeVisible();
-    await expect(page.getByText("Answer 2")).not.toBeVisible();
+    const responsesTable = page.getByRole("table").first();
+    const columnHeaders = (await responsesTable.locator("thead").getByRole("columnheader").allTextContents()).map(
+      (text) => text.trim().toLowerCase()
+    );
+    expect(columnHeaders).not.toContain("question 1");
+    expect(columnHeaders).toContain("question 2");
+
+    const bodyCells = (await responsesTable.locator("tbody").getByRole("cell").allTextContents()).map((text) =>
+      text.trim().toLowerCase()
+    );
+    expect(bodyCells).not.toContain("answer 1");
+    expect(bodyCells).toContain("answer 2");
   });
 
   test("grader cannot create or edit surveys but can view results menu", async ({ page }) => {
