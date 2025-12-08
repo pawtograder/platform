@@ -281,6 +281,69 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
   });
 
+  test("instructor can open edit page by clicking survey title", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
+    ]);
+
+    const draftTitle = "Clickable Draft Survey";
+    const publishedTitle = "Clickable Published Survey";
+
+    const { data: draftSurvey, error: draftError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: draftTitle,
+        description: "Draft row link should open edit",
+        status: "draft",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: {},
+        version: 1
+      })
+      .select("id")
+      .single();
+    if (draftError || !draftSurvey) {
+      throw new Error(`Failed to seed draft survey: ${draftError?.message}`);
+    }
+
+    const { data: publishedSurvey, error: publishedError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: publishedTitle,
+        description: "Published row link should open edit",
+        status: "published",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: {},
+        version: 1
+      })
+      .select("id")
+      .single();
+    if (publishedError || !publishedSurvey) {
+      throw new Error(`Failed to seed published survey: ${publishedError?.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+
+    // Draft title navigates to edit page
+    await page.goto(`/course/${course.id}/manage/surveys`);
+    await page.getByRole("link", { name: draftTitle }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${draftSurvey.id}/edit`));
+    await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
+
+    // Published title also navigates to edit page (new version flow)
+    await page.goto(`/course/${course.id}/manage/surveys`);
+    await page.getByRole("link", { name: publishedTitle }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${publishedSurvey.id}/edit`));
+    await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
+  });
+
   test("student dashboard shows no active surveys when none exist", async ({ page }) => {
     const course = await createClass();
     const [student] = await createUsersInClass([
@@ -530,6 +593,49 @@ test.describe("Surveys Page", () => {
         { timeout: 5000, message: "survey should close" }
       )
       .toBe("closed");
+  });
+
+  test("instructor cannot edit a closed survey", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Student Placeholder", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Instructor User", useMagicLink: true }
+    ]);
+
+    const closedTitle = "Closed Survey No Edit";
+    const { data: closedSurvey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        title: closedTitle,
+        description: "Closed survey should not be editable",
+        status: "closed",
+        assigned_to_all: true,
+        allow_response_editing: false,
+        created_by: instructor.public_profile_id,
+        json: {},
+        version: 1
+      })
+      .select("id, survey_id")
+      .single();
+    if (error || !closedSurvey) {
+      throw new Error(`Failed to seed closed survey: ${error?.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+
+    // Clicking the title should go to responses, not an edit page
+    await page.getByRole("link", { name: closedTitle }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${closedSurvey.survey_id}/responses`));
+    await expect(page.getByRole("heading", { name: /Survey Responses/i })).toBeVisible();
+
+    // The actions menu should not offer an edit option
+    await page.goto(`/course/${course.id}/manage/surveys`);
+    const row = page.getByRole("row", { name: new RegExp(closedTitle) }).first();
+    await row.getByRole("button").first().click();
+    await expect(page.getByRole("menuitem", { name: /Edit/ })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /View Responses/i })).toBeVisible();
   });
 
   test("instructor can view survey responses analytics", async ({ page }) => {
