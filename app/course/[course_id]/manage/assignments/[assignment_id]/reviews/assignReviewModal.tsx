@@ -5,7 +5,7 @@ import { Input, Text, VStack } from "@chakra-ui/react";
 import { HttpError, useCreate, useList, useOne, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect } from "chakra-react-select";
 import { format } from "date-fns";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,8 @@ import { toaster } from "@/components/ui/toaster";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { PopulatedReviewAssignment } from "./ReviewsTable";
+import { useCourseController } from "@/hooks/useCourseController";
+import TableController from "@/lib/TableController";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -142,26 +144,80 @@ export default function AssignReviewModal({
     queryOptions: { enabled: isOpen }
   });
 
-  const { data: submissionsData, isLoading: isLoadingSubmissions } = useList<PopulatedSubmission>({
-    resource: "submissions",
-    filters: [
-      { field: "class_id", operator: "eq", value: courseId },
-      { field: "assignment_id", operator: "eq", value: assignmentId },
-      { field: "is_active", operator: "eq", value: true }
-    ],
-    meta: {
-      select: "*, profiles!profile_id(id, name), assignment_groups(id, name)"
-    },
-    queryOptions: { enabled: isOpen }
-  });
+  const { classRealTimeController } = useCourseController();
+  const supabase = createClient();
+
+  // Create a TableController for populated submissions using AssignmentController pattern
+  const populatedSubmissionsSelect =
+    "*, profiles!profile_id(id, name), assignment_groups(id, name, assignment_groups_members(profiles!profile_id(id, name)))";
+  const [submissionsTableController, setSubmissionsTableController] = useState<TableController<
+    "submissions",
+    typeof populatedSubmissionsSelect,
+    number
+  > | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || !assignmentId || !classRealTimeController) {
+      setSubmissionsTableController(null);
+      return;
+    }
+
+    const query = supabase
+      .from("submissions")
+      .select(populatedSubmissionsSelect)
+      .eq("assignment_id", assignmentId)
+      .eq("is_active", true)
+      .eq("class_id", courseId);
+
+    const tc = new TableController<"submissions", typeof populatedSubmissionsSelect, number>({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      query: query as any,
+      client: supabase,
+      table: "submissions",
+      classRealTimeController
+    });
+
+    setSubmissionsTableController(tc);
+
+    return () => {
+      tc.close();
+    };
+  }, [isOpen, assignmentId, courseId, supabase, classRealTimeController]);
+
+  // Get all submissions from the table controller
+  const [submissionsDataArray, setSubmissionsDataArray] = useState<PopulatedSubmission[]>([]);
+  const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(true);
+
+  useEffect(() => {
+    if (!submissionsTableController) {
+      setSubmissionsDataArray([]);
+      setIsLoadingSubmissions(true);
+      return;
+    }
+
+    setIsLoadingSubmissions(true);
+    const { data, unsubscribe } = submissionsTableController.list((newData) => {
+      setSubmissionsDataArray(newData as PopulatedSubmission[]);
+      setIsLoadingSubmissions(false);
+    });
+    setSubmissionsDataArray(data as PopulatedSubmission[]);
+    setIsLoadingSubmissions(!submissionsTableController.ready);
+
+    // Wait for controller to be ready
+    submissionsTableController.readyPromise.then(() => {
+      setIsLoadingSubmissions(false);
+    });
+
+    return unsubscribe;
+  }, [submissionsTableController]);
 
   const assigneeOptions = useMemo(() => {
     if (!courseUsersData?.data) return [];
 
     let availableAssignees = courseUsersData.data;
 
-    if (selectedSubmissionId && submissionsData?.data && gradingConflictsData?.data) {
-      const selectedSubmission = submissionsData.data.find((sub) => sub.id === selectedSubmissionId);
+    if (selectedSubmissionId && submissionsDataArray && gradingConflictsData?.data) {
+      const selectedSubmission = submissionsDataArray.find((sub) => sub.id === selectedSubmissionId);
       if (selectedSubmission) {
         const studentIdsForSubmission: string[] = [];
         if (selectedSubmission.profiles?.id) {
@@ -192,11 +248,11 @@ export default function AssignReviewModal({
         ? `${userRole.profiles.name}`
         : `Name Missing (User ID: ${userRole.private_profile_id})`
     }));
-  }, [courseUsersData, selectedSubmissionId, submissionsData, gradingConflictsData]);
+  }, [courseUsersData, selectedSubmissionId, submissionsDataArray, gradingConflictsData]);
 
   const submissionsOptions = useMemo(() => {
     return (
-      submissionsData?.data.map((sub) => {
+      submissionsDataArray.map((sub) => {
         let label = `Submission ID: ${sub.id}`;
         if (sub.assignment_groups?.name) {
           label = `Group: ${sub.assignment_groups.name} (Submission ID: ${sub.id})`;
@@ -206,7 +262,7 @@ export default function AssignReviewModal({
         return { value: sub.id, label };
       }) || []
     );
-  }, [submissionsData]);
+  }, [submissionsDataArray]);
 
   const rubricsFilters = useMemo(() => {
     if (isLoadingAssignment) return undefined;
@@ -235,7 +291,6 @@ export default function AssignReviewModal({
     [rubricsData]
   );
 
-  console.log("selectedRubricId", selectedRubricId);
   const { data: rubricPartsData, isLoading: isLoadingRubricParts } = useList<
     Database["public"]["Tables"]["rubric_parts"]["Row"]
   >({
