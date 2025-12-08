@@ -136,7 +136,15 @@ function SurveyPreviewContent() {
       </VStack>
 
       {/* Survey Preview */}
-      <Box w="100%" maxW="1000px" bg="bg.subtle" border="1px solid" borderColor="border.default" borderRadius="lg" p={8}>
+      <Box
+        w="100%"
+        maxW="1000px"
+        bg="bg.subtle"
+        border="1px solid"
+        borderColor="border.default"
+        borderRadius="lg"
+        p={8}
+      >
         <SurveyComponent surveyJson={surveyJson} onComplete={handleComplete} onValueChanged={handleValueChanged} />
       </Box>
     </VStack>

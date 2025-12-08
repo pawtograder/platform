@@ -11,7 +11,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useIsGrader } from "@/hooks/useClassProfiles";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 
@@ -27,6 +27,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
   const trackEvent = useTrackEvent();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
+  const isGrader = useIsGrader();
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -85,20 +86,26 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
   };
 
   const getSurveyLink = (survey: Survey) => {
-    // Non-instructors should go to the student survey-taking page for published/closed surveys
-    if (!isInstructor && (survey.status === "published" || survey.status === "closed")) {
-      return `/course/${courseId}/surveys/${survey.id}`;
+    // Graders can only view responses for published/closed surveys, not edit
+    if (isGrader && (survey.status === "published" || survey.status === "closed")) {
+      return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
     }
 
     // Instructors: route based on survey status
     if (survey.status === "draft") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
-      return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
-    } else {
-      // closed - read-only view
-      return `/course/${courseId}/manage/surveys/${survey.id}`;
+      // Instructors can edit published surveys
+      return isInstructor
+        ? `/course/${courseId}/manage/surveys/${survey.id}/edit`
+        : `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
+    } else if (survey.status === "closed") {
+      // For closed surveys, instructors and graders both view responses
+      return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
     }
+
+    // Default fallback
+    return `/course/${courseId}/manage/surveys/${survey.id}`;
   };
 
   const handlePublish = useCallback(

@@ -218,27 +218,27 @@ export default function MultipleChoiceDynamicViewer({
 
   const containerProps = isFullWindow
     ? {
-      w: "100vw",
-      h: "100vh",
-      bg: "bg.subtle",
-      display: "flex",
-      flexDirection: "column" as const,
-      p: 8
-    }
+        w: "100vw",
+        h: "100vh",
+        bg: "bg.subtle",
+        display: "flex",
+        flexDirection: "column" as const,
+        p: 8
+      }
     : {
-      bg: "bg.subtle",
-      borderRadius: "2xl",
-      p: 10,
-      border: "1px solid",
-      borderColor: "border.default",
-      display: "flex",
-      flexDirection: "column" as const,
-      minH: "700px",
-      maxW: "1400px",
-      w: "95%",
-      mx: "auto",
-      boxShadow: "lg"
-    };
+        bg: "bg.subtle",
+        borderRadius: "2xl",
+        p: 10,
+        border: "1px solid",
+        borderColor: "border.default",
+        display: "flex",
+        flexDirection: "column" as const,
+        minH: "700px",
+        maxW: "1400px",
+        w: "95%",
+        mx: "auto",
+        boxShadow: "lg"
+      };
 
   const handleExit = () => {
     const exitFullscreen = async () => {

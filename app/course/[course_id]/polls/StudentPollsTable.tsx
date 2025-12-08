@@ -11,7 +11,6 @@ type StudentPollsTableProps = {
 };
 
 export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTableProps) {
-
   const getQuestionPrompt = (poll: LivePoll) => {
     const questionData = poll.question as unknown as Record<string, unknown> | null;
     return (questionData?.elements as unknown as { title: string }[])?.[0]?.title || "Poll";
@@ -22,24 +21,10 @@ export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTa
       <Table.Root size="sm">
         <Table.Header bg="bg.muted">
           <Table.Row>
-            <Table.ColumnHeader
-              color="fg.muted"
-              fontWeight="semibold"
-              textAlign="left"
-              pl={4}
-              pr={4}
-              py={3}
-            >
+            <Table.ColumnHeader color="fg.muted" fontWeight="semibold" textAlign="left" pl={4} pr={4} py={3}>
               Question
             </Table.ColumnHeader>
-            <Table.ColumnHeader
-              color="fg.muted"
-              fontWeight="semibold"
-              textAlign="right"
-              pl={2}
-              pr={4}
-              py={3}
-            >
+            <Table.ColumnHeader color="fg.muted" fontWeight="semibold" textAlign="right" pl={2} pr={4} py={3}>
               Action
             </Table.ColumnHeader>
           </Table.Row>
