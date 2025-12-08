@@ -2,7 +2,6 @@
 
 import React, { useEffect, useRef } from "react";
 import { Box, Button, HStack, VStack, Heading, Text } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import PollBuilder from "@/components/PollBuilder";
 
 type PollBuilderModalProps = {
@@ -13,11 +12,6 @@ type PollBuilderModalProps = {
 };
 
 export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson }: PollBuilderModalProps) {
-  const bgColor = useColorModeValue("#FFFFFF", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
 
   // Ref to get current JSON from PollBuilder
   const getCurrentJsonRef = useRef<(() => string) | null>(null);
@@ -52,16 +46,16 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
     <Box
       position="fixed"
       inset="0"
-      bg="rgba(0,0,0,0.8)"
+      bg="bg.muted"
       zIndex="9999"
       display="flex"
       alignItems="center"
       justifyContent="center"
     >
       <Box
-        bg={bgColor}
+        bg="bg.subtle"
         border="1px solid"
-        borderColor={borderColor}
+        borderColor="border.default"
         borderRadius="lg"
         w="90vw"
         maxW="800px"
@@ -74,16 +68,16 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
         <Box
           p={4}
           borderBottom="1px solid"
-          borderColor={borderColor}
+          borderColor="border.subtle"
           display="flex"
           justifyContent="space-between"
           alignItems="center"
         >
           <VStack align="start" gap={1}>
-            <Heading size="lg" color={textColor}>
+            <Heading size="lg" color="fg.default">
               Visual Poll Builder
             </Heading>
-            <Text fontSize="sm" color={buttonTextColor}>
+            <Text fontSize="sm" color="fg.muted">
               Build your poll question visually
             </Text>
           </VStack>
@@ -92,14 +86,14 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
               variant="outline"
               size="sm"
               bg="transparent"
-              borderColor={buttonBorderColor}
-              color={buttonTextColor}
-              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+              borderColor="border"
+              color="fg"
+              _hover={{ bg: "bg.muted" }}
               onClick={onClose}
             >
               Cancel
             </Button>
-            <Button size="sm" bg="#22C55E" color="white" _hover={{ bg: "#16A34A" }} onClick={handleUsePoll}>
+            <Button size="sm" bg="green.500" color="white" _hover={{ bg: "green.600" }} onClick={handleUsePoll}>
               Use This Poll
             </Button>
           </HStack>

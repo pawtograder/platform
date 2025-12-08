@@ -1,7 +1,6 @@
 "use client";
 import { useState, useCallback, useMemo } from "react";
 import { Box } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 import { Json } from "@/utils/supabase/SupabaseTypes";
@@ -38,9 +37,6 @@ export default function PollResponsesDynamicViewer({
   // Use real-time poll status if available, otherwise fallback to initial
   const pollIsLive = poll?.is_live ?? initialPollIsLive;
 
-  // Define color mode values at the top level (before any conditional returns)
-  const bgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-
   const type = parseJsonForType(pollQuestion);
 
   // Calculate poll URL
@@ -61,7 +57,7 @@ export default function PollResponsesDynamicViewer({
     setIsPresenting(false);
   }, []);
 
-  const handlePollStatusChange = useCallback(() => {}, []);
+  const handlePollStatusChange = useCallback(() => { }, []);
 
   // Render full window present view
   if (isPresenting) {
@@ -82,7 +78,7 @@ export default function PollResponsesDynamicViewer({
           <Box
             position="fixed"
             inset="0"
-            bg={bgColor}
+            bg="bg.subtle"
             zIndex="9999"
             display="flex"
             alignItems="center"

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Box, Container, Heading, Text, Button, VStack } from "@chakra-ui/react";
-import { useColorModeValue, ColorModeButton } from "@/components/ui/color-mode";
+import { useColorMode, ColorModeButton } from "@/components/ui/color-mode";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { Model } from "survey-core";
@@ -23,10 +23,8 @@ export default function PollRespondPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [requiresLogin, setRequiresLogin] = useState(false);
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const isDarkMode = useColorModeValue(false, true);
+  const { colorMode } = useColorMode();
+  const isDarkMode = colorMode === "dark";
 
   // Fetch the newest live poll and pass directly to SurveyJS
   useEffect(() => {
@@ -168,15 +166,15 @@ export default function PollRespondPage() {
 
       <Container maxW="800px" my={2}>
         {isLoading ? (
-          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
-            <Text color={textColor}>Loading poll...</Text>
+          <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
+            <Text color="fg">Loading poll...</Text>
           </Box>
         ) : requiresLogin ? (
           <Box display="flex" justifyContent="center" alignItems="center" minH="calc(100vh - 4rem)">
             <Box
-              bg={cardBgColor}
+              bg="bg.muted"
               border="1px solid"
-              borderColor={borderColor}
+              borderColor="border"
               borderRadius="md"
               p={8}
               maxW="400px"
@@ -184,10 +182,10 @@ export default function PollRespondPage() {
             >
               <VStack gap={6} align="stretch">
                 <VStack gap={3} align="center" textAlign="center">
-                  <Heading size="xl" color={textColor}>
+                  <Heading size="xl" color="fg">
                     Login Required
                   </Heading>
-                  <Text color={textColor} fontSize="sm">
+                  <Text color="fg" fontSize="sm">
                     You need to be logged in to respond to this poll. Please sign in to continue.
                   </Text>
                 </VStack>
@@ -206,21 +204,21 @@ export default function PollRespondPage() {
             </Box>
           </Box>
         ) : isSubmitted ? (
-          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
-            <Heading size="lg" color={textColor} mb={4}>
+          <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
+            <Heading size="lg" color="fg" mb={4}>
               Thank You!
             </Heading>
-            <Text color={textColor}>
+            <Text color="fg">
               Your poll response has been submitted successfully. Refresh the page to answer again or to load a new
               poll.
             </Text>
           </Box>
         ) : !surveyModel ? (
-          <Box bg={cardBgColor} border="1px solid" borderColor={borderColor} borderRadius="lg" p={8} textAlign="center">
-            <Heading size="lg" color={textColor} mb={4}>
+          <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
+            <Heading size="lg" color="fg" mb={4}>
               No Live Poll Available
             </Heading>
-            <Text color={textColor}>There is currently no live poll available for this course.</Text>
+            <Text color="fg">There is currently no live poll available for this course.</Text>
           </Box>
         ) : (
           <Box display="flex" justifyContent="center" alignItems="center" minH="calc(100vh - 4rem)">

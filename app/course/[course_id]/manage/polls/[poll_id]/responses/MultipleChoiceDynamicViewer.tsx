@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, VStack, Heading, Text } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import { useMemo, useEffect, useRef } from "react";
 import { CloseButton } from "@/components/ui/close-button";
@@ -39,10 +38,6 @@ export default function MultipleChoiceDynamicViewer({
   onExit,
   pollUrl
 }: MultipleChoiceDynamicViewerProps) {
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
   const fullscreenRef = useRef<HTMLDivElement>(null);
 
   // Handle fullscreen API
@@ -223,27 +218,27 @@ export default function MultipleChoiceDynamicViewer({
 
   const containerProps = isFullWindow
     ? {
-        w: "100vw",
-        h: "100vh",
-        bg: cardBgColor,
-        display: "flex",
-        flexDirection: "column" as const,
-        p: 8
-      }
+      w: "100vw",
+      h: "100vh",
+      bg: "bg.subtle",
+      display: "flex",
+      flexDirection: "column" as const,
+      p: 8
+    }
     : {
-        bg: cardBgColor,
-        borderRadius: "2xl",
-        p: 10,
-        border: "1px solid",
-        borderColor: borderColor,
-        display: "flex",
-        flexDirection: "column" as const,
-        minH: "700px",
-        maxW: "1400px",
-        w: "95%",
-        mx: "auto",
-        boxShadow: "lg"
-      };
+      bg: "bg.subtle",
+      borderRadius: "2xl",
+      p: 10,
+      border: "1px solid",
+      borderColor: "border.default",
+      display: "flex",
+      flexDirection: "column" as const,
+      minH: "700px",
+      maxW: "1400px",
+      w: "95%",
+      mx: "auto",
+      boxShadow: "lg"
+    };
 
   const handleExit = () => {
     const exitFullscreen = async () => {
@@ -286,16 +281,16 @@ export default function MultipleChoiceDynamicViewer({
         )}
         {isFullWindow && pollUrl && (
           <Box position="absolute" bottom={4} right={4} zIndex={10000}>
-            <Text fontSize="2xl" color={textColor} textAlign="right">
+            <Text fontSize="2xl" color="fg.default" textAlign="right">
               Answer Live at:{" "}
-              <Text as="span" fontWeight="semibold" color="#3B82F6">
+              <Text as="span" fontWeight="semibold" color="blue.500">
                 {pollUrl}
               </Text>
             </Text>
           </Box>
         )}
         <VStack align="center" justify="center" gap={4} flex="1" minH="0" w="100%">
-          <Heading size={isFullWindow ? "xl" : "lg"} color={textColor} textAlign="center">
+          <Heading size={isFullWindow ? "xl" : "lg"} color="fg.default" textAlign="center">
             {questionPrompt}
           </Heading>
           <Box w="100%" translate="auto" translateX="-20px">
@@ -303,17 +298,22 @@ export default function MultipleChoiceDynamicViewer({
               <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 100, top: 0, bottom: 0 }}>
                 <XAxis
                   type="number"
-                  tick={{ fill: tickColor, fontSize: 10 }}
+                  tick={{ fill: "var(--chakra-colors-fg-default)", fontSize: 10 }}
                   allowDecimals={false}
                   domain={[0, xAxisMax]}
                   tickFormatter={(value) => (Number.isInteger(value) ? String(value) : "")}
                 />
-                <YAxis type="category" dataKey="name" tick={{ fill: tickColor, fontSize: 12 }} width={200} />
-                <Bar dataKey="value" fill="#3B82F6" barSize={isFullWindow ? 150 : 100} />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  tick={{ fill: "var(--chakra-colors-fg-default)", fontSize: 12 }}
+                  width={200}
+                />
+                <Bar dataKey="value" fill="var(--chakra-colors-blue-500)" barSize={isFullWindow ? 150 : 100} />
               </BarChart>
             </ResponsiveContainer>
           </Box>
-          <Text fontSize="md" color={textColor} textAlign="center">
+          <Text fontSize="md" color="fg.default" textAlign="center">
             Number of Responses
           </Text>
         </VStack>

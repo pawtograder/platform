@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
-import { useColorModeValue } from "@/components/ui/color-mode";
 
 type PollResponsesHeaderProps = {
   courseID: string;
@@ -24,10 +23,6 @@ export default function PollResponsesHeader({
   onPresent
 }: PollResponsesHeaderProps) {
   const router = useRouter();
-
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-  const textColor = useColorModeValue("#1A202C", "#FFFFFF");
 
   const handleToggleLive = useCallback(async () => {
     const nextState = !pollIsLive;
@@ -75,16 +70,16 @@ export default function PollResponsesHeader({
           variant="outline"
           size="sm"
           bg="transparent"
-          borderColor={buttonBorderColor}
-          color={buttonTextColor}
-          _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+          borderColor="border.emphasized"
+          color="fg.muted"
+          _hover={{ bg: "gray.subtle" }}
           onClick={() => router.push(`/course/${courseID}/manage/polls`)}
         >
           ← Back to Polls
         </Button>
-        <Text fontSize="xl" color={textColor} textAlign="center">
+        <Text fontSize="xl" color="fg" textAlign="center">
           Answer Live at:{" "}
-          <Text as="span" fontWeight="semibold" color="#3B82F6">
+          <Text as="span" fontWeight="semibold" color="blue.500">
             {pollUrl}
           </Text>
         </Text>
@@ -93,14 +88,14 @@ export default function PollResponsesHeader({
             variant="outline"
             size="sm"
             bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+            borderColor="border.emphasized"
+            color="fg.muted"
+            _hover={{ bg: "gray.subtle" }}
             onClick={handleToggleLive}
           >
             {pollIsLive ? "Stop Poll" : "Start Poll"}
           </Button>
-          <Button size="sm" bg="#3B82F6" color="white" _hover={{ bg: "#2563EB" }} onClick={onPresent}>
+          <Button size="sm" bg="blue.500" color="white" _hover={{ bg: "blue.600" }} onClick={onPresent}>
             Present
           </Button>
         </HStack>
