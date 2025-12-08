@@ -96,7 +96,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
     } else if (survey.status === "published") {
       // Instructors can edit published surveys
-      return isInstructor 
+      return isInstructor
         ? `/course/${courseId}/manage/surveys/${survey.id}/edit`
         : `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
     } else if (survey.status === "closed") {

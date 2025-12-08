@@ -286,15 +286,7 @@ export default function NewPollPage() {
           </Heading>
         </VStack>
 
-        <Box
-          w="100%"
-          maxW="800px"
-          bg="bg.subtle"
-          border="1px solid"
-          borderColor="border"
-          borderRadius="lg"
-          p={8}
-        >
+        <Box w="100%" maxW="800px" bg="bg.subtle" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
           <form onSubmit={onSubmit}>
             <VStack align="stretch" gap={6}>
               <Box>

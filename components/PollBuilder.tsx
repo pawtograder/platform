@@ -141,9 +141,9 @@ export default function PollBuilder({ value, onGetCurrentJson }: PollBuilderProp
         if (typeConfig.requiresChoices) {
           const choices = Array.isArray(firstElement.choices)
             ? firstElement.choices.map((choice: string | { value: string; text?: string }, index: number) => ({
-              id: `choice${index + 1}`,
-              label: typeof choice === "string" ? choice : choice.text || choice.value || ""
-            }))
+                id: `choice${index + 1}`,
+                label: typeof choice === "string" ? choice : choice.text || choice.value || ""
+              }))
             : [{ id: "choice1", label: "" }];
 
           pollData.choices = choices.length > 0 ? choices : [{ id: "choice1", label: "" }];

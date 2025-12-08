@@ -210,12 +210,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                   <HStack gap={2} justifyContent="center">
                     <MenuRoot>
                       <MenuTrigger asChild>
-                        <IconButton
-                          size="sm"
-                          variant="ghost"
-                          aria-label="Poll actions"
-                          borderColor="border.default"
-                        >
+                        <IconButton size="sm" variant="ghost" aria-label="Poll actions" borderColor="border.default">
                           <HiOutlineDotsHorizontal />
                         </IconButton>
                       </MenuTrigger>

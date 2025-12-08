@@ -39,15 +39,7 @@ export default function StudentPollsPage() {
           </Box>
         ) : polls.length === 0 ? (
           <Box display="flex" justifyContent="center" w="100%">
-            <Box
-              maxW="800px"
-              w="100%"
-              bg="bg.muted"
-              border="1px solid"
-              borderColor="border"
-              borderRadius="lg"
-              p={8}
-            >
+            <Box maxW="800px" w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
               <VStack align="center" gap={4}>
                 <Heading size="xl" color="fg" textAlign="center">
                   No Live Polls Available

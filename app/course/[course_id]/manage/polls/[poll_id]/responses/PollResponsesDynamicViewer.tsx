@@ -57,7 +57,7 @@ export default function PollResponsesDynamicViewer({
     setIsPresenting(false);
   }, []);
 
-  const handlePollStatusChange = useCallback(() => { }, []);
+  const handlePollStatusChange = useCallback(() => {}, []);
 
   // Render full window present view
   if (isPresenting) {

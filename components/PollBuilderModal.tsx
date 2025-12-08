@@ -12,7 +12,6 @@ type PollBuilderModalProps = {
 };
 
 export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson }: PollBuilderModalProps) {
-
   // Ref to get current JSON from PollBuilder
   const getCurrentJsonRef = useRef<(() => string) | null>(null);
 

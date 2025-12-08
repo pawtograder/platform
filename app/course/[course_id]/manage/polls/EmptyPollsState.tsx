@@ -8,7 +8,6 @@ type EmptyPollsStateProps = {
 };
 
 export default function EmptyPollsState({ courseId }: EmptyPollsStateProps) {
-
   return (
     <Container py={8} maxW="1200px" my={2}>
       <HStack justify="space-between" mb={8}>
