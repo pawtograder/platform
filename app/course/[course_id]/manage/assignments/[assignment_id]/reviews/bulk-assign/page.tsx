@@ -440,7 +440,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   // shuffled course staff to avoid those created first from consistently getting more assignments when
   // submissions / course_staff has a remainder
   const courseStaff = useMemo(() => {
-    const staffBase = userRoles.filter((user) => user.role === "grader" || user.role === "instructor");
+    const staffBase = userRoles.filter(
+      (user) => (user.role === "grader" || user.role === "instructor") && !user.disabled
+    );
     const enriched: UserRoleWithConflictsAndName[] = staffBase.map((u) => ({
       ...(u as unknown as UserRoleWithConflictsAndName),
       profiles: {
