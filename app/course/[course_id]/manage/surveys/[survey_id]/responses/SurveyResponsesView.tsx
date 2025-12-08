@@ -24,19 +24,24 @@ type SurveyResponsesViewProps = {
 };
 
 /**
- * Gets question titles from survey JSON for dynamic column headers
+ * Gets question names and titles from survey JSON in page order for dynamic column headers
  */
-function getQuestionTitles(surveyJson: Survey["json"]): Record<string, string> {
+function getOrderedQuestions(surveyJson: Survey["json"]): { names: string[]; titles: Record<string, string> } {
+  const names: string[] = [];
   const titles: Record<string, string> = {};
   try {
     const survey = new Model(surveyJson);
+    // getAllQuestions() returns questions page by page, maintaining the survey flow
     survey.getAllQuestions().forEach((q) => {
-      if (q.name) titles[q.name] = q.title || q.name;
+      if (q.name) {
+        names.push(q.name);
+        titles[q.name] = q.title || q.name;
+      }
     });
   } catch {
     /* ignore */
   }
-  return titles;
+  return { names, titles };
 }
 
 /**
@@ -126,22 +131,10 @@ export default function SurveyResponsesView({
 
   const totalResponses = responses.length;
 
-  // Get dynamic question columns from survey JSON
-  const questionTitles = useMemo<Record<string, string>>(() => {
-    return getQuestionTitles(surveyJson);
+  // Get dynamic question columns from survey JSON in page order
+  const { names: allQuestionNames, titles: questionTitles } = useMemo(() => {
+    return getOrderedQuestions(surveyJson);
   }, [surveyJson]);
-
-  // Get all unique question names from responses
-  const allQuestionNames = useMemo(() => {
-    const questionNames = new Set<string>();
-    responses.forEach((response) => {
-      const answers = (response.response ?? {}) as Record<string, unknown>;
-      Object.keys(answers).forEach((key) => {
-        questionNames.add(key);
-      });
-    });
-    return Array.from(questionNames);
-  }, [responses]);
 
   // Filter responses based on active filters
   const filteredResponses = useMemo(() => {
