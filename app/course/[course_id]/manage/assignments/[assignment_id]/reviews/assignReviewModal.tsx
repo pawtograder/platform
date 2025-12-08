@@ -118,14 +118,16 @@ export default function AssignReviewModal({
 
   const supabaseClient = createClient();
   const selectedRubricId = watch("rubric_id");
+  const selectedRubricPartIds = watch("rubric_part_ids");
   const selectedSubmissionId = watch("submission_id");
 
-  const { isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
+  const { data: assignmentData, isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
     resource: "assignments",
     id: assignmentId,
     queryOptions: { enabled: isOpen && !!assignmentId },
     meta: { select: "id, grading_rubric_id" }
   });
+  const gradingRubricId = assignmentData?.data?.grading_rubric_id;
 
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
@@ -144,8 +146,7 @@ export default function AssignReviewModal({
     queryOptions: { enabled: isOpen }
   });
 
-  const { classRealTimeController } = useCourseController();
-  const supabase = createClient();
+  const { classRealTimeController, client: supabase } = useCourseController();
 
   // Create a TableController for populated submissions using AssignmentController pattern
   const populatedSubmissionsSelect =
@@ -250,8 +251,76 @@ export default function AssignReviewModal({
     }));
   }, [courseUsersData, selectedSubmissionId, submissionsDataArray, gradingConflictsData]);
 
+  // Review assignments to detect which submissions are already assigned (respecting selected rubric/parts)
+  const reviewAssignmentsSelect = "id, submission_id, rubric_id, review_assignment_rubric_parts(rubric_part_id)";
+  const [reviewAssignments, setReviewAssignments] = useState<
+    {
+      id: number;
+      submission_id: number;
+      rubric_id: number;
+      review_assignment_rubric_parts: { rubric_part_id: number | null }[] | null;
+    }[]
+  >([]);
+  const [isLoadingReviewAssignments, setIsLoadingReviewAssignments] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setReviewAssignments([]);
+      return;
+    }
+    const load = async () => {
+      setIsLoadingReviewAssignments(true);
+      const query = supabaseClient
+        .from("review_assignments")
+        .select(reviewAssignmentsSelect)
+        .eq("assignment_id", assignmentId);
+      if (selectedRubricId) {
+        query.eq("rubric_id", selectedRubricId);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        setReviewAssignments(
+          data as {
+            id: number;
+            submission_id: number;
+            rubric_id: number;
+            review_assignment_rubric_parts: { rubric_part_id: number | null }[] | null;
+          }[]
+        );
+      } else {
+        setReviewAssignments([]);
+      }
+      setIsLoadingReviewAssignments(false);
+    };
+    void load();
+  }, [isOpen, assignmentId, selectedRubricId, supabaseClient]);
+
   const submissionsOptions = useMemo(() => {
-    return (
+    const partsToCheck =
+      selectedRubricPartIds && selectedRubricPartIds.length > 0 ? new Set(selectedRubricPartIds) : null;
+
+    const isSubmissionAssigned = (submissionId: number) => {
+      const ras = reviewAssignments.filter(
+        (ra) => ra.submission_id === submissionId && (!selectedRubricId || ra.rubric_id === selectedRubricId)
+      );
+      if (ras.length === 0) return false;
+      if (!partsToCheck || partsToCheck.size === 0) return true;
+
+      // If any RA has no specific parts, treat as fully assigned
+      if (ras.some((ra) => !ra.review_assignment_rubric_parts || ra.review_assignment_rubric_parts.length === 0)) {
+        return true;
+      }
+
+      const covered = new Set<number>();
+      ras.forEach((ra) => {
+        ra.review_assignment_rubric_parts?.forEach((p) => {
+          if (p.rubric_part_id) covered.add(p.rubric_part_id);
+        });
+      });
+      return Array.from(partsToCheck).every((pid) => covered.has(pid));
+    };
+
+    const baseOptions =
       submissionsDataArray.map((sub) => {
         let label = `Submission ID: ${sub.id}`;
         if (sub.assignment_groups?.name) {
@@ -259,10 +328,21 @@ export default function AssignReviewModal({
         } else if (sub.profiles?.name) {
           label = `Student: ${sub.profiles.name} (Submission ID: ${sub.id})`;
         }
-        return { value: sub.id, label };
-      }) || []
-    );
-  }, [submissionsDataArray]);
+        return { value: sub.id, label, assigned: isSubmissionAssigned(sub.id) };
+      }) || [];
+
+    const unassigned = baseOptions.filter((opt) => !opt.assigned);
+    const assigned = baseOptions.filter((opt) => opt.assigned);
+
+    const groups: { label: string; options: typeof baseOptions }[] = [];
+    if (unassigned.length > 0) {
+      groups.push({ label: "Unassigned submissions", options: unassigned });
+    }
+    if (assigned.length > 0) {
+      groups.push({ label: "Already assigned", options: assigned });
+    }
+    return groups;
+  }, [submissionsDataArray, reviewAssignments, selectedRubricId, selectedRubricPartIds]);
 
   const rubricsFilters = useMemo(() => {
     if (isLoadingAssignment) return undefined;
@@ -290,6 +370,16 @@ export default function AssignReviewModal({
       })) || [],
     [rubricsData]
   );
+
+  // Default rubric to grading rubric when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    if (gradingRubricId === null) return;
+    resetForm((prev) => ({
+      ...prev,
+      rubric_id: gradingRubricId ?? prev.rubric_id
+    }));
+  }, [isOpen, gradingRubricId, resetForm]);
 
   const { data: rubricPartsData, isLoading: isLoadingRubricParts } = useList<
     Database["public"]["Tables"]["rubric_parts"]["Row"]
@@ -520,14 +610,18 @@ export default function AssignReviewModal({
   };
 
   useEffect(() => {
-    resetForm(
+    const gradingRubricId = assignmentData?.data?.grading_rubric_id ?? undefined;
+    const defaults: Partial<ReviewAssignmentFormData> =
       isEditing && initialData
         ? {
             assignee_profile_id: initialData.assignee_profile_id,
             submission_id: initialData.submission_id,
-            rubric_id: initialData.rubric_id,
+            rubric_id: initialData.rubric_id ?? gradingRubricId,
             due_date: initialData.due_date ? format(new TZDate(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
-            rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_parts.id) || [],
+            rubric_part_ids:
+              initialData.review_assignment_rubric_parts
+                ?.map((p) => p.rubric_parts.id)
+                .filter((id): id is number => id !== null && id !== undefined) || [],
             release_date: initialData.release_date
               ? format(new TZDate(initialData.release_date), "yyyy-MM-dd'T'HH:mm")
               : undefined,
@@ -538,12 +632,12 @@ export default function AssignReviewModal({
             rubric_part_ids: [],
             assignee_profile_id: undefined,
             submission_id: undefined,
-            rubric_id: undefined,
+            rubric_id: gradingRubricId,
             due_date: "",
             release_date: undefined
-          }
-    );
-  }, [isEditing, initialData, resetForm]);
+          };
+    resetForm(defaults as ReviewAssignmentFormData);
+  }, [isEditing, initialData, resetForm, assignmentData]);
 
   return (
     <DialogRoot
@@ -572,10 +666,16 @@ export default function AssignReviewModal({
                       {...field}
                       inputId="submission_id"
                       options={submissionsOptions}
-                      isLoading={isLoadingSubmissions}
+                      isLoading={isLoadingSubmissions || isLoadingReviewAssignments}
                       placeholder="Select Submission..."
                       onChange={(option) => field.onChange(option?.value)}
-                      value={submissionsOptions.find((opt) => opt.value === field.value)}
+                      value={
+                        Array.isArray(submissionsOptions)
+                          ? submissionsOptions
+                              .flatMap((group) => group.options)
+                              .find((opt) => opt.value === field.value)
+                          : undefined
+                      }
                       chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
                     />
                   )}
