@@ -8,12 +8,12 @@ import { toaster } from "@/components/ui/toaster";
 import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
-  useActiveUserRolesWithProfiles,
   useAssignments,
   useClassSections,
   useCourseController,
   useGradersAndInstructors,
-  useLabSections
+  useLabSections,
+  useUserRolesWithProfiles
 } from "@/hooks/useCourseController";
 import useTags from "@/hooks/useTags";
 import TableController, {
@@ -73,7 +73,9 @@ export default function BulkAssignGradingPage() {
             <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
               Reassigning Work
             </Link>
-            ), and will only process submissions/rubric parts that have not been assigned yet.
+            ), and will only process submissions/rubric parts that have not been assigned yet. If a student/group has
+            not yet made a submission, they will not be assigned to a grader. However, as students update existing
+            submissions, the grading assignments will be updated automatically.
           </Text>
           <Text fontSize="sm" maxW="lg">
             The algorithm will first split submissions between graders (assigning all selected rubric parts to each
@@ -157,7 +159,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const gradingRubric = rubrics.find((rubric) => rubric.review_round === "grading-review");
   const allActiveSubmissions = useActiveSubmissions();
 
-  const userRoles = useActiveUserRolesWithProfiles();
+  const userRoles = useUserRolesWithProfiles();
 
   const courseController = useCourseController();
 
@@ -438,7 +440,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   // shuffled course staff to avoid those created first from consistently getting more assignments when
   // submissions / course_staff has a remainder
   const courseStaff = useMemo(() => {
-    const staffBase = userRoles.filter((user) => user.role === "grader" || user.role === "instructor");
+    const staffBase = userRoles.filter(
+      (user) => (user.role === "grader" || user.role === "instructor") && !user.disabled
+    );
     const enriched: UserRoleWithConflictsAndName[] = staffBase.map((u) => ({
       ...(u as unknown as UserRoleWithConflictsAndName),
       profiles: {
