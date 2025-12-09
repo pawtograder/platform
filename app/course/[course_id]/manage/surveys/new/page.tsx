@@ -34,7 +34,6 @@ export default function NewSurveyPage() {
   const searchParams = useSearchParams();
   const trackEvent = useTrackEvent();
 
-  // THIS is where we're allowed to call hooks like useClassProfiles
   const { private_profile_id, role } = useClassProfiles();
   const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
   const [currentSurveyId, setCurrentSurveyId] = useState<string | null>(null);
@@ -158,22 +157,23 @@ export default function NewSurveyPage() {
   // Only load draft if returning from preview (indicated by URL parameter)
   useEffect(() => {
     const isReturningFromPreview = searchParams.get("from") === "preview";
+    const surveyIdFromUrl = searchParams.get("survey_id");
 
     if (isReturningFromPreview && !hasLoadedDraft.current) {
       hasLoadedDraft.current = true; // Mark as loaded to prevent duplicate loading
       setIsReturningFromPreview(true); // Set state for save functions to use
 
-      const loadLatestDraft = async () => {
+      const loadDraft = async () => {
+        // Require explicit survey_id to restore a draft - without it, start fresh
+        // This prevents the fragile "most recent survey" heuristic that could load
+        // the wrong survey in multi-tab scenarios
+        if (!surveyIdFromUrl) {
+          return;
+        }
+
         try {
           const supabase = createClient();
-          const { data, error } = await supabase
-            .from("surveys")
-            .select("*")
-            .eq("class_id", Number(course_id))
-            .eq("created_by", private_profile_id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single();
+          const { data, error } = await supabase.from("surveys").select("*").eq("id", surveyIdFromUrl).single();
 
           if (data && !error) {
             // Convert due_date from ISO string to datetime-local format in course timezone
@@ -218,14 +218,15 @@ export default function NewSurveyPage() {
         }
       };
 
-      loadLatestDraft();
+      loadDraft();
 
-      // Clean up the URL parameter
+      // Clean up the URL parameters
       const url = new URL(window.location.href);
       url.searchParams.delete("from");
+      url.searchParams.delete("survey_id");
       window.history.replaceState({}, "", url.toString());
     }
-  }, [course_id, reset, searchParams, private_profile_id, timezone]);
+  }, [reset, searchParams, timezone]);
 
   // -------- CENTRALIZED SAVE FUNCTION --------
   const saveSurvey = useCallback(
