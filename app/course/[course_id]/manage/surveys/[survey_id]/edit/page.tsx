@@ -41,10 +41,9 @@ export default function EditSurveyPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
   const trackEvent = useTrackEvent();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
   const [isLoading, setIsLoading] = useState(true);
   const [surveyData, setSurveyData] = useState<SurveyRow>();
-  const { role } = useClassProfiles();
   const rawSurveyId = getParam(survey_id, "survey_id");
   const timezone = role.classes?.time_zone || "America/New_York";
 

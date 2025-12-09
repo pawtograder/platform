@@ -299,74 +299,8 @@ export default function NewSurveyPage() {
 
         data = result.data;
         error = result.error;
-      } else if (isReturningFromPreview) {
-        // Fallback for returning from preview if currentSurveyId wasn't set (e.g. network race condition)
-        // Try to find the latest draft
-        const { data: existingSurvey, error: surveyError } = await supabase
-          .from("surveys")
-          .select("id, survey_id")
-          .eq("class_id", Number(course_id))
-          .eq("created_by", private_profile_id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
-
-        if (existingSurvey && !surveyError) {
-          // Update existing survey found by query
-          setCurrentSurveyId(existingSurvey.id); // Set it for next time
-
-          const updatePayload = {
-            title: (values.title as string) || "Untitled Survey",
-            description: (values.description as string) || null,
-            json: jsonToStore,
-            status: finalStatus,
-            allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
-            due_date: convertDueDateToISO(values.due_date as string),
-            validation_errors: validationErrors,
-            assigned_to_all: Boolean(values.assigned_to_all),
-            updated_at: new Date().toISOString()
-          };
-
-          const result = await supabase
-            .from("surveys")
-            .update(updatePayload)
-            .eq("id", existingSurvey.id)
-            .select("id, survey_id")
-            .single();
-
-          data = result.data;
-          error = result.error;
-        } else {
-          // Should not happen if logic is correct, but treat as new
-          const survey_id = crypto.randomUUID();
-          const insertPayload = {
-            survey_id,
-            version: 1,
-            class_id: Number(course_id),
-            created_by: private_profile_id,
-            title: (values.title as string) || "Untitled Survey",
-            description: (values.description as string) || null,
-            json: jsonToStore,
-            status: finalStatus,
-            created_at: new Date().toISOString(),
-            allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
-            due_date: convertDueDateToISO(values.due_date as string),
-            validation_errors: validationErrors,
-            assigned_to_all: Boolean(values.assigned_to_all)
-          };
-
-          const result = await supabase
-            .from("surveys")
-            .insert(insertPayload)
-            .select("id, survey_id")
-            .single();
-
-          data = result.data;
-          error = result.error;
-          if (data) setCurrentSurveyId(data.id);
-        }
       } else {
-        // Not returning from preview and no current ID - always create new survey
+        // No current survey ID - create new survey
         const survey_id = crypto.randomUUID();
 
         const insertPayload = {
