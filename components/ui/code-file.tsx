@@ -669,9 +669,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
         )
         .map((check: RubricCheck) => check.rubric_criteria_id);
       // Using the effective rubric (either manually selected or default)
-      criteriaWithAnnotationChecks = rubricCriteria.filter((criteria: RubricCriteria) =>
-        annotationChecks.includes(criteria.id)
-      );
+      criteriaWithAnnotationChecks = rubricCriteria
+        .filter((criteria: RubricCriteria) => annotationChecks.includes(criteria.id))
+        .sort((a, b) => a.ordinal - b.ordinal);
     }
 
     const criteriaOptions: RubricCriteriaSelectGroupOption[] =
@@ -687,6 +687,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 (check.annotation_target === "file" || check.annotation_target === null) &&
                 check.rubric_criteria_id === criteria.id
             )
+            .sort((a, b) => a.ordinal - b.ordinal)
             .map((check) => {
               // Count existing annotations for this specific check
               const existingAnnotationsForCheck = existingComments.filter(

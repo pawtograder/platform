@@ -1,11 +1,12 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useRubrics } from "@/hooks/useAssignment";
+import { useActiveSubmissions, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -61,8 +62,17 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const { course_id } = useParams();
   const { mutate: deleteReviewAssignment } = useDelete();
   const { role: course } = useClassProfiles();
-  const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions } = useCourseController();
+  const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions, assignmentGroupsWithMembers } =
+    useCourseController();
   const rubrics = useRubrics();
+  const activeSubmissions = useActiveSubmissions();
+  const gradingRubric = useMemo(
+    () =>
+      rubrics?.find((r) => r.review_round === "grading-review") ??
+      rubrics?.find((r) => r.review_round !== "self-review"),
+    [rubrics]
+  );
+  const gradingRubricParts = useRubricParts(gradingRubric?.id);
   const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
   const supabase = createClient();
   const [isExporting, setIsExporting] = useState(false);
@@ -579,7 +589,9 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
   const table = useTableControllerTable<
     "review_assignments",
-    "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
+    "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))",
+    number,
+    PopulatedReviewAssignment
   >({
     columns,
     tableController,
@@ -724,6 +736,111 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     };
   }, [data, createFilterOptions, getReviewStatus]);
 
+  const assignmentIdNumber = useMemo(() => Number(assignmentId), [assignmentId]);
+  const staffProfileIds = useMemo(() => {
+    // Match bulk-assign: exclude grader/instructor work from counts
+    const roles = ["grader", "instructor"];
+    return new Set(
+      userRolesWithProfiles.rows
+        ?.filter((r) => roles.includes((r.role as string) ?? ""))
+        .map((r) => r.private_profile_id)
+        .filter(Boolean) as string[]
+    );
+  }, [userRolesWithProfiles.rows]);
+  const activeProfileIds = useMemo(() => {
+    const map = new Map<string, boolean>();
+    userRolesWithProfiles.rows?.forEach((r) => {
+      if (r.private_profile_id) {
+        map.set(r.private_profile_id, !r.disabled);
+      }
+    });
+    return map;
+  }, [userRolesWithProfiles.rows]);
+  const groupMembersByGroupId = useMemo(() => {
+    const map = new Map<number, string[]>();
+    assignmentGroupsWithMembers.rows
+      ?.filter((ag) => ag.assignment_id === assignmentIdNumber)
+      .forEach((ag) => {
+        const members = ag.assignment_groups_members?.map((m) => m.profile_id).filter(Boolean) as string[] | undefined;
+        if (members && ag.id !== undefined && ag.id !== null) {
+          map.set(ag.id, members);
+        }
+      });
+    return map;
+  }, [assignmentGroupsWithMembers.rows, assignmentIdNumber]);
+  const unassignedSummary = useMemo(() => {
+    const submissionsForAssignment = activeSubmissions?.filter((sub) => sub.assignment_id === assignmentIdNumber) ?? [];
+    if (!gradingRubric || submissionsForAssignment.length === 0) {
+      return { total: submissionsForAssignment.length, unassigned: 0 };
+    }
+
+    const rubricPartIds = (gradingRubricParts ?? []).map((part) => part.id);
+    const hasParts = rubricPartIds.length > 0;
+
+    const memberIdsForSubmission = (submission: (typeof submissionsForAssignment)[number]) =>
+      submission.assignment_group_id && groupMembersByGroupId.has(submission.assignment_group_id)
+        ? groupMembersByGroupId.get(submission.assignment_group_id)!
+        : submission.profile_id
+          ? [submission.profile_id]
+          : [];
+
+    const isStaffSubmission = (submission: (typeof submissionsForAssignment)[number]) => {
+      const memberIds = memberIdsForSubmission(submission);
+      return memberIds.some((pid) => staffProfileIds.has(pid));
+    };
+
+    const hasAnyActiveMember = (submission: (typeof submissionsForAssignment)[number]) => {
+      const memberIds = memberIdsForSubmission(submission);
+      return memberIds.some((pid) => activeProfileIds.get(pid));
+    };
+
+    const filteredSubmissions = submissionsForAssignment.filter(
+      (submission) => !isStaffSubmission(submission) && hasAnyActiveMember(submission)
+    );
+
+    const unassignedCount = filteredSubmissions.filter((submission) => {
+      const matches =
+        data?.filter((ra) => ra.rubric_id === gradingRubric.id && ra.submission_id === submission.id) ?? [];
+
+      if (matches.length === 0) {
+        return true;
+      }
+
+      if (!hasParts) {
+        return false;
+      }
+
+      if (matches.some((ra) => !ra.review_assignment_rubric_parts || ra.review_assignment_rubric_parts.length === 0)) {
+        return false;
+      }
+
+      const covered = new Set<number>();
+      matches.forEach((ra) => {
+        ra.review_assignment_rubric_parts?.forEach((part) => {
+          if (part.rubric_part_id) {
+            covered.add(part.rubric_part_id);
+          } else if (part.rubric_parts?.id) {
+            covered.add(part.rubric_parts.id);
+          }
+        });
+      });
+
+      const hasUnassignedParts = rubricPartIds.some((pid) => !covered.has(pid));
+      return hasUnassignedParts;
+    }).length;
+
+    return { total: filteredSubmissions.length, unassigned: unassignedCount };
+  }, [
+    activeSubmissions,
+    assignmentIdNumber,
+    data,
+    gradingRubric,
+    gradingRubricParts,
+    groupMembersByGroupId,
+    staffProfileIds,
+    activeProfileIds
+  ]);
+
   if (isLoadingReviewAssignments) {
     return <Spinner />;
   }
@@ -733,6 +850,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   }
 
   const currentRows = getRowModel().rows;
+  const hasUnassigned = unassignedSummary.unassigned > 0;
 
   return (
     <VStack align="stretch" w="100%">
@@ -745,6 +863,13 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           Export CSV
         </Button>
       </HStack>
+      <Alert status={hasUnassigned ? "warning" : "success"} variant="subtle" mb={4}>
+        {unassignedSummary.total === 0
+          ? "No active submissions yet for this assignment."
+          : hasUnassigned
+            ? `${unassignedSummary.unassigned} of ${unassignedSummary.total} active submissions still need grading assignments.`
+            : "All active submissions currently have grading assignments. Use the Bulk Assign Grading button to assign reviews to submissions that have not yet been assigned."}
+      </Alert>
       <Table.Root>
         <Table.Header>
           {getHeaderGroups().map((headerGroup) => (
