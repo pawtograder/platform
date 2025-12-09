@@ -27,7 +27,6 @@ type SurveyFormData = {
 };
 
 type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "closed"
-type SurveyIds = Pick<Tables<"surveys">, "id" | "survey_id">;
 
 export default function NewSurveyPage() {
   const { course_id } = useParams();
@@ -296,8 +295,7 @@ export default function NewSurveyPage() {
           .update(updatePayload)
           .eq("id", currentSurveyId)
           .select("id, survey_id")
-          .single()
-          .returns<SurveyIds>();
+          .single();
 
         data = result.data;
         error = result.error;
@@ -311,8 +309,7 @@ export default function NewSurveyPage() {
           .eq("created_by", private_profile_id)
           .order("created_at", { ascending: false })
           .limit(1)
-          .single()
-          .returns<SurveyIds>();
+          .single();
 
         if (existingSurvey && !surveyError) {
           // Update existing survey found by query
@@ -335,8 +332,7 @@ export default function NewSurveyPage() {
             .update(updatePayload)
             .eq("id", existingSurvey.id)
             .select("id, survey_id")
-            .single()
-            .returns<SurveyIds>();
+            .single();
 
           data = result.data;
           error = result.error;
@@ -363,8 +359,7 @@ export default function NewSurveyPage() {
             .from("surveys")
             .insert(insertPayload)
             .select("id, survey_id")
-            .single()
-            .returns<SurveyIds>();
+            .single();
 
           data = result.data;
           error = result.error;
@@ -394,8 +389,7 @@ export default function NewSurveyPage() {
           .from("surveys")
           .insert(insertPayload)
           .select("id, survey_id")
-          .single()
-          .returns<SurveyIds>();
+          .single();
 
         data = result.data;
         error = result.error;
