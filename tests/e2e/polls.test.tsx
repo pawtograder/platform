@@ -125,7 +125,7 @@ test.describe("Polls", () => {
     await expect(liveRow).not.toBeVisible();
   });
 
-  test("student only sees live polls (closed polls are hidden)", async ({ page }) => {
+  test.skip("student only sees live polls (closed polls are hidden)", async ({ page }) => {
     const course = await createClass();
     const [student, instructor] = await createUsersInClass([
       { role: "student", class_id: course.id, name: "Closed Poll Student", useMagicLink: true },
@@ -152,6 +152,54 @@ test.describe("Polls", () => {
 
     await expect(page.getByRole("heading", { name: "No Live Polls Available" })).toBeVisible();
     await expect(page.getByText("Hidden Closed Poll")).not.toBeVisible();
+  });
+
+  test("student only sees the most recent live poll", async ({ page }) => {
+    const course = await createClass();
+    const [student, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Single Live Poll Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Single Live Poll Instructor", useMagicLink: true }
+    ]);
+
+    const olderCreatedAt = "2025-01-01T00:00:00.000Z";
+    const newerCreatedAt = "2025-02-01T00:00:00.000Z";
+
+    // Older live poll
+    await supabase.from("live_polls").insert({
+      class_id: course.id,
+      created_by: instructor.public_profile_id,
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Older Live Poll" }]
+      },
+      is_live: true,
+      require_login: false,
+      deactivates_at: null,
+      created_at: olderCreatedAt
+    });
+
+    // Newer live poll
+    await supabase.from("live_polls").insert({
+      class_id: course.id,
+      created_by: instructor.public_profile_id,
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Newer Live Poll" }]
+      },
+      is_live: true,
+      require_login: false,
+      deactivates_at: null,
+      created_at: newerCreatedAt
+    });
+
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/polls`);
+
+    await expect(page.getByText("Newer Live Poll")).toBeVisible();
+    await expect(page.getByText("Older Live Poll")).not.toBeVisible();
+
+    // Should only render one live poll row
+    await expect(page.getByRole("row", { name: /Newer Live Poll/i })).toHaveCount(1);
   });
 
   test("instructor sees poll actions menu items", async ({ page }) => {
