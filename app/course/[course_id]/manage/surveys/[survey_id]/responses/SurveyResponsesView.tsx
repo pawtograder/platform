@@ -86,14 +86,22 @@ function formatResponseValue(value: unknown): string {
   return String(value);
 }
 
-function escapeCSVValue(value: string): string {
+function escapeCSVValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "";
   }
 
   const stringValue = String(value);
 
-  // if string value contains comma, quote, or newline, wrap in quotes and escape internal quotes
+  // Prevent CSV/Excel formula injection (OWASP/CWE-1236)
+  // Characters =, +, -, @ at the start can be interpreted as formulas
+  const trimmed = stringValue.trimStart();
+  if (["=", "+", "-", "@"].includes(trimmed[0] ?? "")) {
+    // Leading apostrophe forces text interpretation in spreadsheet applications
+    return `"'${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  // If string value contains comma, quote, or newline, wrap in quotes and escape internal quotes
   if (stringValue.includes(",") || stringValue.includes('"') || stringValue.includes("\n")) {
     return `"${stringValue.replace(/"/g, '""')}"`;
   }
