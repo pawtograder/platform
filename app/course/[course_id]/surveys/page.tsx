@@ -9,6 +9,7 @@ import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { SurveyWithResponse } from "@/types/survey";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 
 type FilterType = "all" | "not_started" | "completed";
 
@@ -17,6 +18,10 @@ export default function StudentSurveysPage() {
   const [surveys, setSurveys] = useState<SurveyWithResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
+
+  // Get private_profile_id from ClassProfileProvider (already available via course layout)
+  const { private_profile_id } = useClassProfiles();
+  const isStudent = useIsStudent();
 
   // Status badge configuration
   const statusColors = {
@@ -36,47 +41,30 @@ export default function StudentSurveysPage() {
 
   useEffect(() => {
     const loadSurveys = async () => {
+      // Check if user has student role for this course
+      if (!isStudent) {
+        toaster.create({
+          title: "Access Error",
+          description: "This page is only available for students.",
+          type: "error"
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      if (!private_profile_id) {
+        toaster.create({
+          title: "Access Error",
+          description: "We couldn't find your course profile.",
+          type: "error"
+        });
+        setIsLoading(false);
+        return;
+      }
+
       try {
         const supabase = createClient();
-
-        // Get current user
-        const {
-          data: { user }
-        } = await supabase.auth.getUser();
-        if (!user) {
-          toaster.create({
-            title: "Authentication Required",
-            description: "Please log in to view surveys.",
-            type: "error"
-          });
-          setIsLoading(false);
-          return;
-        }
-
-        // Resolve this user's class-specific profile (private_profile_id) for this course
-        const { data: roleDataRaw, error: roleError } = await supabase
-          .from("user_roles")
-          .select("private_profile_id")
-          .eq("user_id", user.id)
-          .eq("class_id", Number(course_id))
-          .eq("role", "student")
-          .eq("disabled", false)
-          .single();
-
-        // Tell TypeScript what we actually expect from that query
-        const roleData = roleDataRaw as { private_profile_id: string } | null;
-
-        if (roleError || !roleData || !roleData.private_profile_id) {
-          toaster.create({
-            title: "Access Error",
-            description: "We couldn't find your course profile.",
-            type: "error"
-          });
-          setIsLoading(false);
-          return;
-        }
-
-        const profileId = roleData.private_profile_id;
+        const profileId = private_profile_id;
 
         // Get published surveys for this course (and not soft-deleted)
         const { data: surveysData, error: surveysError } = await supabase
@@ -147,7 +135,7 @@ export default function StudentSurveysPage() {
     };
 
     loadSurveys();
-  }, [course_id]);
+  }, [course_id, private_profile_id, isStudent]);
 
   const getStatusBadge = (survey: SurveyWithResponse) => {
     const status = statusColors[survey.response_status];
