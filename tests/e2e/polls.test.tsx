@@ -310,11 +310,7 @@ test.describe("Polls", () => {
 
     await expect
       .poll(async () => {
-        const { data } = await supabase
-          .from("live_polls")
-          .select("is_live")
-          .eq("id", togglePoll.id)
-          .maybeSingle();
+        const { data } = await supabase.from("live_polls").select("is_live").eq("id", togglePoll.id).maybeSingle();
         return data?.is_live;
       })
       .toBe(true);
@@ -328,11 +324,7 @@ test.describe("Polls", () => {
 
     await expect
       .poll(async () => {
-        const { data } = await supabase
-          .from("live_polls")
-          .select("is_live")
-          .eq("id", togglePoll.id)
-          .maybeSingle();
+        const { data } = await supabase.from("live_polls").select("is_live").eq("id", togglePoll.id).maybeSingle();
         return data?.is_live;
       })
       .toBe(false);
