@@ -234,19 +234,23 @@ test.describe("Polls", () => {
       { role: "instructor", class_id: course.id, name: "Toggle Poll Instructor", useMagicLink: true }
     ]);
 
-    const { error } = await supabase.from("live_polls").insert({
-      class_id: course.id,
-      created_by: instructor.public_profile_id,
-      question: {
-        ...samplePollQuestion,
-        elements: [{ ...samplePollQuestion.elements[0], title: "Toggle Poll Question" }]
-      },
-      is_live: false,
-      require_login: false,
-      deactivates_at: null
-    });
-    if (error) {
-      throw new Error(`Failed to seed poll for toggle: ${error.message}`);
+    const { data: togglePoll, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "Toggle Poll Question" }]
+        },
+        is_live: false,
+        require_login: false,
+        deactivates_at: null
+      })
+      .select("id")
+      .single();
+    if (error || !togglePoll) {
+      throw new Error(`Failed to seed poll for toggle: ${error?.message}`);
     }
 
     await loginAsUser(page, instructor, course);
@@ -256,12 +260,38 @@ test.describe("Polls", () => {
     await pollRow.getByRole("button", { name: /Poll actions/i }).click();
     await page.getByRole("menuitem", { name: /Open Poll/i }).click();
 
-    await expect(pollRow.getByText(/^Live$/)).toBeVisible();
+    await expect
+      .poll(async () => {
+        const { data } = await supabase
+          .from("live_polls")
+          .select("is_live")
+          .eq("id", togglePoll.id)
+          .maybeSingle();
+        return data?.is_live;
+      })
+      .toBe(true);
 
-    await pollRow.getByRole("button", { name: /Poll actions/i }).click();
+    await page.reload();
+    const liveRow = page.getByRole("row", { name: /Toggle Poll Question/i });
+    await expect(liveRow.getByText(/^Live$/)).toBeVisible();
+
+    await liveRow.getByRole("button", { name: /Poll actions/i }).click();
     await page.getByRole("menuitem", { name: /Close Poll/i }).click();
 
-    await expect(pollRow.getByText(/^Closed$/)).toBeVisible();
+    await expect
+      .poll(async () => {
+        const { data } = await supabase
+          .from("live_polls")
+          .select("is_live")
+          .eq("id", togglePoll.id)
+          .maybeSingle();
+        return data?.is_live;
+      })
+      .toBe(false);
+
+    await page.reload();
+    const closedRow = page.getByRole("row", { name: /Toggle Poll Question/i });
+    await expect(closedRow.getByText(/^Closed$/)).toBeVisible();
   });
 
   test("anonymous visitor must log in to answer a require-login poll", async ({ page }) => {
@@ -319,5 +349,201 @@ test.describe("Polls", () => {
     const [pollPage] = await Promise.all([page.waitForEvent("popup"), answerButton.click()]);
     await pollPage.waitForLoadState("domcontentloaded");
     await expect(pollPage).toHaveURL(new RegExp(`/poll/${course.id}`));
+  });
+
+  test("student submits a require-login poll and response is stored", async ({ page }) => {
+    const course = await createClass();
+    const [student, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Submit Poll Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Submit Poll Instructor", useMagicLink: true }
+    ]);
+
+    const { data: poll, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "Submit Poll Question" }]
+        },
+        is_live: true,
+        require_login: true,
+        deactivates_at: null
+      })
+      .select("id")
+      .single();
+    if (error || !poll) {
+      throw new Error(`Failed to seed poll for submission: ${error?.message}`);
+    }
+
+    await loginAsUser(page, student, course);
+    await page.goto(`/poll/${course.id}`);
+
+    await expect(page.getByText("Submit Poll Question")).toBeVisible();
+    const blueRadio = page.getByRole("radio", { name: "Blue" });
+    await blueRadio.evaluate((el: HTMLInputElement) => el.click());
+    await expect(blueRadio).toBeChecked();
+    await page.getByRole("button", { name: /Complete|Submit/i }).click();
+
+    await expect(page.getByRole("heading", { name: /Thank You!/i })).toBeVisible();
+
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("live_poll_responses")
+            .select("public_profile_id, response")
+            .eq("live_poll_id", poll.id)
+            .maybeSingle();
+          return data;
+        },
+        { timeout: 5000, message: "response should be recorded" }
+      )
+      .toMatchObject({ public_profile_id: student.public_profile_id, response: { poll_question_0: "Blue" } });
+  });
+
+  test("responses page start/stop button updates poll live state", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Toggle Resp Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Toggle Resp Instructor", useMagicLink: true }
+    ]);
+
+    const { data: poll, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "Responses Toggle Poll" }]
+        },
+        is_live: false,
+        require_login: false,
+        deactivates_at: null
+      })
+      .select("id")
+      .single();
+    if (error || !poll) {
+      throw new Error(`Failed to seed poll for responses toggle: ${error?.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/polls/${poll.id}/responses`);
+
+    const startButton = page.getByRole("button", { name: /Start Poll/i });
+    await expect(startButton).toBeVisible();
+    await startButton.click();
+
+    await expect
+      .poll(async () => {
+        const { data } = await supabase.from("live_polls").select("is_live").eq("id", poll.id).maybeSingle();
+        return data?.is_live;
+      })
+      .toBe(true);
+    await expect(page.getByRole("button", { name: /Stop Poll/i })).toBeVisible();
+
+    await page.getByRole("button", { name: /Stop Poll/i }).click();
+    await expect
+      .poll(async () => {
+        const { data } = await supabase.from("live_polls").select("is_live").eq("id", poll.id).maybeSingle();
+        return data?.is_live;
+      })
+      .toBe(false);
+    await expect(page.getByRole("button", { name: /Start Poll/i })).toBeVisible();
+  });
+
+  test("public poll page shows empty state when no live poll exists", async ({ page }) => {
+    const course = await createClass();
+
+    await page.goto(`/poll/${course.id}`);
+
+    await expect(page.getByRole("heading", { name: "No Live Poll Available" })).toBeVisible();
+    await expect(page.getByText("There is currently no live poll available for this course.")).toBeVisible();
+  });
+
+  test("instructor can delete a poll from manage table", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Delete Poll Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Delete Poll Instructor", useMagicLink: true }
+    ]);
+
+    const { data: poll, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "Deletable Poll" }]
+        },
+        is_live: false,
+        require_login: false,
+        deactivates_at: null
+      })
+      .select("id")
+      .single();
+    if (error || !poll) {
+      throw new Error(`Failed to seed poll for delete: ${error?.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/polls`);
+
+    const pollRow = page.getByRole("row", { name: /Deletable Poll/i });
+    await pollRow.getByRole("button", { name: /Poll actions/i }).click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("menuitem", { name: /Delete Poll/i }).click();
+
+    await expect(pollRow).toBeHidden();
+
+    await expect
+      .poll(async () => {
+        const { data } = await supabase.from("live_polls").select("id").eq("id", poll.id).maybeSingle();
+        return data;
+      })
+      .toBeNull();
+  });
+
+  test("QR code thumbnail opens full-size modal on responses page", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "QR Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "QR Instructor", useMagicLink: true }
+    ]);
+
+    const { data: poll, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        question: {
+          ...samplePollQuestion,
+          elements: [{ ...samplePollQuestion.elements[0], title: "QR Poll Question" }]
+        },
+        is_live: true,
+        require_login: false,
+        deactivates_at: null
+      })
+      .select("id")
+      .single();
+    if (error || !poll) {
+      throw new Error(`Failed to seed poll for QR: ${error?.message}`);
+    }
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/polls/${poll.id}/responses`);
+
+    const qrThumb = page.getByRole("img", { name: "QR Code" }).first();
+    await expect(qrThumb).toBeVisible();
+
+    await qrThumb.click();
+    const qrDialog = page.getByRole("dialog");
+    await expect(qrDialog.getByRole("img", { name: "QR Code" })).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(qrDialog).toBeHidden();
   });
 });
