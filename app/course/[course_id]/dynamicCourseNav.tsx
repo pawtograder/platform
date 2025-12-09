@@ -89,6 +89,12 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/course/`,
     submenu: [
       {
+        name: "Discord",
+        icon: FiMessageSquare,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/discord`
+      },
+      {
         name: "Enrollments",
         icon: FiUsers,
         instructors_only: true,

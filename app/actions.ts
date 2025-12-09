@@ -181,3 +181,14 @@ export const linkGitHubAction = async () => {
   const { data } = await supabase.auth.linkIdentity({ provider: "github" });
   if (data.url) return redirect(data.url);
 };
+
+export const linkDiscordAction = async () => {
+  const supabase = await createClient();
+  //Make sure there is a session
+  const session = await supabase.auth.getSession();
+  if (!session) {
+    return redirect("/sign-in");
+  }
+  const { data } = await supabase.auth.linkIdentity({ provider: "discord" });
+  if (data.url) return redirect(data.url);
+};

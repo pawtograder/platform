@@ -60,6 +60,7 @@ import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import Link from "next/link";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
 import StudentSummaryTrigger from "../ui/student-summary";
+import DiscordMessageLink from "@/components/discord/discord-message-link";
 
 /**
  * Office hours form and UI helper types
@@ -1160,6 +1161,17 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
             {/* Help Request Watch Button - Available to all users */}
             <HelpRequestWatchButton helpRequestId={request_id} variant="ghost" size="sm" />
+
+            {/* Discord Message Link - Available to staff only */}
+            {isInstructorOrGrader && request && (
+              <DiscordMessageLink
+                classId={request.class_id}
+                resourceType="help_request"
+                resourceId={request.id}
+                size="sm"
+                variant="ghost"
+              />
+            )}
 
             {/* Video Call Controls - Available to all users with video access (disabled in read-only mode) */}
             {!readOnly && canAccessVideoControls && request && (

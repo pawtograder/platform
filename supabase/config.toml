@@ -703,3 +703,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/github-user-sync/deno.json"
 entrypoint = "./functions/github-user-sync/index.ts"
+
+[functions.discord-async-worker]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-async-worker/deno.json"
+entrypoint = "./functions/discord-async-worker/index.ts"

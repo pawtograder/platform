@@ -1319,6 +1319,8 @@ export type Database = {
           course_title: string | null;
           created_at: string;
           description: string | null;
+          discord_channel_group_id: string | null;
+          discord_server_id: string | null;
           end_date: string | null;
           features: Json | null;
           github_org: string | null;
@@ -1337,6 +1339,8 @@ export type Database = {
           course_title?: string | null;
           created_at?: string;
           description?: string | null;
+          discord_channel_group_id?: string | null;
+          discord_server_id?: string | null;
           end_date?: string | null;
           features?: Json | null;
           github_org?: string | null;
@@ -1355,6 +1359,8 @@ export type Database = {
           course_title?: string | null;
           created_at?: string;
           description?: string | null;
+          discord_channel_group_id?: string | null;
+          discord_server_id?: string | null;
           end_date?: string | null;
           features?: Json | null;
           github_org?: string | null;
@@ -1374,6 +1380,132 @@ export type Database = {
             columns: ["gradebook_id"];
             isOneToOne: false;
             referencedRelation: "gradebooks";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Json;
+          error_message: string | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Json | null;
+          log_id: number | null;
+          method: string;
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method: string;
+          original_msg_id?: number | null;
+          retry_count: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method?: string;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_async_worker_dlq_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_channels: {
+        Row: {
+          channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          class_id: number;
+          created_at: string;
+          discord_channel_id: string;
+          id: number;
+          resource_id: number | null;
+        };
+        Insert: {
+          channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          class_id: number;
+          created_at?: string;
+          discord_channel_id: string;
+          id?: number;
+          resource_id?: number | null;
+        };
+        Update: {
+          channel_type?: Database["public"]["Enums"]["discord_channel_type"];
+          class_id?: number;
+          created_at?: string;
+          discord_channel_id?: string;
+          id?: number;
+          resource_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_channels_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_messages: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          discord_channel_id: string;
+          discord_message_id: string;
+          id: number;
+          resource_id: number;
+          resource_type: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          discord_channel_id: string;
+          discord_message_id: string;
+          id?: number;
+          resource_id: number;
+          resource_type: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          discord_channel_id?: string;
+          discord_message_id?: string;
+          id?: number;
+          resource_id?: number;
+          resource_type?: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           }
         ];
@@ -7666,6 +7798,8 @@ export type Database = {
         Row: {
           avatar_url: string | null;
           created_at: string;
+          discord_id: string | null;
+          discord_username: string | null;
           email: string | null;
           github_user_id: string | null;
           github_username: string | null;
@@ -7677,6 +7811,8 @@ export type Database = {
         Insert: {
           avatar_url?: string | null;
           created_at?: string;
+          discord_id?: string | null;
+          discord_username?: string | null;
           email?: string | null;
           github_user_id?: string | null;
           github_username?: string | null;
@@ -7688,6 +7824,8 @@ export type Database = {
         Update: {
           avatar_url?: string | null;
           created_at?: string;
+          discord_id?: string | null;
+          discord_username?: string | null;
           email?: string | null;
           github_user_id?: string | null;
           github_username?: string | null;
@@ -9478,6 +9616,24 @@ export type Database = {
         Args: { p_class_id: number; p_submission_ids: number[] };
         Returns: Json;
       };
+      enqueue_discord_channel_creation: {
+        Args: {
+          p_channel_name?: string;
+          p_channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          p_class_id: number;
+          p_guild_id?: string;
+          p_resource_id?: number;
+        };
+        Returns: undefined;
+      };
+      enqueue_discord_help_request_message: {
+        Args: { p_action?: string; p_help_request_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_regrade_request_message: {
+        Args: { p_action?: string; p_regrade_request_id: number };
+        Returns: undefined;
+      };
       enqueue_github_archive_repo: {
         Args: {
           p_class_id: number;
@@ -9583,7 +9739,7 @@ export type Database = {
         }[];
       };
       get_async_queue_sizes: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           async_queue_size: number;
           dlq_queue_size: number;
@@ -9591,7 +9747,7 @@ export type Database = {
         }[];
       };
       get_circuit_breaker_statuses: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           is_open: boolean;
           key: string;
@@ -10077,6 +10233,8 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+      discord_channel_type: "general" | "assignment" | "lab" | "office_hours" | "regrades";
+      discord_resource_type: "help_request" | "regrade_request";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -10237,6 +10395,8 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+      discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades"],
+      discord_resource_type: ["help_request", "regrade_request"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",

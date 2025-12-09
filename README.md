@@ -64,6 +64,118 @@ Once the local Supabase setup is complete, you can develop with the full local s
 
 Note that additional configuration may be needed for features like GitHub integration depending on your development needs.
 
+## Discord Bot Setup
+
+The Discord bot integration allows staff members to receive real-time notifications about help requests and regrade requests in Discord channels. The bot automatically creates channels for assignments, labs, and office hours queues, and posts notifications when requests are created or updated.
+
+### Prerequisites
+
+1. **Discord Application**: Create a Discord application at [Discord Developer Portal](https://discord.com/developers/applications)
+2. **Discord Bot**: Create a bot user for your application and note the bot token
+3. **OAuth2 Setup**: Configure OAuth2 redirect URI in your Discord application settings
+
+### Environment Variables
+
+Add the following environment variables to your `.env.local` file:
+
+#### Required Variables
+
+- `DISCORD_BOT_TOKEN` - Your Discord bot token (found in Bot section of Discord Developer Portal)
+- `DISCORD_CLIENT_ID` - Your Discord application client ID (found in OAuth2 section)
+- `DISCORD_CLIENT_SECRET` - Your Discord application client secret (found in OAuth2 section)
+- `NEXT_PUBLIC_DISCORD_CLIENT_ID` - Same as `DISCORD_CLIENT_ID` (required for frontend OAuth flow)
+
+#### Optional Variables (for Rate Limiting)
+
+- `UPSTASH_REDIS_REST_URL` - Upstash Redis REST URL for distributed rate limiting (optional, falls back to local limiter)
+- `UPSTASH_REDIS_REST_TOKEN` - Upstash Redis REST token (optional, falls back to local limiter)
+
+### Discord Application Configuration
+
+1. **Create Discord Application**:
+
+   - Go to [Discord Developer Portal](https://discord.com/developers/applications)
+   - Click "New Application" and give it a name
+   - Note your Application ID (this is your `DISCORD_CLIENT_ID`)
+
+2. **Create Bot User**:
+
+   - Navigate to the "Bot" section in your application
+   - Click "Add Bot" and confirm
+   - Under "Token", click "Reset Token" or "Copy" to get your bot token (this is your `DISCORD_BOT_TOKEN`)
+   - Enable the following Privileged Gateway Intents (if needed):
+     - Server Members Intent (for user mentions)
+
+3. **Configure OAuth2**:
+
+   - Navigate to the "OAuth2" section
+   - Under "Redirects", add your callback URL:
+     - For local development: `http://localhost:3000/api/discord/oauth/callback`
+     - For production: `https://app.pawtograder.com/api/discord/oauth/callback`
+   - Note your Client Secret (this is your `DISCORD_CLIENT_SECRET`)
+
+4. **Bot Permissions**:
+   When inviting the bot to your Discord server, ensure it has the following permissions:
+
+   - Manage Channels (to create channels)
+   - Send Messages (to post notifications)
+   - Read Message History (to read channel context)
+   - Mention Everyone (to @ mention users)
+   - Use External Emojis (optional, for better message formatting)
+   - Add Reactions (optional, for feedback on help requests)
+
+   You can generate an invite URL with these permissions using the OAuth2 URL Generator in the Discord Developer Portal, or manually construct:
+
+   ```
+   https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=268896336&scope=bot
+   ```
+
+### Setting Up Discord Integration for a Class
+
+1. **Link Discord Account** (for staff):
+
+   - Navigate to the course page
+   - Click "Connect Discord" to link your Discord account via OAuth
+   - This allows the system to identify you for @ mentions
+
+2. **Configure Discord Server** (for instructors):
+
+   - Navigate to `/course/[course_id]/manage/discord`
+   - Enter your Discord Server ID (right-click server → Copy Server ID, requires Developer Mode)
+   - Optionally enter a Channel Group ID (right-click a category → Copy ID) to organize channels
+   - Click "Save Configuration"
+
+3. **Enable Developer Mode in Discord**:
+   - Open Discord Settings → Advanced
+   - Enable "Developer Mode"
+   - Now you can right-click servers, channels, and categories to copy their IDs
+
+### How It Works
+
+Once configured, the Discord bot will:
+
+- **Auto-create channels** when assignments, labs, or office hours queues are created
+- **Post help requests** to the appropriate office hours channel with status updates
+- **Post regrade requests** to the `#regrades` channel, @ mentioning the grader
+- **Update messages** when request status changes (open → in_progress → resolved)
+- **Show feedback** (thumbs up/down) when help requests are resolved with student feedback
+- **Escalate notifications** by @ mentioning instructors when regrade requests are appealed
+
+Staff members can click the Discord icon on help requests and regrade requests in the Pawtograder UI to open the Discord message in a new tab for side-chat.
+
+### Edge Function Configuration
+
+For the Discord async worker to function, ensure your Supabase Edge Functions have the Discord environment variables set:
+
+```bash
+# In your Supabase project settings or local .env file
+DISCORD_BOT_TOKEN=your_bot_token_here
+UPSTASH_REDIS_REST_URL=your_upstash_url  # Optional
+UPSTASH_REDIS_REST_TOKEN=your_upstash_token  # Optional
+```
+
+The Discord async worker (`discord-async-worker`) processes Discord API calls asynchronously with rate limiting and retry logic, similar to the GitHub async worker pattern.
+
 ## Linting
 
 - Run `npm run lint` to run eslint and prettier.

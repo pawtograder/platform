@@ -2,7 +2,6 @@
 
 import PersonName from "@/components/ui/person-name";
 import { useAllRubricChecks, useRubricCheck } from "@/hooks/useAssignment";
-import { useCourseController } from "@/hooks/useCourseController";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
@@ -17,6 +16,8 @@ import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react"
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import DiscordMessageLink from "@/components/discord/discord-message-link";
+import { useCourseController } from "@/hooks/useCourseController";
 
 // Status configuration
 const statusConfig: Record<
@@ -172,7 +173,7 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
  * The table supports sorting, multi-column filtering, and navigation through large result sets with pagination controls.
  */
 export default function RegradeRequestsTable() {
-  const { assignment_id } = useParams();
+  const { assignment_id, course_id } = useParams();
   const courseController = useCourseController();
   const profiles = useTableControllerTableValues(courseController.profiles);
 
@@ -355,6 +356,24 @@ export default function RegradeRequestsTable() {
 
           return false;
         }
+      },
+      {
+        id: "discord",
+        header: "Discord",
+        cell: ({ row }) => {
+          if (!course_id) return null;
+          return (
+            <DiscordMessageLink
+              classId={Number(course_id)}
+              resourceType="regrade_request"
+              resourceId={row.original.id}
+              size="sm"
+              variant="ghost"
+            />
+          );
+        },
+        enableColumnFilter: false,
+        enableSorting: false
       },
       {
         id: "created_at",
