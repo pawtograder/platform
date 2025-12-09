@@ -97,6 +97,7 @@
     "minimatch": "^10.0.3",
     "monaco-editor": "^0.52.2",
     "monaco-yaml": "^5.3.1",
+    "nayuki-qr-code-generator": "^1.8.0",
     "next": "latest",
     "next-remove-imports": "^1.0.12",
     "next-themes": "^0.4.4",

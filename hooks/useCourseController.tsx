@@ -37,7 +37,7 @@ import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useList } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -382,7 +382,6 @@ export class CourseController {
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
   private _livePolls?: TableController<"live_polls">;
-  private _livePollResponses?: TableController<"live_poll_responses">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -754,21 +753,6 @@ export class CourseController {
       });
     }
     return this._livePolls;
-  }
-
-  get livePollResponses(): TableController<"live_poll_responses"> {
-    if (!this._livePollResponses) {
-      // Fetch all responses - filtered by RLS and broadcast channel
-      // Real-time updates come via class:X:staff channel which handles class filtering
-      // Note: Consider adding RLS policy to live_poll_responses for proper security
-      this._livePollResponses = new TableController({
-        client: this.client,
-        table: "live_poll_responses",
-        query: this.client.from("live_poll_responses").select("*"),
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._livePollResponses;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1191,7 +1175,6 @@ export class CourseController {
     this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
     this._livePolls?.close();
-    this._livePollResponses?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1816,32 +1799,144 @@ export function useLivePoll(pollId: string | undefined) {
 }
 
 /**
- * Hook to get poll responses for a specific poll with real-time updates
+ * Helper to extract choices from poll question JSON
  */
-export function usePollResponses(pollId: string | undefined) {
+function extractChoicesFromPollQuestion(pollQuestion: unknown): string[] {
+  const questionData = pollQuestion as Record<string, unknown> | null;
+  const firstElement = (
+    questionData?.elements as Array<{
+      choices?: string[] | Array<{ text?: string; label?: string; value?: string }>;
+    }>
+  )?.[0];
+
+  const choicesRaw = firstElement?.choices || [];
+  return choicesRaw.map((choice) => {
+    if (typeof choice === "string") return choice;
+    return choice.text || choice.label || choice.value || String(choice);
+  });
+}
+
+/**
+ * Helper to extract answer from poll response
+ * Response format: { "poll_question_0": "Answer" } or { "poll_question_0": ["A", "B"] }
+ */
+function extractPollAnswer(response: unknown): string | string[] | null {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    return null;
+  }
+  const data = response as Record<string, unknown>;
+  const key = Object.keys(data).find((k) => k.startsWith("poll_question_"));
+  if (!key) return null;
+
+  const value = data[key];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+    return value as string[];
+  }
+  return null;
+}
+
+/**
+ * Hook to get poll response counts with instant real-time updates.
+ * Directly increments counts when new responses arrive - no intermediate array processing.
+ *
+ * @param pollId - The poll ID to count responses for
+ * @param pollQuestion - The poll question JSON containing choices
+ */
+export function usePollResponseCounts(pollId: string | undefined, pollQuestion: unknown) {
   const controller = useCourseController();
-  const [responses, setResponses] = useState<Database["public"]["Tables"]["live_poll_responses"]["Row"][]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const seenIdsRef = useRef<Set<string>>(new Set());
+
+  // Extract choices from poll question
+  const choices = useMemo(() => extractChoicesFromPollQuestion(pollQuestion), [pollQuestion]);
 
   useEffect(() => {
-    if (!pollId) {
-      setResponses([]);
+    if (!pollId || choices.length === 0) {
+      setCounts({});
+      seenIdsRef.current.clear();
       setIsLoading(false);
       return;
     }
 
-    const { data, unsubscribe } = controller.livePollResponses.list((updatedResponses) => {
-      const filtered = updatedResponses.filter((r) => r.live_poll_id === pollId);
-      setResponses(filtered);
-      setIsLoading(false);
-    });
-    const filtered = data.filter((r) => r.live_poll_id === pollId);
-    setResponses(filtered);
-    if (filtered.length > 0 || controller.livePollResponses.ready) {
-      setIsLoading(false);
-    }
-    return unsubscribe;
-  }, [controller, pollId]);
+    // Reset state when pollId changes
+    seenIdsRef.current.clear();
 
-  return { responses, isLoading };
+    // Initialize counts for all choices
+    const initialCounts: Record<string, number> = {};
+    choices.forEach((choice) => {
+      initialCounts[choice] = 0;
+    });
+
+    // Fetch initial data and count
+    const fetchInitial = async () => {
+      const { data, error } = await controller.client
+        .from("live_poll_responses")
+        .select("*")
+        .eq("live_poll_id", pollId);
+
+      if (!error && data) {
+        data.forEach((response) => {
+          seenIdsRef.current.add(response.id);
+          const answer = extractPollAnswer(response.response);
+
+          if (Array.isArray(answer)) {
+            answer.forEach((item: string) => {
+              if (!item.startsWith("other:") && initialCounts.hasOwnProperty(item)) {
+                initialCounts[item]++;
+              }
+            });
+          } else if (
+            typeof answer === "string" &&
+            !answer.startsWith("other:") &&
+            initialCounts.hasOwnProperty(answer)
+          ) {
+            initialCounts[answer]++;
+          }
+        });
+      }
+
+      setCounts(initialCounts);
+      setIsLoading(false);
+    };
+    fetchInitial();
+
+    // Subscribe directly to ClassRealTimeController for instant count updates
+    const unsubscribe = controller.classRealTimeController.subscribe({ table: "live_poll_responses" }, (message) => {
+      if (message.operation === "INSERT" && message.data) {
+        const responseData = message.data as Database["public"]["Tables"]["live_poll_responses"]["Row"];
+
+        // Only count if it matches our poll and we haven't seen it
+        if (responseData.live_poll_id === pollId && !seenIdsRef.current.has(responseData.id)) {
+          seenIdsRef.current.add(responseData.id);
+
+          const answer = extractPollAnswer(responseData.response);
+
+          // Increment counts directly - instant update!
+          setCounts((prev) => {
+            const updated = { ...prev };
+
+            if (Array.isArray(answer)) {
+              answer.forEach((item: string) => {
+                if (!item.startsWith("other:") && updated.hasOwnProperty(item)) {
+                  updated[item]++;
+                }
+              });
+            } else if (typeof answer === "string" && !answer.startsWith("other:") && updated.hasOwnProperty(answer)) {
+              updated[answer]++;
+            }
+
+            return updated;
+          });
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [controller, pollId, choices]);
+
+  return { counts, isLoading };
 }
