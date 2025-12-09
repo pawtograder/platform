@@ -634,6 +634,164 @@ CREATE TRIGGER trg_discord_regrade_request_notification
   FOR EACH ROW
   EXECUTE FUNCTION public.trigger_discord_regrade_request_notification();
 
+-- 7. Function to enqueue Discord message for queue assignment changes
+CREATE OR REPLACE FUNCTION public.enqueue_discord_queue_assignment_message(
+  p_queue_assignment_id bigint,
+  p_action text DEFAULT 'started' -- 'started' or 'stopped'
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_assignment RECORD;
+  v_queue RECORD;
+  v_class RECORD;
+  v_discord_channel_id text;
+  v_ta_name text;
+  v_message_content text;
+  v_embed jsonb;
+BEGIN
+  -- Get queue assignment details
+  SELECT 
+    hqa.id,
+    hqa.class_id,
+    hqa.help_queue_id,
+    hqa.ta_profile_id,
+    hqa.is_active,
+    hqa.started_at,
+    hqa.ended_at
+  INTO v_assignment
+  FROM public.help_queue_assignments hqa
+  WHERE hqa.id = p_queue_assignment_id;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  -- Get class Discord info
+  SELECT c.discord_server_id, c.slug
+  INTO v_class
+  FROM public.classes c
+  WHERE c.id = v_assignment.class_id;
+
+  -- Skip if no Discord server configured
+  IF v_class.discord_server_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- Get queue info
+  SELECT hq.name, hq.id
+  INTO v_queue
+  FROM public.help_queues hq
+  WHERE hq.id = v_assignment.help_queue_id;
+
+  -- Get Discord channel for this queue
+  SELECT dc.discord_channel_id
+  INTO v_discord_channel_id
+  FROM public.discord_channels dc
+  WHERE dc.class_id = v_assignment.class_id
+    AND dc.channel_type = 'office_hours'
+    AND dc.resource_id = v_assignment.help_queue_id;
+
+  -- Skip if no channel found
+  IF v_discord_channel_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- Get TA name
+  SELECT p.name INTO v_ta_name
+  FROM public.profiles p
+  WHERE p.id = v_assignment.ta_profile_id;
+
+  v_ta_name := COALESCE(v_ta_name, 'Unknown TA');
+
+  -- Build message content
+  IF p_action = 'started' THEN
+    v_message_content := format('**%s started working** on %s', v_ta_name, COALESCE(v_queue.name, 'Office Hours'));
+    v_embed := jsonb_build_object(
+      'title', format('TA Started Working'),
+      'description', format('%s is now available to help students', v_ta_name),
+      'color', 3066993, -- Green
+      'fields', jsonb_build_array(
+        jsonb_build_object('name', 'Queue', 'value', COALESCE(v_queue.name, 'Office Hours'), 'inline', true),
+        jsonb_build_object('name', 'Started At', 'value', to_char(v_assignment.started_at, 'HH24:MI'), 'inline', true)
+      ),
+      'timestamp', v_assignment.started_at::text
+    );
+  ELSIF p_action = 'stopped' THEN
+    v_message_content := format('**%s stopped working** on %s', v_ta_name, COALESCE(v_queue.name, 'Office Hours'));
+    v_embed := jsonb_build_object(
+      'title', format('TA Stopped Working'),
+      'description', format('%s is no longer available', v_ta_name),
+      'color', 9807270, -- Grey
+      'fields', jsonb_build_array(
+        jsonb_build_object('name', 'Queue', 'value', COALESCE(v_queue.name, 'Office Hours'), 'inline', true),
+        jsonb_build_object('name', 'Ended At', 'value', COALESCE(to_char(v_assignment.ended_at, 'HH24:MI'), 'Now'), 'inline', true)
+      ),
+      'timestamp', COALESCE(v_assignment.ended_at, NOW())::text
+    );
+  ELSE
+    RETURN;
+  END IF;
+
+  -- Enqueue message
+  PERFORM pgmq_public.send(
+    queue_name := 'discord_async_calls',
+    message := jsonb_build_object(
+      'method', 'send_message',
+      'args', jsonb_build_object(
+        'channel_id', v_discord_channel_id,
+        'content', v_message_content,
+        'embeds', jsonb_build_array(v_embed)
+      ),
+      'class_id', v_assignment.class_id
+    )
+  );
+END;
+$$;
+
+-- 8. Trigger function for queue assignment notifications
+CREATE OR REPLACE FUNCTION public.trigger_discord_queue_assignment_notification()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  -- On INSERT: TA started working
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.is_active THEN
+      PERFORM public.enqueue_discord_queue_assignment_message(NEW.id, 'started');
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  -- On UPDATE: check if TA started or stopped working
+  IF TG_OP = 'UPDATE' THEN
+    -- Started working: is_active changed from false to true, or was NULL and now true
+    IF (OLD.is_active IS DISTINCT FROM NEW.is_active AND NEW.is_active = true) THEN
+      PERFORM public.enqueue_discord_queue_assignment_message(NEW.id, 'started');
+    -- Stopped working: is_active changed from true to false, or ended_at was set
+    ELSIF (OLD.is_active IS DISTINCT FROM NEW.is_active AND NEW.is_active = false) 
+       OR (OLD.ended_at IS NULL AND NEW.ended_at IS NOT NULL) THEN
+      PERFORM public.enqueue_discord_queue_assignment_message(NEW.id, 'stopped');
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+-- 9. Create trigger on help_queue_assignments table
+DROP TRIGGER IF EXISTS trg_discord_queue_assignment_notification ON public.help_queue_assignments;
+CREATE TRIGGER trg_discord_queue_assignment_notification
+  AFTER INSERT OR UPDATE ON public.help_queue_assignments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trigger_discord_queue_assignment_notification();
+
 -- Grant execute permissions
 REVOKE EXECUTE ON FUNCTION public.enqueue_discord_channel_creation(bigint, public.discord_channel_type, bigint, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.enqueue_discord_channel_creation(bigint, public.discord_channel_type, bigint, text, text) TO postgres;
@@ -643,3 +801,6 @@ GRANT EXECUTE ON FUNCTION public.enqueue_discord_help_request_message(bigint, te
 
 REVOKE EXECUTE ON FUNCTION public.enqueue_discord_regrade_request_message(bigint, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.enqueue_discord_regrade_request_message(bigint, text) TO postgres;
+
+REVOKE EXECUTE ON FUNCTION public.enqueue_discord_queue_assignment_message(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.enqueue_discord_queue_assignment_message(bigint, text) TO postgres;
