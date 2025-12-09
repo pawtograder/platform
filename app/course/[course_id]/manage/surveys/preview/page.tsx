@@ -22,8 +22,13 @@ function SurveyPreviewContent() {
   const surveyJsonParam = searchParams.get("json");
 
   const handleBackToForm = useCallback(() => {
-    router.push(`/course/${course_id}/manage/surveys/new?from=preview`);
-  }, [router, course_id]);
+    // Include survey_id in the return URL if available to ensure we restore the correct draft
+    const surveyId = searchParams.get("survey_id");
+    const returnUrl = surveyId
+      ? `/course/${course_id}/manage/surveys/new?from=preview&survey_id=${surveyId}`
+      : `/course/${course_id}/manage/surveys/new?from=preview`;
+    router.push(returnUrl);
+  }, [router, course_id, searchParams]);
 
   if (!surveyJsonParam) {
     return (
