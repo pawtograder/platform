@@ -319,11 +319,7 @@ export default function NewSurveyPage() {
           assigned_to_all: Boolean(values.assigned_to_all)
         };
 
-        const result = await supabase
-          .from("surveys")
-          .insert(insertPayload)
-          .select("id, survey_id")
-          .single();
+        const result = await supabase.from("surveys").insert(insertPayload).select("id, survey_id").single();
 
         data = result.data;
         error = result.error;
