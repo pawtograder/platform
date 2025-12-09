@@ -966,4 +966,130 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("menuitem", { name: /Close/ })).not.toBeVisible();
     await expect(page.getByRole("menuitem", { name: /Delete/ })).not.toBeVisible();
   });
+
+  test("visual builder supports multi-page, multi-question surveys", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Multi Builder Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Multi Builder Instructor", useMagicLink: true }
+    ]);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    await page.getByRole("button", { name: /Open Visual Builder/i }).click();
+
+    // Page 1: four questions
+    await page.getByRole("button", { name: /\+ Short Text/i }).click();
+    await page.getByRole("button", { name: /\+ Long Text/i }).click();
+    await page.getByRole("button", { name: /\+ Single Choice/i }).click();
+    await page.getByRole("button", { name: /\+ Checkboxes/i }).click();
+
+    // Page 2: four more, covering all types
+    await page.getByRole("button", { name: /Add Page/i }).click();
+    await page.getByRole("button", { name: /\+ Short Text/i }).click();
+    await page.getByRole("button", { name: /\+ Single Choice/i }).click();
+    await page.getByRole("button", { name: /\+ Checkboxes/i }).click();
+    await page.getByRole("button", { name: /\+ Yes \/ No/i }).click();
+
+    // Page 3: three more to push total over 10
+    await page.getByRole("button", { name: /Add Page/i }).click();
+    await page.getByRole("button", { name: /\+ Long Text/i }).click();
+    await page.getByRole("button", { name: /\+ Checkboxes/i }).click();
+    await page.getByRole("button", { name: /\+ Single Choice/i }).click();
+
+    await page.getByRole("button", { name: /Use This Survey/i }).click();
+
+    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    const parsed = JSON.parse(jsonValue);
+
+    const metaTitle = parsed.meta?.title ?? parsed.title ?? "Survey Name";
+    expect(metaTitle).toBeTruthy();
+    expect(parsed.pages.length).toBeGreaterThanOrEqual(3);
+    const totalQuestions = parsed.pages.reduce((sum: number, page: any) => sum + (page.elements?.length || 0), 0);
+    expect(totalQuestions).toBeGreaterThanOrEqual(11);
+
+    const allTypes = parsed.pages.flatMap((p: any) => p.elements.map((el: any) => el.type));
+    expect(new Set(allTypes)).toEqual(new Set(["text", "comment", "radiogroup", "checkbox", "boolean"]));
+
+    parsed.pages.forEach((page: any) => {
+      page.elements.forEach((el: any) => {
+        expect(el.name).toBeTruthy();
+        expect(el.title).toBeTruthy();
+      });
+    });
+
+    // Validate a variety of content
+    const firstRadio = parsed.pages
+      .flatMap((p: any) => p.elements)
+      .find((el: any) => el.type === "radiogroup");
+    expect(firstRadio.choices.length).toBeGreaterThanOrEqual(3);
+    const firstCheckbox = parsed.pages
+      .flatMap((p: any) => p.elements)
+      .find((el: any) => el.type === "checkbox");
+    expect(firstCheckbox.choices.length).toBeGreaterThanOrEqual(3);
+    const firstBoolean = parsed.pages
+      .flatMap((p: any) => p.elements)
+      .find((el: any) => el.type === "boolean");
+    expect(firstBoolean.labelTrue).toBeTruthy();
+    expect(firstBoolean.labelFalse).toBeTruthy();
+  });
+
+  test("visual builder allows editing page name and choice text", async ({ page }) => {
+    const course = await createClass();
+    const [, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Choice Edit Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Choice Edit Instructor", useMagicLink: true }
+    ]);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    await page.getByRole("button", { name: /Open Visual Builder/i }).click();
+
+    // Add a single choice question
+    await page.getByRole("button", { name: /\+ Single Choice/i }).click();
+    // Add a checkbox question and a boolean for mixed types
+    await page.getByRole("button", { name: /\+ Checkboxes/i }).click();
+    await page.getByRole("button", { name: /\+ Yes \/ No/i }).click();
+
+    // Rename the page
+    const pageNameInput = page.getByText("Page name").locator("..").locator("input");
+    await pageNameInput.fill("Custom Page Name");
+
+    // Edit existing choice text and add four more (total 8 choices) within the single-choice region
+    const singleChoiceRegion = page.getByRole("region", { name: /Single Choice/i }).first();
+    await singleChoiceRegion.locator('input[value="Item 1"]').fill("Red");
+    await singleChoiceRegion.locator('input[value="Item 2"]').fill("Blue");
+    await singleChoiceRegion.locator('input[value="Item 3"]').fill("Yellow");
+    await singleChoiceRegion.getByRole("button", { name: /Add choice/i }).click();
+    await singleChoiceRegion.locator('input[value="Item 4"]').fill("Green");
+    await singleChoiceRegion.getByRole("button", { name: /Add choice/i }).click();
+    await singleChoiceRegion.locator('input[value="Item 5"]').fill("Orange");
+    await singleChoiceRegion.getByRole("button", { name: /Add choice/i }).click();
+    await singleChoiceRegion.locator('input[value="Item 6"]').fill("Purple");
+    await singleChoiceRegion.getByRole("button", { name: /Add choice/i }).click();
+    await singleChoiceRegion.locator('input[value="Item 7"]').fill("Gray");
+    await singleChoiceRegion.getByRole("button", { name: /Add choice/i }).click();
+    await singleChoiceRegion.locator('input[value="Item 8"]').fill("Teal");
+
+    await page.getByRole("button", { name: /Use This Survey/i }).click();
+
+    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    const parsed = JSON.parse(jsonValue);
+
+    expect(parsed.pages[0].name).toBe("Custom Page Name");
+
+    const radio = parsed.pages[0].elements.find((el: any) => el.type === "radiogroup");
+    const radioChoices = (radio.choices || []).map((c: any) => c.value);
+    expect(radioChoices).toEqual(["Red", "Blue", "Yellow", "Green", "Orange", "Purple", "Gray", "Teal"]);
+    expect(radioChoices.length).toBeGreaterThan(7);
+
+    const checkbox = parsed.pages[0].elements.find((el: any) => el.type === "checkbox");
+    expect(checkbox.choices.length).toBeGreaterThanOrEqual(3);
+
+    const bool = parsed.pages[0].elements.find((el: any) => el.type === "boolean");
+    expect(bool.labelTrue).toBeTruthy();
+    expect(bool.labelFalse).toBeTruthy();
+  });
 });
