@@ -36,9 +36,9 @@ export default function PollResponsesHeader({
           variant="outline"
           size="sm"
           bg="transparent"
-          borderColor={buttonBorderColor}
-          color={buttonTextColor}
-          _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+          borderColor="border.emphasized"
+          color="fg.muted"
+          _hover={{ bg: "gray.subtle" }}
           onClick={() => router.push(`/course/${courseID}/manage/polls`)}
         >
           ← Back to Polls
@@ -64,7 +64,7 @@ export default function PollResponsesHeader({
           >
             {pollIsLive ? "Stop Poll" : "Start Poll"}
           </Button>
-          <Button size="sm" bg="#3B82F6" color="white" _hover={{ bg: "#2563EB" }} onClick={onPresent}>
+          <Button size="sm" bg="blue.500" color="white" _hover={{ bg: "blue.600" }} onClick={onPresent}>
             Present
           </Button>
         </HStack>

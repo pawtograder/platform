@@ -45,25 +45,28 @@ function flattenResponseData(responseData: Record<string, unknown>, prefix = "")
 }
 
 /**
- * Gets question titles from survey JSON for CSV headers
+ * Gets question names and titles from survey JSON in page order for CSV headers
  */
-function getQuestionTitles(surveyJson: unknown): Record<string, string> {
+function getOrderedQuestions(surveyJson: unknown): { names: string[]; titles: Record<string, string> } {
+  const names: string[] = [];
   const titles: Record<string, string> = {};
 
   try {
     const survey = new Model(surveyJson);
 
-    // Get all questions from the survey
+    // Get all questions from the survey in page order
+    // getAllQuestions() returns questions page by page, maintaining the survey flow
     survey.getAllQuestions().forEach((question) => {
       if (question.name) {
+        names.push(question.name);
         titles[question.name] = question.title || question.name;
       }
     });
   } catch (error) {
-    console.warn("Error parsing survey JSON for question titles:", error);
+    console.warn("Error parsing survey JSON for question order:", error);
   }
 
-  return titles;
+  return { names, titles };
 }
 
 /**
@@ -74,16 +77,8 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
     return "No responses to export";
   }
 
-  // Get question titles for headers
-  const questionTitles = getQuestionTitles(survey.questions);
-
-  // Get all unique question names from all responses
-  const allQuestionNames = new Set<string>();
-  responses.forEach((response) => {
-    Object.keys(flattenResponseData(response.response)).forEach((key) => {
-      allQuestionNames.add(key);
-    });
-  });
+  // Get question names in page order and their titles
+  const { names: orderedQuestionNames, titles: questionTitles } = getOrderedQuestions(survey.questions);
 
   // Create CSV headers
   const headers = [
@@ -92,7 +87,7 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
     "Status",
     "Submitted At",
     "Last Updated",
-    ...Array.from(allQuestionNames).map((name) => questionTitles[name] || name)
+    ...orderedQuestionNames.map((name) => questionTitles[name] || name)
   ];
 
   // Create CSV rows
@@ -109,7 +104,7 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
       status,
       submittedAt,
       lastUpdated,
-      ...Array.from(allQuestionNames).map((name) => flattenedResponse[name] || "")
+      ...orderedQuestionNames.map((name) => flattenedResponse[name] || "")
     ];
 
     return row;

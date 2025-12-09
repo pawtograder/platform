@@ -3,7 +3,6 @@
 import { Box, Textarea, HStack, VStack, Button, Heading, Checkbox } from "@chakra-ui/react";
 import { useForm, Controller } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
 import { Button as UIButton } from "@/components/ui/button";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -51,14 +50,6 @@ export default function NewPollPage() {
   });
 
   const questionValue = watch("question");
-
-  const textColor = useColorModeValue("#000000", "#FFFFFF");
-  const bgColor = useColorModeValue("#F2F2F2", "#0D0D0D");
-  const borderColor = useColorModeValue("#D2D2D", "#2D2D2D");
-  const placeholderColor = useColorModeValue("#8A8A8A", "#757575");
-  const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
-  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
 
   const validateJson = (): boolean => {
     const jsonValue = getValues("question");
@@ -281,29 +272,21 @@ export default function NewPollPage() {
             variant="outline"
             size="sm"
             bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+            borderColor="border.emphasized"
+            color="fg.muted"
+            _hover={{ bg: "bg.muted" }}
             onClick={() => router.push(`/course/${course_id}/manage/polls`)}
             alignSelf="flex-start"
           >
             ← Back to Polls
           </Button>
 
-          <Heading size="xl" color={textColor} textAlign="left">
+          <Heading size="xl" color="fg" textAlign="left">
             Create Poll
           </Heading>
         </VStack>
 
-        <Box
-          w="100%"
-          maxW="800px"
-          bg={cardBgColor}
-          border="1px solid"
-          borderColor={borderColor}
-          borderRadius="lg"
-          p={8}
-        >
+        <Box w="100%" maxW="800px" bg="bg.subtle" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
           <form onSubmit={onSubmit}>
             <VStack align="stretch" gap={6}>
               <Box>
@@ -317,10 +300,10 @@ export default function NewPollPage() {
                     rows={12}
                     fontFamily="mono"
                     fontSize="sm"
-                    bg={bgColor}
-                    borderColor={borderColor}
-                    color={textColor}
-                    _placeholder={{ color: placeholderColor }}
+                    bg="bg.subtle"
+                    borderColor="border"
+                    color="fg.default"
+                    _placeholder={{ color: "fg.muted" }}
                     _focus={{ borderColor: "blue.500" }}
                     {...register("question", {
                       required: "A JSON payload is required for the poll question"
@@ -332,9 +315,9 @@ export default function NewPollPage() {
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.default"
+                      color="fg.muted"
+                      _hover={{ bg: "bg.muted" }}
                       type="button"
                       onClick={() => setIsBuilderOpen(true)}
                     >
@@ -344,9 +327,9 @@ export default function NewPollPage() {
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.default"
+                      color="fg.muted"
+                      _hover={{ bg: "bg.muted" }}
                       type="button"
                       onClick={loadSampleTemplate}
                     >
@@ -356,9 +339,9 @@ export default function NewPollPage() {
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.default"
+                      color="fg.muted"
+                      _hover={{ bg: "bg.muted" }}
                       type="button"
                       onClick={validateJson}
                     >
@@ -368,9 +351,9 @@ export default function NewPollPage() {
                       size="sm"
                       variant="outline"
                       bg="transparent"
-                      borderColor={buttonBorderColor}
-                      color={buttonTextColor}
-                      _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                      borderColor="border.default"
+                      color="fg.muted"
+                      _hover={{ bg: "bg.muted" }}
                       type="button"
                       onClick={showPreview}
                     >
@@ -393,14 +376,14 @@ export default function NewPollPage() {
                       <Checkbox.HiddenInput />
                       <Checkbox.Control />
                       <Checkbox.Label>
-                        <Box fontSize="sm" color={textColor}>
+                        <Box fontSize="sm" color="fg.default">
                           Require login to respond
                         </Box>
                       </Checkbox.Label>
                     </Checkbox.Root>
                   )}
                 />
-                <Box fontSize="xs" color={buttonTextColor} mt={1} ml={6}>
+                <Box fontSize="xs" color="fg.muted" mt={1} ml={6}>
                   If checked, only logged-in students can respond to this poll.
                 </Box>
               </Box>
@@ -410,18 +393,18 @@ export default function NewPollPage() {
                   type="submit"
                   loading={isSaving}
                   size="md"
-                  bg="#22C55E"
+                  bg="green.500"
                   color="white"
-                  _hover={{ bg: "#16A34A" }}
+                  _hover={{ bg: "green.600" }}
                 >
                   Publish Poll
                 </UIButton>
                 <Button
                   variant="outline"
                   bg="transparent"
-                  borderColor={buttonBorderColor}
-                  color={buttonTextColor}
-                  _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                  borderColor="border.default"
+                  color="fg.muted"
+                  _hover={{ bg: "bg.muted" }}
                   onClick={handleSubmit(saveDraft)}
                   size="md"
                   type="button"
@@ -432,9 +415,9 @@ export default function NewPollPage() {
                 <Button
                   variant="outline"
                   bg="transparent"
-                  borderColor={buttonBorderColor}
-                  color={buttonTextColor}
-                  _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+                  borderColor="border.default"
+                  color="fg.muted"
+                  _hover={{ bg: "bg.muted" }}
                   onClick={() => router.push(`/course/${course_id}/manage/polls`)}
                   size="md"
                   type="button"

@@ -3,7 +3,7 @@
 import React from "react";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
-import { useColorModeValue } from "@/components/ui/color-mode";
+import { useColorMode } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
 import type { Survey as SurveyType, SurveyResponseWithProfile } from "@/types/survey";
@@ -24,13 +24,13 @@ export default function ViewSurveyResponse({
   onValueChanged
 }: ViewSurveyResponseProps) {
   // Get color mode to determine theme
-  const isDarkMode = useColorModeValue(false, true);
+  const { colorMode } = useColorMode();
 
   // Create survey model from JSON
   const survey = new Model(surveyJson);
 
   // Apply SurveyJS theme based on color mode
-  if (isDarkMode) {
+  if (colorMode === "dark") {
     survey.applyTheme(DefaultDark);
   } else {
     survey.applyTheme(DefaultLight);

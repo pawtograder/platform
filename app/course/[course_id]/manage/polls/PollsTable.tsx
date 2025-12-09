@@ -1,7 +1,6 @@
 "use client";
 
 import { Box, Table, Text, Badge, HStack, IconButton, Button, Spinner } from "@chakra-ui/react";
-import { useColorModeValue } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
@@ -29,19 +28,6 @@ export default function PollsTable({ courseId }: PollsTableProps) {
   const timezone = course?.time_zone || "America/New_York";
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
-  const textColor = useColorModeValue("#1A202C", "#FFFFFF");
-  const secondaryTextColor = useColorModeValue("#4B5563", "#A0AEC0");
-  const tableBorderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const tableHeaderBg = useColorModeValue("#F2F2F2", "#0D0D0D");
-  const tableHeaderTextColor = useColorModeValue("#1A202C", "#9CA3AF");
-  const tableRowBg = useColorModeValue("#E5E5E5", "#1A1A1A");
-  const actionsButtonBorder = useColorModeValue("#D2D2D2", "#2D2D2D");
-  const filterButtonActiveBg = useColorModeValue("#3B82F6", "#2563EB");
-  const filterButtonActiveColor = "#FFFFFF";
-  const filterButtonInactiveBg = useColorModeValue("#F2F2F2", "#374151");
-  const filterButtonInactiveColor = useColorModeValue("#4B5563", "#9CA3AF");
-  const filterButtonHoverBg = useColorModeValue("#E5E5E5", "#4B5563");
-
   const filteredPolls = useMemo(() => {
     if (!Array.isArray(polls)) return [];
     if (activeFilter === "all") {
@@ -56,13 +42,18 @@ export default function PollsTable({ courseId }: PollsTableProps) {
   };
 
   const getStatusBadge = (isLive: boolean) => {
-    const colors = isLive
-      ? { text: "#22C55E", bg: "rgba(34, 197, 94, 0.2)", label: "Live" }
-      : { text: "#EF4444", bg: "rgba(239, 68, 68, 0.2)", label: "Closed" };
-
     return (
-      <Badge px={2} py={1} borderRadius="md" fontSize="xs" fontWeight="medium" bg={colors.bg} color={colors.text}>
-        {colors.label}
+      <Badge
+        px={2}
+        py={1}
+        borderRadius="md"
+        fontSize="xs"
+        fontWeight="medium"
+        colorPalette={isLive ? "green" : "red"}
+        bg={isLive ? "green.subtle" : "red.subtle"}
+        color={isLive ? "green.500" : "red.500"}
+      >
+        {isLive ? "Live" : "Closed"}
       </Badge>
     );
   };
@@ -169,10 +160,10 @@ export default function PollsTable({ courseId }: PollsTableProps) {
             key={filter}
             size="sm"
             variant="outline"
-            bg={activeFilter === filter ? filterButtonActiveBg : filterButtonInactiveBg}
-            color={activeFilter === filter ? filterButtonActiveColor : filterButtonInactiveColor}
-            borderColor={tableBorderColor}
-            _hover={{ bg: filterButtonHoverBg }}
+            bg={activeFilter === filter ? "blue.500" : "bg.subtle"}
+            color={activeFilter === filter ? "white" : "fg.muted"}
+            borderColor={activeFilter === filter ? "blue.500" : "border"}
+            _hover={{ bg: activeFilter === filter ? "blue.500" : "bg.muted" }}
             onClick={() => setActiveFilter(filter)}
             textTransform="capitalize"
           >
@@ -181,37 +172,37 @@ export default function PollsTable({ courseId }: PollsTableProps) {
         ))}
       </HStack>
 
-      <Box border="1px solid" borderColor={tableBorderColor} borderRadius="lg" overflow="hidden">
+      <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden">
         <Table.Root size="sm">
-          <Table.Header bg={tableHeaderBg}>
+          <Table.Header bg="bg.muted">
             <Table.Row>
-              <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
+              <Table.ColumnHeader color="fg.muted" fontWeight="semibold">
                 Question
               </Table.ColumnHeader>
-              <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
+              <Table.ColumnHeader color="fg.muted" fontWeight="semibold">
                 Status
               </Table.ColumnHeader>
-              <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold">
+              <Table.ColumnHeader color="fg.muted" fontWeight="semibold">
                 Created
               </Table.ColumnHeader>
-              <Table.ColumnHeader color={tableHeaderTextColor} fontWeight="semibold" textAlign="center">
+              <Table.ColumnHeader color="fg.muted" fontWeight="semibold" textAlign="center">
                 Actions
               </Table.ColumnHeader>
             </Table.Row>
           </Table.Header>
           <Table.Body>
             {filteredPolls.map((poll) => (
-              <Table.Row key={poll.id} bg={tableRowBg}>
+              <Table.Row key={poll.id} bg="bg.subtle">
                 <Table.Cell>
                   <Link href={`/course/${courseId}/manage/polls/${poll.id}/responses`}>
-                    <Text fontWeight="medium" color={textColor}>
+                    <Text fontWeight="medium" color="fg.default">
                       {getQuestionPrompt(poll)}
                     </Text>
                   </Link>
                 </Table.Cell>
                 <Table.Cell>{getStatusBadge(poll.is_live)}</Table.Cell>
                 <Table.Cell>
-                  <Text fontSize="xs" color={secondaryTextColor}>
+                  <Text fontSize="xs" color="fg.muted">
                     {formatDate(poll.created_at)}
                   </Text>
                 </Table.Cell>
@@ -219,12 +210,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                   <HStack gap={2} justifyContent="center">
                     <MenuRoot>
                       <MenuTrigger asChild>
-                        <IconButton
-                          size="sm"
-                          variant="ghost"
-                          aria-label="Poll actions"
-                          borderColor={actionsButtonBorder}
-                        >
+                        <IconButton size="sm" variant="ghost" aria-label="Poll actions" borderColor="border.default">
                           <HiOutlineDotsHorizontal />
                         </IconButton>
                       </MenuTrigger>
