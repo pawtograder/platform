@@ -40,6 +40,13 @@ export default function PollRespondPage() {
         .single();
 
       if (error || !pollData) {
+        if (error) {
+          toaster.create({
+            title: "Error loading poll",
+            description: error.message,
+            type: "error"
+          });
+        }
         setIsLoading(false);
         return;
       }
