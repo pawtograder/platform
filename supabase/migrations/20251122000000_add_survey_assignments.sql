@@ -1,6 +1,3 @@
--- Drop the unused survey_assignees table (superseded by survey_assignments)
-DROP TABLE IF EXISTS survey_assignees CASCADE;
-
 -- Create survey_assignments table
 CREATE TABLE IF NOT EXISTS survey_assignments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
