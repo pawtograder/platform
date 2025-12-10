@@ -5,6 +5,7 @@ import { BsDiscord, BsExclamationCircle } from "react-icons/bs";
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
 import { Alert } from "../ui/alert";
+import { Tooltip } from "../ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 
 type DiscordInvite = {
@@ -19,8 +20,8 @@ type DiscordInvite = {
   created_at: string;
   classes?: {
     id: number;
-    slug: string;
-    name: string;
+    slug: string | null;
+    name: string | null;
   };
 };
 
@@ -63,7 +64,7 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
         const { data, error: fetchError } = await query;
 
         if (fetchError) throw fetchError;
-        setInvites(data || []);
+        setInvites((data || []) as DiscordInvite[]);
       } catch (err) {
         console.error("Error fetching Discord invites:", err);
         setError(err instanceof Error ? err.message : "Failed to load invites");
@@ -145,20 +146,26 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
                         Expires {expiresAt.toLocaleDateString()} at {expiresAt.toLocaleTimeString()}
                       </Text>
                     </VStack>
-                    {isExpiringSoon && <Icon as={BsExclamationCircle} color="fg.warning" title="Expiring soon" />}
+                    {isExpiringSoon && (
+                      <Tooltip content="Expiring soon">
+                        <Icon as={BsExclamationCircle} color="fg.warning" />
+                      </Tooltip>
+                    )}
                   </HStack>
                   <HStack gap={2}>
-                    <Button
-                      as={Link}
+                    <Link
                       href={invite.invite_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      colorPalette="blue"
-                      size="sm"
-                      leftIcon={<BsDiscord />}
+                      _hover={{ textDecoration: "none" }}
                     >
-                      Join Discord Server
-                    </Button>
+                      <Button colorPalette="blue" size="sm">
+                        <HStack gap={2}>
+                          <Icon as={BsDiscord} />
+                          <Text>Join Discord Server</Text>
+                        </HStack>
+                      </Button>
+                    </Link>
                     <Button
                       variant="ghost"
                       size="sm"
