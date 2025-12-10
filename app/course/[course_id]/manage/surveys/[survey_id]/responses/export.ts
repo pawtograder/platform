@@ -1,24 +1,5 @@
 import { Model } from "survey-core";
-
-export type SurveyResponse = {
-  id: string;
-  response: Record<string, unknown>;
-  is_submitted: boolean;
-  submitted_at?: string;
-  created_at: string;
-  updated_at: string;
-  profiles: {
-    id: string;
-    name: string;
-    sis_user_id: string | null;
-  };
-};
-
-export type Survey = {
-  id: string;
-  title: string;
-  questions: unknown;
-};
+import type { Survey, SurveyResponseWithProfile as SurveyResponse } from "@/types/survey";
 
 /**
  * Flattens nested response data into a flat object for CSV export
@@ -78,7 +59,8 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
   }
 
   // Get question names in page order and their titles
-  const { names: orderedQuestionNames, titles: questionTitles } = getOrderedQuestions(survey.questions);
+  const surveyJson = (survey as { json?: unknown }).json ?? {};
+  const { names: orderedQuestionNames, titles: questionTitles } = getOrderedQuestions(surveyJson);
 
   // Create CSV headers
   const headers = [
@@ -92,7 +74,8 @@ export function exportResponsesToCSV(responses: SurveyResponse[], survey: Survey
 
   // Create CSV rows
   const rows = responses.map((response) => {
-    const flattenedResponse = flattenResponseData(response.response);
+    const responseData = (response.response ?? {}) as Record<string, unknown>;
+    const flattenedResponse = flattenResponseData(responseData);
     const studentName = response.profiles.name;
     const status = response.is_submitted ? "Completed" : "Partial";
     const submittedAt = response.submitted_at || "";
