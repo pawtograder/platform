@@ -59,8 +59,18 @@ test.describe("Polls", () => {
     const ids = (polls ?? []).map((p) => p.id);
     if (!ids.length) return;
 
-    await supabase.from("live_poll_responses").delete().in("live_poll_id", ids);
-    await supabase.from("live_polls").delete().in("id", ids);
+    const { error: responsesError } = await supabase.from("live_poll_responses").delete().in("live_poll_id", ids);
+    const { error: pollsError } = await supabase.from("live_polls").delete().in("id", ids);
+
+    const deleteErrors = [
+      { table: "live_poll_responses", error: responsesError },
+      { table: "live_polls", error: pollsError }
+    ].filter(({ error }) => error);
+
+    if (deleteErrors.length) {
+      const details = deleteErrors.map(({ table, error }) => `${table}: ${error?.message}`).join("; ");
+      throw new Error(`Failed to clear polls: ${details}`);
+    }
   };
 
   test.beforeAll(async () => {
