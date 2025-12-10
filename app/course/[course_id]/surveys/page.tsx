@@ -10,6 +10,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { SurveyWithResponse } from "@/types/survey";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
 
 type FilterType = "all" | "not_started" | "completed";
 
@@ -22,6 +23,7 @@ export default function StudentSurveysPage() {
   // Get private_profile_id from ClassProfileProvider (already available via course layout)
   const { private_profile_id } = useClassProfiles();
   const isStudent = useIsStudent();
+  const course = useCourse();
 
   // Status badge configuration
   const statusColors = {
@@ -158,7 +160,8 @@ export default function StudentSurveysPage() {
 
   const formatDueDate = (dueDate: string) => {
     try {
-      return formatInTimeZone(new Date(dueDate), "America/New_York", "MMM dd, yyyy 'at' h:mm a");
+      const timeZone = course.time_zone || "UTC";
+      return formatInTimeZone(new Date(dueDate), timeZone, "MMM dd, yyyy 'at' h:mm a");
     } catch {
       return "Invalid date";
     }
