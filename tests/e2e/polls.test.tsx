@@ -146,6 +146,7 @@ test.describe("Polls", () => {
     await expect(liveRow).not.toBeVisible();
   });
 
+  // TODO: Re-enable once [reason] is resolved
   test.skip("student only sees live polls (closed polls are hidden)", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: false,
