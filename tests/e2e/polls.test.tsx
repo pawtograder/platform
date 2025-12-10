@@ -380,6 +380,7 @@ test.describe("Polls", () => {
     await expect(page.getByText("There is currently no live poll available for this course.")).toBeVisible();
   });
 
+  // TODO: Re-enable once [reason] is resolved
   test.skip("instructor can delete a poll from manage table", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
       is_live: false,
