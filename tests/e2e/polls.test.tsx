@@ -59,8 +59,18 @@ test.describe("Polls", () => {
     const ids = (polls ?? []).map((p) => p.id);
     if (!ids.length) return;
 
-    await supabase.from("live_poll_responses").delete().in("live_poll_id", ids);
-    await supabase.from("live_polls").delete().in("id", ids);
+    const { error: responsesError } = await supabase.from("live_poll_responses").delete().in("live_poll_id", ids);
+    const { error: pollsError } = await supabase.from("live_polls").delete().in("id", ids);
+
+    const deleteErrors = [
+      { table: "live_poll_responses", error: responsesError },
+      { table: "live_polls", error: pollsError }
+    ].filter(({ error }) => error);
+
+    if (deleteErrors.length) {
+      const details = deleteErrors.map(({ table, error }) => `${table}: ${error?.message}`).join("; ");
+      throw new Error(`Failed to clear polls: ${details}`);
+    }
   };
 
   test.beforeAll(async () => {
@@ -82,6 +92,41 @@ test.describe("Polls", () => {
 
     await expect(page.getByRole("heading", { name: "No Live Polls Available" })).toBeVisible();
     await expect(page.getByText("There are currently no live polls available for this course.")).toBeVisible();
+  });
+
+
+  // TODO: Possibe vulnerability to flakiness, check issue and reduce the time limit for the check
+  test("student sees a poll go live without refreshing", async ({ page }) => {
+    const poll = await seedPoll(course, instructor, {
+      is_live: false,
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Real-time Poll" }]
+      }
+    });
+
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/polls`);
+
+    const emptyHeading = page.getByRole("heading", { name: "No Live Polls Available" });
+    await expect(emptyHeading).toBeVisible();
+
+    const { error } = await supabase.from("live_polls").update({ is_live: true }).eq("id", poll.id);
+    if (error) {
+      throw new Error(`Failed to set poll live for real-time test: ${error.message}`);
+    }
+
+    await expect
+      .poll(async () => {
+        try {
+          return await page.getByRole("row", { name: /Real-time Poll/i }).isVisible();
+        } catch {
+          return false;
+        }
+      }, { timeout: 10000, message: "poll row should appear without refresh" })
+      .toBe(true);
+
+    await expect(emptyHeading).toBeHidden();
   });
 
   test("student sees active poll with answer action", async ({ page }) => {
@@ -146,7 +191,7 @@ test.describe("Polls", () => {
     await expect(liveRow).not.toBeVisible();
   });
 
-  // TODO: Re-enable once [reason] is resolved
+  // TODO: Re-enable once UI is fixed to show the list of closed polls (not deleted)
   test.skip("student only sees live polls (closed polls are hidden)", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: false,
@@ -380,7 +425,7 @@ test.describe("Polls", () => {
     await expect(page.getByText("There is currently no live poll available for this course.")).toBeVisible();
   });
 
-  // TODO: Re-enable once [reason] is resolved
+  // TODO: Re-enable once the page not refreshing after adding a poll issue is resolved
   test.skip("instructor can delete a poll from manage table", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
       is_live: false,
