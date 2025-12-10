@@ -95,7 +95,7 @@ test.describe("Polls", () => {
   });
 
 
-  // TODO: Possibe vulnerability to flakiness, check issue and reduce the time limit for the check
+  // TODO: Possible vulnerability to flakiness, check issue and reduce the time limit for the check
   test("student sees a poll go live without refreshing", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
       is_live: false,
