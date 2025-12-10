@@ -22,7 +22,7 @@ const buildSurveyPayload = (course: Course, instructor: User, overrides: Partial
   };
 };
 
-const seedSurvey = async <T = any>(
+const seedSurvey = async <T = any,>(
   course: Course,
   instructor: User,
   overrides: Partial<SurveyInsert>,
@@ -701,17 +701,11 @@ test.describe("Surveys Page", () => {
     });
 
     // Validate a variety of content
-    const firstRadio = parsed.pages
-      .flatMap((p: any) => p.elements)
-      .find((el: any) => el.type === "radiogroup");
+    const firstRadio = parsed.pages.flatMap((p: any) => p.elements).find((el: any) => el.type === "radiogroup");
     expect(firstRadio.choices.length).toBeGreaterThanOrEqual(3);
-    const firstCheckbox = parsed.pages
-      .flatMap((p: any) => p.elements)
-      .find((el: any) => el.type === "checkbox");
+    const firstCheckbox = parsed.pages.flatMap((p: any) => p.elements).find((el: any) => el.type === "checkbox");
     expect(firstCheckbox.choices.length).toBeGreaterThanOrEqual(3);
-    const firstBoolean = parsed.pages
-      .flatMap((p: any) => p.elements)
-      .find((el: any) => el.type === "boolean");
+    const firstBoolean = parsed.pages.flatMap((p: any) => p.elements).find((el: any) => el.type === "boolean");
     expect(firstBoolean.labelTrue).toBeTruthy();
     expect(firstBoolean.labelFalse).toBeTruthy();
   });

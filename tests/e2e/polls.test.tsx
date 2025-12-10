@@ -20,7 +20,7 @@ const seedPoll = async (
   instructor: User,
   overrides: Record<string, any>,
   selectFields = "id"
-): Promise<{ id: number }> => {
+): Promise<{ id: string }> => {
   const { data, error } = await supabase
     .from("live_polls")
     .insert({
@@ -39,7 +39,11 @@ const seedPoll = async (
     throw new Error(`Failed to seed poll: ${error?.message}`);
   }
 
-  return data as { id: number };
+  const id = (data as any)?.id;
+  if (typeof id !== "string") {
+    throw new Error("Failed to seed poll: missing id");
+  }
+  return { id };
 };
 
 test.describe("Polls", () => {
@@ -107,7 +111,10 @@ test.describe("Polls", () => {
   test("instructor sees live and closed polls with filters", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: true,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Live Poll Question" }] }
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Live Poll Question" }]
+      }
     });
 
     await seedPoll(course, instructor, {
@@ -185,7 +192,10 @@ test.describe("Polls", () => {
   test("instructor sees poll actions menu items", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: true,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Menu Poll Question" }] }
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Menu Poll Question" }]
+      }
     });
 
     await loginAsUser(page, instructor, course);
@@ -202,7 +212,10 @@ test.describe("Polls", () => {
   test("instructor 'View Poll' opens responses page", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
       is_live: true,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "View Poll Question" }] }
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "View Poll Question" }]
+      }
     });
 
     await loginAsUser(page, instructor, course);
@@ -218,7 +231,10 @@ test.describe("Polls", () => {
   test("start/stop poll toggles status badge and button label", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
       is_live: false,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Toggle Poll Question" }] }
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Toggle Poll Question" }]
+      }
     });
 
     await loginAsUser(page, instructor, course);
@@ -258,7 +274,10 @@ test.describe("Polls", () => {
     await seedPoll(course, instructor, {
       is_live: true,
       require_login: true,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Login Required Poll" }] }
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Login Required Poll" }]
+      }
     });
 
     await page.goto(`/poll/${course.id}`);
@@ -287,7 +306,10 @@ test.describe("Polls", () => {
     const poll = await seedPoll(course, instructor, {
       is_live: true,
       require_login: true,
-      question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Submit Poll Question" }] }
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Submit Poll Question" }]
+      }
     });
 
     await loginAsUser(page, student, course);
