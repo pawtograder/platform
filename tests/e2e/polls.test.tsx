@@ -94,6 +94,41 @@ test.describe("Polls", () => {
     await expect(page.getByText("There are currently no live polls available for this course.")).toBeVisible();
   });
 
+
+  // TODO: Possibe vulnerability to flakiness, check issue and reduce the time limit for the check
+  test("student sees a poll go live without refreshing", async ({ page }) => {
+    const poll = await seedPoll(course, instructor, {
+      is_live: false,
+      question: {
+        ...samplePollQuestion,
+        elements: [{ ...samplePollQuestion.elements[0], title: "Real-time Poll" }]
+      }
+    });
+
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/polls`);
+
+    const emptyHeading = page.getByRole("heading", { name: "No Live Polls Available" });
+    await expect(emptyHeading).toBeVisible();
+
+    const { error } = await supabase.from("live_polls").update({ is_live: true }).eq("id", poll.id);
+    if (error) {
+      throw new Error(`Failed to set poll live for real-time test: ${error.message}`);
+    }
+
+    await expect
+      .poll(async () => {
+        try {
+          return await page.getByRole("row", { name: /Real-time Poll/i }).isVisible();
+        } catch {
+          return false;
+        }
+      }, { timeout: 10000, message: "poll row should appear without refresh" })
+      .toBe(true);
+
+    await expect(emptyHeading).toBeHidden();
+  });
+
   test("student sees active poll with answer action", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: true,
