@@ -18,7 +18,18 @@ interface PollQuestion {
 export default function PollRespondPage() {
   const params = useParams();
   const router = useRouter();
-  const course_id = params.course_id as string;
+  const course_id = Array.isArray(params.course_id) ? params.course_id[0] : params.course_id;
+  const courseIdNum = course_id ? parseInt(course_id, 10) : NaN;
+
+  if (isNaN(courseIdNum)) {
+    toaster.create({
+      title: "Invalid Course ID",
+      description: "Course ID must be a number.",
+      type: "error"
+    });
+    return;
+  }
+  
   const [surveyModel, setSurveyModel] = useState<Model | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
