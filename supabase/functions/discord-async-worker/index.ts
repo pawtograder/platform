@@ -609,7 +609,6 @@ export async function processEnvelope(
             console.log(`[processEnvelope] User ${args.user_id} not in guild ${args.guild_id}, creating invite`);
             const invite = await discord.createGuildInvite(args.guild_id, 604800, 1, scope); // 7 days, 1 use
 
-            // Log the invite - in production, you might want to send this via email or store it
             console.log(`[processEnvelope] Created invite for user ${args.user_id}: ${invite.url}`);
             scope.setContext("discord_invite_created", {
               user_id: args.user_id,
@@ -622,6 +621,63 @@ export async function processEnvelope(
               tags: { user_id: args.user_id, guild_id: args.guild_id }
             });
 
+            // Store invite in database if we have class_id
+            if (envelope.class_id) {
+              try {
+                // Get user_id from discord_id
+                const { data: userData, error: userError } = await adminSupabase
+                  .from("users")
+                  .select("user_id")
+                  .eq("discord_id", args.user_id)
+                  .single();
+
+                if (!userError && userData) {
+                  // Calculate expiration time (7 days from now)
+                  const expiresAt = new Date();
+                  expiresAt.setTime(expiresAt.getTime() + 604800 * 1000); // 7 days in milliseconds
+
+                  // Upsert invite (replace existing if any)
+                  const { error: inviteError } = await adminSupabase.from("discord_invites").upsert(
+                    {
+                      user_id: userData.user_id,
+                      class_id: envelope.class_id,
+                      guild_id: args.guild_id,
+                      invite_code: invite.code,
+                      invite_url: invite.url,
+                      expires_at: expiresAt.toISOString(),
+                      used: false
+                    },
+                    {
+                      onConflict: "user_id,class_id,guild_id"
+                    }
+                  );
+
+                  if (inviteError) {
+                    console.error(`[processEnvelope] Failed to store invite in database:`, inviteError);
+                    scope.setContext("invite_storage_error", {
+                      error_message: inviteError.message
+                    });
+                  } else {
+                    console.log(
+                      `[processEnvelope] Stored invite in database: user_id=${userData.user_id}, class_id=${envelope.class_id}`
+                    );
+                  }
+                } else {
+                  console.warn(
+                    `[processEnvelope] Could not find user with discord_id=${args.user_id} to store invite:`,
+                    userError
+                  );
+                }
+              } catch (e) {
+                console.error(`[processEnvelope] Error storing invite in database:`, e);
+                scope.setContext("invite_storage_exception", {
+                  error_message: e instanceof Error ? e.message : String(e)
+                });
+              }
+            } else {
+              console.warn(`[processEnvelope] No class_id in envelope, skipping invite storage`);
+            }
+
             // Don't fail - the invite was created, user can join later
             // The role will be added when they join and the sync runs again
             return true;
@@ -630,6 +686,36 @@ export async function processEnvelope(
           // User is in guild, add the role
           await discord.addMemberRole(args, scope);
           console.log(`[processEnvelope] add_member_role completed successfully`);
+
+          // Mark any pending invites for this user/guild as used
+          if (envelope.class_id) {
+            try {
+              const { data: userData, error: userError } = await adminSupabase
+                .from("users")
+                .select("user_id")
+                .eq("discord_id", args.user_id)
+                .single();
+
+              if (!userError && userData) {
+                const { error: markError } = await adminSupabase.rpc("mark_discord_invite_used", {
+                  p_user_id: userData.user_id,
+                  p_guild_id: args.guild_id
+                });
+
+                if (markError) {
+                  console.warn(`[processEnvelope] Failed to mark invite as used:`, markError);
+                } else {
+                  console.log(
+                    `[processEnvelope] Marked invites as used for user_id=${userData.user_id}, guild_id=${args.guild_id}`
+                  );
+                }
+              }
+            } catch (e) {
+              console.error(`[processEnvelope] Error marking invite as used:`, e);
+              // Don't fail the operation if marking invite fails
+            }
+          }
+
           return true;
         } catch (error) {
           // If adding role fails (e.g., user left server), log but don't fail completely

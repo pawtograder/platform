@@ -1472,6 +1472,57 @@ export type Database = {
           }
         ];
       };
+      discord_invites: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          expires_at: string;
+          guild_id: string;
+          id: number;
+          invite_code: string;
+          invite_url: string;
+          used: boolean;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          expires_at: string;
+          guild_id: string;
+          id?: number;
+          invite_code: string;
+          invite_url: string;
+          used?: boolean;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          expires_at?: string;
+          guild_id?: string;
+          id?: number;
+          invite_code?: string;
+          invite_url?: string;
+          used?: boolean;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_invites_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discord_invites_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discord_messages: {
         Row: {
           class_id: number;
@@ -1503,6 +1554,38 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "discord_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_roles: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          discord_role_id: string;
+          id: number;
+          role_type: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          discord_role_id: string;
+          id?: number;
+          role_type: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          discord_role_id?: string;
+          id?: number;
+          role_type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_roles_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
@@ -9440,6 +9523,10 @@ export type Database = {
         };
         Returns: boolean;
       };
+      check_discord_role_sync_after_link: {
+        Args: { p_user_id: string };
+        Returns: undefined;
+      };
       check_github_error_threshold: {
         Args: { p_org: string; p_threshold: number; p_window_minutes: number };
         Returns: number;
@@ -9630,8 +9717,29 @@ export type Database = {
         Args: { p_action?: string; p_help_request_id: number };
         Returns: undefined;
       };
+      enqueue_discord_queue_assignment_message: {
+        Args: { p_action?: string; p_queue_assignment_id: number };
+        Returns: undefined;
+      };
       enqueue_discord_regrade_request_message: {
         Args: { p_action?: string; p_regrade_request_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_role_creation: {
+        Args: { p_class_id: number; p_guild_id?: string; p_role_type: string };
+        Returns: undefined;
+      };
+      enqueue_discord_role_sync: {
+        Args: {
+          p_action?: string;
+          p_class_id: number;
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_user_id: string;
+        };
+        Returns: undefined;
+      };
+      enqueue_discord_roles_creation: {
+        Args: { p_class_id: number; p_guild_id?: string };
         Returns: undefined;
       };
       enqueue_github_archive_repo: {
@@ -10001,6 +10109,10 @@ export type Database = {
         Args: { p_class_id: number; p_updates: Json };
         Returns: boolean;
       };
+      invoke_discord_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_email_batch_processor_background_task: {
         Args: never;
         Returns: undefined;
@@ -10049,6 +10161,14 @@ export type Database = {
           p_student_id: string;
         };
         Returns: undefined;
+      };
+      mark_discord_invite_used: {
+        Args: { p_guild_id: string; p_user_id: string };
+        Returns: undefined;
+      };
+      only_discord_ids_changed: {
+        Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
+        Returns: boolean;
       };
       open_github_circuit: {
         Args: {

@@ -292,7 +292,51 @@ CREATE POLICY discord_async_worker_dlq_messages_service_role_insert
   TO service_role
   WITH CHECK (true);
 
--- 13. Add trigger to auto-populate Discord fields from identity data
+-- 13. Function to check and sync Discord roles for a user after linking Discord account
+-- This can be called after OAuth linking to ensure roles are synced and invites are created
+CREATE OR REPLACE FUNCTION public.check_discord_role_sync_after_link(
+  p_user_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_role RECORD;
+BEGIN
+  -- Get all active roles for this user in classes with Discord servers
+  FOR v_user_role IN
+    SELECT ur.user_id, ur.class_id, ur.role
+    FROM public.user_roles ur
+    INNER JOIN public.classes c ON c.id = ur.class_id
+    WHERE ur.user_id = p_user_id
+      AND ur.disabled = false
+      AND c.discord_server_id IS NOT NULL
+  LOOP
+    -- Enqueue role sync for each role
+    -- This will check if user is in server and create invite if needed
+    -- Note: enqueue_discord_role_sync is defined in a later migration, so this will only work
+    -- if that migration has run. For now, we'll just skip if the function doesn't exist.
+    BEGIN
+      PERFORM public.enqueue_discord_role_sync(
+        v_user_role.user_id,
+        v_user_role.class_id,
+        v_user_role.role,
+        'add'
+      );
+    EXCEPTION
+      WHEN undefined_function THEN
+        -- Function doesn't exist yet (migration not run), skip silently
+        NULL;
+    END;
+  END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION public.check_discord_role_sync_after_link IS 'Checks and syncs Discord roles for a user after linking Discord account, creating invites if needed';
+
+-- 14. Add trigger to auto-populate Discord fields from identity data
 -- This mirrors how we handle GitHub identity data in update_github_profile
 -- Discord identity data structure:
 -- {
@@ -308,16 +352,30 @@ RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $function$
+DECLARE
+  v_had_discord_id boolean;
 BEGIN
     IF NEW.provider <> 'discord' THEN
       RETURN NEW;
     END IF;
+
+    -- Check if user already had a Discord ID (to detect new linking vs update)
+    SELECT (discord_id IS NOT NULL) INTO v_had_discord_id
+    FROM public.users
+    WHERE user_id = NEW.user_id;
 
     UPDATE public.users
     SET
       discord_username = json_extract_path_text(to_json(NEW.identity_data), 'name'),
       discord_id = NEW.provider_id
     WHERE user_id = NEW.user_id;
+
+    -- If this is a new Discord link (didn't have discord_id before), check for role sync
+    IF NOT v_had_discord_id THEN
+      -- Call function to check and sync roles (will create invites if user not in servers)
+      PERFORM public.check_discord_role_sync_after_link(NEW.user_id);
+    END IF;
+
     RETURN NEW;
 END;
 $function$;

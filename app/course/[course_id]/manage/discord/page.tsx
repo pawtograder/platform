@@ -1,28 +1,34 @@
 "use client";
 
-import { Box, Button, Field, Heading, HStack, Icon, Input, Stack, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Field, Heading, HStack, Icon, Input, Stack, Text, VStack, Collapsible } from "@chakra-ui/react";
 import { BsDiscord, BsInfoCircle } from "react-icons/bs";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
 import { useState } from "react";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import LinkDiscordAccount from "@/components/discord/link-account";
+import PendingInvites from "@/components/discord/pending-invites";
 
 /**
  * Admin page for configuring Discord server integration for a class
- * Only accessible to instructors and graders
+ * Accessible to instructors and graders, but only instructors can edit settings
  */
 export default function DiscordManagementPage() {
   const courseController = useCourseController();
   const course = courseController.course;
   const isStaff = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
   const { mutateAsync: updateClass } = useUpdate();
 
   const [discordServerId, setDiscordServerId] = useState(course?.discord_server_id || "");
   const [discordChannelGroupId, setDiscordChannelGroupId] = useState(course?.discord_channel_group_id || "");
   const [isSaving, setIsSaving] = useState(false);
+
+  // Collapse settings if server is already configured
+  const isServerConfigured = !!course?.discord_server_id;
 
   if (!isStaff) {
     return (
@@ -84,73 +90,116 @@ export default function DiscordManagementPage() {
         <LinkDiscordAccount />
       </Box>
 
+      {/* Pending Invites */}
+      <Box>
+        <PendingInvites classId={course.id} showAll={true} />
+      </Box>
+
       {/* Discord Server Configuration */}
       <Box borderWidth="1px" borderRadius="md" p={4}>
-        <VStack align="stretch" gap={4}>
-          <HStack justify="space-between">
-            <Heading size="md">Server Configuration</Heading>
-            <PopoverRoot>
-              <PopoverTrigger asChild>
-                <Button variant="ghost" size="sm">
-                  <Icon as={BsInfoCircle} />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent width="lg">
-                <PopoverHeader>
-                  <Heading size="sm">Discord Server Setup</Heading>
-                </PopoverHeader>
-                <PopoverBody>
-                  <VStack align="stretch" gap={2}>
-                    <Text fontSize="sm">
-                      <strong>Discord Server ID:</strong> The ID of your Discord server (guild). You can find this by
-                      enabling Developer Mode in Discord, right-clicking your server, and selecting &quot;Copy Server
-                      ID&quot;.
-                    </Text>
-                    <Text fontSize="sm">
-                      <strong>Channel Group ID:</strong> (Optional) The ID of a Discord category/channel group where
-                      class channels will be organized. Leave empty to create channels at the root level.
-                    </Text>
-                    <Text fontSize="sm">
-                      <strong>Note:</strong> The Discord bot must be added to your server with appropriate permissions
-                      (Manage Channels, Send Messages, Read Message History).
-                    </Text>
-                  </VStack>
-                </PopoverBody>
-              </PopoverContent>
-            </PopoverRoot>
-          </HStack>
+        <Collapsible.Root defaultOpen={!isServerConfigured}>
+          <Collapsible.Trigger asChild>
+            <HStack
+              justify="space-between"
+              cursor="pointer"
+              _hover={{ opacity: 0.8 }}
+              transition="opacity 0.2s"
+              role="button"
+              tabIndex={0}
+              mb={isServerConfigured ? 0 : 4}
+            >
+              <HStack gap={2}>
+                <Heading size="md">Server Configuration</Heading>
+                {isServerConfigured && (
+                  <Text fontSize="sm" color="fg.muted" fontWeight="normal">
+                    (Configured)
+                  </Text>
+                )}
+              </HStack>
+              <HStack gap={2}>
+                <PopoverRoot>
+                  <PopoverTrigger asChild>
+                    <Button variant="ghost" size="sm" onClick={(e) => e.stopPropagation()}>
+                      <Icon as={BsInfoCircle} />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent width="lg">
+                    <PopoverHeader>
+                      <Heading size="sm">Discord Server Setup</Heading>
+                    </PopoverHeader>
+                    <PopoverBody>
+                      <VStack align="stretch" gap={2}>
+                        <Text fontSize="sm">
+                          <strong>Discord Server ID:</strong> The ID of your Discord server (guild). You can find this
+                          by enabling Developer Mode in Discord, right-clicking your server, and selecting &quot;Copy
+                          Server ID&quot;.
+                        </Text>
+                        <Text fontSize="sm">
+                          <strong>Channel Group ID:</strong> (Optional) The ID of a Discord category/channel group where
+                          class channels will be organized. Leave empty to create channels at the root level.
+                        </Text>
+                        <Text fontSize="sm">
+                          <strong>Note:</strong> The Discord bot must be added to your server with appropriate
+                          permissions (Manage Channels, Send Messages, Read Message History).
+                        </Text>
+                      </VStack>
+                    </PopoverBody>
+                  </PopoverContent>
+                </PopoverRoot>
+                <Collapsible.Context>
+                  {(collapsible) => (
+                    <Icon as={collapsible.open ? ChevronDown : ChevronRight} boxSize={5} color="fg.muted" />
+                  )}
+                </Collapsible.Context>
+              </HStack>
+            </HStack>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            <VStack align="stretch" gap={4} mt={4}>
+              <Field.Root>
+                <Field.Label>Discord Server ID</Field.Label>
+                <Input
+                  value={discordServerId}
+                  onChange={(e) => setDiscordServerId(e.target.value)}
+                  placeholder="Enter Discord server (guild) ID"
+                  readOnly={!isInstructor}
+                  disabled={!isInstructor}
+                />
+                <Field.HelperText>
+                  Right-click your Discord server → Copy Server ID (requires Developer Mode)
+                </Field.HelperText>
+              </Field.Root>
 
-          <Field.Root>
-            <Field.Label>Discord Server ID</Field.Label>
-            <Input
-              value={discordServerId}
-              onChange={(e) => setDiscordServerId(e.target.value)}
-              placeholder="Enter Discord server (guild) ID"
-            />
-            <Field.HelperText>
-              Right-click your Discord server → Copy Server ID (requires Developer Mode)
-            </Field.HelperText>
-          </Field.Root>
+              <Field.Root>
+                <Field.Label>Channel Group ID (Optional)</Field.Label>
+                <Input
+                  value={discordChannelGroupId}
+                  onChange={(e) => setDiscordChannelGroupId(e.target.value)}
+                  placeholder="Enter Discord category/channel group ID"
+                  readOnly={!isInstructor}
+                  disabled={!isInstructor}
+                />
+                <Field.HelperText>
+                  Right-click a Discord category → Copy ID (requires Developer Mode). Leave empty to create channels at
+                  root level.
+                </Field.HelperText>
+              </Field.Root>
 
-          <Field.Root>
-            <Field.Label>Channel Group ID (Optional)</Field.Label>
-            <Input
-              value={discordChannelGroupId}
-              onChange={(e) => setDiscordChannelGroupId(e.target.value)}
-              placeholder="Enter Discord category/channel group ID"
-            />
-            <Field.HelperText>
-              Right-click a Discord category → Copy ID (requires Developer Mode). Leave empty to create channels at root
-              level.
-            </Field.HelperText>
-          </Field.Root>
-
-          <HStack justify="end">
-            <Button onClick={handleSave} colorPalette="blue" loading={isSaving} disabled={isSaving}>
-              Save Configuration
-            </Button>
-          </HStack>
-        </VStack>
+              {isInstructor && (
+                <HStack justify="end">
+                  <Button onClick={handleSave} colorPalette="blue" loading={isSaving} disabled={isSaving}>
+                    Save Configuration
+                  </Button>
+                </HStack>
+              )}
+              {!isInstructor && (
+                <Text fontSize="sm" color="fg.muted" fontStyle="italic">
+                  Only instructors can edit Discord server configuration.
+                </Text>
+              )}
+            </VStack>
+          </Collapsible.Content>
+        </Collapsible.Root>
       </Box>
 
       {/* Information Box */}

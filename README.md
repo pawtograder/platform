@@ -84,6 +84,7 @@ Add the following environment variables to your `.env.local` file:
 - `DISCORD_CLIENT_ID` - Your Discord application client ID (found in OAuth2 section)
 - `DISCORD_CLIENT_SECRET` - Your Discord application client secret (found in OAuth2 section)
 - `NEXT_PUBLIC_DISCORD_CLIENT_ID` - Same as `DISCORD_CLIENT_ID` (required for frontend OAuth flow)
+- `DISCORD_WEBHOOK_PUBLIC_KEY` - Your Discord webhook's public key for signature verification (found in Webhooks section → Your Webhook → "Signing Secret" or "Public Key"). This is hex-encoded and can include or omit the `0x` prefix. Required for webhook security.
 
 #### Optional Variables (for Rate Limiting)
 
@@ -123,12 +124,32 @@ Add the following environment variables to your `.env.local` file:
    - Mention Everyone (to @ mention users)
    - Use External Emojis (optional, for better message formatting)
    - Add Reactions (optional, for feedback on help requests)
+   - Manage Roles (to assign roles to users)
 
    You can generate an invite URL with these permissions using the OAuth2 URL Generator in the Discord Developer Portal, or manually construct:
 
    ```
    https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=268896336&scope=bot
    ```
+
+5. **Configure Webhook** (for automatic role assignment):
+   - Navigate to the "Webhooks" section in your Discord application
+   - Click "New Webhook"
+   - Set the webhook URL to:
+     - For local development: `http://localhost:3000/api/discord/webhook` (use ngrok or similar for testing)
+     - For production: `https://app.pawtograder.com/api/discord/webhook` (or your domain)
+   - Copy the webhook's **public key** (found in the webhook settings, labeled "Signing Secret" or "Public Key")
+   - Add it to your environment variables as `DISCORD_WEBHOOK_PUBLIC_KEY`:
+     - The public key is hex-encoded (64 characters)
+     - You can include or omit the `0x` prefix
+     - Example: `a1b2c3d4e5f6...` or `0xa1b2c3d4e5f6...`
+   - Enable the "Guild Member Add" event in the webhook settings
+   - Test the webhook by clicking "Send Test Message" - Discord will send a PING event
+   - **Security Note**: The webhook endpoint uses ed25519 signature verification (via `@noble/ed25519`) to ensure all requests are from Discord. Invalid signatures are rejected with a 401 status.
+   - This webhook will automatically:
+     - Verify the request signature
+     - Mark pending Discord invites as used when users join
+     - Enqueue role sync operations to assign Pawtograder roles to users
 
 ### Setting Up Discord Integration for a Class
 
@@ -174,7 +195,18 @@ UPSTASH_REDIS_REST_URL=your_upstash_url  # Optional
 UPSTASH_REDIS_REST_TOKEN=your_upstash_token  # Optional
 ```
 
+### Next.js API Route Configuration
+
+For the Discord webhook endpoint to function, ensure your Next.js application has the webhook public key set:
+
+```bash
+# In your .env.local file or production environment
+DISCORD_WEBHOOK_PUBLIC_KEY=your_webhook_public_key_here  # Hex-encoded, 64 characters
+```
+
 The Discord async worker (`discord-async-worker`) processes Discord API calls asynchronously with rate limiting and retry logic, similar to the GitHub async worker pattern.
+
+The Discord webhook endpoint (`/api/discord/webhook`) receives events from Discord when users join servers, verifies signatures using ed25519 cryptography, and automatically triggers role assignment.
 
 ## Linting
 
