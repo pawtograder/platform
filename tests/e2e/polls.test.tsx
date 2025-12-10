@@ -156,7 +156,7 @@ test.describe("Polls", () => {
     await expect(liveRow).not.toBeVisible();
   });
 
-  // TODO: Re-enable once [reason] is resolved
+  // TODO: Re-enable once UI is fixed to show the list of closed polls (not deleted)
   test.skip("student only sees live polls (closed polls are hidden)", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: false,
@@ -390,7 +390,7 @@ test.describe("Polls", () => {
     await expect(page.getByText("There is currently no live poll available for this course.")).toBeVisible();
   });
 
-  // TODO: Re-enable once [reason] is resolved
+  // TODO: Re-enable once the page not refreshing after adding a poll issue is resolved
   test.skip("instructor can delete a poll from manage table", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
       is_live: false,
