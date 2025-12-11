@@ -9,6 +9,8 @@ import { formatInTimeZone } from "date-fns-tz";
 import dynamic from "next/dynamic";
 import { Survey, SurveyResponseWithProfile } from "@/types/survey";
 
+type SurveyData = Pick<Survey, "id" | "title" | "description" | "json" | "allow_response_editing">;
+
 const ViewSurveyResponse = dynamic(() => import("@/components/ViewSurveyResponse"), {
   ssr: false,
   loading: () => (
@@ -22,7 +24,7 @@ export default function IndividualResponsePage() {
   const { course_id, survey_id, response_id } = useParams();
   const router = useRouter();
   const [response, setResponse] = useState<SurveyResponseWithProfile | null>(null);
-  const [survey, setSurvey] = useState<Survey | null>(null);
+  const [survey, setSurvey] = useState<SurveyData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [timezone, setTimezone] = useState<string>("America/New_York");
 
@@ -60,7 +62,7 @@ export default function IndividualResponsePage() {
           return;
         }
 
-        const finalSurvey = surveyData as unknown as Survey;
+        const finalSurvey = surveyData as SurveyData;
         setSurvey(finalSurvey);
 
         // Now fetch the response using the survey's database ID

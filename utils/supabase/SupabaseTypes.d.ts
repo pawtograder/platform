@@ -9970,7 +9970,7 @@ export type Database = {
         }[];
       };
       get_async_queue_sizes: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           async_queue_size: number;
           dlq_queue_size: number;
@@ -9978,7 +9978,7 @@ export type Database = {
         }[];
       };
       get_circuit_breaker_statuses: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           is_open: boolean;
           key: string;
@@ -10345,6 +10345,10 @@ export type Database = {
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
+      };
+      soft_delete_survey: {
+        Args: { p_survey_id: string; p_survey_logical_id: string };
+        Returns: undefined;
       };
       submission_set_active: {
         Args: { _submission_id: number };

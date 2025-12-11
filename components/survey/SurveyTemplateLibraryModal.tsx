@@ -47,6 +47,8 @@ type SurveyTemplate = {
   updated_at: string;
 };
 
+const stringifyTemplate = (template: Record<string, unknown> | null) => JSON.stringify(template ?? {});
+
 interface SurveyTemplateLibraryModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -84,13 +86,7 @@ export function SurveyTemplateLibraryModal({
   const [editScope, setEditScope] = useState<"course" | "global">("course");
 
   // Fetch templates
-  useEffect(() => {
-    if (isOpen) {
-      fetchTemplates();
-    }
-  }, [isOpen, courseId]);
-
-  const fetchTemplates = async () => {
+  const fetchTemplates = useCallback(async () => {
     setIsLoading(true);
     try {
       const supabase = createClient();
@@ -105,6 +101,11 @@ export function SurveyTemplateLibraryModal({
 
       if (templatesError) {
         console.error("Error fetching templates:", templatesError);
+        toaster.create({
+          title: "Failed to load templates",
+          description: templatesError.message,
+          type: "error"
+        });
         return;
       }
 
@@ -119,10 +120,21 @@ export function SurveyTemplateLibraryModal({
       setFilteredTemplates(allTemplates as unknown as SurveyTemplate[]);
     } catch (error) {
       console.error("Error fetching templates:", error);
+      toaster.create({
+        title: "Failed to load templates",
+        description: error instanceof Error ? error.message : "Please try again.",
+        type: "error"
+      });
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchTemplates();
+    }
+  }, [isOpen, fetchTemplates]);
 
   // Filter templates based on search, visibility, and ownership
   useEffect(() => {
@@ -172,8 +184,7 @@ export function SurveyTemplateLibraryModal({
     (template: SurveyTemplate) => {
       if (isEditMode && onTemplateLoad) {
         // In edit mode, load template into current survey
-        const templateJson =
-          typeof template.template === "string" ? template.template : JSON.stringify(template.template);
+        const templateJson = stringifyTemplate(template.template);
         onTemplateLoad(templateJson, template.title, template.description || undefined);
         onClose();
       } else {
@@ -340,7 +351,12 @@ export function SurveyTemplateLibraryModal({
 
   return (
     <>
-      <DialogRoot open={isOpen} onOpenChange={onClose}>
+      <DialogRoot
+        open={isOpen}
+        onOpenChange={({ open }) => {
+          if (!open) onClose();
+        }}
+      >
         <DialogContent
           maxW="6xl"
           w="90vw"
@@ -570,7 +586,7 @@ export function SurveyTemplateLibraryModal({
             setIsPreviewOpen(false);
             setPreviewTemplate(null);
           }}
-          surveyJson={JSON.stringify(previewTemplate.template)}
+          surveyJson={stringifyTemplate(previewTemplate.template)}
           surveyTitle={previewTemplate.title}
         />
       )}
