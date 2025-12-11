@@ -21,15 +21,6 @@ export default function PollRespondPage() {
   const course_id = Array.isArray(params.course_id) ? params.course_id[0] : params.course_id;
   const courseIdNum = course_id ? parseInt(course_id, 10) : NaN;
 
-  if (isNaN(courseIdNum)) {
-    toaster.create({
-      title: "Invalid Course ID",
-      description: "Course ID must be a number.",
-      type: "error"
-    });
-    return;
-  }
-  
   const [surveyModel, setSurveyModel] = useState<Model | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -174,6 +165,25 @@ export default function PollRespondPage() {
       }
     }
   }, [isDarkMode, surveyModel]);
+
+  // Handle invalid course ID in render instead of early return
+  if (isNaN(courseIdNum)) {
+    return (
+      <Box position="relative" minH="100vh" py={8}>
+        <Box position="absolute" top={4} right={4} zIndex={1000}>
+          <ColorModeButton colorPalette="gray" variant="outline" />
+        </Box>
+        <Container maxW="800px" my={2}>
+          <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
+            <Heading size="lg" color="fg" mb={4}>
+              Invalid Course ID
+            </Heading>
+            <Text color="fg">Course ID must be a number.</Text>
+          </Box>
+        </Container>
+      </Box>
+    );
+  }
 
   return (
     <Box position="relative" minH="100vh" py={8}>
