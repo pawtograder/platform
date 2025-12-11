@@ -77,12 +77,11 @@ export default function PollResponsesDynamicViewer({
   // Calculate poll URL
   const pollUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
+    const protocol = window.location.protocol || "https:";
     const hostname = window.location.hostname;
     const port = window.location.port;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return `${hostname}:${port}/poll/${courseId}`;
-    }
-    return `https://${hostname}/poll/${courseId}`;
+    const portSegment = port || hostname === "localhost" || hostname === "127.0.0.1" ? `:${port}` : "";
+    return `${protocol}//${hostname}${portSegment}/poll/${courseId}`;
   }, [courseId]);
 
   // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
