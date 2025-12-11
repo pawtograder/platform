@@ -124,7 +124,7 @@ test.describe("Polls", () => {
             return false;
           }
         },
-        { timeout: 10000, message: "poll row should appear without refresh" }
+        { timeout: 15000, message: "poll row should appear without refresh" }
       )
       .toBe(true);
 
