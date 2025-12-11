@@ -160,7 +160,7 @@ export default function StudentSurveysPage() {
 
   const formatDueDate = (dueDate: string) => {
     try {
-      const timeZone = course.time_zone || "UTC";
+      const timeZone = course.time_zone || "America/New_York";
       return formatInTimeZone(new Date(dueDate), timeZone, "MMM dd, yyyy 'at' h:mm a");
     } catch {
       return "Invalid date";
