@@ -177,7 +177,7 @@ export default function StudentSurveysPage() {
   const filterOptions = useMemo(
     () => [
       { value: "all" as const, label: "All" },
-      { value: "not_started" as const, label: "Not Started" },
+      { value: "not_started" as const, label: "Available" },
       { value: "completed" as const, label: "Completed" }
     ],
     []
