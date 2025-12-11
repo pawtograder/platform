@@ -29,10 +29,34 @@ interface FullscreenDocument extends Document {
 
 function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" {
   const questionData = pollQuestion as unknown as Record<string, unknown> | null;
-  const type = (questionData?.elements as unknown as { type: string }[])?.[0]?.type;
-  if (!type) {
-    throw new Error("Poll question JSON must have a 'type' field in elements[0]");
+  
+  // Verify that elements exists and is an array
+  if (!questionData?.elements || !Array.isArray(questionData.elements)) {
+    throw new Error("Poll question JSON must have an 'elements' array field");
   }
+  
+  // Verify that elements[0] exists
+  if (questionData.elements.length === 0 || !questionData.elements[0]) {
+    throw new Error("Poll question JSON must have at least one element in the 'elements' array");
+  }
+  
+  const firstElement = questionData.elements[0] as Record<string, unknown> | null;
+  const type = firstElement?.type;
+  
+  // Verify that type is a string
+  if (typeof type !== "string") {
+    throw new Error(
+      `Poll question type must be a string, but got ${typeof type}${type !== undefined ? ` (value: ${JSON.stringify(type)})` : ""}`
+    );
+  }
+  
+  // Verify that type is exactly "radiogroup" or "checkbox"
+  if (type !== "radiogroup" && type !== "checkbox") {
+    throw new Error(
+      `Unsupported SurveyJS question type: "${type}". Expected "radiogroup" or "checkbox".`
+    );
+  }
+  
   return type as "radiogroup" | "checkbox";
 }
 
