@@ -101,7 +101,7 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
         {/* Body: the builder */}
         <Box flex="1" overflow="auto" p={4}>
           <PollBuilder
-            key={isOpen ? `builder-${initialJson ?? "new"}` : undefined}
+            key={isOpen ? "builder" : undefined}
             value={initialJson ?? ""}
             onGetCurrentJson={handleGetCurrentJson}
           />

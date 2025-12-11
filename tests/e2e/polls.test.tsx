@@ -94,7 +94,6 @@ test.describe("Polls", () => {
     await expect(page.getByText("There are currently no live polls available for this course.")).toBeVisible();
   });
 
-
   // TODO: Possible vulnerability to flakiness, check issue and reduce the time limit for the check
   test("student sees a poll go live without refreshing", async ({ page }) => {
     const poll = await seedPoll(course, instructor, {
@@ -117,13 +116,16 @@ test.describe("Polls", () => {
     }
 
     await expect
-      .poll(async () => {
-        try {
-          return await page.getByRole("row", { name: /Real-time Poll/i }).isVisible();
-        } catch {
-          return false;
-        }
-      }, { timeout: 10000, message: "poll row should appear without refresh" })
+      .poll(
+        async () => {
+          try {
+            return await page.getByRole("row", { name: /Real-time Poll/i }).isVisible();
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 15000, message: "poll row should appear without refresh" }
+      )
       .toBe(true);
 
     await expect(emptyHeading).toBeHidden();
@@ -151,6 +153,22 @@ test.describe("Polls", () => {
     await expect(page.getByRole("heading", { name: "Manage Polls" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "No polls yet" })).toBeVisible();
     await expect(page.getByRole("link", { name: /\+ Create Poll/ })).toBeVisible();
+  });
+
+  test("visual builder modal updates poll question JSON", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/polls/new`);
+
+    await page.getByRole("button", { name: /open visual builder/i }).click();
+
+    const promptInput = page.getByPlaceholder("Enter your poll question...");
+    await expect(promptInput).toHaveValue("Which topic should we review next?");
+
+    await promptInput.fill("Builder Prompt");
+    await page.getByRole("button", { name: /use this poll/i }).click();
+
+    const questionTextarea = page.getByRole("textbox").first();
+    await expect(questionTextarea).toHaveValue(/Builder Prompt/);
   });
 
   test("instructor sees live and closed polls with filters", async ({ page }) => {

@@ -10,16 +10,7 @@ import { useParams } from "next/navigation";
 export default function ManagePollsPage() {
   const { course_id } = useParams();
   const courseId = course_id as string;
-  const { polls, isLoading } = useLivePolls();
-
-  if (isLoading) {
-    return (
-      <Container py={8} maxW="1200px" my={2}>
-        <PollsHeader courseId={courseId} />
-        <div>Loading polls...</div>
-      </Container>
-    );
-  }
+  const polls = useLivePolls();
 
   if (polls.length === 0) {
     return <EmptyPollsState courseId={courseId} />;

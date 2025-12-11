@@ -30,7 +30,7 @@ export default function SurveyTakingPage() {
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [, setIsSubmitting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const loadSurveyData = async () => {
@@ -271,7 +271,7 @@ export default function SurveyTakingPage() {
           <SurveyComponent
             surveyJson={survey.json}
             initialData={existingResponse?.response}
-            readOnly={isReadOnly}
+            readOnly={isReadOnly || isSubmitting}
             onComplete={handleSurveyComplete}
             onValueChanged={handleValueChanged}
             isPopup={false}

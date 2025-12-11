@@ -67,7 +67,7 @@ function SurveyPreviewContent() {
 
   let surveyJson;
   try {
-    surveyJson = JSON.parse(decodeURIComponent(surveyJsonParam));
+    surveyJson = JSON.parse(surveyJsonParam);
   } catch {
     return (
       <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>

@@ -1760,21 +1760,16 @@ export function useDiscussionTopics() {
 export function useLivePolls() {
   const controller = useCourseController();
   const [polls, setPolls] = useState<Database["public"]["Tables"]["live_polls"]["Row"][]>([]);
-  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const { data, unsubscribe } = controller.livePolls.list((updatedPolls) => {
       setPolls(updatedPolls);
-      setIsLoading(false);
     });
     setPolls(data);
-    if (data.length > 0 || controller.livePolls.ready) {
-      setIsLoading(false);
-    }
     return unsubscribe;
   }, [controller]);
 
-  return { polls, isLoading };
+  return polls;
 }
 
 /**

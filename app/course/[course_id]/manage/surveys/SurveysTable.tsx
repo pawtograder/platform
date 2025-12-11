@@ -293,28 +293,14 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
 
       try {
         const supabase = createClient();
-        const now = new Date().toISOString();
+        // Soft delete survey and responses atomically via RPC
+        const { error } = await supabase.rpc("soft_delete_survey", {
+          p_survey_id: survey.id,
+          p_survey_logical_id: survey.survey_id
+        });
 
-        // Soft delete all survey responses first (set deleted_at timestamp)
-        const { error: responsesError } = await supabase
-          .from("survey_responses")
-          .update({ deleted_at: now })
-          .eq("survey_id", survey.id)
-          .is("deleted_at", null); // Only update records that aren't already soft deleted
-
-        if (responsesError) {
-          throw new Error(`Failed to soft delete survey responses: ${responsesError.message}`);
-        }
-
-        // Soft delete all survey versions (all records with the same survey_id)
-        const { error: surveysError } = await supabase
-          .from("surveys")
-          .update({ deleted_at: now })
-          .eq("survey_id", survey.survey_id)
-          .is("deleted_at", null); // Only update records that aren't already soft deleted
-
-        if (surveysError) {
-          throw new Error(`Failed to soft delete survey: ${surveysError.message}`);
+        if (error) {
+          throw new Error(`Failed to soft delete survey: ${error.message}`);
         }
 
         // Dismiss loading toast and show success
