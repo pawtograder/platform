@@ -65,10 +65,9 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       )
     `
     )
-    .eq("survey_id", survey.id);
-  // Use the database ID of the latest survey version to fetch responses
-  // .eq("is_submitted", true); // Temporarily comment out to test if this column exists
-  // .is("deleted_at", null); // Temporarily comment out to test if this column exists
+    .eq("survey_id", survey.id)
+    .eq("is_submitted", true)
+    .is("deleted_at", null);
 
   if (responsesError) {
     console.error("Error fetching responses:", responsesError);
