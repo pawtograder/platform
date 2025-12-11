@@ -526,14 +526,21 @@ test.describe("Surveys Page", () => {
     });
 
     await loginAsUser(page, studentA, course);
-    await page.goto(`/course/${course.id}/surveys/${survey.survey_id}`);
+    await page.goto(`/course/${course.id}/surveys`);
+
+    // Open the survey from the student list
+    await expect(page.getByText("In-progress Survey")).toBeVisible();
+    const startLink = page.getByRole("link", { name: /Start Survey|Continue Survey/i });
+    await expect(startLink).toBeVisible();
+    await startLink.click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`));
 
     const input = page.getByRole("textbox", { name: "Question 1" });
     await expect(input).toBeVisible();
     await input.fill("First response");
 
     // Trigger a re-render (color mode toggle) and ensure the answer stays
-    await page.getByLabel("Toggle color mode").click();
+    await page.getByRole("button", { name: "Toggle color mode" }).first().click();
     await expect(input).toHaveValue("First response");
 
     // Auto-save should have persisted the response once
@@ -542,12 +549,14 @@ test.describe("Surveys Page", () => {
         async () => {
           const { data, error } = await supabase
             .from("survey_responses")
-            .select("response")
+            .select("response, updated_at")
             .eq("survey_id", survey.id)
             .eq("profile_id", studentA.private_profile_id)
-            .single();
+            .order("updated_at", { ascending: false })
+            .limit(1);
           if (error) throw new Error(error.message);
-          return (data?.response as { q1?: string } | null)?.q1;
+          const response = Array.isArray(data) ? data[0] : data;
+          return (response?.response as { q1?: string } | null)?.q1;
         },
         { timeout: 5000 }
       )
