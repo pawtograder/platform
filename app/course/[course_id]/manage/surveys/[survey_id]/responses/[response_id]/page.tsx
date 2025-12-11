@@ -329,7 +329,7 @@ export default function IndividualResponsePage() {
                 fontSize="sm"
                 fontWeight="medium"
               >
-                {survey.allow_response_editing ? "Editable" : "Read Only"}
+                {survey.allow_response_editing ? "Student: Editable" : "Student: Read Only"}
               </Badge>
             </HStack>
 
