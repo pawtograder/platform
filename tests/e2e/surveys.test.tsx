@@ -1,6 +1,7 @@
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
+import { createClient } from "@supabase/supabase-js";
+import { createClass, createUsersInClass, getAuthTokenForUser, loginAsUser, supabase } from "./TestingUtils";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -39,6 +40,13 @@ const seedSurvey = async <T = any,>(
   }
 
   return data as T;
+};
+
+const getAuthedClient = async (user: User) => {
+  const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  const access_token = await getAuthTokenForUser(user);
+  await client.auth.setSession({ access_token, refresh_token: "ignore" });
+  return client;
 };
 
 test.describe("Surveys Page", () => {
@@ -210,6 +218,46 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByText("All Students Survey")).toBeVisible();
     await expect(page.getByText("Specific Student Survey")).toBeVisible();
+  });
+
+  test("instructor RPC can assign specific students", async () => {
+    const targetedSurvey = await seedSurvey<{ id: string }>(course, instructor, {
+      title: "RPC Assignment Survey",
+      status: "published",
+      assigned_to_all: false
+    });
+
+    const instructorClient = await getAuthedClient(instructor);
+    const { error: rpcError } = await instructorClient.rpc("create_survey_assignments", {
+      p_survey_id: targetedSurvey.id,
+      p_profile_ids: [studentA.private_profile_id]
+    });
+    expect(rpcError).toBeNull();
+
+    const { data: assignments, error: fetchError } = await instructorClient
+      .from("survey_assignments")
+      .select("profile_id, class_id")
+      .eq("survey_id", targetedSurvey.id);
+    expect(fetchError).toBeNull();
+    expect(assignments?.map((row) => row.profile_id)).toEqual([studentA.private_profile_id]);
+    expect(assignments?.[0]?.class_id).toBe(course.id);
+  });
+
+  test("students cannot call create_survey_assignments", async () => {
+    const targetedSurvey = await seedSurvey<{ id: string }>(course, instructor, {
+      title: "Unauthorized RPC Survey",
+      status: "published",
+      assigned_to_all: false
+    });
+
+    const studentClient = await getAuthedClient(studentA);
+    const { error: rpcError } = await studentClient.rpc("create_survey_assignments", {
+      p_survey_id: targetedSurvey.id,
+      p_profile_ids: [studentA.private_profile_id]
+    });
+
+    expect(rpcError).not.toBeNull();
+    expect(rpcError?.message).toMatch(/Permission denied/i);
   });
 
   test("instructor can open create survey form from manage page", async ({ page }) => {
