@@ -73,7 +73,11 @@ const findInternalTypeFromSurveyJS = (surveyType: string): QuestionType => {
 
 // Helper function to convert internal format to SurveyJS format
 const convertToSurveyJSFormat = (data: PollQuestionJSON): Record<string, unknown> => {
-  const typeConfig = QUESTION_TYPE_REGISTRY[data.type];
+  const resolvedType: QuestionType =
+    data.type && QUESTION_TYPE_REGISTRY[data.type as QuestionType]
+      ? (data.type as QuestionType)
+      : "multiple-choice";
+  const typeConfig = QUESTION_TYPE_REGISTRY[resolvedType];
   const element: Record<string, unknown> = {
     type: typeConfig.surveyJSType,
     title: data.prompt || ""
