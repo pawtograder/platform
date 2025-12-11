@@ -340,7 +340,12 @@ export function SurveyTemplateLibraryModal({
 
   return (
     <>
-      <DialogRoot open={isOpen} onOpenChange={onClose}>
+      <DialogRoot
+        open={isOpen}
+        onOpenChange={({ open }) => {
+          if (!open) onClose();
+        }}
+      >
         <DialogContent
           maxW="6xl"
           w="90vw"
