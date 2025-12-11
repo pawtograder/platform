@@ -42,6 +42,8 @@ const seedSurvey = async <T = any,>(
 };
 
 test.describe("Surveys Page", () => {
+  test.describe.configure({ mode: "serial" });
+
   let course: Course;
   let studentA: User;
   let studentB: User;
