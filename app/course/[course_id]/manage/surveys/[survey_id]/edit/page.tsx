@@ -387,9 +387,10 @@ export default function EditSurveyPage() {
 
             if (assignmentError) {
               console.error("[EditSurvey] Assignment error:", assignmentError);
+              console.error("[EditSurvey] profile_ids passed:", JSON.stringify(values.assigned_students));
               toaster.error({
                 title: "Warning",
-                description: "Survey was updated but there was an error assigning it to specific students."
+                description: `Error: ${assignmentError.message}`
               });
             }
           } else if (values.assigned_to_all) {
