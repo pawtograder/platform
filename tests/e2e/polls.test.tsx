@@ -155,6 +155,22 @@ test.describe("Polls", () => {
     await expect(page.getByRole("link", { name: /\+ Create Poll/ })).toBeVisible();
   });
 
+  test("visual builder modal updates poll question JSON", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/polls/new`);
+
+    await page.getByRole("button", { name: /open visual builder/i }).click();
+
+    const promptInput = page.getByPlaceholder("Enter your poll question...");
+    await expect(promptInput).toHaveValue("Which topic should we review next?");
+
+    await promptInput.fill("Builder Prompt");
+    await page.getByRole("button", { name: /use this poll/i }).click();
+
+    const questionTextarea = page.getByRole("textbox").first();
+    await expect(questionTextarea).toHaveValue(/Builder Prompt/);
+  });
+
   test("instructor sees live and closed polls with filters", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: true,
