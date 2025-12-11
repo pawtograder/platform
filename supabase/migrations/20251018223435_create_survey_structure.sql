@@ -246,3 +246,50 @@ CREATE POLICY survey_responses_update_owner ON survey_responses
 -- No user can directly update a survey, only use prev as template
 -- Survey responses can be viewed by instructor/course staff
 -- Survey responses can be edited as long as the profile who made an original response tries to and its allowed
+
+-- RPC: Soft delete a survey and its responses atomically
+CREATE OR REPLACE FUNCTION soft_delete_survey(
+  p_survey_id UUID,
+  p_survey_logical_id UUID
+)
+RETURNS void AS $$
+DECLARE
+  v_class_id BIGINT;
+BEGIN
+  SET LOCAL search_path = pg_catalog, public;
+
+  -- Verify survey exists and capture class for authorization
+  SELECT class_id
+  INTO v_class_id
+  FROM public.surveys
+  WHERE id = p_survey_id
+    AND survey_id = p_survey_logical_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Survey not found';
+  END IF;
+
+  IF NOT authorizeforclassinstructor(v_class_id) THEN
+    RAISE EXCEPTION 'Permission denied: instructor access required';
+  END IF;
+
+  -- Soft delete responses tied to any version of this survey
+  UPDATE public.survey_responses
+  SET deleted_at = NOW()
+  WHERE survey_id IN (
+    SELECT id FROM public.surveys WHERE survey_id = p_survey_logical_id
+  )
+    AND deleted_at IS NULL;
+
+  -- Soft delete all survey versions sharing the logical id
+  UPDATE public.surveys
+  SET deleted_at = NOW()
+  WHERE survey_id = p_survey_logical_id
+    AND deleted_at IS NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+GRANT EXECUTE ON FUNCTION soft_delete_survey(UUID, UUID) TO authenticated;
+
+COMMENT ON FUNCTION soft_delete_survey IS 'Soft deletes all survey versions and responses atomically for the given survey logical id';
