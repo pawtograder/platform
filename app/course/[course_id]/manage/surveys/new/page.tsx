@@ -317,7 +317,7 @@ export default function NewSurveyPage() {
           allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
           due_date: convertDueDateToISO(values.due_date as string),
           validation_errors: validationErrors,
-          assigned_to_all: Boolean(values.assigned_to_all)
+          assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all)
         };
 
         const result = await supabase.from("surveys").insert(insertPayload).select("id, survey_id").single();
@@ -337,7 +337,8 @@ export default function NewSurveyPage() {
       }
 
       // Handle survey assignments if not assigned to all students
-      if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
+      const isAssignedToAll = values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all);
+      if (!isAssignedToAll && values.assigned_students && values.assigned_students.length > 0) {
         const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
           p_survey_id: data.id,
           p_profile_ids: values.assigned_students
@@ -433,7 +434,8 @@ export default function NewSurveyPage() {
       }
 
       // Validate student assignments
-      if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
+      const assignedToAll = values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all);
+      if (!assignedToAll && (!values.assigned_students || values.assigned_students.length === 0)) {
         toaster.create({
           title: "Cannot Save Survey",
           description: "Please select at least one student or change assignment mode to 'all students'.",
