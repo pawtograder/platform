@@ -80,7 +80,7 @@ export default function PollResponsesDynamicViewer({
     const protocol = window.location.protocol || "https:";
     const hostname = window.location.hostname;
     const port = window.location.port;
-    const portSegment = port || hostname === "localhost" || hostname === "127.0.0.1" ? `:${port}` : "";
+    const portSegment = (hostname === "localhost" || hostname === "127.0.0.1") && port ? `:${port}` : "";
     return `${protocol}//${hostname}${portSegment}/poll/${courseId}`;
   }, [courseId]);
 
