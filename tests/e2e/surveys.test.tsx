@@ -56,9 +56,20 @@ test.describe("Surveys Page", () => {
     const ids = (surveys ?? []).map((s) => s.id);
     if (!ids.length) return;
 
-    await supabase.from("survey_responses").delete().in("survey_id", ids);
-    await supabase.from("survey_assignments").delete().in("survey_id", ids);
-    await supabase.from("surveys").delete().in("id", ids);
+    const { error: responsesError } = await supabase.from("survey_responses").delete().in("survey_id", ids);
+    if (responsesError) {
+      throw new Error(`Failed to delete survey responses: ${responsesError.message}`);
+    }
+
+    const { error: assignmentsError } = await supabase.from("survey_assignments").delete().in("survey_id", ids);
+    if (assignmentsError) {
+      throw new Error(`Failed to delete survey assignments: ${assignmentsError.message}`);
+    }
+
+    const { error: surveysError } = await supabase.from("surveys").delete().in("id", ids);
+    if (surveysError) {
+      throw new Error(`Failed to delete surveys: ${surveysError.message}`);
+    }
   };
 
   test.beforeAll(async () => {
@@ -608,6 +619,10 @@ test.describe("Surveys Page", () => {
     await dateInputs.nth(1).fill("2025-02-01");
 
     await expect(page.getByText(/Date: 2025-02-01 to 2025-02-01/)).toBeVisible();
+
+    const responsesTable = page.getByRole("table");
+    await expect(responsesTable.getByText("New response")).toBeVisible();
+    await expect(responsesTable.getByText("Old response")).not.toBeVisible();
   });
 
   test("instructor sees export CSV button", async ({ page }) => {
