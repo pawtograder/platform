@@ -381,6 +381,8 @@ export class CourseController {
   private _gradebookColumns?: TableController<"gradebook_columns">;
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
+  private _calendarEvents?: TableController<"calendar_events">;
+  private _classStaffSettings?: TableController<"class_staff_settings">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -735,6 +737,51 @@ export class CourseController {
       });
     }
     return this._discussionTopics;
+  }
+
+  /**
+   * Calendar events for this class.
+   * Students can only see office_hours events, staff can see all.
+   */
+  get calendarEvents(): TableController<"calendar_events"> {
+    if (!this._calendarEvents) {
+      let query = this.client.from("calendar_events").select("*").eq("class_id", this.courseId);
+
+      // Students can only see office_hours events (enforced by RLS, but filter here too for efficiency)
+      if (!this.isStaff) {
+        query = query.eq("calendar_type", "office_hours");
+      }
+
+      query = query.order("start_time", { ascending: true }).limit(1000);
+
+      this._calendarEvents = new TableController({
+        client: this.client,
+        table: "calendar_events",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._calendarEvents;
+  }
+
+  /**
+   * Staff-only settings for this class (e.g., calendar edit URLs).
+   * Only visible to staff (enforced by RLS).
+   */
+  get classStaffSettings(): TableController<"class_staff_settings"> {
+    if (!this._classStaffSettings) {
+      const query = this.client.from("class_staff_settings").select("*").eq("class_id", this.courseId);
+
+      this._classStaffSettings = new TableController({
+        client: this.client,
+        table: "class_staff_settings",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._classStaffSettings;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};

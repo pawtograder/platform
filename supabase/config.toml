@@ -709,3 +709,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/discord-async-worker/deno.json"
 entrypoint = "./functions/discord-async-worker/index.ts"
+
+[functions.calendar-sync]
+enabled = true
+verify_jwt = false
+import_map = "./functions/calendar-sync/deno.json"
+entrypoint = "./functions/calendar-sync/index.ts"

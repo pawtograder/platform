@@ -7,7 +7,9 @@ export type DiscordAsyncMethod =
   | "delete_role"
   | "add_member_role"
   | "remove_member_role"
-  | "add_guild_member";
+  | "add_guild_member"
+  | "register_commands"
+  | "batch_role_sync";
 
 export type SendMessageArgs = {
   channel_id: string;
@@ -101,6 +103,14 @@ export type AddGuildMemberArgs = {
   deaf?: boolean;
 };
 
+// Args for registering slash commands with Discord
+// No args needed - uses DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN from env
+export type RegisterCommandsArgs = Record<string, never>;
+
+// Args for batch role sync
+// No args needed - queries database for users needing sync
+export type BatchRoleSyncArgs = Record<string, never>;
+
 export type DiscordAsyncArgs =
   | SendMessageArgs
   | UpdateMessageArgs
@@ -110,7 +120,9 @@ export type DiscordAsyncArgs =
   | DeleteRoleArgs
   | AddMemberRoleArgs
   | RemoveMemberRoleArgs
-  | AddGuildMemberArgs;
+  | AddGuildMemberArgs
+  | RegisterCommandsArgs
+  | BatchRoleSyncArgs;
 
 export type DiscordAsyncEnvelope = {
   method: DiscordAsyncMethod;
@@ -125,7 +137,7 @@ export type DiscordAsyncEnvelope = {
   resource_type?: "help_request" | "regrade_request"; // For tracking in discord_messages table
   resource_id?: number; // For tracking in discord_messages table
   // For channel tracking (create_channel method)
-  channel_type?: "general" | "assignment" | "lab" | "office_hours" | "regrades"; // For tracking in discord_channels table
+  channel_type?: "general" | "assignment" | "lab" | "office_hours" | "regrades" | "scheduling" | "operations"; // For tracking in discord_channels table
   // For role tracking (create_role method)
   role_type?: "student" | "grader" | "instructor"; // For tracking in discord_roles table
 };

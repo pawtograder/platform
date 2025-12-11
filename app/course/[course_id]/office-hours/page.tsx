@@ -17,10 +17,16 @@ import {
   useConnectionStatus
 } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequest, HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
+import { useCourseController } from "@/hooks/useCourseController";
+import OfficeHoursSchedule from "@/components/calendar/office-hours-schedule";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
   const classId = Number(course_id);
+  const { course } = useCourseController();
+
+  // Check if calendar is configured
+  const hasCalendar = !!course?.office_hours_ics_url;
 
   // Use individual hooks for office hours data
   const allHelpQueues = useHelpQueues();
@@ -155,6 +161,13 @@ export default function OfficeHoursPage() {
               </Heading>
               <Text>Choose a help queue to get assistance from course staff</Text>
             </Box>
+
+            {/* Office Hours Schedule - only show if calendar is configured */}
+            {hasCalendar && (
+              <Box maxW={{ base: "md", md: "full" }} w={{ base: "auto", md: "full" }} mx="auto">
+                <OfficeHoursSchedule />
+              </Box>
+            )}
 
             {availableQueues.length === 0 ? (
               <Card.Root>

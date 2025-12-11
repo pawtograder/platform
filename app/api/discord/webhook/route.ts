@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { verify } from "@noble/ed25519";
 
 /**
- * Discord webhook endpoint to handle guild member join events
+ * Discord webhook endpoint for application events
  *
- * This endpoint receives webhooks from Discord when users join servers.
- * When a user joins, we:
- * 1. Mark any pending invites as used
- * 2. Enqueue role sync operations to assign their Pawtograder roles
+ * NOTE: Discord Application Webhooks only support specific events:
+ * - APPLICATION_AUTHORIZED / APPLICATION_DEAUTHORIZED
+ * - ENTITLEMENT_* events
+ * - Quest, lobby, and game DM events
+ *
+ * IMPORTANT: GUILD_MEMBER_ADD and other Gateway events are NOT supported
+ * via HTTP webhooks - they require a persistent WebSocket connection.
+ * Role synchronization is handled via:
+ * - /sync-roles slash command (users invoke after joining)
+ * - Periodic batch sync cron job
+ * - UI "Sync Roles" button in Pawtograder
  *
  * Discord webhook signature verification uses ed25519.
  * The signature is in the X-Signature-Ed25519 header and the timestamp
@@ -21,7 +26,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Get webhook public key from environment
-    // This is the public key from Discord Developer Portal → Your App → Webhooks → Your Webhook
+    // This is the public key from Discord Developer Portal → Your App → General Information
     const webhookPublicKey = process.env.DISCORD_WEBHOOK_PUBLIC_KEY;
     if (!webhookPublicKey) {
       scope.setTag("error_type", "missing_public_key");
@@ -94,181 +99,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
     }
 
-    // Handle different event types
+    // Handle PING event - Discord sends this to verify the webhook endpoint
     if (payload.type === 1) {
-      // PING event - Discord sends this to verify the webhook
       return NextResponse.json({ type: 1 });
     }
 
-    if (payload.type === 0 && payload.t === "GUILD_MEMBER_ADD") {
-      // User joined a guild
-      const member = payload.d as DiscordGuildMember;
-      const memberData = payload.d as DiscordGuildMember & { guild_id?: string };
-      const guildId = member.guild_id || memberData.guild_id;
-      const userId = member.user?.id;
-
-      if (!guildId || !userId) {
-        scope.setContext("invalid_event", {
-          guild_id: guildId,
-          user_id: userId,
-          payload: JSON.stringify(payload)
-        });
-        return NextResponse.json({ error: "Invalid event data" }, { status: 400 });
-      }
-
-      // eslint-disable-next-line no-console
-      console.log(`[Discord Webhook] User ${userId} joined guild ${guildId}`);
-      scope.setTag("guild_id", guildId);
-      scope.setTag("discord_user_id", userId);
-      scope.setContext("guild_member_add", {
-        guild_id: guildId,
-        user_id: userId,
-        username: member.user?.username,
-        discriminator: member.user?.discriminator
-      });
-
-      // Get admin Supabase client
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-      const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-      if (!supabaseUrl || !supabaseServiceKey) {
-        scope.setTag("error_type", "missing_supabase_config");
-        Sentry.captureMessage("Missing Supabase configuration for Discord webhook", {
-          level: "error"
-        });
-        return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
-      }
-
-      const adminSupabase = createAdminClient<Database>(supabaseUrl, supabaseServiceKey);
-
-      // Find user by Discord ID
-      const { data: userData, error: userError } = await adminSupabase
-        .from("users")
-        .select("user_id")
-        .eq("discord_id", userId)
-        .single();
-
-      if (userError || !userData) {
-        // User not found - they might not have linked Discord yet
-        scope.setContext("user_not_found", {
-          discord_id: userId,
-          error: userError?.message
-        });
-        // Return success - we'll handle role assignment when they link Discord
-        return NextResponse.json({ received: true });
-      }
-
-      // Mark invites as used for this user/guild
-      try {
-        const { error: markError } = await adminSupabase.rpc("mark_discord_invite_used", {
-          p_user_id: userData.user_id,
-          p_guild_id: guildId
-        });
-
-        if (markError) {
-          // eslint-disable-next-line no-console
-          console.error(`[Discord Webhook] Failed to mark invites as used:`, markError);
-          scope.setContext("mark_invite_error", {
-            error: markError.message
-          });
-        } else {
-          // eslint-disable-next-line no-console
-          console.log(`[Discord Webhook] Marked invites as used for user ${userData.user_id}, guild ${guildId}`);
-        }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error(`[Discord Webhook] Error marking invites:`, e);
-        scope.setContext("mark_invite_exception", {
-          error: e instanceof Error ? e.message : String(e)
-        });
-      }
-
-      // Find all classes with this Discord server ID
-      const { data: classes, error: classesError } = await adminSupabase
-        .from("classes")
-        .select("id")
-        .eq("discord_server_id", guildId);
-
-      if (classesError) {
-        // eslint-disable-next-line no-console
-        console.error(`[Discord Webhook] Failed to find classes:`, classesError);
-        scope.setContext("classes_error", {
-          error: classesError.message
-        });
-        Sentry.captureException(classesError, scope);
-        return NextResponse.json({ received: true }); // Don't fail the webhook
-      }
-
-      // Enqueue role sync for each class the user has a role in
-      if (classes && classes.length > 0) {
-        for (const classData of classes) {
-          // Get user's roles for this class
-          const { data: userRoles, error: rolesError } = await adminSupabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", userData.user_id)
-            .eq("class_id", classData.id)
-            .eq("disabled", false);
-
-          if (!rolesError && userRoles) {
-            for (const userRole of userRoles) {
-              // Enqueue role sync
-              try {
-                const { error: syncError } = await adminSupabase.rpc("enqueue_discord_role_sync", {
-                  p_user_id: userData.user_id,
-                  p_class_id: classData.id,
-                  p_role: userRole.role,
-                  p_action: "add"
-                });
-
-                if (syncError) {
-                  // eslint-disable-next-line no-console
-                  console.error(
-                    `[Discord Webhook] Failed to enqueue role sync for user ${userData.user_id}, class ${classData.id}, role ${userRole.role}:`,
-                    syncError
-                  );
-                  scope.setContext("role_sync_error", {
-                    user_id: userData.user_id,
-                    class_id: classData.id,
-                    role: userRole.role,
-                    error: syncError.message
-                  });
-                } else {
-                  // eslint-disable-next-line no-console
-                  console.log(
-                    `[Discord Webhook] Enqueued role sync for user ${userData.user_id}, class ${classData.id}, role ${userRole.role}`
-                  );
-                }
-              } catch (e) {
-                // eslint-disable-next-line no-console
-                console.error(`[Discord Webhook] Exception enqueueing role sync:`, e);
-                scope.setContext("role_sync_exception", {
-                  error: e instanceof Error ? e.message : String(e)
-                });
-              }
-            }
-          }
-        }
-      }
-
-      Sentry.addBreadcrumb({
-        message: `Processed Discord guild member add: user ${userId} joined guild ${guildId}`,
-        level: "info"
-      });
-
-      return NextResponse.json({ received: true });
-    }
-
-    // Unknown event type - log but don't fail
-    const eventType = payload.t || "unknown";
+    // Log received event for debugging
+    const eventType = payload.type || "unknown";
     // eslint-disable-next-line no-console
-    console.log(`[Discord Webhook] Unknown event type: ${payload.type}, t: ${eventType}`);
-    scope.setContext("unknown_event", {
+    console.log(`[Discord Webhook] Received event type: ${eventType}`);
+
+    scope.setContext("discord_webhook_event", {
       type: payload.type,
-      t: eventType,
-      payload: JSON.stringify(payload).substring(0, 500)
+      event_type: eventType,
+      has_data: !!payload.data
     });
 
+    // Acknowledge all other events
+    // NOTE: Gateway events like GUILD_MEMBER_ADD will never arrive here
+    // as Discord does not forward them via HTTP webhooks
     return NextResponse.json({ received: true });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -284,21 +133,9 @@ export async function POST(request: NextRequest) {
 
 // Discord webhook payload types
 type DiscordWebhookPayload = {
-  type: number; // 1 = PING, 0 = event
-  t?: string; // Event type (e.g., "GUILD_MEMBER_ADD")
-  d?: DiscordGuildMember | Record<string, unknown>; // Event data
-};
-
-type DiscordGuildMember = {
-  user?: {
-    id: string;
-    username: string;
-    discriminator: string;
-    avatar?: string;
-  };
-  guild_id?: string;
-  roles?: string[];
-  joined_at?: string;
+  type: number; // 1 = PING
+  application_id?: string;
+  data?: Record<string, unknown>;
 };
 
 /**

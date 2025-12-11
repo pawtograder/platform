@@ -227,6 +227,229 @@ async function sendToDeadLetterQueue(
   return true;
 }
 
+// ============================================================================
+// Slash Command Registration
+// ============================================================================
+
+const DISCORD_API_BASE = "https://discord.com/api/v10";
+
+const SLASH_COMMANDS = [
+  {
+    name: "sync-roles",
+    description: "Sync your Pawtograder roles in this Discord server",
+    type: 1, // CHAT_INPUT (slash command)
+    dm_permission: false,
+    default_member_permissions: null,
+    contexts: [0], // 0 = GUILD (server only)
+    integration_types: [0] // 0 = GUILD_INSTALL
+  }
+];
+
+type CommandResult = {
+  command: string;
+  success: boolean;
+  id?: string;
+  error?: string;
+};
+
+async function registerSlashCommands(scope: Sentry.Scope): Promise<CommandResult[]> {
+  const applicationId = Deno.env.get("DISCORD_APPLICATION_ID");
+  const botToken = Deno.env.get("DISCORD_BOT_TOKEN");
+
+  if (!applicationId || !botToken) {
+    console.error("[registerSlashCommands] Missing DISCORD_APPLICATION_ID or DISCORD_BOT_TOKEN");
+    return [{ command: "*", success: false, error: "Missing Discord configuration" }];
+  }
+
+  const results: CommandResult[] = [];
+
+  for (const command of SLASH_COMMANDS) {
+    try {
+      const response = await fetch(`${DISCORD_API_BASE}/applications/${applicationId}/commands`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(command)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[registerSlashCommands] Failed to register ${command.name}:`, errorText);
+        results.push({ command: command.name, success: false, error: `${response.status}: ${errorText}` });
+      } else {
+        const data = await response.json();
+        console.log(`[registerSlashCommands] Registered ${command.name} with ID ${data.id}`);
+        results.push({ command: command.name, success: true, id: data.id });
+      }
+    } catch (error) {
+      console.error(`[registerSlashCommands] Exception registering ${command.name}:`, error);
+      results.push({
+        command: command.name,
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  return results;
+}
+
+// ============================================================================
+// Batch Role Sync
+// ============================================================================
+
+type UserRoleRecord = {
+  user_id: string;
+  class_id: number;
+  role: string;
+  discord_id: string;
+  discord_server_id: string;
+};
+
+type BatchSyncResult = {
+  summary: {
+    total: number;
+    synced: number;
+    not_in_guild: number;
+    invite_created: number;
+    errors: number;
+  };
+};
+
+async function checkGuildMembership(guildId: string, discordUserId: string, botToken: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${DISCORD_API_BASE}/guilds/${guildId}/members/${discordUserId}`, {
+      method: "GET",
+      headers: { Authorization: `Bot ${botToken}` }
+    });
+    return response.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+async function processBatchRoleSync(
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope
+): Promise<BatchSyncResult> {
+  const botToken = Deno.env.get("DISCORD_BOT_TOKEN");
+  if (!botToken) {
+    console.error("[processBatchRoleSync] Missing DISCORD_BOT_TOKEN");
+    return { summary: { total: 0, synced: 0, not_in_guild: 0, invite_created: 0, errors: 1 } };
+  }
+
+  // Get all users who need role sync
+  const { data, error } = await adminSupabase
+    .from("user_roles")
+    .select(
+      `
+      user_id,
+      class_id,
+      role,
+      users!inner(discord_id),
+      classes!inner(discord_server_id)
+    `
+    )
+    .eq("disabled", false)
+    .not("users.discord_id", "is", null)
+    .not("classes.discord_server_id", "is", null);
+
+  if (error) {
+    console.error("[processBatchRoleSync] Error fetching users:", error);
+    scope.setContext("batch_sync_error", { error: error.message });
+    return { summary: { total: 0, synced: 0, not_in_guild: 0, invite_created: 0, errors: 1 } };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const records: UserRoleRecord[] = (data || []).map((record: any) => ({
+    user_id: record.user_id,
+    class_id: record.class_id,
+    role: record.role,
+    discord_id: record.users.discord_id,
+    discord_server_id: record.classes.discord_server_id
+  }));
+
+  console.log(`[processBatchRoleSync] Found ${records.length} user-role records to process`);
+
+  const summary = { total: records.length, synced: 0, not_in_guild: 0, invite_created: 0, errors: 0 };
+
+  // Cache membership checks per guild/user
+  const membershipCache = new Map<string, boolean>();
+
+  for (const record of records) {
+    const cacheKey = `${record.discord_server_id}:${record.discord_id}`;
+
+    // Check membership if not cached
+    if (!membershipCache.has(cacheKey)) {
+      const isMember = await checkGuildMembership(record.discord_server_id, record.discord_id, botToken);
+      membershipCache.set(cacheKey, isMember);
+      // Small delay to avoid rate limiting
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    const isMember = membershipCache.get(cacheKey)!;
+
+    if (isMember) {
+      // User is in guild, enqueue role sync
+      try {
+        const { error: syncError } = await adminSupabase.rpc("enqueue_discord_role_sync", {
+          p_user_id: record.user_id,
+          p_class_id: record.class_id,
+          p_role: record.role,
+          p_action: "add"
+        });
+
+        if (syncError) {
+          console.error(`[processBatchRoleSync] Error enqueueing sync:`, syncError);
+          summary.errors++;
+        } else {
+          summary.synced++;
+        }
+      } catch (e) {
+        console.error(`[processBatchRoleSync] Exception enqueueing sync:`, e);
+        summary.errors++;
+      }
+    } else {
+      // User not in guild - check for existing invite
+      const { data: existingInvite } = await adminSupabase
+        .from("discord_invites")
+        .select("id")
+        .eq("user_id", record.user_id)
+        .eq("class_id", record.class_id)
+        .eq("guild_id", record.discord_server_id)
+        .eq("used", false)
+        .gt("expires_at", new Date().toISOString())
+        .single();
+
+      if (existingInvite) {
+        summary.not_in_guild++;
+      } else {
+        // Enqueue role sync which will create invite
+        try {
+          const { error: syncError } = await adminSupabase.rpc("enqueue_discord_role_sync", {
+            p_user_id: record.user_id,
+            p_class_id: record.class_id,
+            p_role: record.role,
+            p_action: "add"
+          });
+
+          if (syncError) {
+            summary.errors++;
+          } else {
+            summary.invite_created++;
+          }
+        } catch {
+          summary.errors++;
+        }
+      }
+    }
+  }
+
+  return { summary };
+}
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: DiscordAsyncEnvelope,
@@ -758,6 +981,32 @@ export async function processEnvelope(
 
         const result = await discord.addGuildMember(args, scope);
         console.log(`[processEnvelope] Successfully added user to guild: ${result.user.username}`);
+        return true;
+      }
+
+      case "register_commands": {
+        console.log(`[processEnvelope] Processing register_commands`);
+        Sentry.addBreadcrumb({ message: "Registering Discord slash commands", level: "info" });
+
+        const results = await registerSlashCommands(scope);
+        const allSuccess = results.every((r) => r.success);
+
+        if (!allSuccess) {
+          const failures = results.filter((r) => !r.success);
+          console.error(`[processEnvelope] Some commands failed to register:`, failures);
+          scope.setContext("register_commands_failures", { failures });
+        }
+
+        console.log(`[processEnvelope] register_commands completed: ${results.length} commands processed`);
+        return true; // Don't retry on partial failure - commands that succeeded are fine
+      }
+
+      case "batch_role_sync": {
+        console.log(`[processEnvelope] Processing batch_role_sync`);
+        Sentry.addBreadcrumb({ message: "Running batch Discord role sync", level: "info" });
+
+        const results = await processBatchRoleSync(adminSupabase, scope);
+        console.log(`[processEnvelope] batch_role_sync completed: ${JSON.stringify(results.summary)}`);
         return true;
       }
 

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Alert } from "../ui/alert";
 import { Tooltip } from "../ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
+import SyncRolesButton from "./sync-roles-button";
 
 type DiscordInvite = {
   id: number;
@@ -66,6 +67,7 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
         if (fetchError) throw fetchError;
         setInvites((data || []) as DiscordInvite[]);
       } catch (err) {
+        // eslint-disable-next-line no-console
         console.error("Error fetching Discord invites:", err);
         setError(err instanceof Error ? err.message : "Failed to load invites");
       } finally {
@@ -181,10 +183,22 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
             );
           })}
         </Stack>
-        <Text fontSize="xs" color="fg.muted">
-          After joining, your Discord roles will be automatically assigned. You may need to refresh this page after
-          joining.
-        </Text>
+        <Box borderTopWidth="1px" pt={3} mt={1}>
+          <VStack align="stretch" gap={2}>
+            <Text fontSize="xs" color="fg.muted">
+              <strong>After joining the Discord server:</strong>
+            </Text>
+            <Text fontSize="xs" color="fg.muted">
+              Your roles will be synced automatically within an hour. For immediate sync, use the button below or type{" "}
+              <code>/sync-roles</code> in the Discord server.
+            </Text>
+            {!showAll && (
+              <HStack>
+                <SyncRolesButton classId={classId} variant="outline" size="sm" />
+              </HStack>
+            )}
+          </VStack>
+        </Box>
       </VStack>
     </Box>
   );

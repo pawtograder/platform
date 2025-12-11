@@ -231,7 +231,65 @@ CREATE TRIGGER trg_discord_role_sync
   FOR EACH ROW
   EXECUTE FUNCTION public.trigger_discord_role_sync();
 
--- 6. Trigger function to create roles when Discord server is connected to a class
+-- 6. Function to enqueue invite creation for users who have Discord linked but aren't in server
+-- This fixes the race condition where users already have Discord linked when server is connected
+-- We enqueue role syncs which will create invites when processed (the async worker checks membership first)
+CREATE OR REPLACE FUNCTION public.enqueue_discord_invites_for_existing_users(
+  p_class_id bigint,
+  p_guild_id text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_role RECORD;
+  v_discord_role_id text;
+BEGIN
+  -- For each user who:
+  -- 1. Has a role in this class
+  -- 2. Has Discord linked
+  -- 3. Doesn't already have an active invite
+  -- 4. Is active (not disabled)
+  FOR v_user_role IN
+    SELECT DISTINCT ur.user_id, ur.role, u.discord_id
+    FROM public.user_roles ur
+    INNER JOIN public.users u ON u.user_id = ur.user_id
+    LEFT JOIN public.discord_invites di ON di.user_id = ur.user_id 
+      AND di.class_id = ur.class_id 
+      AND di.guild_id = p_guild_id
+      AND di.used = false
+      AND di.expires_at > now()
+    WHERE ur.class_id = p_class_id
+      AND ur.disabled = false
+      AND u.discord_id IS NOT NULL
+      AND di.id IS NULL -- No active invite exists
+  LOOP
+    -- Try to get the Discord role ID for this user's role
+    SELECT dr.discord_role_id INTO v_discord_role_id
+    FROM public.discord_roles dr
+    WHERE dr.class_id = p_class_id
+      AND dr.role_type = v_user_role.role::text
+    LIMIT 1;
+    
+    -- If role exists, enqueue role sync (which will create invite if user not in server)
+    IF v_discord_role_id IS NOT NULL THEN
+      PERFORM public.enqueue_discord_role_sync(
+        v_user_role.user_id,
+        p_class_id,
+        v_user_role.role,
+        'add'
+      );
+    END IF;
+    -- If role doesn't exist yet, we'll skip for now
+    -- The sync_existing_users_after_roles_created function will handle invites
+    -- when roles are created. This ensures we don't enqueue operations with invalid role_ids.
+  END LOOP;
+END;
+$$;
+
+-- 7. Trigger function to create roles when Discord server is connected to a class
 CREATE OR REPLACE FUNCTION public.trigger_discord_create_roles_on_server_connect()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -254,6 +312,10 @@ BEGIN
     IF NOT v_roles_exist THEN
       -- Enqueue role creation
       PERFORM public.enqueue_discord_roles_creation(NEW.id, NEW.discord_server_id);
+      
+      -- Also enqueue invite creation for users who already have Discord linked
+      -- This fixes the race condition where users have Discord but aren't in server yet
+      PERFORM public.enqueue_discord_invites_for_existing_users(NEW.id, NEW.discord_server_id);
     END IF;
   END IF;
   
@@ -266,14 +328,92 @@ EXCEPTION
 END;
 $$;
 
--- 7. Create trigger on classes table
+-- 7. Function to sync all existing users for a class after roles are created
+-- This fixes the race condition where users are already in the Discord server
+-- but roles haven't been created yet
+CREATE OR REPLACE FUNCTION public.sync_existing_users_after_roles_created(
+  p_class_id bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_role RECORD;
+BEGIN
+  -- Enqueue role sync for all users who:
+  -- 1. Have a role in this class (user_roles)
+  -- 2. Have Discord linked (users.discord_id is not null)
+  -- 3. Are active (not disabled)
+  FOR v_user_role IN
+    SELECT ur.user_id, ur.class_id, ur.role
+    FROM public.user_roles ur
+    INNER JOIN public.users u ON u.user_id = ur.user_id
+    WHERE ur.class_id = p_class_id
+      AND ur.disabled = false
+      AND u.discord_id IS NOT NULL
+  LOOP
+    -- Enqueue role sync for each user
+    -- The async worker will check if user is in server and assign role or create invite
+    PERFORM public.enqueue_discord_role_sync(
+      v_user_role.user_id,
+      v_user_role.class_id,
+      v_user_role.role,
+      'add'
+    );
+  END LOOP;
+END;
+$$;
+
+-- 8. Trigger function to sync existing users when all roles are created
+CREATE OR REPLACE FUNCTION public.trigger_sync_existing_users_on_role_creation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_role_count integer;
+BEGIN
+  -- Check if all three role types exist for this class
+  SELECT COUNT(DISTINCT role_type) INTO v_role_count
+  FROM public.discord_roles
+  WHERE class_id = NEW.class_id
+    AND role_type IN ('student', 'grader', 'instructor');
+  
+  -- If all three roles exist, sync existing users
+  -- This fixes the race condition where users are already in the Discord server
+  -- but roles were just created. The sync will enqueue role assignments for all
+  -- existing users who have Discord linked.
+  IF v_role_count = 3 THEN
+    PERFORM public.sync_existing_users_after_roles_created(NEW.class_id);
+  END IF;
+  
+  RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Log error but don't fail the insert
+    RAISE WARNING 'Error in trigger_sync_existing_users_on_role_creation for class_id=%: %', NEW.class_id, SQLERRM;
+    RETURN NEW;
+END;
+$$;
+
+-- 9. Create trigger on discord_roles table
+DROP TRIGGER IF EXISTS trg_sync_existing_users_on_role_creation ON public.discord_roles;
+CREATE TRIGGER trg_sync_existing_users_on_role_creation
+  AFTER INSERT ON public.discord_roles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trigger_sync_existing_users_on_role_creation();
+
+-- 10. Create trigger on classes table
 DROP TRIGGER IF EXISTS trg_discord_create_roles_on_server_connect ON public.classes;
 CREATE TRIGGER trg_discord_create_roles_on_server_connect
   AFTER UPDATE OF discord_server_id ON public.classes
   FOR EACH ROW
   EXECUTE FUNCTION public.trigger_discord_create_roles_on_server_connect();
 
--- 8. Grant execute permissions
+-- 11. Grant execute permissions
 REVOKE EXECUTE ON FUNCTION public.enqueue_discord_role_creation(bigint, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.enqueue_discord_role_creation(bigint, text, text) TO postgres;
 
@@ -283,7 +423,13 @@ GRANT EXECUTE ON FUNCTION public.enqueue_discord_role_sync(uuid, bigint, public.
 REVOKE EXECUTE ON FUNCTION public.enqueue_discord_roles_creation(bigint, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.enqueue_discord_roles_creation(bigint, text) TO postgres;
 
--- 9. Create discord_invites table to store invite links for users not in server
+REVOKE EXECUTE ON FUNCTION public.sync_existing_users_after_roles_created(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.sync_existing_users_after_roles_created(bigint) TO postgres;
+
+REVOKE EXECUTE ON FUNCTION public.enqueue_discord_invites_for_existing_users(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.enqueue_discord_invites_for_existing_users(bigint, text) TO postgres;
+
+-- 12. Create discord_invites table to store invite links for users not in server
 CREATE TABLE IF NOT EXISTS public.discord_invites (
   id bigint PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY,
   user_id uuid NOT NULL REFERENCES public.users(user_id) ON DELETE CASCADE,
@@ -297,15 +443,15 @@ CREATE TABLE IF NOT EXISTS public.discord_invites (
   UNIQUE(user_id, class_id, guild_id) -- One active invite per user per class per server
 );
 
--- 10. Create indexes for discord_invites
+-- 13. Create indexes for discord_invites
 CREATE INDEX IF NOT EXISTS idx_discord_invites_user_id ON public.discord_invites(user_id);
 CREATE INDEX IF NOT EXISTS idx_discord_invites_class_id ON public.discord_invites(class_id);
 CREATE INDEX IF NOT EXISTS idx_discord_invites_active ON public.discord_invites(user_id, class_id, used, expires_at) WHERE used = false;
 
--- 11. Enable RLS on discord_invites
+-- 14. Enable RLS on discord_invites
 ALTER TABLE public.discord_invites ENABLE ROW LEVEL SECURITY;
 
--- 12. RLS Policies for discord_invites
+-- 15. RLS Policies for discord_invites
 -- Users can view their own invites
 DROP POLICY IF EXISTS discord_invites_user_select ON public.discord_invites;
 CREATE POLICY discord_invites_user_select
@@ -338,11 +484,11 @@ CREATE POLICY discord_invites_service_role_all
   USING (true)
   WITH CHECK (true);
 
--- 13. Grant execute permission for check_discord_role_sync_after_link
+-- 16. Grant execute permission for check_discord_role_sync_after_link
 REVOKE EXECUTE ON FUNCTION public.check_discord_role_sync_after_link(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.check_discord_role_sync_after_link(uuid) TO postgres;
 
--- 14. Function to mark invite as used when user joins server
+-- 17. Function to mark invite as used when user joins server
 CREATE OR REPLACE FUNCTION public.mark_discord_invite_used(
   p_user_id uuid,
   p_guild_id text
@@ -361,7 +507,7 @@ BEGIN
 END;
 $$;
 
--- 14. Function already exists in earlier migration, but ensure it's updated to work properly
+-- 18. Function already exists in earlier migration, but ensure it's updated to work properly
 -- (The function is created in 20251208193226_discord_integration.sql, but we ensure it works here)
 CREATE OR REPLACE FUNCTION public.check_discord_role_sync_after_link(
   p_user_id uuid
@@ -395,13 +541,16 @@ BEGIN
 END;
 $$;
 
--- 15. Comments
+-- 19. Comments
 COMMENT ON TABLE public.discord_invites IS 'Stores Discord server invite links for users who need to join a class Discord server';
 COMMENT ON FUNCTION public.enqueue_discord_role_creation IS 'Enqueues creation of a Discord role for a class';
 COMMENT ON FUNCTION public.enqueue_discord_role_sync IS 'Enqueues adding or removing a Discord role for a user based on their Pawtograder role';
 COMMENT ON FUNCTION public.enqueue_discord_roles_creation IS 'Enqueues creation of all three Discord roles (Student, Grader, Instructor) for a class';
 COMMENT ON FUNCTION public.trigger_discord_role_sync IS 'Trigger function that syncs Discord roles when user_roles change';
 COMMENT ON FUNCTION public.trigger_discord_create_roles_on_server_connect IS 'Trigger function that creates Discord roles when a Discord server is connected to a class';
+COMMENT ON FUNCTION public.sync_existing_users_after_roles_created IS 'Syncs Discord roles for all existing users in a class after roles are created. Fixes race condition where users are already in the server but roles havent been created yet.';
+COMMENT ON FUNCTION public.trigger_sync_existing_users_on_role_creation IS 'Trigger function that syncs existing users when all three Discord roles are created for a class';
+COMMENT ON FUNCTION public.enqueue_discord_invites_for_existing_users IS 'Enqueues invite creation for users who have Discord linked but arent in the server yet. Fixes race condition where users have Discord linked when server is connected but arent in the server.';
 COMMENT ON FUNCTION public.mark_discord_invite_used IS 'Marks Discord invites as used when a user joins a server';
 COMMENT ON FUNCTION public.check_discord_role_sync_after_link IS 'Checks and syncs Discord roles for a user after linking Discord account, creating invites if needed';
 

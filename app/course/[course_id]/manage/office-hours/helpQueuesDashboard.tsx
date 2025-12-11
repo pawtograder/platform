@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, VStack } from "@chakra-ui/react";
+import { Box, Flex, Heading, HStack, Stack, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
@@ -17,6 +17,8 @@ import {
 } from "@/hooks/useOfficeHoursRealtime";
 import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
+import { useCourseController } from "@/hooks/useCourseController";
+import CalendarDayView from "@/components/calendar/calendar-day-view";
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -29,8 +31,12 @@ import { toaster } from "@/components/ui/toaster";
  */
 export default function HelpQueuesDashboard() {
   const { course_id } = useParams();
+  const { course } = useCourseController();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
+
+  // Check if any calendar is configured
+  const hasCalendar = !!(course?.office_hours_ics_url || course?.events_ics_url);
 
   // Get data using individual hooks
   const queues = useHelpQueues();
@@ -124,6 +130,18 @@ export default function HelpQueuesDashboard() {
           Queue status may not be up to date. Connection status: {connectionStatus?.overall}
         </Alert>
       )}
+
+      {/* Today's Calendar Schedule - only show if calendar is configured */}
+      {hasCalendar && (
+        <Box>
+          <CalendarDayView />
+        </Box>
+      )}
+
+      {/* Queue Management Section */}
+      <Heading size="sm" mt={hasCalendar ? 4 : 0}>
+        Help Queues
+      </Heading>
 
       {queues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);

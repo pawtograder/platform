@@ -1162,6 +1162,115 @@ export type Database = {
           }
         ];
       };
+      calendar_events: {
+        Row: {
+          calendar_type: string;
+          change_announced_at: string | null;
+          class_id: number;
+          created_at: string;
+          description: string | null;
+          end_announced_at: string | null;
+          end_time: string;
+          id: number;
+          location: string | null;
+          organizer_name: string | null;
+          queue_name: string | null;
+          raw_ics_data: Json | null;
+          start_announced_at: string | null;
+          start_time: string;
+          title: string;
+          uid: string;
+          updated_at: string;
+        };
+        Insert: {
+          calendar_type: string;
+          change_announced_at?: string | null;
+          class_id: number;
+          created_at?: string;
+          description?: string | null;
+          end_announced_at?: string | null;
+          end_time: string;
+          id?: number;
+          location?: string | null;
+          organizer_name?: string | null;
+          queue_name?: string | null;
+          raw_ics_data?: Json | null;
+          start_announced_at?: string | null;
+          start_time: string;
+          title: string;
+          uid: string;
+          updated_at?: string;
+        };
+        Update: {
+          calendar_type?: string;
+          change_announced_at?: string | null;
+          class_id?: number;
+          created_at?: string;
+          description?: string | null;
+          end_announced_at?: string | null;
+          end_time?: string;
+          id?: number;
+          location?: string | null;
+          organizer_name?: string | null;
+          queue_name?: string | null;
+          raw_ics_data?: Json | null;
+          start_announced_at?: string | null;
+          start_time?: string;
+          title?: string;
+          uid?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendar_events_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      calendar_sync_state: {
+        Row: {
+          calendar_type: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          last_etag: string | null;
+          last_hash: string | null;
+          last_sync_at: string | null;
+          sync_error: string | null;
+        };
+        Insert: {
+          calendar_type: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          last_etag?: string | null;
+          last_hash?: string | null;
+          last_sync_at?: string | null;
+          sync_error?: string | null;
+        };
+        Update: {
+          calendar_type?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          last_etag?: string | null;
+          last_hash?: string | null;
+          last_sync_at?: string | null;
+          sync_error?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendar_sync_state_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       class_metrics_totals: {
         Row: {
           active_graders_total: number | null;
@@ -1313,6 +1422,41 @@ export type Database = {
           }
         ];
       };
+      class_staff_settings: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          setting_key: string;
+          setting_value: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          setting_key: string;
+          setting_value?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          setting_key?: string;
+          setting_value?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_staff_settings_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       classes: {
         Row: {
           archived: boolean | null;
@@ -1322,6 +1466,7 @@ export type Database = {
           discord_channel_group_id: string | null;
           discord_server_id: string | null;
           end_date: string | null;
+          events_ics_url: string | null;
           features: Json | null;
           github_org: string | null;
           gradebook_id: number | null;
@@ -1329,6 +1474,7 @@ export type Database = {
           is_demo: boolean;
           late_tokens_per_student: number;
           name: string | null;
+          office_hours_ics_url: string | null;
           slug: string | null;
           start_date: string | null;
           term: number | null;
@@ -1342,6 +1488,7 @@ export type Database = {
           discord_channel_group_id?: string | null;
           discord_server_id?: string | null;
           end_date?: string | null;
+          events_ics_url?: string | null;
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
@@ -1349,6 +1496,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
           term?: number | null;
@@ -1362,6 +1510,7 @@ export type Database = {
           discord_channel_group_id?: string | null;
           discord_server_id?: string | null;
           end_date?: string | null;
+          events_ics_url?: string | null;
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
@@ -1369,6 +1518,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
           term?: number | null;
@@ -9703,6 +9853,7 @@ export type Database = {
         Args: { p_class_id: number; p_submission_ids: number[] };
         Returns: Json;
       };
+      enqueue_discord_batch_role_sync: { Args: never; Returns: undefined };
       enqueue_discord_channel_creation: {
         Args: {
           p_channel_name?: string;
@@ -9717,10 +9868,15 @@ export type Database = {
         Args: { p_action?: string; p_help_request_id: number };
         Returns: undefined;
       };
+      enqueue_discord_invites_for_existing_users: {
+        Args: { p_class_id: number; p_guild_id: string };
+        Returns: undefined;
+      };
       enqueue_discord_queue_assignment_message: {
         Args: { p_action?: string; p_queue_assignment_id: number };
         Returns: undefined;
       };
+      enqueue_discord_register_commands: { Args: never; Returns: undefined };
       enqueue_discord_regrade_request_message: {
         Args: { p_action?: string; p_regrade_request_id: number };
         Returns: undefined;
@@ -10109,6 +10265,7 @@ export type Database = {
         Args: { p_class_id: number; p_updates: Json };
         Returns: boolean;
       };
+      invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
       invoke_discord_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -10166,6 +10323,10 @@ export type Database = {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
       };
+      only_calendar_or_discord_ids_changed: {
+        Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
+        Returns: boolean;
+      };
       only_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
         Returns: boolean;
@@ -10180,6 +10341,7 @@ export type Database = {
         };
         Returns: number;
       };
+      process_calendar_announcements: { Args: never; Returns: Json };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
@@ -10239,6 +10401,10 @@ export type Database = {
         Args: { _submission_id: number };
         Returns: boolean;
       };
+      sync_existing_users_after_roles_created: {
+        Args: { p_class_id: number };
+        Returns: undefined;
+      };
       sync_lab_section_meetings: {
         Args: { lab_section_id_param: number };
         Returns: undefined;
@@ -10263,6 +10429,10 @@ export type Database = {
           inserts_per_second: number;
           operation: string;
         }[];
+      };
+      trigger_discord_role_sync_for_user: {
+        Args: { p_class_id?: number };
+        Returns: Json;
       };
       trigger_sis_sync: { Args: { p_class_id?: number }; Returns: Json };
       unregister_realtime_subscription: {
@@ -10353,7 +10523,14 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
-      discord_channel_type: "general" | "assignment" | "lab" | "office_hours" | "regrades";
+      discord_channel_type:
+        | "general"
+        | "assignment"
+        | "lab"
+        | "office_hours"
+        | "regrades"
+        | "scheduling"
+        | "operations";
       discord_resource_type: "help_request" | "regrade_request";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
@@ -10515,7 +10692,7 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
-      discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades"],
+      discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades", "scheduling", "operations"],
       discord_resource_type: ["help_request", "regrade_request"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
