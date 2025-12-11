@@ -19,12 +19,31 @@ CREATE INDEX IF NOT EXISTS idx_survey_assignments_class_id ON survey_assignments
 -- Enable RLS on survey_assignments table
 ALTER TABLE survey_assignments ENABLE ROW LEVEL SECURITY;
 
--- Policy: Instructors can manage survey assignments in their class
+-- Policy: Instructors can SELECT/UPDATE/DELETE survey assignments in their class
 CREATE POLICY survey_assignments_manage_instructors ON survey_assignments
   AS PERMISSIVE
-  FOR ALL
+  FOR SELECT
+  TO authenticated
+  USING (authorizeforclassinstructor(class_id));
+
+CREATE POLICY survey_assignments_update_instructors ON survey_assignments
+  AS PERMISSIVE
+  FOR UPDATE
   TO authenticated
   USING (authorizeforclassinstructor(class_id))
+  WITH CHECK (authorizeforclassinstructor(class_id));
+
+CREATE POLICY survey_assignments_delete_instructors ON survey_assignments
+  AS PERMISSIVE
+  FOR DELETE
+  TO authenticated
+  USING (authorizeforclassinstructor(class_id));
+
+-- Policy: Instructors can INSERT survey assignments in their class
+CREATE POLICY survey_assignments_insert_instructors ON survey_assignments
+  AS PERMISSIVE
+  FOR INSERT
+  TO authenticated
   WITH CHECK (authorizeforclassinstructor(class_id));
 
 -- Policy: Graders can view survey assignments in their class
