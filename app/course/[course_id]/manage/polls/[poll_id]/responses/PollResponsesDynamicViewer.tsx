@@ -268,7 +268,7 @@ export default function PollResponsesDynamicViewer({
           </>
         )}
         {type === "radiogroup" || type === "checkbox" ? (
-          <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion as unknown as JSON} />
+          <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion} />
         ) : (
           <div>Unsupported poll question type: {type}</div>
         )}

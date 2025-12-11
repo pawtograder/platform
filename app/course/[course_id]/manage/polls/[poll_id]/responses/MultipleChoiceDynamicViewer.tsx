@@ -2,11 +2,13 @@
 
 import { useMemo } from "react";
 import { usePollResponseCounts } from "@/hooks/useCourseController";
+import { Json } from "@/utils/supabase/SupabaseTypes";
 import PollBarChart from "./PollBarChart";
+import { Json } from "@/utils/supabase/SupabaseTypes";
 
 type MultipleChoiceDynamicViewerProps = {
   pollId: string;
-  pollQuestion: JSON;
+  pollQuestion: Json;
 };
 
 export default function MultipleChoiceDynamicViewer({ pollId, pollQuestion }: MultipleChoiceDynamicViewerProps) {

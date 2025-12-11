@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Table, Text, Badge, HStack, IconButton, Button, Spinner } from "@chakra-ui/react";
+import { Box, Table, Text, Badge, HStack, IconButton, Button } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
@@ -23,13 +23,12 @@ type PollsTableProps = {
 
 export default function PollsTable({ courseId }: PollsTableProps) {
   const router = useRouter();
-  const { polls, isLoading: pollsLoading } = useLivePolls();
+  const polls = useLivePolls();
   const course = useCourse();
   const timezone = course?.time_zone || "America/New_York";
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   const filteredPolls = useMemo(() => {
-    if (!Array.isArray(polls)) return [];
     if (activeFilter === "all") {
       return polls;
     }
@@ -138,18 +137,6 @@ export default function PollsTable({ courseId }: PollsTableProps) {
       return dateString;
     }
   };
-
-  if (pollsLoading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" p={8}>
-        <Spinner />
-      </Box>
-    );
-  }
-
-  if (!polls || polls.length === 0) {
-    return null; // Parent component will show empty state
-  }
 
   return (
     <>
