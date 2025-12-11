@@ -49,6 +49,15 @@ CREATE POLICY survey_assignments_select_assignee ON survey_assignments
     )
   );
 
+-- Policy: Class members can view survey assignments for surveys in their class
+-- This is needed for the surveys_select_students policy to correctly evaluate
+-- the EXISTS check for survey_assignments
+CREATE POLICY survey_assignments_select_class_member ON survey_assignments
+  AS PERMISSIVE
+  FOR SELECT
+  TO authenticated
+  USING (authorizeforclass(class_id));
+
 -- Update the create_survey_assignments function to include class_id
 CREATE OR REPLACE FUNCTION create_survey_assignments(
   p_survey_id UUID,

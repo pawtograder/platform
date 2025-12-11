@@ -167,7 +167,8 @@ test.describe("Surveys Page", () => {
 
     const { error: assignmentError } = await supabase.from("survey_assignments").insert({
       survey_id: specificSurvey.id,
-      profile_id: studentB.private_profile_id
+      profile_id: studentB.private_profile_id,
+      class_id: course.id
     });
     if (assignmentError) {
       throw new Error(`Failed to seed survey assignment: ${assignmentError.message}`);
@@ -197,7 +198,8 @@ test.describe("Surveys Page", () => {
 
     const { error: assignmentError } = await supabase.from("survey_assignments").insert({
       survey_id: specificSurvey.id,
-      profile_id: studentB.private_profile_id
+      profile_id: studentB.private_profile_id,
+      class_id: course.id
     });
     if (assignmentError) {
       throw new Error(`Failed to seed survey assignment: ${assignmentError.message}`);
