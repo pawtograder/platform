@@ -47,6 +47,8 @@ type SurveyTemplate = {
   updated_at: string;
 };
 
+const stringifyTemplate = (template: Record<string, unknown> | null) => JSON.stringify(template ?? {});
+
 interface SurveyTemplateLibraryModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -182,8 +184,7 @@ export function SurveyTemplateLibraryModal({
     (template: SurveyTemplate) => {
       if (isEditMode && onTemplateLoad) {
         // In edit mode, load template into current survey
-        const templateJson =
-          typeof template.template === "string" ? template.template : JSON.stringify(template.template);
+        const templateJson = stringifyTemplate(template.template);
         onTemplateLoad(templateJson, template.title, template.description || undefined);
         onClose();
       } else {
@@ -585,7 +586,7 @@ export function SurveyTemplateLibraryModal({
             setIsPreviewOpen(false);
             setPreviewTemplate(null);
           }}
-          surveyJson={JSON.stringify(previewTemplate.template)}
+          surveyJson={stringifyTemplate(previewTemplate.template)}
           surveyTitle={previewTemplate.title}
         />
       )}
