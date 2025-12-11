@@ -105,6 +105,11 @@ export function SurveyTemplateLibraryModal({
 
       if (templatesError) {
         console.error("Error fetching templates:", templatesError);
+        toaster.create({
+          title: "Failed to load templates",
+          description: templatesError.message,
+          type: "error"
+        });
         return;
       }
 
@@ -119,6 +124,11 @@ export function SurveyTemplateLibraryModal({
       setFilteredTemplates(allTemplates as unknown as SurveyTemplate[]);
     } catch (error) {
       console.error("Error fetching templates:", error);
+      toaster.create({
+        title: "Failed to load templates",
+        description: error instanceof Error ? error.message : "Please try again.",
+        type: "error"
+      });
     } finally {
       setIsLoading(false);
     }

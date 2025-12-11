@@ -56,9 +56,20 @@ test.describe("Surveys Page", () => {
     const ids = (surveys ?? []).map((s) => s.id);
     if (!ids.length) return;
 
-    await supabase.from("survey_responses").delete().in("survey_id", ids);
-    await supabase.from("survey_assignments").delete().in("survey_id", ids);
-    await supabase.from("surveys").delete().in("id", ids);
+    const { error: responsesError } = await supabase.from("survey_responses").delete().in("survey_id", ids);
+    if (responsesError) {
+      throw new Error(`Failed to delete survey responses: ${responsesError.message}`);
+    }
+
+    const { error: assignmentsError } = await supabase.from("survey_assignments").delete().in("survey_id", ids);
+    if (assignmentsError) {
+      throw new Error(`Failed to delete survey assignments: ${assignmentsError.message}`);
+    }
+
+    const { error: surveysError } = await supabase.from("surveys").delete().in("id", ids);
+    if (surveysError) {
+      throw new Error(`Failed to delete surveys: ${surveysError.message}`);
+    }
   };
 
   test.beforeAll(async () => {
@@ -580,24 +591,49 @@ test.describe("Surveys Page", () => {
       json: surveyJson
     });
 
-    const oldDate = "2025-01-01T00:00:00.000Z";
-    const newDate = "2025-02-01T00:00:00.000Z";
-    await supabase.from("survey_responses").insert([
-      {
-        survey_id: survey.id,
-        profile_id: studentA.private_profile_id,
-        response: { q1: "Old response" },
-        is_submitted: true,
-        submitted_at: oldDate
-      },
-      {
-        survey_id: survey.id,
-        profile_id: studentB.private_profile_id,
-        response: { q1: "New response" },
-        is_submitted: true,
-        submitted_at: newDate
-      }
-    ]);
+    // Use noon UTC to avoid timezone shifts making the date inputs off by one
+    const oldDate = "2025-01-01T12:00:00.000Z";
+    const newDate = "2025-02-01T12:00:00.000Z";
+    const { data: insertedResponses, error: insertError } = await supabase
+      .from("survey_responses")
+      .insert([
+        {
+          survey_id: survey.id,
+          profile_id: studentA.private_profile_id,
+          response: { q1: "Old response" },
+          is_submitted: true
+        },
+        {
+          survey_id: survey.id,
+          profile_id: studentB.private_profile_id,
+          response: { q1: "New response" },
+          is_submitted: true
+        }
+      ])
+      .select("id");
+
+    if (insertError || !insertedResponses) {
+      throw new Error(`Failed to seed responses: ${insertError?.message}`);
+    }
+
+    const oldId = insertedResponses[0].id;
+    const newId = insertedResponses[1].id;
+
+    const { error: oldUpdateError } = await supabase
+      .from("survey_responses")
+      .update({ submitted_at: oldDate })
+      .eq("id", oldId);
+    if (oldUpdateError) {
+      throw new Error(`Failed to update old response submitted_at: ${oldUpdateError.message}`);
+    }
+
+    const { error: newUpdateError } = await supabase
+      .from("survey_responses")
+      .update({ submitted_at: newDate })
+      .eq("id", newId);
+    if (newUpdateError) {
+      throw new Error(`Failed to update new response submitted_at: ${newUpdateError.message}`);
+    }
 
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
@@ -605,9 +641,13 @@ test.describe("Surveys Page", () => {
     await page.getByRole("button", { name: /Filters/i }).click();
     const dateInputs = page.locator('input[type="date"]');
     await dateInputs.nth(0).fill("2025-02-01");
-    await dateInputs.nth(1).fill("2025-02-01");
+    await dateInputs.nth(1).fill("2025-02-02");
 
-    await expect(page.getByText(/Date: 2025-02-01 to 2025-02-01/)).toBeVisible();
+    await expect(page.getByText(/Date: 2025-02-01 to 2025-02-02/)).toBeVisible();
+
+    // Wait for table refresh
+    await expect(page.getByRole("row", { name: /New response/ })).toBeVisible();
+    await expect(page.getByRole("row", { name: /Old response/ })).not.toBeVisible();
   });
 
   test("instructor sees export CSV button", async ({ page }) => {
