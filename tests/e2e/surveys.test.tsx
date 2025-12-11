@@ -507,6 +507,53 @@ test.describe("Surveys Page", () => {
     await expect(page.getByText("Grader can view")).toBeVisible();
   });
 
+  test("student keeps in-progress answers across re-render", async ({ page }) => {
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "In-progress Survey",
+      description: "Should persist on re-render",
+      status: "published",
+      allow_response_editing: true,
+      json: surveyJson
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${survey.survey_id}`);
+
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeVisible();
+    await input.fill("First response");
+
+    // Trigger a re-render (color mode toggle) and ensure the answer stays
+    await page.getByLabel("Toggle color mode").click();
+    await expect(input).toHaveValue("First response");
+
+    // Auto-save should have persisted the response once
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await supabase
+            .from("survey_responses")
+            .select("response")
+            .eq("survey_id", survey.id)
+            .eq("profile_id", studentA.private_profile_id)
+            .single();
+          if (error) throw new Error(error.message);
+          return (data?.response as { q1?: string } | null)?.q1;
+        },
+        { timeout: 5000 }
+      )
+      .toBe("First response");
+  });
+
   test("instructor can apply filters on responses", async ({ page }) => {
     const surveyJson = {
       pages: [
