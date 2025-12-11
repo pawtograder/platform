@@ -68,11 +68,17 @@ export default function StudentSurveysPage() {
         const supabase = createClient();
         const profileId = private_profile_id;
 
+        // Validate course_id is a valid number
+        const courseIdNum = Array.isArray(course_id) ? Number(course_id[0]) : Number(course_id);
+        if (isNaN(courseIdNum)) {
+          throw new Error("Invalid course ID");
+        }
+
         // Get published surveys for this course (and not soft-deleted)
         const { data: surveysData, error: surveysError } = await supabase
           .from("surveys")
           .select("*")
-          .eq("class_id", Number(course_id))
+          .eq("class_id", courseIdNum)
           .eq("status", "published")
           .is("deleted_at", null)
           .order("created_at", { ascending: false });
