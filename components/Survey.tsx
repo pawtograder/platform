@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo } from "react";
 import { Model, ValueChangedEvent } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
@@ -29,34 +30,41 @@ export default function SurveyComponent({
   // Get color mode to determine theme
   const { colorMode } = useColorMode();
 
-  // Create survey model from JSON
-  const survey = new Model(surveyJson);
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
 
-  // Apply SurveyJS theme based on color mode
-  if (colorMode === "dark") {
-    survey.applyTheme(DefaultDark);
-  } else {
-    survey.applyTheme(DefaultLight);
-  }
+  useEffect(() => {
+    if (colorMode === "dark") {
+      survey.applyTheme(DefaultDark);
+    } else {
+      survey.applyTheme(DefaultLight);
+    }
+  }, [colorMode, survey]);
 
-  // Set initial data FIRST, before setting other properties
-  if (initialData) {
-    survey.data = initialData;
-  }
+  useEffect(() => {
+    if (initialData !== undefined) {
+      survey.data = initialData;
+    }
+  }, [initialData, survey]);
 
-  // Set read-only mode if specified
-  if (readOnly) {
-    survey.readOnly = true;
-  }
+  useEffect(() => {
+    survey.readOnly = !!readOnly;
+  }, [readOnly, survey]);
 
-  // Set up event handlers AFTER setting data and read-only mode
-  if (onComplete) {
+  useEffect(() => {
+    if (!onComplete) return;
     survey.onComplete.add(onComplete);
-  }
+    return () => {
+      survey.onComplete.remove(onComplete);
+    };
+  }, [onComplete, survey]);
 
-  if (onValueChanged) {
+  useEffect(() => {
+    if (!onValueChanged) return;
     survey.onValueChanged.add(onValueChanged);
-  }
+    return () => {
+      survey.onValueChanged.remove(onValueChanged);
+    };
+  }, [onValueChanged, survey]);
 
   // Render the survey in a pop-up window
   if (isPopup) {

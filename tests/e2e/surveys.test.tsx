@@ -507,6 +507,62 @@ test.describe("Surveys Page", () => {
     await expect(page.getByText("Grader can view")).toBeVisible();
   });
 
+  test("student keeps in-progress answers across re-render", async ({ page }) => {
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "In-progress Survey",
+      description: "Should persist on re-render",
+      status: "published",
+      allow_response_editing: true,
+      json: surveyJson
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys`);
+
+    // Open the survey from the student list
+    await expect(page.getByText("In-progress Survey")).toBeVisible();
+    const startLink = page.getByRole("link", { name: /Start Survey|Continue Survey/i });
+    await expect(startLink).toBeVisible();
+    await startLink.click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`));
+
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeVisible();
+    await input.fill("First response");
+
+    // Trigger a re-render (color mode toggle) and ensure the answer stays
+    await page.getByRole("button", { name: "Toggle color mode" }).first().click();
+    await expect(input).toHaveValue("First response");
+
+    // Auto-save should have persisted the response once
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await supabase
+            .from("survey_responses")
+            .select("response, updated_at")
+            .eq("survey_id", survey.id)
+            .eq("profile_id", studentA.private_profile_id)
+            .order("updated_at", { ascending: false })
+            .limit(1);
+          if (error) throw new Error(error.message);
+          const response = Array.isArray(data) ? data[0] : data;
+          return (response?.response as { q1?: string } | null)?.q1;
+        },
+        { timeout: 5000 }
+      )
+      .toBe("First response");
+  });
+
   test("instructor can apply filters on responses", async ({ page }) => {
     const surveyJson = {
       pages: [
