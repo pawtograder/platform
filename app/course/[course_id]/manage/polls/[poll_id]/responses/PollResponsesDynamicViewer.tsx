@@ -258,7 +258,13 @@ export default function PollResponsesDynamicViewer({
             <Box position="absolute" bottom={4} right={4} zIndex={10000} display="flex" alignItems="center" gap={3}>
               <Text color={textColor} fontSize="lg" fontWeight="medium">
                 Answer at:{" "}
-                <Link href={pollUrl} target="_blank" color="blue.500" textDecoration="underline">
+                <Link
+                  href={pollUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  color="blue.500"
+                  textDecoration="underline"
+                >
                   {pollUrl}
                 </Link>
               </Text>
