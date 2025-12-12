@@ -262,11 +262,27 @@ DROP POLICY IF EXISTS live_polls_responses_insert ON live_poll_responses;
 DROP POLICY IF EXISTS live_polls_responses_select ON live_poll_responses;
 
 -- Staff (instructors and graders) can do everything on live polls
-CREATE POLICY live_polls_all_staff ON live_polls
-  FOR ALL
+CREATE POLICY live_polls_all_staff_insert ON live_polls
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    authorizeforclassgrader(live_polls.class_id)
+    AND authorizeforprofile(live_polls.created_by)
+  );
+
+CREATE POLICY live_polls_all_staff_update_delete ON live_polls
+  FOR UPDATE, DELETE
   TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id))
-  WITH CHECK (authorizeforclassgrader(live_polls.class_id));
+  WITH CHECK (
+    authorizeforclassgrader(live_polls.class_id)
+    -- Prevent created_by from being changed: NEW.created_by must equal existing created_by
+    AND live_polls.created_by = (
+      SELECT created_by 
+      FROM live_polls 
+      WHERE id = live_polls.id
+    )
+  );
 
 -- Students and anyone can select live polls
 -- Frontend handles require_login logic (shows login prompt if needed)
