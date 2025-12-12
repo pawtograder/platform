@@ -43,11 +43,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_live_poll_responses_set_submitted_at ON live_poll_responses;
 CREATE TRIGGER trg_live_poll_responses_set_submitted_at
   BEFORE INSERT OR UPDATE ON live_poll_responses
   FOR EACH ROW
   EXECUTE FUNCTION set_live_poll_response_submitted_at();
-
 -- Helpful indexes for querying
 CREATE INDEX IF NOT EXISTS idx_live_polls_class_is_live
   ON live_polls (class_id, is_live);
