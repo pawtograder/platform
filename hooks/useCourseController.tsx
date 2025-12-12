@@ -1873,7 +1873,7 @@ export function usePollResponseCounts(pollId: string | undefined, pollQuestion: 
       initialCounts[choice] = 0;
     });
 
-    // Fetch initial data and count
+    // Fetch initial data and count, then set up real-time subscription
     const fetchInitial = async () => {
       const { data, error } = await controller.client
         .from("live_poll_responses")
@@ -1903,42 +1903,49 @@ export function usePollResponseCounts(pollId: string | undefined, pollQuestion: 
 
       setCounts(initialCounts);
       setIsLoading(false);
-    };
-    fetchInitial();
 
-    // Subscribe directly to ClassRealTimeController for instant count updates
-    const unsubscribe = controller.classRealTimeController.subscribe({ table: "live_poll_responses" }, (message) => {
-      if (message.operation === "INSERT" && message.data) {
-        const responseData = message.data as Database["public"]["Tables"]["live_poll_responses"]["Row"];
+      // Set up real-time subscription after initial data is loaded
+      // This ensures we don't miss any updates that arrive during the initial fetch
+      const unsubscribe = controller.classRealTimeController.subscribe({ table: "live_poll_responses" }, (message) => {
+        if (message.operation === "INSERT" && message.data) {
+          const responseData = message.data as Database["public"]["Tables"]["live_poll_responses"]["Row"];
 
-        // Only count if it matches our poll and we haven't seen it
-        if (responseData.live_poll_id === pollId && !seenIdsRef.current.has(responseData.id)) {
-          seenIdsRef.current.add(responseData.id);
+          // Only count if it matches our poll and we haven't seen it
+          if (responseData.live_poll_id === pollId && !seenIdsRef.current.has(responseData.id)) {
+            seenIdsRef.current.add(responseData.id);
 
-          const answer = extractPollAnswer(responseData.response);
+            const answer = extractPollAnswer(responseData.response);
 
-          // Increment counts directly - instant update!
-          setCounts((prev) => {
-            const updated = { ...prev };
+            // Increment counts directly - instant update!
+            setCounts((prev) => {
+              const updated = { ...prev };
 
-            if (Array.isArray(answer)) {
-              answer.forEach((item: string) => {
-                if (!item.startsWith("other:") && updated.hasOwnProperty(item)) {
-                  updated[item]++;
-                }
-              });
-            } else if (typeof answer === "string" && !answer.startsWith("other:") && updated.hasOwnProperty(answer)) {
-              updated[answer]++;
-            }
+              if (Array.isArray(answer)) {
+                answer.forEach((item: string) => {
+                  if (!item.startsWith("other:") && updated.hasOwnProperty(item)) {
+                    updated[item]++;
+                  }
+                });
+              } else if (typeof answer === "string" && !answer.startsWith("other:") && updated.hasOwnProperty(answer)) {
+                updated[answer]++;
+              }
 
-            return updated;
-          });
+              return updated;
+            });
+          }
         }
-      }
+      });
+
+      return unsubscribe;
+    };
+
+    let unsubscribeFunc: (() => void) | undefined;
+    fetchInitial().then((unsub) => {
+      unsubscribeFunc = unsub;
     });
 
     return () => {
-      unsubscribe();
+      unsubscribeFunc?.();
     };
   }, [controller, pollId, choices]);
 
