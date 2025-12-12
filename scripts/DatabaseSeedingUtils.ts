@@ -4650,25 +4650,28 @@ public class Entrypoint {
 
   private generateSurveyJSResponse(element: any): any {
     switch (element.type) {
-      case "rating":
+      case "rating": {
         const min = element.rateMin || 1;
         const max = element.rateMax || 5;
         const step = element.rateStep || 1;
         const range = (max - min) / step;
         return min + Math.floor(Math.random() * (range + 1)) * step;
+      }
 
       case "radiogroup":
-      case "dropdown":
+      case "dropdown": {
         const choices = element.choices || [];
         if (choices.length === 0) return null;
         return choices[Math.floor(Math.random() * choices.length)];
+      }
 
-      case "checkbox":
+      case "checkbox": {
         const checkboxChoices = element.choices || [];
         if (checkboxChoices.length === 0) return [];
         // Select 1-3 random options
         const numSelections = Math.floor(Math.random() * Math.min(3, checkboxChoices.length)) + 1;
         return faker.helpers.arrayElements(checkboxChoices, numSelections);
+      }
 
       case "boolean":
         return Math.random() < 0.5;
@@ -4676,9 +4679,10 @@ public class Entrypoint {
       case "text":
         return faker.lorem.sentence();
 
-      case "comment":
+      case "comment": {
         const rows = element.rows || 3;
         return faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
+      }
 
       default:
         return null;
