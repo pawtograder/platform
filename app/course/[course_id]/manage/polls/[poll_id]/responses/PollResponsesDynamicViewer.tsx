@@ -28,11 +28,22 @@ interface FullscreenDocument extends Document {
 }
 
 function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | undefined {
-  const questionData = (pollQuestion ?? {}) as Record<string, unknown>;
-  const elements = Array.isArray((questionData as any).elements)
-    ? (questionData as any).elements
-    : [];
-  const rawType: unknown = elements[0]?.type;
+  // Type guard: check if pollQuestion is an object (not null, not a primitive)
+  const questionData =
+    pollQuestion !== null &&
+    typeof pollQuestion === "object" &&
+    !Array.isArray(pollQuestion)
+      ? (pollQuestion as Record<string, Json>)
+      : null;
+  
+  // Type guard: check if elements exists and is an array
+  const elements = questionData?.elements;
+  const elementsArray = Array.isArray(elements) ? elements : [];
+  const firstElement =
+    elementsArray.length > 0 && typeof elementsArray[0] === "object" && elementsArray[0] !== null
+      ? (elementsArray[0] as Record<string, Json>)
+      : null;
+  const rawType: unknown = firstElement?.type;
 
   if (rawType === "radiogroup" || rawType === "checkbox") {
     return rawType;
