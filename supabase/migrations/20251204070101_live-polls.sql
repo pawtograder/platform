@@ -1,11 +1,14 @@
--- Drop existing objects
 DROP TABLE IF EXISTS live_poll_responses CASCADE;
 DROP TABLE IF EXISTS live_polls CASCADE;
--- Drop function
 DROP FUNCTION IF EXISTS set_live_poll_response_submitted_at() CASCADE;
+DROP FUNCTION IF EXISTS deactivate_expired_polls() CASCADE;
+DROP FUNCTION IF EXISTS broadcast_live_poll_change() CASCADE;
+DROP FUNCTION IF EXISTS broadcast_live_poll_response_change() CASCADE;
+DROP INDEX IF EXISTS idx_live_polls_class_is_live;
+DROP INDEX IF EXISTS idx_live_poll_responses_poll_id;
 
 -- Create live_polls table
-CREATE TABLE live_polls (
+CREATE TABLE IF NOT EXISTS live_polls (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
     created_by UUID NOT NULL REFERENCES user_roles(public_profile_id) ON DELETE CASCADE,
@@ -330,17 +333,24 @@ AS $$
     WHEN NOT lp.require_login THEN true
     -- If require_login is true, user must be authenticated
     WHEN lp.require_login AND auth.uid() IS NULL THEN false
-    -- If require_login is true and user is authenticated, check user role
-    WHEN lp.require_login AND auth.uid() IS NOT NULL THEN true
+    -- If require_login is true and user is authenticated, verify class membership and profile ownership
+    WHEN lp.require_login AND auth.uid() IS NOT NULL THEN
+      -- User must belong to the poll's class
+      authorizeforclass(lp.class_id)
+      -- Profile_id must be provided when require_login is true
+      AND profile_id IS NOT NULL
+      -- Profile_id must belong to the authenticated user (prevents impersonation)
+      AND authorizeforprofile(profile_id)
+    ELSE false
   END
   FROM public.live_polls lp
   WHERE lp.id = poll_id;
 $$;
 
 -- Students can insert responses if:
--- 1. require_login is false (anyone can respond), OR
--- 2. require_login is true AND user is authenticated and in the class (public_profile_id can be null for anonymous)
--- Note: Must allow both anon and authenticated roles for anonymous responses
+-- 1. require_login is false (anyone can respond, including anonymous with null profile_id), OR
+-- 2. require_login is true AND user is authenticated, belongs to the class, and profile_id belongs to the authenticated user
+-- Note: Must allow both anon and authenticated roles for anonymous responses when require_login is false
 CREATE POLICY live_polls_responses_insert ON live_poll_responses
   FOR INSERT
   TO anon, authenticated

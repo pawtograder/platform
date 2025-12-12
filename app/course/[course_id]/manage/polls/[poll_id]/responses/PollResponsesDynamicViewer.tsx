@@ -29,8 +29,8 @@ interface FullscreenDocument extends Document {
 
 function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | undefined {
   const questionData = (pollQuestion ?? {}) as Record<string, unknown>;
-  const elements = Array.isArray((questionData as any).elements)
-    ? (questionData as any).elements
+  const elements = Array.isArray((questionData).elements)
+    ? (questionData).elements
     : [];
   const rawType: unknown = elements[0]?.type;
 
@@ -256,7 +256,7 @@ export default function PollResponsesDynamicViewer({
         pollIsLive={pollIsLive}
         onPresent={handlePresent}
         onToggleLive={handleToggleLive}
-        qrCodeUrl={qrCodeUrl}
+        qrCodeUrl={qrCodeUrl ?? undefined}
       />
       <Box
         ref={fullscreenRef}
@@ -295,7 +295,7 @@ export default function PollResponsesDynamicViewer({
                   {pollUrl}
                 </Link>
               </Text>
-              <QrCode qrCodeUrl={qrCodeUrl} size="60px" isFullscreen={true} />
+              <QrCode qrCodeUrl={qrCodeUrl ?? undefined} size="60px" isFullscreen={true} />
             </Box>
           </>
         )}
