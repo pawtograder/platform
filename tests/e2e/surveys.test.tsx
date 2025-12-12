@@ -733,7 +733,7 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("button", { name: /Export to CSV/i })).toBeVisible();
   });
 
-  test.skip("response question filter hides unselected columns", async ({ page }) => {
+  test("response question filter hides unselected columns", async ({ page }) => {
     const surveyJson = {
       pages: [
         {
