@@ -295,6 +295,9 @@ ALTER TABLE live_poll_responses ENABLE ROW LEVEL SECURITY;
 
 -- Drop existing policies if they exist
 DROP POLICY IF EXISTS live_polls_all_staff ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_insert ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_update ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_delete ON live_polls;
 DROP POLICY IF EXISTS live_polls_select ON live_polls;
 DROP POLICY IF EXISTS live_polls_responses_all_staff ON live_poll_responses;
 DROP POLICY IF EXISTS live_polls_responses_insert ON live_poll_responses;
@@ -434,4 +437,3 @@ CREATE TRIGGER set_poll_deactivates_at_trigger
 
 COMMENT ON FUNCTION public.set_poll_deactivates_at() IS 
 'Automatically sets deactivates_at to 1 hour when is_live becomes true, and clears it when is_live becomes false.';
-
