@@ -35,7 +35,7 @@ export default function PollRespondPage() {
       const { data: pollData, error } = await supabase
         .from("live_polls")
         .select("*")
-        .eq("class_id", Number(course_id))
+        .eq("class_id", courseIdNum)
         .eq("is_live", true)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -72,7 +72,7 @@ export default function PollRespondPage() {
           .from("user_roles")
           .select("public_profile_id")
           .eq("user_id", user.id)
-          .eq("class_id", Number(course_id))
+          .eq("class_id", courseIdNum)
           .single();
 
         if (!data?.public_profile_id) {
