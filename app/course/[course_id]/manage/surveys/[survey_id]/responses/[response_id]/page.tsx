@@ -338,8 +338,8 @@ export default function IndividualResponsePage() {
                 surveyJson={survey.json}
                 responseData={response.response}
                 readOnly={true}
-                onComplete={() => { }} // No-op for display mode
-                onValueChanged={() => { }} // No-op for display mode
+                onComplete={() => {}} // No-op for display mode
+                onValueChanged={() => {}} // No-op for display mode
               />
             </Box>
           </VStack>
