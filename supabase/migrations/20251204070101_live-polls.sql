@@ -342,8 +342,9 @@ CREATE POLICY live_polls_all_staff_delete ON live_polls
   TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id));
 
--- Students and anyone can select live polls
--- Frontend handles require_login logic (shows login prompt if needed)
+-- Migration note: Poll definitions stay readable by anon/authenticated users to allow external sharing.
+-- The frontend prompts login when require_login is true (/poll/[course_id]/page.tsx lines 203-236),
+-- and answers/inserts are still gated server-side via can_access_poll_response() and response RLS policies.
 CREATE POLICY live_polls_select ON live_polls
   FOR SELECT
   TO anon, authenticated
