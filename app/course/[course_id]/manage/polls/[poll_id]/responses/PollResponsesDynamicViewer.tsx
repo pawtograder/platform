@@ -97,6 +97,7 @@ export default function PollResponsesDynamicViewer({
   const { qrCodeUrl } = usePollQrCode(courseId, pollUrl, qrLightColor, qrDarkColor);
 
   const handleToggleLive = useCallback(async () => {
+    const originalState = pollIsLive;
     const nextState = !pollIsLive;
     setPollIsLive(nextState);
     const supabase = createClient();
@@ -126,7 +127,7 @@ export default function PollResponsesDynamicViewer({
         description: err instanceof Error ? err.message : "An unexpected error occurred",
         type: "error"
       });
-      setPollIsLive(pollIsLive);
+      setPollIsLive(originalState);
     }
   }, [pollId, pollIsLive]);
 
