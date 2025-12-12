@@ -1,42 +1,16 @@
 "use client";
 
 import { Box, Heading, Text, VStack, HStack } from "@chakra-ui/react";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useParams } from "next/navigation";
 import { useActiveLivePolls } from "@/hooks/useCourseController";
 import StudentPollsTable from "./StudentPollsTable";
 
 export default function StudentPollsPage() {
-  const params = useParams();
-  const router = useRouter();
+  const { course_id } = useParams();
   const { polls, isLoading } = useActiveLivePolls();
 
-  // Validate and normalize course_id from useParams
-  const course_id = (() => {
-    const rawCourseId = params.course_id;
-    if (rawCourseId === undefined) {
-      return null;
-    }
-    if (Array.isArray(rawCourseId)) {
-      return rawCourseId[0] || null;
-    }
-    return rawCourseId;
-  })();
-
-  // Handle invalid course_id by redirecting
-  useEffect(() => {
-    if (course_id === null) {
-      router.push("/");
-    }
-  }, [course_id, router]);
-
-  // Early return if course_id is invalid (prevents rendering with invalid data)
-  if (course_id === null) {
-    return null;
-  }
-
   const handlePollClick = () => {
-    window.open(`/poll/${encodeURIComponent(course_id)}`, "_blank", "noopener,noreferrer");
+    window.open(`/poll/${course_id}`, "_blank");
   };
 
   return (

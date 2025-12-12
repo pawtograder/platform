@@ -255,7 +255,7 @@ export function SurveyTemplateLibraryModal({
         type: "error"
       });
     }
-  }, [editingTemplate, editTitle, editDescription, editScope, courseId, fetchTemplates]);
+  }, [editingTemplate, editTitle, editDescription, editScope, courseId]);
 
   const handleDeleteClick = useCallback((template: SurveyTemplate) => {
     setDeleteConfirmTemplate(template);
@@ -304,7 +304,7 @@ export function SurveyTemplateLibraryModal({
         type: "error"
       });
     }
-  }, [deleteConfirmTemplate, fetchTemplates]);
+  }, [deleteConfirmTemplate]);
 
   const formatDate = (dateString: string) => {
     try {

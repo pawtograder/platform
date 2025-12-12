@@ -25,8 +25,6 @@ export default function PollRespondPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [requiresLogin, setRequiresLogin] = useState(false);
-  const [hasAlreadySubmitted, setHasAlreadySubmitted] = useState(false);
-  const [pollRequiresLogin, setPollRequiresLogin] = useState(false);
   const { colorMode } = useColorMode();
   const isDarkMode = colorMode === "dark";
 
@@ -56,9 +54,6 @@ export default function PollRespondPage() {
       }
 
       const poll = pollData;
-
-      // Store require_login for use in render
-      setPollRequiresLogin(poll.require_login);
 
       // Resolve the profile ID to attach to responses (if login is required)
       let profileId: string | null = null;
@@ -139,37 +134,26 @@ export default function PollRespondPage() {
           });
 
           if (error) {
-            // Check if it's a unique constraint violation and poll requires login
-            if (error.code === "23505" && poll.require_login) {
-              setHasAlreadySubmitted(true);
-              return;
-            }
-            throw error;
+            throw new Error(error.message);
           }
 
           setIsSubmitted(true);
         } catch (error) {
-          // Only show toast if we haven't already handled it as a duplicate submission
-          if (!hasAlreadySubmitted) {
-            toaster.create({
-              title: "Error submitting response",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
-              type: "error"
-            });
-          }
+          toaster.create({
+            title: "Error submitting response",
+            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            type: "error"
+          });
         }
       });
       setSurveyModel(survey);
       setIsLoading(false);
     };
 
-    if (!course_id || Number.isNaN(courseIdNum)) {
-      setIsLoading(false);
-      return;
+    if (course_id) {
+      fetchPoll();
     }
-
-    fetchPoll();
-  }, [courseIdNum, course_id]);
+  }, [course_id]);
 
   // Update survey theme when color mode changes
   useEffect(() => {
@@ -247,25 +231,14 @@ export default function PollRespondPage() {
               </VStack>
             </Box>
           </Box>
-        ) : hasAlreadySubmitted ? (
-          <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
-            <Heading size="lg" color="fg" mb={4}>
-              Already Submitted
-            </Heading>
-            <Text color="fg">
-              You have already submitted a response. Polls with login require you to submit only once.
-            </Text>
-          </Box>
         ) : isSubmitted ? (
           <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
             <Heading size="lg" color="fg" mb={4}>
               Thank You!
             </Heading>
             <Text color="fg">
-              Your poll response has been submitted successfully.{" "}
-              {pollRequiresLogin
-                ? "Refresh the page to load a new poll."
-                : "Refresh the page to answer again or to load a new poll."}
+              Your poll response has been submitted successfully. Refresh the page to answer again or to load a new
+              poll.
             </Text>
           </Box>
         ) : !surveyModel ? (
