@@ -82,22 +82,16 @@ export default function PollResponsesDynamicViewer({
   const qrDarkColor = useColorModeValue("#000000", "#FFFFFF");
   const errorBoxColor = useColorModeValue("#FF0000", "#FF0000");
 
-
-  let type: "radiogroup" | "checkbox" | undefined;
-
-  try {
-    const parsedType = parseJsonForType(pollQuestion);
-    if (parsedType) {
-      type = parsedType;
+  const { type, parseError } = useMemo(() => {
+    try {
+      return { type: parseJsonForType(pollQuestion), parseError: null as Error | null };
+    } catch (error) {
+      return {
+        type: undefined,
+        parseError: error instanceof Error ? error : new Error("Invalid poll question format")
+      };
     }
-  } catch (error) {
-    return (
-      <Box p={8} color={errorBoxColor}>
-        <Text fontWeight="bold">Unable to display poll</Text>
-        <Text mt={2}>{error instanceof Error ? error.message : "Invalid poll question format"}</Text>
-      </Box>
-    );
-  }
+  }, [pollQuestion]);
 
   // Calculate poll URL
   const pollUrl = useMemo(() => {
@@ -305,7 +299,12 @@ export default function PollResponsesDynamicViewer({
             </Box>
           </>
         )}
-        {type === "radiogroup" || type === "checkbox" ? (
+        {parseError ? (
+          <Box p={8} color={errorBoxColor}>
+            <Text fontWeight="bold">Unable to display poll</Text>
+            <Text mt={2}>{parseError.message}</Text>
+          </Box>
+        ) : type === "radiogroup" || type === "checkbox" ? (
           <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion} />
         ) : (
           <div>Unsupported poll question type: {type ?? "unknown"}</div>

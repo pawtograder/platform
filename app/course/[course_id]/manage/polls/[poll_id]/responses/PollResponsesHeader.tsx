@@ -11,7 +11,7 @@ type PollResponsesHeaderProps = {
   pollUrl: string;
   onPresent: () => void;
   onToggleLive: () => void;
-  qrCodeUrl?: string | null;
+  qrCodeUrl?: string;
 };
 
 export default function PollResponsesHeader({
@@ -49,7 +49,7 @@ export default function PollResponsesHeader({
               {pollUrl}
             </Text>
           </Text>
-          <QrCode qrCodeUrl={qrCodeUrl ?? null} />
+          <QrCode qrCodeUrl={qrCodeUrl} />
         </HStack>
         <HStack gap={2}>
           <Button

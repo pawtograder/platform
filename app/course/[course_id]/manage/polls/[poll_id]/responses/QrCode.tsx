@@ -4,7 +4,7 @@ import { useState } from "react";
 import { DialogRoot, DialogContent, DialogBody, DialogCloseTrigger } from "@/components/ui/dialog";
 
 type QrCodeProps = {
-  qrCodeUrl: string | null;
+  qrCodeUrl: string | undefined;
   size?: string;
   isFullscreen?: boolean;
 };
