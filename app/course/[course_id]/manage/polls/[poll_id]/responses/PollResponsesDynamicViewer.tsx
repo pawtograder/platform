@@ -155,21 +155,29 @@ export default function PollResponsesDynamicViewer({
   const handlePresent = useCallback(async () => {
     if (!fullscreenRef.current) return;
 
-    setIsPresenting(true);
-
     try {
       const element = fullscreenRef.current as FullscreenElement;
+      let didEnterFullscreen = false;
       if (element.requestFullscreen) {
         await element.requestFullscreen();
+        didEnterFullscreen = true;
       } else if (element.webkitRequestFullscreen) {
         await element.webkitRequestFullscreen();
+        didEnterFullscreen = true;
       } else if (element.mozRequestFullScreen) {
         await element.mozRequestFullScreen();
+        didEnterFullscreen = true;
       } else if (element.msRequestFullscreen) {
         await element.msRequestFullscreen();
+        didEnterFullscreen = true;
+      }
+
+      if (didEnterFullscreen) {
+        setIsPresenting(true);
       }
     } catch (error) {
       console.error("Error entering fullscreen:", error);
+      setIsPresenting(false);
     }
   }, []);
 
