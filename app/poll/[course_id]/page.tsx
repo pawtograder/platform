@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Box, Container, Heading, Text, Button, VStack } from "@chakra-ui/react";
 import { useColorMode, ColorModeButton } from "@/components/ui/color-mode";
@@ -27,6 +27,7 @@ export default function PollRespondPage() {
   const [requiresLogin, setRequiresLogin] = useState(false);
   const [hasAlreadySubmitted, setHasAlreadySubmitted] = useState(false);
   const [pollRequiresLogin, setPollRequiresLogin] = useState(false);
+  const hasAlreadySubmittedRef = useRef(false);
   const { colorMode } = useColorMode();
   const isDarkMode = colorMode === "dark";
 
@@ -142,6 +143,7 @@ export default function PollRespondPage() {
             // Check if it's a unique constraint violation and poll requires login
             if (error.code === "23505" && poll.require_login) {
               setHasAlreadySubmitted(true);
+              hasAlreadySubmittedRef.current = true;
               return;
             }
             throw error;
@@ -150,7 +152,7 @@ export default function PollRespondPage() {
           setIsSubmitted(true);
         } catch (error) {
           // Only show toast if we haven't already handled it as a duplicate submission
-          if (!hasAlreadySubmitted) {
+          if (!hasAlreadySubmittedRef.current) {
             toaster.create({
               title: "Error submitting response",
               description: error instanceof Error ? error.message : "An unexpected error occurred.",
