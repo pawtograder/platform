@@ -313,15 +313,25 @@ CREATE POLICY live_polls_all_staff_update ON live_polls
   FOR UPDATE
   TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id))
-  WITH CHECK (
-    authorizeforclassgrader(live_polls.class_id)
-    -- Prevent created_by from being changed: NEW.created_by must equal existing created_by
-    AND live_polls.created_by = (
-      SELECT created_by 
-      FROM live_polls 
-      WHERE id = live_polls.id
-    )
-  );
+  WITH CHECK (authorizeforclassgrader(live_polls.class_id));
+
+-- Trigger to prevent created_by from being changed
+CREATE OR REPLACE FUNCTION public.prevent_live_poll_created_by_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD.created_by IS DISTINCT FROM NEW.created_by THEN
+    RAISE EXCEPTION 'Cannot change created_by of a live poll';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER prevent_live_poll_created_by_change_trigger
+  BEFORE UPDATE ON live_polls
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_live_poll_created_by_change();
 
 CREATE POLICY live_polls_all_staff_delete ON live_polls
   FOR DELETE
