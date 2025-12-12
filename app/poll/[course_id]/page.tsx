@@ -42,16 +42,19 @@ export default function PollRespondPage() {
         .eq("is_live", true)
         .order("created_at", { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
-      if (error || !pollData) {
-        if (error) {
-          toaster.create({
-            title: "Error loading poll",
-            description: error.message,
-            type: "error"
-          });
-        }
+      if (error) {
+        toaster.create({
+          title: "Error loading poll",
+          description: error.message,
+          type: "error"
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      if (!pollData) {
         setIsLoading(false);
         return;
       }
@@ -74,17 +77,17 @@ export default function PollRespondPage() {
           return;
         }
 
-        const { data } = await supabase
+        const { data, error: profileError } = await supabase
           .from("user_roles")
           .select("public_profile_id")
           .eq("user_id", user.id)
           .eq("class_id", courseIdNum)
-          .single();
+          .maybeSingle();
 
-        if (!data?.public_profile_id) {
+        if (profileError || !data?.public_profile_id) {
           toaster.create({
             title: "Access Error",
-            description: "We couldn't find your course profile.",
+            description: profileError?.message || "We couldn't find your course profile.",
             type: "error"
           });
           setRequiresLogin(true);
