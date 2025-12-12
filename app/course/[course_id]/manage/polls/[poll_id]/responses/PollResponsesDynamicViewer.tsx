@@ -27,35 +27,22 @@ interface FullscreenDocument extends Document {
   msExitFullscreen?: () => Promise<void>;
 }
 
-function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" {
-  const questionData = pollQuestion as unknown as Record<string, unknown> | null;
+function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | undefined {
+  const questionData = (pollQuestion ?? {}) as Record<string, unknown>;
+  const elements = Array.isArray((questionData as any).elements)
+    ? (questionData as any).elements
+    : [];
+  const rawType: unknown = elements[0]?.type;
 
-  // Verify that elements exists and is an array
-  if (!questionData?.elements || !Array.isArray(questionData.elements)) {
-    throw new Error("Poll question JSON must have an 'elements' array field");
+  if (rawType === "radiogroup" || rawType === "checkbox") {
+    return rawType;
   }
 
-  // Verify that elements[0] exists
-  if (questionData.elements.length === 0 || !questionData.elements[0]) {
-    throw new Error("Poll question JSON must have at least one element in the 'elements' array");
+  if (typeof rawType === "string" && rawType.length > 0) {
+    console.warn(`Unsupported poll question type in SurveyJS JSON: ${rawType}`);
   }
 
-  const firstElement = questionData.elements[0] as Record<string, unknown> | null;
-  const type = firstElement?.type;
-
-  // Verify that type is a string
-  if (typeof type !== "string") {
-    throw new Error(
-      `Poll question type must be a string, but got ${typeof type}${type !== undefined ? ` (value: ${JSON.stringify(type)})` : ""}`
-    );
-  }
-
-  // Verify that type is exactly "radiogroup" or "checkbox"
-  if (type !== "radiogroup" && type !== "checkbox") {
-    throw new Error(`Unsupported SurveyJS question type: "${type}". Expected "radiogroup" or "checkbox".`);
-  }
-
-  return type as "radiogroup" | "checkbox";
+  return undefined;
 }
 
 type PollResponsesDynamicViewerProps = {
@@ -167,21 +154,29 @@ export default function PollResponsesDynamicViewer({
   const handlePresent = useCallback(async () => {
     if (!fullscreenRef.current) return;
 
-    setIsPresenting(true);
-
     try {
       const element = fullscreenRef.current as FullscreenElement;
+      let didEnterFullscreen = false;
       if (element.requestFullscreen) {
         await element.requestFullscreen();
+        didEnterFullscreen = true;
       } else if (element.webkitRequestFullscreen) {
         await element.webkitRequestFullscreen();
+        didEnterFullscreen = true;
       } else if (element.mozRequestFullScreen) {
         await element.mozRequestFullScreen();
+        didEnterFullscreen = true;
       } else if (element.msRequestFullscreen) {
         await element.msRequestFullscreen();
+        didEnterFullscreen = true;
+      }
+
+      if (didEnterFullscreen) {
+        setIsPresenting(true);
       }
     } catch (error) {
       console.error("Error entering fullscreen:", error);
+      setIsPresenting(false);
     }
   }, []);
 
@@ -297,7 +292,7 @@ export default function PollResponsesDynamicViewer({
         {type === "radiogroup" || type === "checkbox" ? (
           <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion} />
         ) : (
-          <div>Unsupported poll question type: {type}</div>
+          <div>Unsupported poll question type: {type ?? "unknown"}</div>
         )}
       </Box>
     </div>
