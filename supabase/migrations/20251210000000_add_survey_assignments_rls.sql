@@ -107,4 +107,4 @@ BEGIN
   SELECT p_survey_id, unnest(p_profile_ids), v_class_id
   ON CONFLICT (survey_id, profile_id) DO NOTHING;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
