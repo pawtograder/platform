@@ -4,16 +4,6 @@ DROP FUNCTION IF EXISTS set_live_poll_response_submitted_at() CASCADE;
 DROP FUNCTION IF EXISTS deactivate_expired_polls() CASCADE;
 DROP FUNCTION IF EXISTS broadcast_live_poll_change() CASCADE;
 DROP FUNCTION IF EXISTS broadcast_live_poll_response_change() CASCADE;
-DROP POLICY IF EXISTS live_polls_all_staff ON live_polls;
-DROP POLICY IF EXISTS live_polls_all_staff_insert ON live_polls;
-DROP POLICY IF EXISTS live_polls_all_staff_update_delete ON live_polls;
-DROP POLICY IF EXISTS live_polls_select ON live_polls;
-DROP POLICY IF EXISTS live_polls_responses_all_staff ON live_poll_responses;
-DROP POLICY IF EXISTS live_polls_responses_insert ON live_poll_responses;
-DROP POLICY IF EXISTS live_polls_responses_select ON live_poll_responses;
-DROP TRIGGER IF EXISTS broadcast_live_polls_realtime ON live_polls;
-DROP TRIGGER IF EXISTS broadcast_live_poll_responses_realtime ON live_poll_responses;
-DROP TRIGGER IF EXISTS set_poll_deactivates_at_trigger ON live_polls;
 DROP INDEX IF EXISTS idx_live_polls_class_is_live;
 DROP INDEX IF EXISTS idx_live_poll_responses_poll_id;
 
