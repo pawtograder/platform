@@ -1,12 +1,3 @@
-DROP TABLE IF EXISTS live_poll_responses CASCADE;
-DROP TABLE IF EXISTS live_polls CASCADE;
-DROP FUNCTION IF EXISTS set_live_poll_response_submitted_at() CASCADE;
-DROP FUNCTION IF EXISTS deactivate_expired_polls() CASCADE;
-DROP FUNCTION IF EXISTS broadcast_live_poll_change() CASCADE;
-DROP FUNCTION IF EXISTS broadcast_live_poll_response_change() CASCADE;
-DROP INDEX IF EXISTS idx_live_polls_class_is_live;
-DROP INDEX IF EXISTS idx_live_poll_responses_poll_id;
-
 -- Create live_polls table
 CREATE TABLE IF NOT EXISTS live_polls (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,8 +10,24 @@ CREATE TABLE IF NOT EXISTS live_polls (
     require_login BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- Ensure expected columns exist in live_polls (for idempotent migrations)
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS created_by UUID NOT NULL REFERENCES user_roles(public_profile_id) ON DELETE CASCADE;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS question JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS deactivates_at TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS require_login BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Create live_poll_responses table
-CREATE TABLE live_poll_responses (
+CREATE TABLE IF NOT EXISTS live_poll_responses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   live_poll_id UUID NOT NULL REFERENCES live_polls(id) ON DELETE CASCADE,
   public_profile_id UUID REFERENCES user_roles(public_profile_id) ON DELETE CASCADE, --Anonymous responses are allowed
@@ -30,6 +37,35 @@ CREATE TABLE live_poll_responses (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT live_poll_responses_unique_per_profile UNIQUE (live_poll_id, public_profile_id)
 );
+
+-- Ensure expected columns exist in live_poll_responses (for idempotent migrations)
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS live_poll_id UUID NOT NULL REFERENCES live_polls(id) ON DELETE CASCADE;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS public_profile_id UUID REFERENCES user_roles(public_profile_id) ON DELETE CASCADE;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS response JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints tc
+    WHERE tc.constraint_name = 'live_poll_responses_unique_per_profile'
+      AND tc.table_name = 'live_poll_responses'
+      AND tc.constraint_type = 'UNIQUE'
+  ) THEN
+    ALTER TABLE live_poll_responses
+      ADD CONSTRAINT live_poll_responses_unique_per_profile UNIQUE (live_poll_id, public_profile_id);
+  END IF;
+END;
+$$;
 
 -- Automatically set submitted_at when a response is submitted
 CREATE OR REPLACE FUNCTION set_live_poll_response_submitted_at()
@@ -387,5 +423,4 @@ CREATE TRIGGER set_poll_deactivates_at_trigger
 
 COMMENT ON FUNCTION public.set_poll_deactivates_at() IS 
 'Automatically sets deactivates_at to 1 hour when is_live becomes true, and clears it when is_live becomes false.';
-
 
