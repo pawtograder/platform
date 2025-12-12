@@ -1797,16 +1797,25 @@ export function useLivePoll(pollId: string | undefined) {
  * Helper to extract choices from poll question JSON
  */
 function extractChoicesFromPollQuestion(pollQuestion: unknown): string[] {
+  if (!pollQuestion || typeof pollQuestion !== "object") {
+    return [];
+  }
+
   const questionData = pollQuestion as Record<string, unknown> | null;
+  if (!questionData || !Array.isArray(questionData.elements) || questionData.elements.length === 0) {
+    return [];
+  }
+
   const firstElement = (
     questionData?.elements as Array<{
       choices?: string[] | Array<{ text?: string; label?: string; value?: string }>;
     }>
   )?.[0];
 
-  const choicesRaw = firstElement?.choices || [];
+  const choicesRaw = Array.isArray(firstElement?.choices) ? firstElement.choices : [];
   return choicesRaw.map((choice) => {
     if (typeof choice === "string") return choice;
+    if (!choice || typeof choice !== "object") return "";
     return choice.text || choice.label || choice.value || String(choice);
   });
 }

@@ -29,9 +29,7 @@ interface FullscreenDocument extends Document {
 
 function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | undefined {
   const questionData = (pollQuestion ?? {}) as Record<string, unknown>;
-  const elements = Array.isArray((questionData as any).elements)
-    ? (questionData as any).elements
-    : [];
+  const elements = Array.isArray(questionData.elements) ? questionData.elements : [];
   const rawType: unknown = elements[0]?.type;
 
   if (rawType === "radiogroup" || rawType === "checkbox") {

@@ -1,12 +1,3 @@
-DROP TABLE IF EXISTS live_poll_responses CASCADE;
-DROP TABLE IF EXISTS live_polls CASCADE;
-DROP FUNCTION IF EXISTS set_live_poll_response_submitted_at() CASCADE;
-DROP FUNCTION IF EXISTS deactivate_expired_polls() CASCADE;
-DROP FUNCTION IF EXISTS broadcast_live_poll_change() CASCADE;
-DROP FUNCTION IF EXISTS broadcast_live_poll_response_change() CASCADE;
-DROP INDEX IF EXISTS idx_live_polls_class_is_live;
-DROP INDEX IF EXISTS idx_live_poll_responses_poll_id;
-
 -- Create live_polls table
 CREATE TABLE IF NOT EXISTS live_polls (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,8 +10,24 @@ CREATE TABLE IF NOT EXISTS live_polls (
     require_login BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- Ensure expected columns exist in live_polls (for idempotent migrations)
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS created_by UUID NOT NULL REFERENCES user_roles(public_profile_id) ON DELETE CASCADE;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS question JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS deactivates_at TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE live_polls
+    ADD COLUMN IF NOT EXISTS require_login BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Create live_poll_responses table
-CREATE TABLE live_poll_responses (
+CREATE TABLE IF NOT EXISTS live_poll_responses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   live_poll_id UUID NOT NULL REFERENCES live_polls(id) ON DELETE CASCADE,
   public_profile_id UUID REFERENCES user_roles(public_profile_id) ON DELETE CASCADE, --Anonymous responses are allowed
@@ -30,6 +37,35 @@ CREATE TABLE live_poll_responses (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT live_poll_responses_unique_per_profile UNIQUE (live_poll_id, public_profile_id)
 );
+
+-- Ensure expected columns exist in live_poll_responses (for idempotent migrations)
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS live_poll_id UUID NOT NULL REFERENCES live_polls(id) ON DELETE CASCADE;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS public_profile_id UUID REFERENCES user_roles(public_profile_id) ON DELETE CASCADE;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS response JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE live_poll_responses
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints tc
+    WHERE tc.constraint_name = 'live_poll_responses_unique_per_profile'
+      AND tc.table_name = 'live_poll_responses'
+      AND tc.constraint_type = 'UNIQUE'
+  ) THEN
+    ALTER TABLE live_poll_responses
+      ADD CONSTRAINT live_poll_responses_unique_per_profile UNIQUE (live_poll_id, public_profile_id);
+  END IF;
+END;
+$$;
 
 -- Automatically set submitted_at when a response is submitted
 CREATE OR REPLACE FUNCTION set_live_poll_response_submitted_at()
@@ -43,19 +79,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_live_poll_responses_set_submitted_at ON live_poll_responses;
 CREATE TRIGGER trg_live_poll_responses_set_submitted_at
   BEFORE INSERT OR UPDATE ON live_poll_responses
   FOR EACH ROW
   EXECUTE FUNCTION set_live_poll_response_submitted_at();
-
 -- Helpful indexes for querying
-CREATE INDEX idx_live_polls_class_is_live
+CREATE INDEX IF NOT EXISTS idx_live_polls_class_is_live
   ON live_polls (class_id, is_live);
 
-CREATE INDEX idx_live_poll_responses_poll_id
+CREATE INDEX IF NOT EXISTS idx_live_poll_responses_poll_id
   ON live_poll_responses (live_poll_id);
 
-CREATE INDEX idx_live_poll_responses_profile_id
+CREATE INDEX IF NOT EXISTS idx_live_poll_responses_profile_id
   ON live_poll_responses (public_profile_id);
 
 -- Index for efficient deactivation queries
@@ -124,6 +160,8 @@ AS $$
 DECLARE
     target_class_id bigint;
     staff_payload jsonb;
+    affected_profile_ids uuid[];
+    profile_id uuid;
 BEGIN
     -- Get the class_id from the record
     IF TG_OP = 'INSERT' THEN
@@ -154,13 +192,21 @@ BEGIN
             true
         );
 
-        -- Broadcast once to a class-wide student channel (fanout on the client/subscription layer).
-        PERFORM realtime.send(
-            staff_payload,
-            'broadcast',
-            'class:' || target_class_id || ':students',
-            true
-        );
+        -- Broadcast to all students in the class (for live poll visibility)
+        SELECT ARRAY(
+            SELECT ur.private_profile_id
+            FROM user_roles ur
+            WHERE ur.class_id = target_class_id AND ur.role = 'student'
+        ) INTO affected_profile_ids;
+
+        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+            PERFORM realtime.send(
+                staff_payload,
+                'broadcast',
+                'class:' || target_class_id || ':user:' || profile_id,
+                true
+            );
+        END LOOP;
     END IF;
 
     IF TG_OP = 'DELETE' THEN
@@ -249,6 +295,9 @@ ALTER TABLE live_poll_responses ENABLE ROW LEVEL SECURITY;
 
 -- Drop existing policies if they exist
 DROP POLICY IF EXISTS live_polls_all_staff ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_insert ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_update ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_delete ON live_polls;
 DROP POLICY IF EXISTS live_polls_select ON live_polls;
 DROP POLICY IF EXISTS live_polls_responses_all_staff ON live_poll_responses;
 DROP POLICY IF EXISTS live_polls_responses_insert ON live_poll_responses;
@@ -267,23 +316,35 @@ CREATE POLICY live_polls_all_staff_update ON live_polls
   FOR UPDATE
   TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id))
-  WITH CHECK (
-    authorizeforclassgrader(live_polls.class_id)
-    -- Prevent created_by from being changed: NEW.created_by must equal existing created_by
-    AND live_polls.created_by = (
-      SELECT created_by 
-      FROM live_polls 
-      WHERE id = live_polls.id
-    )
-  );
+  WITH CHECK (authorizeforclassgrader(live_polls.class_id));
+
+-- Trigger to prevent created_by from being changed
+CREATE OR REPLACE FUNCTION public.prevent_live_poll_created_by_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD.created_by IS DISTINCT FROM NEW.created_by THEN
+    RAISE EXCEPTION 'Cannot change created_by of a live poll';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS prevent_live_poll_created_by_change_trigger ON live_polls;
+CREATE TRIGGER prevent_live_poll_created_by_change_trigger
+  BEFORE UPDATE ON live_polls
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_live_poll_created_by_change();
 
 CREATE POLICY live_polls_all_staff_delete ON live_polls
   FOR DELETE
   TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id));
 
--- Students and anyone can select live polls
--- Frontend handles require_login logic (shows login prompt if needed)
+-- Migration note: Poll definitions stay readable by anon/authenticated users to allow external sharing.
+-- The frontend prompts login when require_login is true (/poll/[course_id]/page.tsx lines 203-236),
+-- and answers/inserts are still gated server-side via can_access_poll_response() and response RLS policies.
 CREATE POLICY live_polls_select ON live_polls
   FOR SELECT
   TO anon, authenticated
@@ -377,5 +438,3 @@ CREATE TRIGGER set_poll_deactivates_at_trigger
 
 COMMENT ON FUNCTION public.set_poll_deactivates_at() IS 
 'Automatically sets deactivates_at to 1 hour when is_live becomes true, and clears it when is_live becomes false.';
-
-
