@@ -80,8 +80,24 @@ export default function PollResponsesDynamicViewer({
   const textColor = useColorModeValue("#000000", "#FFFFFF");
   const qrLightColor = useColorModeValue("#FFFFFF", "#000000");
   const qrDarkColor = useColorModeValue("#000000", "#FFFFFF");
+  const errorBoxColor = useColorModeValue("#FF0000", "#FF0000");
 
-  const type = parseJsonForType(pollQuestion);
+
+  let type: "radiogroup" | "checkbox" | undefined;
+
+  try {
+    const parsedType = parseJsonForType(pollQuestion);
+    if (parsedType) {
+      type = parsedType;
+    }
+  } catch (error) {
+    return (
+      <Box p={8} color={errorBoxColor}>
+        <Text fontWeight="bold">Unable to display poll</Text>
+        <Text mt={2}>{error instanceof Error ? error.message : "Invalid poll question format"}</Text>
+      </Box>
+    );
+  }
 
   // Calculate poll URL
   const pollUrl = useMemo(() => {
