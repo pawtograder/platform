@@ -51,15 +51,20 @@ export default function NewPollPage() {
 
   const questionValue = watch("question");
 
-  const validateJson = (): boolean => {
-    const jsonValue = getValues("question");
+  const validateJson = (
+    options: { silent?: boolean; jsonValue?: string } = {}
+  ): { isValid: boolean; parsed?: Record<string, unknown> } => {
+    const { silent = false, jsonValue: providedJsonValue } = options;
+    const jsonValue = providedJsonValue ?? getValues("question");
     if (!jsonValue.trim()) {
-      toaster.create({
-        title: "Missing question",
-        description: "Please enter a JSON payload for your poll question.",
-        type: "error"
-      });
-      return false;
+      if (!silent) {
+        toaster.create({
+          title: "Missing question",
+          description: "Please enter a JSON payload for your poll question.",
+          type: "error"
+        });
+      }
+      return { isValid: false };
     }
     try {
       const parsed = JSON.parse(jsonValue);
@@ -71,38 +76,46 @@ export default function NewPollPage() {
         !Array.isArray(parsed.elements) ||
         parsed.elements.length === 0
       ) {
-        toaster.create({
-          title: "Invalid Question Format",
-          description: "Question must be an object with an 'elements' array containing at least one element.",
-          type: "error"
-        });
-        return false;
+        if (!silent) {
+          toaster.create({
+            title: "Invalid Question Format",
+            description: "Question must be an object with an 'elements' array containing at least one element.",
+            type: "error"
+          });
+        }
+        return { isValid: false };
       }
 
       // Ensure the first element has required fields
       const firstElement = parsed.elements[0];
       if (!firstElement.type || !firstElement.title) {
-        toaster.create({
-          title: "Invalid Question Format",
-          description: "The first element in 'elements' must have 'type' and 'title' fields.",
-          type: "error"
-        });
-        return false;
+        if (!silent) {
+          toaster.create({
+            title: "Invalid Question Format",
+            description: "The first element in 'elements' must have 'type' and 'title' fields.",
+            type: "error"
+          });
+        }
+        return { isValid: false };
       }
 
-      toaster.create({
-        title: "JSON valid",
-        description: "Your poll question JSON looks good.",
-        type: "success"
-      });
-      return true;
+      if (!silent) {
+        toaster.create({
+          title: "JSON valid",
+          description: "Your poll question JSON looks good.",
+          type: "success"
+        });
+      }
+      return { isValid: true, parsed: parsed as Record<string, unknown> };
     } catch (error) {
-      toaster.create({
-        title: "Invalid JSON",
-        description: error instanceof Error ? error.message : "Unable to parse the JSON payload.",
-        type: "error"
-      });
-      return false;
+      if (!silent) {
+        toaster.create({
+          title: "Invalid JSON",
+          description: error instanceof Error ? error.message : "Unable to parse the JSON payload.",
+          type: "error"
+        });
+      }
+      return { isValid: false };
     }
   };
 
@@ -126,7 +139,7 @@ export default function NewPollPage() {
 
   const showPreview = () => {
     // Validate JSON first before showing preview
-    if (!validateJson()) {
+    if (!validateJson({ silent: false }).isValid) {
       return;
     }
     setIsPreviewOpen(true);
@@ -151,45 +164,19 @@ export default function NewPollPage() {
       return;
     }
 
-    let parsedQuestion: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(values.question);
+    // Use validateJson to validate and get parsed question
+    // If called from onSubmit, validation already happened (with toasts)
+    // If called from saveDraft, we need to show error toasts here
+    // So we validate silently first, then show errors only if validation fails
+    const validation = validateJson({ silent: true, jsonValue: values.question });
 
-      // Ensure it has the elements array structure
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        !Array.isArray(parsed.elements) ||
-        parsed.elements.length === 0
-      ) {
-        toaster.create({
-          title: "Invalid Question Format",
-          description: "Question must be an object with an 'elements' array containing at least one element.",
-          type: "error"
-        });
-        return;
-      }
-
-      // Ensure the first element has required fields
-      const firstElement = parsed.elements[0];
-      if (!firstElement.type || !firstElement.title) {
-        toaster.create({
-          title: "Invalid Question Format",
-          description: "The first element in 'elements' must have 'type' and 'title' fields.",
-          type: "error"
-        });
-        return;
-      }
-
-      parsedQuestion = parsed as Record<string, unknown>;
-    } catch (error) {
-      toaster.create({
-        title: "Invalid JSON",
-        description: error instanceof Error ? error.message : "Unable to parse the JSON payload.",
-        type: "error"
-      });
+    if (!validation.isValid || !validation.parsed) {
+      // Show detailed error message (only if not already shown by onSubmit)
+      validateJson({ silent: false, jsonValue: values.question });
       return;
     }
+
+    const parsedQuestion = validation.parsed;
 
     setIsSaving(true);
     const supabase = createClient();
@@ -251,12 +238,11 @@ export default function NewPollPage() {
   };
 
   const onSubmit = handleSubmit(async (values) => {
-    if (!validateJson()) {
-      toaster.create({
-        title: "Invalid poll JSON",
-        description: "Please check your poll question format before submitting.",
-        type: "error"
-      });
+    // Validate JSON - validateJson will show detailed error messages
+    const validation = validateJson({ silent: false, jsonValue: values.question });
+
+    if (!validation.isValid) {
+      // validateJson already shows detailed error messages, no need for duplicate toast
       return;
     }
 
@@ -343,7 +329,7 @@ export default function NewPollPage() {
                       color="fg.muted"
                       _hover={{ bg: "bg.muted" }}
                       type="button"
-                      onClick={validateJson}
+                      onClick={() => validateJson({ silent: false })}
                     >
                       Validate JSON
                     </Button>
