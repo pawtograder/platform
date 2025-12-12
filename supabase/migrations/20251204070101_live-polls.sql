@@ -192,21 +192,13 @@ BEGIN
             true
         );
 
-        -- Broadcast to all students in the class (for live poll visibility)
-        SELECT ARRAY(
-            SELECT ur.private_profile_id
-            FROM user_roles ur
-            WHERE ur.class_id = target_class_id AND ur.role = 'student'
-        ) INTO affected_profile_ids;
-
-        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
-            PERFORM realtime.send(
-                staff_payload,
-                'broadcast',
-                'class:' || target_class_id || ':user:' || profile_id,
-                true
-            );
-        END LOOP;
+        -- Broadcast to all students using class-wide student channel
+        PERFORM realtime.send(
+            staff_payload,
+            'broadcast',
+            'class:' || target_class_id || ':students',
+            true
+        );
     END IF;
 
     IF TG_OP = 'DELETE' THEN

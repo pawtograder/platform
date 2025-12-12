@@ -75,7 +75,7 @@ BEGIN
   SELECT p_survey_id, unnest(p_profile_ids)
   ON CONFLICT (survey_id, profile_id) DO NOTHING;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public; 
 
 -- Grant execute permission to authenticated users
 GRANT EXECUTE ON FUNCTION create_survey_assignments(UUID, UUID[]) TO authenticated;
