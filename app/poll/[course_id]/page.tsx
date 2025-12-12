@@ -150,10 +150,13 @@ export default function PollRespondPage() {
       setIsLoading(false);
     };
 
-    if (course_id) {
-      fetchPoll();
+    if (!course_id || Number.isNaN(courseIdNum)) {
+      setIsLoading(false);
+      return;
     }
-  }, [course_id]);
+
+    fetchPoll();
+  }, [courseIdNum, course_id]);
 
   // Update survey theme when color mode changes
   useEffect(() => {

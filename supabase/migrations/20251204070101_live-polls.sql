@@ -49,13 +49,13 @@ CREATE TRIGGER trg_live_poll_responses_set_submitted_at
   EXECUTE FUNCTION set_live_poll_response_submitted_at();
 
 -- Helpful indexes for querying
-CREATE INDEX idx_live_polls_class_is_live
+CREATE INDEX IF NOT EXISTS idx_live_polls_class_is_live
   ON live_polls (class_id, is_live);
 
-CREATE INDEX idx_live_poll_responses_poll_id
+CREATE INDEX IF NOT EXISTS idx_live_poll_responses_poll_id
   ON live_poll_responses (live_poll_id);
 
-CREATE INDEX idx_live_poll_responses_profile_id
+CREATE INDEX IF NOT EXISTS idx_live_poll_responses_profile_id
   ON live_poll_responses (public_profile_id);
 
 -- Index for efficient deactivation queries
