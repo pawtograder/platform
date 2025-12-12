@@ -328,6 +328,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS prevent_live_poll_created_by_change_trigger ON live_polls;
 CREATE TRIGGER prevent_live_poll_created_by_change_trigger
   BEFORE UPDATE ON live_polls
   FOR EACH ROW
