@@ -1,5 +1,5 @@
 "use client";
-import { PollQuestionWithAnswers } from "@/utils/supabase/DatabaseTypes";
+import { PollQuestionWithAnswers, PollQuestionAnswer } from "@/utils/supabase/DatabaseTypes";
 import { Card, HStack, Progress, Text, VStack } from "@chakra-ui/react";
 
 export function PollQuestionForm({ question }: { question: PollQuestionWithAnswers }) {
@@ -7,7 +7,7 @@ export function PollQuestionForm({ question }: { question: PollQuestionWithAnswe
   //     resource: "poll_response_answers",
   // });
 
-  question.poll_question_answers.sort((a, b) => a.ordinal - b.ordinal);
+  question.poll_question_answers.sort((a: PollQuestionAnswer, b: PollQuestionAnswer) => a.ordinal - b.ordinal);
   return (
     <Card.Root>
       <Card.Header>
@@ -15,7 +15,7 @@ export function PollQuestionForm({ question }: { question: PollQuestionWithAnswe
       </Card.Header>
       <Card.Body>
         <VStack align="stretch">
-          {question.poll_question_answers.map((answer) => (
+          {question.poll_question_answers.map((answer: PollQuestionAnswer) => (
             <HStack
               key={answer.id}
               borderWidth="1px"

@@ -1,11 +1,24 @@
--- Drop existing objects
 DROP TABLE IF EXISTS live_poll_responses CASCADE;
 DROP TABLE IF EXISTS live_polls CASCADE;
--- Drop function
 DROP FUNCTION IF EXISTS set_live_poll_response_submitted_at() CASCADE;
+DROP FUNCTION IF EXISTS deactivate_expired_polls() CASCADE;
+DROP FUNCTION IF EXISTS broadcast_live_poll_change() CASCADE;
+DROP FUNCTION IF EXISTS broadcast_live_poll_response_change() CASCADE;
+DROP POLICY IF EXISTS live_polls_all_staff ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_insert ON live_polls;
+DROP POLICY IF EXISTS live_polls_all_staff_update_delete ON live_polls;
+DROP POLICY IF EXISTS live_polls_select ON live_polls;
+DROP POLICY IF EXISTS live_polls_responses_all_staff ON live_poll_responses;
+DROP POLICY IF EXISTS live_polls_responses_insert ON live_poll_responses;
+DROP POLICY IF EXISTS live_polls_responses_select ON live_poll_responses;
+DROP TRIGGER IF EXISTS broadcast_live_polls_realtime ON live_polls;
+DROP TRIGGER IF EXISTS broadcast_live_poll_responses_realtime ON live_poll_responses;
+DROP TRIGGER IF EXISTS set_poll_deactivates_at_trigger ON live_polls;
+DROP INDEX IF EXISTS idx_live_polls_class_is_live;
+DROP INDEX IF EXISTS idx_live_poll_responses_poll_id;
 
 -- Create live_polls table
-CREATE TABLE live_polls (
+CREATE TABLE IF NOT EXISTS live_polls (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     class_id BIGINT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
     created_by UUID NOT NULL REFERENCES user_roles(public_profile_id) ON DELETE CASCADE,
