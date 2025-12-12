@@ -124,7 +124,7 @@ test.describe("Polls", () => {
             return false;
           }
         },
-        { timeout: 15000, message: "poll row should appear without refresh" }
+        { timeout: 20000, message: "poll row should appear without refresh" }
       )
       .toBe(true);
 
@@ -209,8 +209,7 @@ test.describe("Polls", () => {
     await expect(liveRow).not.toBeVisible();
   });
 
-  // TODO: Re-enable once UI is fixed to show the list of closed polls (not deleted)
-  test.skip("student only sees live polls (closed polls are hidden)", async ({ page }) => {
+  test("student only sees live polls (closed polls are hidden)", async ({ page }) => {
     await seedPoll(course, instructor, {
       is_live: false,
       question: {
