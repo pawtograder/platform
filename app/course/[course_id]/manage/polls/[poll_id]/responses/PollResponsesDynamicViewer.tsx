@@ -86,12 +86,11 @@ export default function PollResponsesDynamicViewer({
   // Calculate poll URL
   const pollUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
+    const protocol = window.location.protocol || "https:";
     const hostname = window.location.hostname;
     const port = window.location.port;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return `${hostname}:${port}/poll/${courseId}`;
-    }
-    return `https://${hostname}/poll/${courseId}`;
+    const portSegment = (hostname === "localhost" || hostname === "127.0.0.1") && port ? `:${port}` : "";
+    return `${protocol}//${hostname}${portSegment}/poll/${courseId}`;
   }, [courseId]);
 
   // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
@@ -276,7 +275,13 @@ export default function PollResponsesDynamicViewer({
             <Box position="absolute" bottom={4} right={4} zIndex={10000} display="flex" alignItems="center" gap={3}>
               <Text color={textColor} fontSize="lg" fontWeight="medium">
                 Answer at:{" "}
-                <Link href={pollUrl} target="_blank" color="blue.500" textDecoration="underline">
+                <Link
+                  href={pollUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  color="blue.500"
+                  textDecoration="underline"
+                >
                   {pollUrl}
                 </Link>
               </Text>

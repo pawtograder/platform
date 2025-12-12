@@ -86,13 +86,7 @@ export function SurveyTemplateLibraryModal({
   const [editScope, setEditScope] = useState<"course" | "global">("course");
 
   // Fetch templates
-  useEffect(() => {
-    if (isOpen) {
-      fetchTemplates();
-    }
-  }, [isOpen, courseId]);
-
-  const fetchTemplates = async () => {
+  const fetchTemplates = useCallback(async () => {
     setIsLoading(true);
     try {
       const supabase = createClient();
@@ -134,7 +128,13 @@ export function SurveyTemplateLibraryModal({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchTemplates();
+    }
+  }, [isOpen, fetchTemplates]);
 
   // Filter templates based on search, visibility, and ownership
   useEffect(() => {

@@ -361,16 +361,23 @@ export default function EditSurveyPage() {
                 .eq("id", rawSurveyId)
                 .select("id, survey_id")
                 .single();
-
               if (fallbackData.error) {
                 throw new Error(fallbackData.error.message);
               }
+
+              // Dismiss loading toast and inform user
+              toaster.dismiss(loadingToast);
+              toaster.create({
+                title: "Survey Saved as Draft",
+                description: "There was an issue with the requested update. Your survey was saved as a draft.",
+                type: "warning"
+              });
+              router.push(`/course/${course_id}/manage/surveys`);
             } catch (fallbackError) {
               throw new Error(`Failed to update survey: ${error?.message || fallbackError || "Unknown error"}`);
             }
             return;
           }
-
           // Handle survey assignments if not assigned to all students
           if (!values.assigned_to_all && values.assigned_students && values.assigned_students.length > 0) {
             const { error: assignmentError } = await supabase.rpc("create_survey_assignments", {
@@ -380,9 +387,10 @@ export default function EditSurveyPage() {
 
             if (assignmentError) {
               console.error("[EditSurvey] Assignment error:", assignmentError);
+              console.error("[EditSurvey] profile_ids passed:", JSON.stringify(values.assigned_students));
               toaster.error({
                 title: "Warning",
-                description: "Survey was updated but there was an error assigning it to specific students."
+                description: `Error: ${assignmentError.message}`
               });
             }
           } else if (values.assigned_to_all) {
