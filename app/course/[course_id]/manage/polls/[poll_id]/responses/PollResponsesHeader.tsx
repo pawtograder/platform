@@ -7,7 +7,6 @@ import QrCode from "./QrCode";
 
 type PollResponsesHeaderProps = {
   courseID: string;
-  pollID: string;
   pollIsLive: boolean;
   pollUrl: string;
   onPresent: () => void;
