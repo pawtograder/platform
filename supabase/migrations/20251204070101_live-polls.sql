@@ -270,8 +270,8 @@ CREATE POLICY live_polls_all_staff_insert ON live_polls
     AND authorizeforprofile(live_polls.created_by)
   );
 
-CREATE POLICY live_polls_all_staff_update_delete ON live_polls
-  FOR UPDATE, DELETE
+CREATE POLICY live_polls_all_staff_update ON live_polls
+  FOR UPDATE
   TO authenticated
   USING (authorizeforclassgrader(live_polls.class_id))
   WITH CHECK (
@@ -283,6 +283,11 @@ CREATE POLICY live_polls_all_staff_update_delete ON live_polls
       WHERE id = live_polls.id
     )
   );
+
+CREATE POLICY live_polls_all_staff_delete ON live_polls
+  FOR DELETE
+  TO authenticated
+  USING (authorizeforclassgrader(live_polls.class_id));
 
 -- Students and anyone can select live polls
 -- Frontend handles require_login logic (shows login prompt if needed)
