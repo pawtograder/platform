@@ -1,5 +1,7 @@
 -- Add peer feedback survey template as a global template
 -- Uses the first class and profile found as defaults
+-- This migration is idempotent: it will not insert duplicates on re-run
+-- and will only insert if both profiles and classes tables have data
 INSERT INTO survey_templates (id, title, description, template, scope, version, created_by, class_id)
 SELECT
   gen_random_uuid(),
@@ -106,4 +108,13 @@ SELECT
   c.id
 FROM profiles p
 CROSS JOIN classes c
+WHERE
+  -- Guard: Only insert if both profiles and classes have at least one row
+  EXISTS (SELECT 1 FROM profiles)
+  AND EXISTS (SELECT 1 FROM classes)
+  -- Idempotency: Only insert if this template doesn't already exist
+  AND NOT EXISTS (
+    SELECT 1 FROM survey_templates
+    WHERE title = 'Peer Feedback Survey' AND scope = 'global'
+  )
 LIMIT 1;
