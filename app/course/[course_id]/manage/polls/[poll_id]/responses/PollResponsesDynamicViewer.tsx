@@ -259,7 +259,6 @@ export default function PollResponsesDynamicViewer({
       <PollResponsesHeader
         courseID={courseId}
         pollUrl={pollUrl}
-        pollID={pollId}
         pollIsLive={pollIsLive}
         onPresent={handlePresent}
         onToggleLive={handleToggleLive}
