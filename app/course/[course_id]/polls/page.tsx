@@ -36,7 +36,7 @@ export default function StudentPollsPage() {
   }
 
   const handlePollClick = () => {
-    window.open(`/poll/${course_id}`, "_blank");
+    window.open(`/poll/${encodeURIComponent(course_id)}`, "_blank", "noopener,noreferrer");
   };
 
   return (
