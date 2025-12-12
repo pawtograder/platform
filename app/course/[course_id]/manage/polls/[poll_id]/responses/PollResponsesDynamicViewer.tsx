@@ -27,13 +27,22 @@ interface FullscreenDocument extends Document {
   msExitFullscreen?: () => Promise<void>;
 }
 
-function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" {
-  const questionData = pollQuestion as unknown as Record<string, unknown> | null;
-  const type = (questionData?.elements as unknown as { type: string }[])?.[0]?.type;
-  if (!type) {
-    throw new Error("Poll question JSON must have a 'type' field in elements[0]");
+function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | undefined {
+  const questionData = (pollQuestion ?? {}) as Record<string, unknown>;
+  const elements = Array.isArray((questionData as any).elements)
+    ? (questionData as any).elements
+    : [];
+  const rawType: unknown = elements[0]?.type;
+
+  if (rawType === "radiogroup" || rawType === "checkbox") {
+    return rawType;
   }
-  return type as "radiogroup" | "checkbox";
+
+  if (typeof rawType === "string" && rawType.length > 0) {
+    console.warn(`Unsupported poll question type in SurveyJS JSON: ${rawType}`);
+  }
+
+  return undefined;
 }
 
 type PollResponsesDynamicViewerProps = {
@@ -270,7 +279,7 @@ export default function PollResponsesDynamicViewer({
         {type === "radiogroup" || type === "checkbox" ? (
           <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion} />
         ) : (
-          <div>Unsupported poll question type: {type}</div>
+          <div>Unsupported poll question type: {type ?? "unknown"}</div>
         )}
       </Box>
     </div>
