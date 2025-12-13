@@ -748,6 +748,7 @@ export type Database = {
           meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
+          regrade_deadline: string | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
@@ -780,6 +781,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
@@ -812,6 +814,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
@@ -9583,7 +9586,7 @@ export type Database = {
         }[];
       };
       get_async_queue_sizes: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           async_queue_size: number;
           dlq_queue_size: number;
@@ -9591,7 +9594,7 @@ export type Database = {
         }[];
       };
       get_circuit_breaker_statuses: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           is_open: boolean;
           key: string;
