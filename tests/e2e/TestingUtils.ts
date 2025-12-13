@@ -151,6 +151,37 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
   return data.session.access_token;
 }
 
+// Helper function to create a Supabase client authenticated as a specific user
+export async function createAuthenticatedClient(testingUser: TestingUser) {
+  // Create a separate Supabase client for the user (using anon key)
+  const userSupabase = createClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+
+  // Generate magic link using admin client
+  const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
+    email: testingUser.email,
+    type: "magiclink"
+  });
+
+  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
+  }
+
+  // Verify the OTP to get a session
+  const { data, error } = await userSupabase.auth.verifyOtp({
+    token_hash: magicLinkData.properties.hashed_token,
+    type: "magiclink"
+  });
+
+  if (error || !data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  }
+
+  return userSupabase;
+}
+
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication

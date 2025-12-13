@@ -1,8 +1,10 @@
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { addDays, addHours, subHours } from "date-fns";
 import dotenv from "dotenv";
 import {
+  createAuthenticatedClient,
   createClass,
   createUsersInClass,
   insertAssignment,
@@ -10,12 +12,14 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { SupabaseClient } from "@supabase/supabase-js";
 
 dotenv.config({ path: ".env.local" });
 
 let course: Course;
 let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
+let studentClient: SupabaseClient<Database>;
 
 test.beforeAll(async () => {
   course = await createClass();
@@ -35,6 +39,9 @@ test.beforeAll(async () => {
       useMagicLink: true
     }
   ]);
+
+  // Create an authenticated client for the student to use for RPC calls
+  studentClient = await createAuthenticatedClient(student!);
 });
 
 test.describe("Regrade request deadline enforcement", () => {
@@ -74,7 +81,8 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentData).not.toBeNull();
 
     // Try to create a regrade request - should succeed
-    const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
+    // Use the student's authenticated client so auth.uid() works correctly
+    const { data: regradeData, error: regradeError } = await studentClient.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
     });
@@ -118,7 +126,8 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentData).not.toBeNull();
 
     // Try to create a regrade request - should succeed (deadline hasn't passed)
-    const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
+    // Use the student's authenticated client so auth.uid() works correctly
+    const { data: regradeData, error: regradeError } = await studentClient.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
     });
@@ -162,7 +171,8 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentData).not.toBeNull();
 
     // Try to create a regrade request - should fail (deadline has passed)
-    const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
+    // Use the student's authenticated client so auth.uid() works correctly
+    const { data: regradeData, error: regradeError } = await studentClient.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
     });
@@ -207,7 +217,8 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentData).not.toBeNull();
 
     // Try to create a regrade request - should succeed (deadline hasn't passed yet)
-    const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
+    // Use the student's authenticated client so auth.uid() works correctly
+    const { data: regradeData, error: regradeError } = await studentClient.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
     });
@@ -251,7 +262,8 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentData).not.toBeNull();
 
     // Try to create a regrade request - should fail (deadline just passed)
-    const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
+    // Use the student's authenticated client so auth.uid() works correctly
+    const { data: regradeData, error: regradeError } = await studentClient.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
     });
