@@ -36,8 +36,20 @@ export default function OfficeHoursPage() {
   const { connectionStatus, connectionError, isLoading } = useConnectionStatus();
 
   // Filter data based on requirements
-  const helpQueues = allHelpQueues.filter((queue) => queue.available);
   const helpQueueAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
+
+  // Create a set of queue IDs that have active assignments
+  const queuesWithActiveAssignments = new Set(helpQueueAssignments.map((assignment) => assignment.help_queue_id));
+
+  const helpQueues = allHelpQueues
+    .filter((queue) => queue.available)
+    .sort((a, b) => {
+      // Sort queues with active assignments first, then queues without active assignments
+      const aHasActive = queuesWithActiveAssignments.has(a.id);
+      const bHasActive = queuesWithActiveAssignments.has(b.id);
+      if (aHasActive === bHasActive) return 0;
+      return aHasActive ? -1 : 1;
+    });
   const activeHelpRequests = allHelpRequests.filter(
     (request) => request.status === "open" || request.status === "in_progress"
   );
@@ -184,6 +196,7 @@ export default function OfficeHoursPage() {
                     const activeUsers = queueRequests.flatMap((request) => request.students);
                     const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
                     const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
+                    const hasActiveAssignment = queuesWithActiveAssignments.has(queue.id);
 
                     return (
                       <Card.Root
@@ -268,7 +281,7 @@ export default function OfficeHoursPage() {
 
                             <NextLink href={`/course/${course_id}/office-hours/${queue.id}`} passHref>
                               <Button variant="outline" size="sm" width="full">
-                                Join Queue
+                                {hasActiveAssignment ? "Join Queue" : "view (closed for new requests)"}
                               </Button>
                             </NextLink>
                           </Stack>

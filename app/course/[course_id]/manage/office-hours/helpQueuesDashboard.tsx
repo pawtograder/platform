@@ -54,7 +54,7 @@ export default function HelpQueuesDashboard() {
     return allHelpRequests.filter((request) => request.status !== "resolved" && request.status !== "closed");
   }, [allHelpRequests]);
 
-  // Group all active assignments by queue
+  // Group all active assignments by queue (used for both sorting and display)
   const activeAssignmentsByQueue = useMemo(() => {
     const assignments = allQueueAssignments.filter((assignment) => assignment.is_active);
 
@@ -70,6 +70,21 @@ export default function HelpQueuesDashboard() {
       {} as Record<number, HelpQueueAssignment[]>
     );
   }, [allQueueAssignments]);
+
+  const sortedQueues = useMemo(() => {
+    return [...queues].sort((a, b) => {
+      // Sort queues with active assignments first
+      const aHasActive = (activeAssignmentsByQueue[a.id]?.length ?? 0) > 0;
+      const bHasActive = (activeAssignmentsByQueue[b.id]?.length ?? 0) > 0;
+
+      if (aHasActive !== bHasActive) {
+        return aHasActive ? -1 : 1;
+      }
+
+      // Within each group, sort alphabetically by name
+      return a.name.localeCompare(b.name);
+    });
+  }, [queues, activeAssignmentsByQueue]);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -143,7 +158,7 @@ export default function HelpQueuesDashboard() {
         Help Queues
       </Heading>
 
-      {queues.map((queue) => {
+      {sortedQueues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
         const activeStaff = queueAssignments.map((assignment: HelpQueueAssignment) => assignment.ta_profile_id);

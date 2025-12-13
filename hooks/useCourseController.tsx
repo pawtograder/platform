@@ -383,6 +383,8 @@ export class CourseController {
   private _discussionTopics?: TableController<"discussion_topics">;
   private _calendarEvents?: TableController<"calendar_events">;
   private _classStaffSettings?: TableController<"class_staff_settings">;
+  private _discordChannels?: TableController<"discord_channels">;
+  private _discordMessages?: TableController<"discord_messages">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -428,6 +430,10 @@ export class CourseController {
     void this.discussionTopics; // Triggers lazy creation
     void this.repositories; // Triggers lazy creation
     void this.gradebookColumns; // Triggers lazy creation
+    if (this.isStaff) {
+      void this.discordChannels; // Triggers lazy creation (staff only)
+      void this.discordMessages; // Triggers lazy creation (staff only)
+    }
 
     // Clear initialData to free memory after all eager controllers are initialized
     this._initialData = undefined;
@@ -782,6 +788,46 @@ export class CourseController {
       });
     }
     return this._classStaffSettings;
+  }
+
+  /**
+   * Discord channels for this class.
+   * Only visible to staff (enforced by RLS).
+   */
+  get discordChannels(): TableController<"discord_channels"> {
+    if (!this._discordChannels) {
+      const query = this.client.from("discord_channels").select("*").eq("class_id", this.courseId);
+
+      this._discordChannels = new TableController({
+        client: this.client,
+        table: "discord_channels",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.discordChannels
+      });
+    }
+    return this._discordChannels;
+  }
+
+  /**
+   * Discord messages for this class (tracks which Discord messages correspond to help requests, regrade requests, etc).
+   * Only visible to staff (enforced by RLS).
+   */
+  get discordMessages(): TableController<"discord_messages"> {
+    if (!this._discordMessages) {
+      const query = this.client.from("discord_messages").select("*").eq("class_id", this.courseId);
+
+      this._discordMessages = new TableController({
+        client: this.client,
+        table: "discord_messages",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.discordMessages
+      });
+    }
+    return this._discordMessages;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1203,6 +1249,8 @@ export class CourseController {
     this._assignments?.close();
     this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
+    this._discordChannels?.close();
+    this._discordMessages?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1780,4 +1828,52 @@ export function useDiscussionTopics() {
   }, [controller]);
 
   return topics;
+}
+
+/**
+ * Hook to get a discord channel by type and resource_id
+ * Useful for finding the channel for a specific help queue, assignment, etc.
+ * Uses useFindTableControllerValue for efficient lookup
+ */
+export function useDiscordChannel(
+  channelType: Database["public"]["Enums"]["discord_channel_type"],
+  resourceId?: number | null
+) {
+  const { discordChannels, isStaff } = useCourseController();
+
+  const filter = useCallback(
+    (channel: Database["public"]["Tables"]["discord_channels"]["Row"]) =>
+      channel.channel_type === channelType &&
+      (resourceId === undefined || resourceId === null || channel.resource_id === resourceId),
+    [channelType, resourceId]
+  );
+
+  // Only search if staff (discord_channels is staff-only)
+  const channel = useFindTableControllerValue(discordChannels, isStaff ? filter : () => false);
+
+  return channel ?? null;
+}
+
+/**
+ * Hook to get a discord message by resource type and resource_id
+ * Useful for finding the Discord message for a help request, regrade request, etc.
+ * Uses useFindTableControllerValue for efficient lookup
+ */
+export function useDiscordMessage(
+  resourceType: Database["public"]["Enums"]["discord_resource_type"],
+  resourceId: number | null | undefined
+) {
+  const { discordMessages, isStaff } = useCourseController();
+
+  const filter = useCallback(
+    (message: Database["public"]["Tables"]["discord_messages"]["Row"]) =>
+      message.resource_type === resourceType && message.resource_id === resourceId,
+    [resourceType, resourceId]
+  );
+
+  // Only search if staff (discord_messages is staff-only) and resourceId is valid
+  const shouldSearch = isStaff && resourceId !== null && resourceId !== undefined;
+  const message = useFindTableControllerValue(discordMessages, shouldSearch ? filter : () => false);
+
+  return message ?? null;
 }

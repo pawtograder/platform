@@ -3,12 +3,11 @@
 import { Button, Icon } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { BsDiscord } from "react-icons/bs";
-import { createBrowserClient } from "@supabase/ssr";
-import { useEffect, useState } from "react";
-import { getDiscordMessageUrlForResource } from "@/lib/discordUtils";
+import { useMemo } from "react";
+import { getDiscordMessageUrl } from "@/lib/discordUtils";
+import { useCourse, useDiscordMessage } from "@/hooks/useCourseController";
 
 interface DiscordMessageLinkProps {
-  classId: number;
   resourceType: "help_request" | "regrade_request";
   resourceId: number;
   size?: "sm" | "md" | "lg";
@@ -18,38 +17,25 @@ interface DiscordMessageLinkProps {
 /**
  * Component that displays a Discord link button if a Discord message exists for the resource
  * Only visible to staff members
+ * Uses cached discord_messages data from CourseController
  */
 export default function DiscordMessageLink({
-  classId,
   resourceType,
   resourceId,
   size = "sm",
   variant = "ghost"
 }: DiscordMessageLinkProps) {
-  const [discordUrl, setDiscordUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const course = useCourse();
+  const message = useDiscordMessage(resourceType, resourceId);
 
-  useEffect(() => {
-    const fetchDiscordUrl = async () => {
-      const supabase = createBrowserClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
-      );
+  const discordUrl = useMemo(() => {
+    if (!message || !course.discord_server_id) {
+      return null;
+    }
+    return getDiscordMessageUrl(course.discord_server_id, message.discord_channel_id, message.discord_message_id);
+  }, [message, course.discord_server_id]);
 
-      try {
-        const url = await getDiscordMessageUrlForResource(supabase, classId, resourceType, resourceId);
-        setDiscordUrl(url);
-      } catch (error) {
-        console.error("Failed to fetch Discord message URL:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchDiscordUrl();
-  }, [classId, resourceType, resourceId]);
-
-  if (loading || !discordUrl) {
+  if (!discordUrl) {
     return null;
   }
 

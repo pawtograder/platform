@@ -475,6 +475,77 @@ export async function processEnvelope(
         console.log(`[processEnvelope] Message content:`, args.content?.substring(0, 100));
         Sentry.addBreadcrumb({ message: `Sending Discord message to channel ${args.channel_id}`, level: "info" });
 
+        // Check if a message already exists for this resource (handles race conditions)
+        // If so, convert to an update operation instead of creating a duplicate
+        if (envelope.resource_type && envelope.resource_id && envelope.class_id) {
+          try {
+            const { data: existingMessage, error: lookupError } = await adminSupabase
+              .from("discord_messages")
+              .select("discord_message_id, discord_channel_id")
+              .eq("class_id", envelope.class_id)
+              .eq("resource_type", envelope.resource_type)
+              .eq("resource_id", envelope.resource_id)
+              .single();
+
+            if (!lookupError && existingMessage) {
+              console.log(
+                `[processEnvelope] Found existing message ${existingMessage.discord_message_id} for resource, converting to update`
+              );
+              // Convert to update operation
+              const updateArgs: UpdateMessageArgs = {
+                channel_id: existingMessage.discord_channel_id,
+                message_id: existingMessage.discord_message_id,
+                content: args.content,
+                embeds: args.embeds,
+                allowed_mentions: args.allowed_mentions
+              };
+
+              // Add deep link to embed before updating
+              const appUrl = Deno.env.get("APP_URL");
+              if (appUrl && updateArgs.embeds && updateArgs.embeds.length > 0) {
+                let deepLinkUrl: string | undefined;
+                if (envelope.resource_type === "help_request") {
+                  deepLinkUrl = `https://${appUrl}/course/${envelope.class_id}/office-hours/request/${envelope.resource_id}`;
+                } else if (envelope.resource_type === "regrade_request") {
+                  const { data: regradeRequest } = await adminSupabase
+                    .from("submission_regrade_requests")
+                    .select("assignment_id, submission_id")
+                    .eq("id", envelope.resource_id)
+                    .single();
+                  if (regradeRequest) {
+                    deepLinkUrl = `https://${appUrl}/course/${envelope.class_id}/assignments/${regradeRequest.assignment_id}/submissions/${regradeRequest.submission_id}/files#regrade-request-${envelope.resource_id}`;
+                  }
+                }
+                if (deepLinkUrl) {
+                  updateArgs.embeds[0].url = deepLinkUrl;
+                  const fields = updateArgs.embeds[0].fields || [];
+                  const urlFieldIndex = fields.findIndex(
+                    (f) => f.name.toLowerCase().includes("view") || f.name.toLowerCase().includes("link")
+                  );
+                  const urlField = {
+                    name: "🔗 View in Pawtograder",
+                    value: `[Click here](${deepLinkUrl})`,
+                    inline: false
+                  };
+                  if (urlFieldIndex >= 0) {
+                    fields[urlFieldIndex] = urlField;
+                  } else {
+                    fields.push(urlField);
+                  }
+                  updateArgs.embeds[0].fields = fields;
+                }
+              }
+
+              await discord.updateMessage(updateArgs, scope);
+              console.log(`[processEnvelope] Successfully updated existing message instead of creating duplicate`);
+              return true;
+            }
+          } catch (e) {
+            // If lookup fails, proceed with creating new message
+            console.log(`[processEnvelope] No existing message found, proceeding with new message`);
+          }
+        }
+
         // Add deep link URL to embed if we have resource tracking info
         if (envelope.resource_type && envelope.resource_id && envelope.class_id) {
           const appUrl = Deno.env.get("APP_URL");
@@ -535,22 +606,38 @@ export async function processEnvelope(
         console.log(`[processEnvelope] Successfully sent message, id=${result.id}, channel_id=${result.channel_id}`);
 
         // Store message in discord_messages table if resource tracking is provided
+        // Uses RPC with upsert to handle both insert and update cases
+        console.log(
+          `[processEnvelope] Resource tracking check: resource_type=${envelope.resource_type}, resource_id=${envelope.resource_id}, class_id=${envelope.class_id}`
+        );
         if (envelope.resource_type && envelope.resource_id && envelope.class_id) {
           console.log(
-            `[processEnvelope] Storing message tracking: resource_type=${envelope.resource_type}, resource_id=${envelope.resource_id}`
+            `[processEnvelope] Storing message tracking via RPC: resource_type=${envelope.resource_type}, resource_id=${envelope.resource_id}, discord_message_id=${result.id}`
           );
           try {
-            await adminSupabase.from("discord_messages").insert({
-              class_id: envelope.class_id,
-              discord_message_id: result.id,
-              discord_channel_id: result.channel_id,
-              resource_type: envelope.resource_type,
-              resource_id: envelope.resource_id
+            const { error: upsertError } = await adminSupabase.rpc("insert_discord_message", {
+              p_class_id: envelope.class_id,
+              p_discord_message_id: result.id,
+              p_discord_channel_id: result.channel_id,
+              p_resource_type: envelope.resource_type,
+              p_resource_id: envelope.resource_id
             });
-            console.log(`[processEnvelope] Successfully stored message tracking`);
+
+            if (upsertError) {
+              console.error(`[processEnvelope] Failed to upsert message tracking:`, upsertError);
+              console.error(
+                `[processEnvelope] Upsert error code: ${upsertError.code}, message: ${upsertError.message}`
+              );
+              scope.setContext("message_tracking_error", {
+                error_message: upsertError.message,
+                error_code: upsertError.code
+              });
+              Sentry.captureException(upsertError, scope);
+            } else {
+              console.log(`[processEnvelope] Successfully upserted message tracking`);
+            }
           } catch (e) {
             console.error(`[processEnvelope] Failed to store message tracking:`, e);
-            // Log but don't fail - message was sent successfully
             scope.setContext("message_tracking_error", {
               error_message: e instanceof Error ? e.message : String(e)
             });

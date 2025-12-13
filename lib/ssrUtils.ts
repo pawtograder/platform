@@ -52,6 +52,8 @@ export type CourseControllerInitialData = {
   discussionTopics?: DiscussionTopic[];
   repositories?: Database["public"]["Tables"]["repositories"]["Row"][];
   gradebookColumns?: Database["public"]["Tables"]["gradebook_columns"]["Row"][];
+  discordChannels?: Database["public"]["Tables"]["discord_channels"]["Row"][];
+  discordMessages?: Database["public"]["Tables"]["discord_messages"]["Row"][];
 };
 
 /**
@@ -211,6 +213,14 @@ export async function fetchCourseControllerData(
     tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`],
     revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
   });
+  const discordChannelsClient = await createClientWithCaching({
+    tags: [`discord_channels:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 60 // discord channels don't change often
+  });
+  const discordMessagesClient = await createClientWithCaching({
+    tags: [`discord_messages:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // discord messages are created dynamically but don't change after
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -227,7 +237,9 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns
+    gradebookColumns,
+    discordChannels,
+    discordMessages
   ] = await Promise.all([
     // Profiles
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
@@ -302,7 +314,21 @@ export async function fetchCourseControllerData(
     // Gradebook columns
     fetchAllPages<Database["public"]["Tables"]["gradebook_columns"]["Row"]>(
       gradebookColumnsClient.from("gradebook_columns").select("*").eq("class_id", course_id)
-    )
+    ),
+
+    // Discord channels (staff only - RLS enforces this)
+    isStaff
+      ? fetchAllPages<Database["public"]["Tables"]["discord_channels"]["Row"]>(
+          discordChannelsClient.from("discord_channels").select("*").eq("class_id", course_id)
+        )
+      : Promise.resolve(undefined),
+
+    // Discord messages (staff only - RLS enforces this)
+    isStaff
+      ? fetchAllPages<Database["public"]["Tables"]["discord_messages"]["Row"]>(
+          discordMessagesClient.from("discord_messages").select("*").eq("class_id", course_id)
+        )
+      : Promise.resolve(undefined)
   ]);
 
   return {
@@ -319,7 +345,9 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns
+    gradebookColumns,
+    discordChannels,
+    discordMessages
   };
 }
 

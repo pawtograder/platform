@@ -363,13 +363,7 @@ export default function RegradeRequestsTable() {
         cell: ({ row }) => {
           if (!course_id) return null;
           return (
-            <DiscordMessageLink
-              classId={Number(course_id)}
-              resourceType="regrade_request"
-              resourceId={row.original.id}
-              size="sm"
-              variant="ghost"
-            />
+            <DiscordMessageLink resourceType="regrade_request" resourceId={row.original.id} size="sm" variant="ghost" />
           );
         },
         enableColumnFilter: false,

@@ -17,6 +17,7 @@ export type SendMessageArgs = {
   embeds?: Array<{
     title?: string;
     description?: string;
+    url?: string;
     color?: number;
     fields?: Array<{
       name: string;
@@ -41,6 +42,7 @@ export type UpdateMessageArgs = {
   embeds?: Array<{
     title?: string;
     description?: string;
+    url?: string;
     color?: number;
     fields?: Array<{
       name: string;
@@ -52,6 +54,10 @@ export type UpdateMessageArgs = {
     };
     timestamp?: string;
   }>;
+  allowed_mentions?: {
+    users?: string[];
+    roles?: string[];
+  };
 };
 
 export type CreateChannelArgs = {

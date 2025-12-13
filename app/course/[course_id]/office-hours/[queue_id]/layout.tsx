@@ -5,12 +5,19 @@ import { useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { useQueueData } from "@/hooks/useQueueData";
-import { useHelpQueue } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueue, useHelpQueueAssignments } from "@/hooks/useOfficeHoursRealtime";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 interface LayoutProps {
   children: React.ReactNode;
+}
+
+interface NavigationItem {
+  href: string;
+  label: string;
+  isActive: boolean;
+  disabled?: boolean;
 }
 
 export default function QueueLayout({ children }: LayoutProps) {
@@ -18,6 +25,7 @@ export default function QueueLayout({ children }: LayoutProps) {
   const pathname = usePathname();
   const helpQueue = useHelpQueue(Number(queue_id));
   const course = useCourseController();
+  const allHelpQueueAssignments = useHelpQueueAssignments();
 
   const { queueRequests, userRequests, similarQuestions, resolvedRequests, isLoading, connectionStatus } = useQueueData(
     {
@@ -25,6 +33,14 @@ export default function QueueLayout({ children }: LayoutProps) {
       queueId: Number(queue_id)
     }
   );
+
+  // Check if queue has an active assignment (must be before early returns)
+  const hasActiveAssignment = useMemo(() => {
+    if (!allHelpQueueAssignments) return false;
+    return allHelpQueueAssignments.some(
+      (assignment) => assignment.help_queue_id === Number(queue_id) && assignment.is_active
+    );
+  }, [allHelpQueueAssignments, queue_id]);
 
   const title = (() => {
     try {
@@ -69,7 +85,7 @@ export default function QueueLayout({ children }: LayoutProps) {
     };
   });
 
-  const navigationItems = [
+  const navigationItems: NavigationItem[] = [
     {
       href: basePath,
       label: `Queue Status (${queueRequests.length})`,
@@ -79,7 +95,8 @@ export default function QueueLayout({ children }: LayoutProps) {
     {
       href: `${basePath}/new`,
       label: "New Request",
-      isActive: pathname === `${basePath}/new`
+      isActive: pathname === `${basePath}/new`,
+      disabled: !hasActiveAssignment
     },
     {
       href: `${basePath}/closed`,
@@ -104,31 +121,56 @@ export default function QueueLayout({ children }: LayoutProps) {
           <VStack align="stretch" width={{ base: "100%", md: "300px" }} gap={2}>
             {navigationItems.map((item) => {
               const isNewRequest = item.label === "New Request";
-              return (
-                <Link key={item.href} href={item.href}>
-                  <Box
-                    p={{ base: 3, md: 3 }}
-                    borderRadius="md"
-                    bg={
-                      isNewRequest
+              const isDisabled = item.disabled ?? false;
+
+              const content = (
+                <Box
+                  p={{ base: 3, md: 3 }}
+                  borderRadius="md"
+                  bg={
+                    isDisabled
+                      ? "bg.muted"
+                      : isNewRequest
                         ? item.isActive
                           ? "green.emphasized"
                           : "green.muted"
                         : item.isActive
                           ? "bg.info"
                           : "bg.muted"
-                    }
-                    color={
-                      isNewRequest ? (item.isActive ? "white" : "green.fg") : item.isActive ? "fg.info" : "fg.muted"
-                    }
-                    _hover={{
-                      bg: isNewRequest ? "green.emphasized" : item.isActive ? "blue.emphasized" : "bg.emphasized"
-                    }}
-                    cursor="pointer"
-                    fontWeight={item.isActive ? "semibold" : "normal"}
-                  >
-                    {item.label}
-                  </Box>
+                  }
+                  color={
+                    isDisabled
+                      ? "fg.disabled"
+                      : isNewRequest
+                        ? item.isActive
+                          ? "white"
+                          : "green.fg"
+                        : item.isActive
+                          ? "fg.info"
+                          : "fg.muted"
+                  }
+                  _hover={
+                    isDisabled
+                      ? {}
+                      : {
+                          bg: isNewRequest ? "green.emphasized" : item.isActive ? "blue.emphasized" : "bg.emphasized"
+                        }
+                  }
+                  cursor={isDisabled ? "not-allowed" : "pointer"}
+                  fontWeight={item.isActive ? "semibold" : "normal"}
+                  opacity={isDisabled ? 0.6 : 1}
+                >
+                  {item.label}
+                </Box>
+              );
+
+              if (isDisabled) {
+                return <Box key={item.href}>{content}</Box>;
+              }
+
+              return (
+                <Link key={item.href} href={item.href}>
+                  {content}
                 </Link>
               );
             })}
