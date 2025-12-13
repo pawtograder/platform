@@ -569,7 +569,8 @@ export default function AssignmentForm({
         ...values,
         release_date: appendTimezoneOffset(values.release_date, timezone),
         due_date: appendTimezoneOffset(values.due_date, timezone),
-        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone)
+        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone),
+        regrade_deadline: appendTimezoneOffset(values.regrade_deadline, timezone)
       };
       try {
         await onSubmit(valuesWithDates);
@@ -769,19 +770,33 @@ export default function AssignmentForm({
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>
             <Field
-              label="Regrade Request Deadline (hours after release)"
-              helperText="The number of hours after the assignment is released that students can submit regrade requests. Leave empty for no deadline."
-              errorText={errors.regrade_deadline_hours?.message?.toString()}
-              invalid={!!errors.regrade_deadline_hours}
+              label={`Regrade Request Deadline (${course.time_zone})`}
+              helperText="The deadline after which students cannot submit new regrade requests. Leave empty for no deadline."
+              errorText={errors.regrade_deadline?.message?.toString()}
+              invalid={!!errors.regrade_deadline}
             >
-              <Input
-                type="number"
-                placeholder="No deadline"
-                {...register("regrade_deadline_hours", {
-                  required: false,
-                  min: { value: 1, message: "Deadline must be at least 1 hour" },
-                  setValueAs: (v) => (v === "" || v === null || v === undefined ? null : parseInt(v, 10))
-                })}
+              <Controller
+                name="regrade_deadline"
+                control={control}
+                rules={{ required: false }}
+                render={({ field }) => {
+                  const hasATimezoneOffset =
+                    field.value &&
+                    (field.value.charAt(field.value.length - 6) === "+" ||
+                      field.value.charAt(field.value.length - 6) === "-");
+                  const localValue =
+                    field.value && hasATimezoneOffset
+                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                      : field.value;
+                  return (
+                    <Input
+                      type="datetime-local"
+                      value={localValue || ""}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                    />
+                  );
+                }}
               />
             </Field>
           </Fieldset.Content>

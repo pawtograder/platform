@@ -17,7 +17,7 @@ import { useCreate } from "@refinedev/core";
 import { useCallback, useMemo, useState } from "react";
 import { toaster } from "./toaster";
 import { Alert } from "@/components/ui/alert";
-import { addHours, format, formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 
 export default function RequestRegradeDialog({
   comment
@@ -39,20 +39,19 @@ export default function RequestRegradeDialog({
 
   // Calculate regrade deadline status
   const regradeDeadlineInfo = useMemo(() => {
-    const regradeDeadlineHours = assignment.regrade_deadline_hours;
-    const releaseDate = assignment.release_date;
+    const regradeDeadline = assignment.regrade_deadline;
 
     // If no deadline is set, regrades are always allowed
-    if (regradeDeadlineHours === null || regradeDeadlineHours === undefined || !releaseDate) {
+    if (!regradeDeadline) {
       return { hasDeadline: false, isPastDeadline: false, deadline: null };
     }
 
-    const deadline = addHours(new Date(releaseDate), regradeDeadlineHours);
+    const deadline = new Date(regradeDeadline);
     const now = new Date();
     const isPastDeadline = now > deadline;
 
     return { hasDeadline: true, isPastDeadline, deadline };
-  }, [assignment.regrade_deadline_hours, assignment.release_date]);
+  }, [assignment.regrade_deadline]);
   const handleConfirmCreateRegradeRequest = useCallback(async () => {
     try {
       if ("submission_file_id" in comment) {

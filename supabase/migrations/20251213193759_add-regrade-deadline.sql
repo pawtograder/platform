@@ -1,14 +1,13 @@
--- Add regrade_deadline_hours column to assignments table
--- This column specifies the number of hours after the assignment release date
--- during which students can submit new regrade requests.
+-- Add regrade_deadline column to assignments table
+-- This column specifies the deadline after which students cannot submit new regrade requests.
 -- If NULL, regrade requests are always allowed (backward compatibility).
 
 ALTER TABLE "public"."assignments" 
-ADD COLUMN "regrade_deadline_hours" integer;
+ADD COLUMN "regrade_deadline" timestamp with time zone;
 
 -- Add a comment to document the column
-COMMENT ON COLUMN "public"."assignments"."regrade_deadline_hours" IS 
-'Number of hours after release_date during which regrade requests can be submitted. NULL means no deadline (always allowed).';
+COMMENT ON COLUMN "public"."assignments"."regrade_deadline" IS 
+'The deadline after which regrade requests cannot be submitted. NULL means no deadline (always allowed).';
 
 -- Update the create_regrade_request function to check the deadline
 CREATE OR REPLACE FUNCTION public.create_regrade_request(
@@ -32,9 +31,7 @@ declare
     param_count int;
     new_regrade_request_id bigint;
     grading_rubric_id bigint;
-    assignment_release_date timestamptz;
-    assignment_regrade_deadline_hours int;
-    regrade_deadline timestamptz;
+    assignment_regrade_deadline timestamptz;
 begin
     -- Count how many non-null parameters were provided
     param_count := 0;
@@ -96,17 +93,16 @@ begin
     end if;
     
     -- Check if regrade deadline has passed
-    select a.release_date, a.regrade_deadline_hours
-    into assignment_release_date, assignment_regrade_deadline_hours
+    select a.regrade_deadline
+    into assignment_regrade_deadline
     from public.assignments a
     where a.id = comment_assignment_id;
     
-    -- If regrade_deadline_hours is set (not null), check if we're past the deadline
-    if assignment_regrade_deadline_hours is not null and assignment_release_date is not null then
-        regrade_deadline := assignment_release_date + (assignment_regrade_deadline_hours || ' hours')::interval;
-        if now() > regrade_deadline then
+    -- If regrade_deadline is set (not null), check if we're past the deadline
+    if assignment_regrade_deadline is not null then
+        if now() > assignment_regrade_deadline then
             raise exception 'The regrade request deadline has passed. Regrade requests were due by %.', 
-                to_char(regrade_deadline, 'Mon DD, YYYY at HH12:MI AM TZ');
+                to_char(assignment_regrade_deadline, 'Mon DD, YYYY at HH12:MI AM TZ');
         end if;
     end if;
     

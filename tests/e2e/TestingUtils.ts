@@ -930,7 +930,7 @@ export async function insertAssignment({
   class_id,
   rateLimitManager,
   name,
-  regrade_deadline_hours,
+  regrade_deadline,
   release_date
 }: {
   due_date: string;
@@ -939,7 +939,7 @@ export async function insertAssignment({
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
-  regrade_deadline_hours?: number | null;
+  regrade_deadline?: string | null;
   release_date?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
@@ -980,7 +980,7 @@ export async function insertAssignment({
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       self_review_setting_id: self_review_setting_id,
-      regrade_deadline_hours: regrade_deadline_hours
+      regrade_deadline: regrade_deadline
     })
     .select("id")
     .single();

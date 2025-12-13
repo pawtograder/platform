@@ -46,7 +46,7 @@ test.describe("Regrade request deadline enforcement", () => {
       due_date: addDays(new Date(), 1).toUTCString(),
       class_id: course.id,
       name: "No Deadline Assignment",
-      regrade_deadline_hours: null // No deadline
+      regrade_deadline: null // No deadline
     });
 
     const submission_res = await insertPreBakedSubmission({
@@ -84,13 +84,13 @@ test.describe("Regrade request deadline enforcement", () => {
   });
 
   test("Regrade request succeeds when deadline has not passed", async () => {
-    // Create assignment with a deadline far in the future (1000 hours from release)
-    // Release was 1 day ago, so deadline is ~1000 hours - 24 hours = 976 hours in the future
+    // Create assignment with a deadline far in the future (7 days from now)
+    const futureDeadline = addDays(new Date(), 7);
     const assignment = await insertAssignment({
       due_date: addDays(new Date(), 1).toUTCString(),
       class_id: course.id,
       name: "Future Deadline Assignment",
-      regrade_deadline_hours: 1000 // 1000 hours from release
+      regrade_deadline: futureDeadline.toISOString()
     });
 
     const submission_res = await insertPreBakedSubmission({
@@ -128,14 +128,13 @@ test.describe("Regrade request deadline enforcement", () => {
   });
 
   test("Regrade request fails when deadline has passed", async () => {
-    // Create assignment with a deadline that has already passed
-    // Release was 1 day ago (24 hours ago), deadline is 1 hour after release
-    // So deadline was 23 hours ago
+    // Create assignment with a deadline that has already passed (1 day ago)
+    const pastDeadline = subHours(new Date(), 24);
     const assignment = await insertAssignment({
       due_date: addDays(new Date(), 1).toUTCString(),
       class_id: course.id,
       name: "Expired Deadline Assignment",
-      regrade_deadline_hours: 1 // 1 hour after release (which was 1 day ago)
+      regrade_deadline: pastDeadline.toISOString()
     });
 
     const submission_res = await insertPreBakedSubmission({
@@ -173,16 +172,14 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(regradeData).toBeNull();
   });
 
-  test("Regrade request with explicit release date - deadline not passed", async () => {
-    // Create assignment with release date 1 hour ago and 48 hour deadline
-    // So deadline is 47 hours in the future
-    const releaseDate = subHours(new Date(), 1);
+  test("Regrade request succeeds just before deadline", async () => {
+    // Create assignment with a deadline 2 hours in the future
+    const nearFutureDeadline = addHours(new Date(), 2);
     const assignment = await insertAssignment({
       due_date: addDays(new Date(), 1).toUTCString(),
       class_id: course.id,
-      name: "Recent Release Assignment",
-      regrade_deadline_hours: 48, // 48 hours from release
-      release_date: releaseDate.toISOString()
+      name: "Near Future Deadline Assignment",
+      regrade_deadline: nearFutureDeadline.toISOString()
     });
 
     const submission_res = await insertPreBakedSubmission({
@@ -209,7 +206,7 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentError).toBeNull();
     expect(commentData).not.toBeNull();
 
-    // Try to create a regrade request - should succeed
+    // Try to create a regrade request - should succeed (deadline hasn't passed yet)
     const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
@@ -219,16 +216,14 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(regradeData).not.toBeNull();
   });
 
-  test("Regrade request with explicit release date - deadline passed", async () => {
-    // Create assignment with release date 100 hours ago and 24 hour deadline
-    // So deadline was 76 hours ago
-    const releaseDate = subHours(new Date(), 100);
+  test("Regrade request fails just after deadline", async () => {
+    // Create assignment with a deadline that just passed (1 minute ago)
+    const justPastDeadline = subHours(new Date(), 1);
     const assignment = await insertAssignment({
       due_date: addDays(new Date(), 1).toUTCString(),
       class_id: course.id,
-      name: "Old Release Assignment",
-      regrade_deadline_hours: 24, // 24 hours from release (which was 100 hours ago)
-      release_date: releaseDate.toISOString()
+      name: "Just Past Deadline Assignment",
+      regrade_deadline: justPastDeadline.toISOString()
     });
 
     const submission_res = await insertPreBakedSubmission({
@@ -255,7 +250,7 @@ test.describe("Regrade request deadline enforcement", () => {
     expect(commentError).toBeNull();
     expect(commentData).not.toBeNull();
 
-    // Try to create a regrade request - should fail (deadline has passed)
+    // Try to create a regrade request - should fail (deadline just passed)
     const { data: regradeData, error: regradeError } = await supabase.rpc("create_regrade_request", {
       private_profile_id: student!.private_profile_id,
       submission_comment_id: commentData!.id
