@@ -565,6 +565,15 @@ export function useAssignmentController() {
   return ctx.assignmentController;
 }
 
+/**
+ * Returns the current assignment data from the AssignmentController.
+ * This hook provides access to assignment properties like release_date, regrade_deadline_hours, etc.
+ */
+export function useAssignmentData() {
+  const controller = useAssignmentController();
+  return controller.assignment;
+}
+
 // --- Provider ---
 
 export function AssignmentProvider({

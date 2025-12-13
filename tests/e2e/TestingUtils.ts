@@ -929,7 +929,9 @@ export async function insertAssignment({
   allow_not_graded_submissions,
   class_id,
   rateLimitManager,
-  name
+  name,
+  regrade_deadline_hours,
+  release_date
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -937,6 +939,8 @@ export async function insertAssignment({
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
+  regrade_deadline_hours?: number | null;
+  release_date?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -970,12 +974,13 @@ export async function insertAssignment({
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,
-      release_date: addDays(new Date(), -1).toUTCString(),
+      release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
       slug: `assignment-${currentAssignmentIdx}`,
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
-      self_review_setting_id: self_review_setting_id
+      self_review_setting_id: self_review_setting_id,
+      regrade_deadline_hours: regrade_deadline_hours
     })
     .select("id")
     .single();

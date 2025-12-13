@@ -768,6 +768,24 @@ export default function AssignmentForm({
           <GroupConfigurationSubform form={form} timezone={timezone} />
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>
+            <Field
+              label="Regrade Request Deadline (hours after release)"
+              helperText="The number of hours after the assignment is released that students can submit regrade requests. Leave empty for no deadline."
+              errorText={errors.regrade_deadline_hours?.message?.toString()}
+              invalid={!!errors.regrade_deadline_hours}
+            >
+              <Input
+                type="number"
+                placeholder="No deadline"
+                {...register("regrade_deadline_hours", {
+                  required: false,
+                  min: { value: 1, message: "Deadline must be at least 1 hour" },
+                  setValueAs: (v) => (v === "" || v === null || v === undefined ? null : parseInt(v, 10))
+                })}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
             </Button>
