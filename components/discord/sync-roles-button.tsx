@@ -52,7 +52,7 @@ export default function SyncRolesButton({
 
     try {
       const { data, error } = await supabase.rpc("trigger_discord_role_sync_for_user", {
-        p_class_id: classId || null
+        p_class_id: classId || undefined
       });
 
       if (error) {

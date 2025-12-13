@@ -169,7 +169,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
     return date;
   }, [dayOffset]);
 
-  const { events, isLoading, error } = useDaySchedule(selectedDate);
+  const { events, isLoading } = useDaySchedule(selectedDate);
 
   const isToday = useMemo(() => isSameDay(selectedDate, new Date()), [selectedDate]);
 
@@ -205,16 +205,6 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
     );
   }
 
-  if (error) {
-    return (
-      <Card.Root>
-        <Card.Body>
-          <Text color="red.500">Error loading schedule: {error}</Text>
-        </Card.Body>
-      </Card.Root>
-    );
-  }
-
   return (
     <Card.Root>
       <Card.Body>
@@ -230,10 +220,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
               {/* Edit buttons */}
               {officeHoursEditUrl && (
                 <Button
-                  as="a"
-                  href={officeHoursEditUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  onClick={() => window.open(officeHoursEditUrl, "_blank")}
                   size="xs"
                   variant="ghost"
                   colorPalette="blue"
@@ -244,10 +231,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
               )}
               {eventsEditUrl && (
                 <Button
-                  as="a"
-                  href={eventsEditUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  onClick={() => window.open(eventsEditUrl, "_blank")}
                   size="xs"
                   variant="ghost"
                   colorPalette="orange"
