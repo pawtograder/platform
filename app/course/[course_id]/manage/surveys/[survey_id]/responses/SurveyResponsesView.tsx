@@ -9,16 +9,18 @@ import { Model } from "survey-core";
 import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
 import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
+import { useSurveyResponses } from "@/hooks/useCourseController";
 
 type SurveyResponsesViewProps = {
   courseId: string;
-  surveyId: string; // The UUID
+  surveyId: string; // The UUID (survey_id column)
+  surveyDbId: string; // The database ID (id column) - used for querying responses
   surveyTitle: Survey["title"];
   surveyVersion: number;
   surveyStatus: Survey["status"];
   surveyJson: Survey["json"]; // The JSON configuration of the survey
   surveyDueDate: Survey["due_date"]; // The deadline for the survey
-  responses: SurveyResponseWithProfile[];
+  initialResponses: SurveyResponseWithProfile[]; // SSR initial data
   totalStudents: number;
   timezone: string; // Course timezone for date formatting
 };
@@ -111,15 +113,32 @@ function escapeCSVValue(value: unknown): string {
 
 export default function SurveyResponsesView({
   courseId,
+  surveyDbId,
   surveyTitle,
   surveyVersion,
   surveyJson,
   surveyDueDate,
-  responses,
+  initialResponses,
   totalStudents,
   timezone
 }: SurveyResponsesViewProps) {
   const router = useRouter();
+
+  // Use the hook for realtime response updates
+  const { responses: liveResponses, isLoading: responsesLoading } = useSurveyResponses(surveyDbId);
+
+  // Use live responses if available, otherwise fall back to initial SSR data
+  const responses: SurveyResponseWithProfile[] = useMemo(() => {
+    if (responsesLoading && initialResponses.length > 0) {
+      // While loading, use SSR data
+      return initialResponses;
+    }
+    // Once loaded, use live data (with proper type casting)
+    return liveResponses.map((r) => ({
+      ...r,
+      profiles: r.profiles || { id: r.profile_id, name: null }
+    })) as SurveyResponseWithProfile[];
+  }, [liveResponses, initialResponses, responsesLoading]);
 
   // Filter state
   const [dateRangeStart, setDateRangeStart] = useState<string>("");

@@ -1,16 +1,13 @@
 "use client";
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { Box, Text, Link } from "@chakra-ui/react";
+import { CloseButton } from "@/components/ui/close-button";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import { usePollQrCode } from "@/hooks/usePollQrCode";
+import { Json } from "@/utils/supabase/SupabaseTypes";
+import { Box, Link, Text } from "@chakra-ui/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
 import PollResponsesHeader from "./PollResponsesHeader";
 import QrCode from "./QrCode";
-import { Json } from "@/utils/supabase/SupabaseTypes";
-import { useLivePoll } from "@/hooks/useCourseController";
-import { usePollQrCode } from "@/hooks/usePollQrCode";
-import { CloseButton } from "@/components/ui/close-button";
-import { createClient } from "@/utils/supabase/client";
-import { toaster } from "@/components/ui/toaster";
 
 interface FullscreenElement extends Element {
   webkitRequestFullscreen?: () => Promise<void>;
@@ -47,30 +44,15 @@ type PollResponsesDynamicViewerProps = {
   courseId: string;
   pollId: string;
   pollQuestion: Json;
-  pollIsLive: boolean;
 };
 
 export default function PollResponsesDynamicViewer({
   courseId,
   pollId,
-  pollQuestion,
-  pollIsLive: initialPollIsLive
+  pollQuestion
 }: PollResponsesDynamicViewerProps) {
   const [isPresenting, setIsPresenting] = useState(false);
   const fullscreenRef = useRef<HTMLDivElement>(null);
-
-  // Use real-time hook for poll data
-  const poll = useLivePoll(pollId);
-
-  // Use real-time poll status if available, otherwise fallback to initial
-  const [pollIsLive, setPollIsLive] = useState(poll?.is_live ?? initialPollIsLive);
-
-  // Sync local state when real-time data changes
-  useEffect(() => {
-    if (poll?.is_live !== undefined) {
-      setPollIsLive(poll.is_live);
-    }
-  }, [poll?.is_live]);
 
   // Define color mode values at the top level (before any conditional returns)
   const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
@@ -103,41 +85,6 @@ export default function PollResponsesDynamicViewer({
 
   // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
   const { qrCodeUrl } = usePollQrCode(courseId, pollUrl, qrLightColor, qrDarkColor);
-
-  const handleToggleLive = useCallback(async () => {
-    const originalState = pollIsLive;
-    const nextState = !pollIsLive;
-    setPollIsLive(nextState);
-    const supabase = createClient();
-    const loadingToast = toaster.create({
-      title: nextState ? "Starting Poll" : "Closing Poll",
-      description: nextState ? "Making poll available to students..." : "Closing poll for students...",
-      type: "loading"
-    });
-
-    try {
-      const { error } = await supabase.from("live_polls").update({ is_live: nextState }).eq("id", pollId);
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: nextState ? "Poll is Live" : "Poll Closed",
-        description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
-        type: "success"
-      });
-    } catch (err) {
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Unable to update poll",
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
-        type: "error"
-      });
-      setPollIsLive(originalState);
-    }
-  }, [pollId, pollIsLive]);
 
   // Exit fullscreen helper
   const exitFullscreen = useCallback(async () => {
@@ -251,9 +198,7 @@ export default function PollResponsesDynamicViewer({
       <PollResponsesHeader
         courseID={courseId}
         pollUrl={pollUrl}
-        pollIsLive={pollIsLive}
         onPresent={handlePresent}
-        onToggleLive={handleToggleLive}
         qrCodeUrl={qrCodeUrl ?? undefined}
       />
       <Box

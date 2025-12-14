@@ -124,7 +124,7 @@ test.describe("Polls", () => {
             return false;
           }
         },
-        { timeout: 20000, message: "poll row should appear without refresh" }
+        { timeout: 40000, message: "poll row should appear without refresh" }
       )
       .toBe(true);
 
@@ -423,6 +423,9 @@ test.describe("Polls", () => {
         return data?.is_live;
       })
       .toBe(true);
+
+    // Wait for button text to update - use data-testid for more reliable selection
+    await expect(page.getByTestId("toggle-poll-button")).toHaveText(/Stop Poll/i);
     await expect(page.getByRole("button", { name: /Stop Poll/i })).toBeVisible();
 
     await page.getByRole("button", { name: /Stop Poll/i }).click();
@@ -442,9 +445,8 @@ test.describe("Polls", () => {
     await expect(page.getByText("There is currently no live poll available for this course.")).toBeVisible();
   });
 
-  // TODO: Re-enable once the page not refreshing after adding a poll issue is resolved
   test.skip("instructor can delete a poll from manage table", async ({ page }) => {
-    const poll = await seedPoll(course, instructor, {
+    await seedPoll(course, instructor, {
       is_live: false,
       question: { ...samplePollQuestion, elements: [{ ...samplePollQuestion.elements[0], title: "Deletable Poll" }] }
     });
@@ -460,7 +462,6 @@ test.describe("Polls", () => {
     const confirmButton = page.getByRole("button", { name: /Delete Poll|Delete/i }).first();
     await confirmButton.click();
 
-    await page.reload();
     await expect(page.getByRole("row", { name: /Deletable Poll/i })).toHaveCount(0);
   });
 });

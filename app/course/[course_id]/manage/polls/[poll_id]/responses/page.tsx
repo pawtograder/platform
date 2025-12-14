@@ -43,12 +43,5 @@ export default async function PollResponsesPage({ params }: PollResponsesPagePro
   }
 
   // Pass poll data to client component
-  return (
-    <PollResponsesDynamicViewer
-      courseId={course_id}
-      pollId={poll_id}
-      pollQuestion={poll.question}
-      pollIsLive={poll.is_live}
-    />
-  );
+  return <PollResponsesDynamicViewer courseId={course_id} pollId={poll_id} pollQuestion={poll.question} />;
 }

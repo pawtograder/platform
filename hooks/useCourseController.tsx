@@ -382,6 +382,7 @@ export class CourseController {
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
   private _livePolls?: TableController<"live_polls">;
+  private _surveys?: TableController<"surveys">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -753,6 +754,25 @@ export class CourseController {
       });
     }
     return this._livePolls;
+  }
+
+  get surveys(): TableController<"surveys"> {
+    if (!this._surveys) {
+      this._surveys = new TableController({
+        client: this.client,
+        table: "surveys",
+        query: this.client
+          .from("surveys")
+          .select("*")
+          .eq("class_id", this.courseId)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false }),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.surveys
+      });
+    }
+    return this._surveys;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1175,6 +1195,7 @@ export class CourseController {
     this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
     this._livePolls?.close();
+    this._surveys?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1950,4 +1971,122 @@ export function usePollResponseCounts(pollId: string | undefined, pollQuestion: 
   }, [controller, pollId, choices]);
 
   return { counts, isLoading };
+}
+
+// =============================================================================
+// SURVEY HOOKS
+// =============================================================================
+
+/**
+ * Hook to get all surveys for the course with real-time updates (staff only)
+ */
+export function useSurveys() {
+  const controller = useCourseController();
+  const [surveys, setSurveys] = useState<Database["public"]["Tables"]["surveys"]["Row"][]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.surveys.list((updatedSurveys) => {
+      setSurveys(updatedSurveys);
+    });
+    setSurveys(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return surveys;
+}
+
+/**
+ * Hook to get a single survey by ID with real-time updates
+ */
+export function useSurvey(surveyId: string | undefined) {
+  const { surveys } = useCourseController();
+  const survey = useTableControllerValueById(surveys, surveyId);
+  return survey;
+}
+
+/**
+ * Hook to get only published surveys for the course (for students)
+ */
+export function usePublishedSurveys() {
+  const controller = useCourseController();
+  const predicate = useCallback(
+    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.status === "published" && !survey.deleted_at,
+    []
+  );
+  const surveys = useListTableControllerValues(controller.surveys, predicate);
+  const isLoading = !controller.surveys.ready;
+
+  return { surveys, isLoading };
+}
+
+/**
+ * Type for survey response with profile data
+ */
+export type SurveyResponseWithProfile = Database["public"]["Tables"]["survey_responses"]["Row"] & {
+  profiles: { id: string; name: string | null } | null;
+};
+
+/**
+ * Hook to get survey responses for a specific survey with real-time updates
+ * Uses per-survey loading - creates a TableController scoped to the specific survey
+ */
+export function useSurveyResponses(surveyId: string | undefined) {
+  const controller = useCourseController();
+  const [responses, setResponses] = useState<SurveyResponseWithProfile[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!surveyId) {
+      setResponses([]);
+      setIsLoading(false);
+      return;
+    }
+
+    // Create a TableController scoped to this specific survey
+    const ctrl = new TableController({
+      client: controller.client,
+      table: "survey_responses",
+      query: controller.client
+        .from("survey_responses")
+        .select("*")
+        .eq("survey_id", surveyId)
+        .eq("is_submitted", true)
+        .is("deleted_at", null),
+      classRealTimeController: controller.classRealTimeController,
+      realtimeFilter: { survey_id: surveyId }
+    });
+
+    // Get profiles for joining response data
+    const profilesController = controller.profiles;
+
+    const updateResponsesWithProfiles = (rawResponses: Database["public"]["Tables"]["survey_responses"]["Row"][]) => {
+      // Join with profiles data from the profiles controller
+      const { data: profiles } = profilesController.list(() => {});
+      const profileMap = new Map(profiles.map((p) => [p.id, p]));
+
+      const responsesWithProfiles: SurveyResponseWithProfile[] = rawResponses.map((r) => ({
+        ...r,
+        profiles: profileMap.get(r.profile_id)
+          ? { id: r.profile_id, name: profileMap.get(r.profile_id)?.name ?? null }
+          : null
+      }));
+
+      setResponses(responsesWithProfiles);
+    };
+
+    const { data, unsubscribe } = ctrl.list((updated) => {
+      updateResponsesWithProfiles(updated);
+      setIsLoading(false);
+    });
+
+    updateResponsesWithProfiles(data);
+    setIsLoading(!ctrl.ready);
+
+    return () => {
+      unsubscribe();
+      ctrl.close();
+    };
+  }, [surveyId, controller]);
+
+  return { responses, isLoading };
 }

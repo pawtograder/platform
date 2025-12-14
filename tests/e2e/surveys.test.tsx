@@ -769,8 +769,8 @@ test.describe("Surveys Page", () => {
     await q2Checkbox.click();
 
     const responsesTable = page.getByRole("table").first();
-    const columnHeaders = (await responsesTable.locator("thead").getByRole("columnheader").allTextContents()).map(
-      (text) => text.trim().toLowerCase()
+    const columnHeaders = (await responsesTable.locator("thead th").allTextContents()).map((text) =>
+      text.trim().toLowerCase()
     );
     expect(columnHeaders).not.toContain("question 1");
     expect(columnHeaders).toContain("question 2");

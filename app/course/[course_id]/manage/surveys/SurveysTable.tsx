@@ -9,9 +9,9 @@ import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
-import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
 import { useIsInstructor, useIsGrader } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 
@@ -25,6 +25,7 @@ type SurveysTableProps = {
 
 export default function SurveysTable({ surveys, courseId, timezone }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
+  const controller = useCourseController();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
   const isGrader = useIsGrader();
@@ -134,8 +135,6 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
       });
 
       try {
-        const supabase = createClient();
-
         // Validate JSON before publishing
         // survey.json is already a parsed object from Supabase (JSONB columns are auto-deserialized)
         let validationErrors = null;
@@ -154,20 +153,16 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
         }
 
-        // Update survey status to published
-        const { data, error } = await supabase
-          .from("surveys")
-          .update({
-            status: validationErrors ? "draft" : "published",
-            validation_errors: validationErrors
-          })
-          .eq("id", survey.id)
-          .select("id, survey_id, status")
-          .single();
-
-        if (error || !data) {
-          throw new Error(error?.message || "Failed to publish survey");
-        }
+        console.log("updating survey status", survey.id, {
+          status: validationErrors ? "draft" : "published",
+          validation_errors: validationErrors
+        });
+        console.log(controller.surveys.rows);
+        // Update survey status using TableController - auto-refreshes UI via realtime
+        await controller.surveys.update(survey.id, {
+          status: validationErrors ? "draft" : "published",
+          validation_errors: validationErrors
+        });
 
         // Dismiss loading toast and show success
         toaster.dismiss(loadingToast);
@@ -192,9 +187,6 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
           survey_id: survey.survey_id,
           has_validation_errors: !!validationErrors
         });
-
-        // Refresh the page to show updated status
-        window.location.reload();
       } catch (error) {
         // Dismiss loading toast and show error
         toaster.dismiss(loadingToast);
@@ -205,7 +197,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
         });
       }
     },
-    [courseId, trackEvent]
+    [courseId, trackEvent, controller]
   );
 
   const handleClose = useCallback(
@@ -218,21 +210,10 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
       });
 
       try {
-        const supabase = createClient();
-
-        // Update survey status to closed
-        const { data, error } = await supabase
-          .from("surveys")
-          .update({
-            status: "closed"
-          })
-          .eq("id", survey.id)
-          .select("id, survey_id, status")
-          .single();
-
-        if (error || !data) {
-          throw new Error(error?.message || "Failed to close survey");
-        }
+        // Update survey status using TableController - auto-refreshes UI via realtime
+        await controller.surveys.update(survey.id, {
+          status: "closed"
+        });
 
         // Dismiss loading toast and show success
         toaster.dismiss(loadingToast);
@@ -247,9 +228,6 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
           course_id: Number(courseId),
           survey_id: survey.survey_id
         });
-
-        // Refresh the page to show updated status
-        window.location.reload();
       } catch (error) {
         // Dismiss loading toast and show error
         toaster.dismiss(loadingToast);
@@ -260,7 +238,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
         });
       }
     },
-    [courseId, trackEvent]
+    [courseId, trackEvent, controller]
   );
 
   const handleDelete = useCallback(
@@ -292,9 +270,9 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
       });
 
       try {
-        const supabase = createClient();
         // Soft delete survey and responses atomically via RPC
-        const { error } = await supabase.rpc("soft_delete_survey", {
+        // The RPC sets deleted_at which triggers realtime broadcast and auto-refreshes UI
+        const { error } = await controller.client.rpc("soft_delete_survey", {
           p_survey_id: survey.id,
           p_survey_logical_id: survey.survey_id
         });
@@ -319,9 +297,6 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
           response_count: survey.response_count,
           soft_delete: true
         });
-
-        // Refresh the page to show updated list
-        window.location.reload();
       } catch (error) {
         // Dismiss loading toast and show error
         toaster.dismiss(loadingToast);
@@ -332,7 +307,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
         });
       }
     },
-    [courseId, trackEvent]
+    [courseId, trackEvent, controller]
   );
 
   return (

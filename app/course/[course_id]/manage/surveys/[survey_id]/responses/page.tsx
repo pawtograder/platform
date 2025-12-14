@@ -113,13 +113,14 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   return (
     <SurveyResponsesView
       courseId={course_id}
-      surveyId={survey_id} // The UUID
+      surveyId={survey_id} // The UUID (survey_id column)
+      surveyDbId={survey.id} // The database ID (id column)
       surveyTitle={survey.title}
       surveyVersion={1} // Temporarily hardcode since we're not selecting version
       surveyStatus={survey.status}
       surveyJson={survey.json}
       surveyDueDate={survey.due_date}
-      responses={responses || []}
+      initialResponses={responses || []}
       totalStudents={assignedStudentCount}
       timezone={timezone}
     />

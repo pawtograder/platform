@@ -8,6 +8,7 @@ import { toaster } from "@/components/ui/toaster";
 import { formatInTimeZone } from "date-fns-tz";
 import dynamic from "next/dynamic";
 import { Survey, SurveyResponseWithProfile } from "@/types/survey";
+import { useCourse } from "@/hooks/useCourseController";
 
 type SurveyData = Pick<Survey, "id" | "title" | "description" | "json" | "allow_response_editing">;
 
@@ -23,24 +24,18 @@ const ViewSurveyResponse = dynamic(() => import("@/components/ViewSurveyResponse
 export default function IndividualResponsePage() {
   const { course_id, survey_id, response_id } = useParams();
   const router = useRouter();
+  const course = useCourse();
   const [response, setResponse] = useState<SurveyResponseWithProfile | null>(null);
   const [survey, setSurvey] = useState<SurveyData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [timezone, setTimezone] = useState<string>("America/New_York");
+
+  // Use timezone from course context
+  const timezone = course?.time_zone || "America/New_York";
 
   useEffect(() => {
     const loadResponseData = async () => {
       try {
         const supabase = createClient();
-
-        // Fetch class data for timezone
-        const { data: classData } = await supabase
-          .from("classes")
-          .select("time_zone")
-          .eq("id", Number(course_id))
-          .single();
-        const courseTimezone = classData?.time_zone || "America/New_York";
-        setTimezone(courseTimezone);
 
         // First, fetch the survey to get its database ID (not the UUID)
         // The URL survey_id parameter is surveys.survey_id (UUID), but we need surveys.id

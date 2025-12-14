@@ -5,12 +5,11 @@ import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
-import { createClient } from "@/utils/supabase/client";
 import { useCallback, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { FaTrash } from "react-icons/fa";
-import { useLivePolls, useCourse } from "@/hooks/useCourseController";
+import { useLivePolls, useCourse, useCourseController } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
 type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
@@ -25,6 +24,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
   const router = useRouter();
   const polls = useLivePolls();
   const course = useCourse();
+  const { livePolls } = useCourseController();
   const timezone = course?.time_zone || "America/New_York";
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
@@ -58,7 +58,6 @@ export default function PollsTable({ courseId }: PollsTableProps) {
   };
 
   const handleToggleLive = useCallback(async (pollId: string, nextState: boolean) => {
-    const supabase = createClient();
     const loadingToast = toaster.create({
       title: nextState ? "Starting Poll" : "Closing Poll",
       description: nextState ? "Making poll available to students..." : "Closing poll for students...",
@@ -75,11 +74,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
           : null
       };
 
-      const { error } = await supabase.from("live_polls").update(updateData).eq("id", pollId);
-
-      if (error) {
-        throw new Error(error.message);
-      }
+      await livePolls.update(pollId, updateData);
 
       toaster.dismiss(loadingToast);
       toaster.create({
@@ -107,12 +102,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
       type: "loading"
     });
     try {
-      const supabase = createClient();
-      const { error } = await supabase.from("live_polls").delete().eq("id", pollId);
-
-      if (error) {
-        throw new Error(error.message);
-      }
+      await livePolls.hardDelete(pollId);
 
       toaster.dismiss(loadingToast);
       toaster.create({
@@ -214,7 +204,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                         >
                           View Poll
                         </MenuItem>
-                        <MenuItem value="delete" onClick={() => handleDelete(poll.id)} colorPalette="red">
+                        <MenuItem value="delete"  onClick={() => handleDelete(poll.id)} colorPalette="red">
                           <FaTrash />
                           Delete Poll
                         </MenuItem>

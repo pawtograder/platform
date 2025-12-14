@@ -1345,4 +1345,200 @@ CREATE TRIGGER sync_survey_type_trigger BEFORE UPDATE ON public.surveys FOR EACH
 CREATE TRIGGER update_surveys_updated_at BEFORE UPDATE ON public.surveys FOR EACH ROW EXECUTE FUNCTION update_updated_at_survey_column();
 
 
+-- Migration: Add realtime broadcast triggers for surveys, survey_responses, and survey_assignments
+-- This enables TableController realtime updates for survey-related tables
 
+-- =============================================================================
+-- BROADCAST FUNCTION: surveys table
+-- Broadcasts to staff channel when surveys are created, updated, or deleted
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.broadcast_survey_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_class_id bigint;
+  v_row_id text;
+  v_operation text;
+  v_data jsonb;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_class_id := OLD.class_id;
+    v_row_id := OLD.id;
+    v_operation := 'DELETE';
+    v_data := row_to_json(OLD)::jsonb;
+  ELSE
+    v_class_id := NEW.class_id;
+    v_row_id := NEW.id;
+    v_operation := TG_OP;
+    v_data := row_to_json(NEW)::jsonb;
+  END IF;
+
+  -- Broadcast to staff channel (surveys are staff-only data)
+  PERFORM public.safe_broadcast(
+    jsonb_build_object(
+      'type', 'table_change',
+      'table', 'surveys',
+      'operation', v_operation,
+      'row_id', v_row_id,
+      'class_id', v_class_id,
+      'data', v_data,
+      'timestamp', now()::text
+    ),
+    'broadcast',
+    'class:' || v_class_id || ':staff',
+    true
+  );
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  ELSE
+    RETURN NEW;
+  END IF;
+END;
+$$;
+
+-- Create the trigger for surveys
+DROP TRIGGER IF EXISTS broadcast_surveys_realtime ON public.surveys;
+CREATE TRIGGER broadcast_surveys_realtime
+  AFTER INSERT OR UPDATE OR DELETE ON public.surveys
+  FOR EACH ROW
+  EXECUTE FUNCTION public.broadcast_survey_change();
+
+-- =============================================================================
+-- BROADCAST FUNCTION: survey_responses table
+-- Broadcasts to staff channel when responses are created, updated, or deleted
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.broadcast_survey_response_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_class_id bigint;
+  v_survey_id text;
+  v_row_id text;
+  v_operation text;
+  v_data jsonb;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_row_id := OLD.id;
+    v_survey_id := OLD.survey_id;
+    v_operation := 'DELETE';
+    v_data := row_to_json(OLD)::jsonb;
+    -- Get class_id from the survey
+    SELECT class_id INTO v_class_id FROM surveys WHERE id = OLD.survey_id;
+  ELSE
+    v_row_id := NEW.id;
+    v_survey_id := NEW.survey_id;
+    v_operation := TG_OP;
+    v_data := row_to_json(NEW)::jsonb;
+    -- Get class_id from the survey
+    SELECT class_id INTO v_class_id FROM surveys WHERE id = NEW.survey_id;
+  END IF;
+
+  -- Only broadcast if we found a class_id
+  IF v_class_id IS NOT NULL THEN
+    -- Broadcast to staff channel (responses are staff-only data)
+    PERFORM public.safe_broadcast(
+      jsonb_build_object(
+        'type', 'table_change',
+        'table', 'survey_responses',
+        'operation', v_operation,
+        'row_id', v_row_id,
+        'survey_id', v_survey_id,
+        'class_id', v_class_id,
+        'data', v_data,
+        'timestamp', now()::text
+      ),
+      'broadcast',
+      'class:' || v_class_id || ':staff',
+      true
+    );
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  ELSE
+    RETURN NEW;
+  END IF;
+END;
+$$;
+
+-- Create the trigger for survey_responses
+DROP TRIGGER IF EXISTS broadcast_survey_responses_realtime ON public.survey_responses;
+CREATE TRIGGER broadcast_survey_responses_realtime
+  AFTER INSERT OR UPDATE OR DELETE ON public.survey_responses
+  FOR EACH ROW
+  EXECUTE FUNCTION public.broadcast_survey_response_change();
+
+-- =============================================================================
+-- BROADCAST FUNCTION: survey_assignments table
+-- Broadcasts to staff channel when assignments are created, updated, or deleted
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.broadcast_survey_assignment_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_class_id bigint;
+  v_survey_id text;
+  v_row_id text;
+  v_operation text;
+  v_data jsonb;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_row_id := OLD.id;
+    v_survey_id := OLD.survey_id;
+    v_operation := 'DELETE';
+    v_data := row_to_json(OLD)::jsonb;
+    -- Get class_id from the survey
+    SELECT class_id INTO v_class_id FROM surveys WHERE id = OLD.survey_id;
+  ELSE
+    v_row_id := NEW.id;
+    v_survey_id := NEW.survey_id;
+    v_operation := TG_OP;
+    v_data := row_to_json(NEW)::jsonb;
+    -- Get class_id from the survey
+    SELECT class_id INTO v_class_id FROM surveys WHERE id = NEW.survey_id;
+  END IF;
+
+  -- Only broadcast if we found a class_id
+  IF v_class_id IS NOT NULL THEN
+    -- Broadcast to staff channel (assignments are staff-only data)
+    PERFORM public.safe_broadcast(
+      jsonb_build_object(
+        'type', 'table_change',
+        'table', 'survey_assignments',
+        'operation', v_operation,
+        'row_id', v_row_id,
+        'survey_id', v_survey_id,
+        'class_id', v_class_id,
+        'data', v_data,
+        'timestamp', now()::text
+      ),
+      'broadcast',
+      'class:' || v_class_id || ':staff',
+      true
+    );
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  ELSE
+    RETURN NEW;
+  END IF;
+END;
+$$;
+
+-- Create the trigger for survey_assignments
+DROP TRIGGER IF EXISTS broadcast_survey_assignments_realtime ON public.survey_assignments;
+CREATE TRIGGER broadcast_survey_assignments_realtime
+  AFTER INSERT OR UPDATE OR DELETE ON public.survey_assignments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.broadcast_survey_assignment_change();

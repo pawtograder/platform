@@ -1,15 +1,14 @@
 "use client";
 
 import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
-import { createClient } from "@/utils/supabase/client";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
 import dynamic from "next/dynamic";
-import { saveResponse, getResponse } from "./submit";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Survey, SurveyResponse } from "@/types/survey";
+import { SurveyResponse, ResponseData } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
+import { useCourseController, useSurvey } from "@/hooks/useCourseController";
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -23,86 +22,101 @@ const SurveyComponent = dynamic(() => import("@/components/Survey"), {
 export default function SurveyTakingPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
+  const controller = useCourseController();
 
   // pulls from ClassProfileProvider
   const { private_profile_id } = useClassProfiles();
 
-  const [survey, setSurvey] = useState<Survey | null>(null);
+  // Use the survey hook to get the survey with realtime updates
+  const survey = useSurvey(survey_id as string);
+
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Load existing response for this user
   useEffect(() => {
-    const loadSurveyData = async () => {
+    const loadExistingResponse = async () => {
+      if (!survey || !private_profile_id) {
+        setIsLoading(false);
+        return;
+      }
+
       try {
-        const supabase = createClient();
-
-        // Get current user
-        const {
-          data: { user }
-        } = await supabase.auth.getUser();
-        if (!user) {
-          toaster.create({
-            title: "Authentication Required",
-            description: "Please log in to take surveys.",
-            type: "error"
-          });
-          router.push(`/course/${course_id}/surveys`);
-          return;
-        }
-
-        // If we somehow don't have a profile for this class context, bail early
-        if (!private_profile_id) {
-          toaster.create({
-            title: "Access Error",
-            description: "We couldn't find your course profile.",
-            type: "error"
-          });
-          router.push(`/course/${course_id}/surveys`);
-          return;
-        }
-
-        // Get survey data
-        const { data: surveyDataRaw, error: surveyError } = await supabase
-          .from("surveys")
+        // Fetch existing response for this student
+        const { data, error } = await controller.client
+          .from("survey_responses")
           .select("*")
-          .eq("id", survey_id as string)
-          .eq("class_id", Number(course_id))
-          .eq("status", "published")
+          .eq("survey_id", survey.id)
+          .eq("profile_id", private_profile_id)
           .single();
 
-        const surveyData = surveyDataRaw as Survey | null;
-
-        if (surveyError || !surveyData) {
-          toaster.create({
-            title: "Survey Not Found",
-            description: "This survey is not available or has been removed.",
-            type: "error"
-          });
-          router.push(`/course/${course_id}/surveys`);
-          return;
+        if (error && error.code !== "PGRST116") {
+          // PGRST116 = no rows found, which is fine
+          console.error("Error loading response:", error);
         }
 
-        setSurvey(surveyData);
-
-        // Get existing response if any
-        const response = await getResponse(surveyData.id, private_profile_id);
-        setExistingResponse(response || null);
+        setExistingResponse(data || null);
       } catch (error) {
-        console.error("Error loading survey:", error);
-        toaster.create({
-          title: "Error Loading Survey",
-          description: "An error occurred while loading the survey.",
-          type: "error"
-        });
-        router.push(`/course/${course_id}/surveys`);
+        console.error("Error loading existing response:", error);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadSurveyData();
-  }, [course_id, survey_id, private_profile_id, router]); // Include router in dependencies
+    loadExistingResponse();
+  }, [survey, private_profile_id, controller.client]);
+
+  // Handle survey not found or not published
+  useEffect(() => {
+    if (!isLoading && survey === null) {
+      toaster.create({
+        title: "Survey Not Found",
+        description: "This survey is not available or has been removed.",
+        type: "error"
+      });
+      router.push(`/course/${course_id}/surveys`);
+    }
+  }, [isLoading, survey, course_id, router]);
+
+  // Save response helper using controller client
+  const saveResponseToDb = useCallback(
+    async (responseData: ResponseData, isSubmitted: boolean) => {
+      if (!survey || !private_profile_id) return;
+
+      const upsertData: {
+        survey_id: string;
+        profile_id: string;
+        response: ResponseData;
+        is_submitted: boolean;
+        submitted_at?: string;
+      } = {
+        survey_id: survey.id,
+        profile_id: private_profile_id,
+        response: responseData,
+        is_submitted: isSubmitted
+      };
+
+      if (isSubmitted) {
+        upsertData.submitted_at = new Date().toISOString();
+      }
+
+      const { data, error } = await controller.client
+        .from("survey_responses")
+        .upsert(upsertData, {
+          onConflict: "survey_id,profile_id"
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      return data;
+    },
+    [survey, private_profile_id, controller.client]
+  );
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model) => {
@@ -116,7 +130,7 @@ export default function SurveyTakingPage() {
 
       setIsSubmitting(true);
       try {
-        await saveResponse(survey.id, private_profile_id, surveyData, true);
+        await saveResponseToDb(surveyData, true);
 
         toaster.create({
           title: "Survey Submitted",
@@ -139,7 +153,7 @@ export default function SurveyTakingPage() {
         setIsSubmitting(false);
       }
     },
-    [private_profile_id, survey, course_id, router]
+    [private_profile_id, survey, course_id, router, saveResponseToDb]
   );
 
   const handleValueChanged = useCallback(
@@ -152,20 +166,21 @@ export default function SurveyTakingPage() {
 
       // Auto-save on value change if editing is allowed
       try {
-        await saveResponse(survey.id, private_profile_id, surveyData, false);
+        await saveResponseToDb(surveyData, false);
       } catch (error) {
         console.error("Error auto-saving response:", error);
         // Don't show error toast for auto-save failures to avoid spam
       }
     },
-    [private_profile_id, survey]
+    [private_profile_id, survey, saveResponseToDb]
   );
 
   const handleBackToSurveys = useCallback(() => {
     router.push(`/course/${course_id}/surveys`);
   }, [router, course_id]);
 
-  if (isLoading) {
+  // Show loading while survey is being fetched
+  if (isLoading || survey === undefined) {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <Box display="flex" alignItems="center" justifyContent="center" p={8}>

@@ -3,27 +3,32 @@
 import { Box, Heading, Text, VStack, HStack, Badge, Button } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { SurveyWithResponse } from "@/types/survey";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useCourse, usePublishedSurveys } from "@/hooks/useCourseController";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 type FilterType = "all" | "not_started" | "completed";
+type SurveyResponse = Database["public"]["Tables"]["survey_responses"]["Row"];
 
 export default function StudentSurveysPage() {
   const { course_id } = useParams();
-  const [surveys, setSurveys] = useState<SurveyWithResponse[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [responses, setResponses] = useState<SurveyResponse[]>([]);
+  const [responsesLoading, setResponsesLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   // Get private_profile_id from ClassProfileProvider (already available via course layout)
   const { private_profile_id } = useClassProfiles();
   const isStudent = useIsStudent();
   const course = useCourse();
+
+  // Use the hook for realtime survey updates
+  const { surveys: publishedSurveys, isLoading: surveysLoading } = usePublishedSurveys();
 
   // Status badge configuration
   const statusColors = {
@@ -41,16 +46,16 @@ export default function StudentSurveysPage() {
     }
   };
 
+  // Fetch student's responses for the surveys
   useEffect(() => {
-    const loadSurveys = async () => {
-      // Check if user has student role for this course
+    const loadResponses = async () => {
       if (!isStudent) {
         toaster.create({
           title: "Access Error",
           description: "This page is only available for students.",
           type: "error"
         });
-        setIsLoading(false);
+        setResponsesLoading(false);
         return;
       }
 
@@ -60,118 +65,108 @@ export default function StudentSurveysPage() {
           description: "We couldn't find your course profile.",
           type: "error"
         });
-        setIsLoading(false);
+        setResponsesLoading(false);
+        return;
+      }
+
+      if (publishedSurveys.length === 0) {
+        setResponses([]);
+        setResponsesLoading(false);
         return;
       }
 
       try {
         const supabase = createClient();
-        const profileId = private_profile_id;
-
-        // Validate course_id is a valid number
-        const courseIdNum = Array.isArray(course_id) ? Number(course_id[0]) : Number(course_id);
-        if (isNaN(courseIdNum)) {
-          throw new Error("Invalid course ID");
-        }
-
-        // Get published surveys for this course (and not soft-deleted)
-        const { data: surveysData, error: surveysError } = await supabase
-          .from("surveys")
-          .select("*")
-          .eq("class_id", courseIdNum)
-          .eq("status", "published")
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false });
-
-        if (surveysError) {
-          throw surveysError;
-        }
-
-        // If there are no surveys, just finish early
-        if (!surveysData || surveysData.length === 0) {
-          setSurveys([]);
-          setIsLoading(false);
-          return;
-        }
 
         // Get this profile's responses for those surveys
         const { data: responsesData, error: responsesError } = await supabase
           .from("survey_responses")
           .select("*")
-          .eq("profile_id", profileId)
+          .eq("profile_id", private_profile_id)
           .in(
             "survey_id",
-            surveysData.map((s) => s.id)
+            publishedSurveys.map((s) => s.id)
           );
 
         if (responsesError) {
           throw responsesError;
         }
 
-        // Merge surveys with the current profile's response status
-        const surveysWithResponse: SurveyWithResponse[] = surveysData.map((survey) => {
-          const response = responsesData?.find((r) => r.survey_id === survey.id);
-
-          let response_status: "not_started" | "in_progress" | "completed" = "not_started";
-          if (response) {
-            if (response.is_submitted) {
-              response_status = "completed";
-            } else {
-              response_status = "in_progress";
-            }
-          }
-
-          return {
-            ...survey,
-            response_status,
-            submitted_at: response?.submitted_at,
-            is_submitted: response?.is_submitted
-          };
-        });
-
-        setSurveys(surveysWithResponse);
+        setResponses(responsesData || []);
       } catch (error) {
-        console.error("Error loading surveys:", error);
+        console.error("Error loading responses:", error);
         toaster.create({
           title: "Error Loading Surveys",
-          description: "An error occurred while loading surveys.",
+          description: "An error occurred while loading survey responses.",
           type: "error"
         });
       } finally {
-        setIsLoading(false);
+        setResponsesLoading(false);
       }
     };
 
-    loadSurveys();
-  }, [course_id, private_profile_id, isStudent]);
-
-  const getStatusBadge = (survey: SurveyWithResponse) => {
-    const status = statusColors[survey.response_status];
-
-    return (
-      <Badge
-        colorPalette={status.colorPalette}
-        bg={`${status.colorPalette}.subtle`}
-        color={`${status.colorPalette}.fg`}
-        px={2}
-        py={1}
-        borderRadius="md"
-        fontSize="sm"
-        fontWeight="medium"
-      >
-        {status.text}
-      </Badge>
-    );
-  };
-
-  const formatDueDate = (dueDate: string) => {
-    try {
-      const timeZone = course.time_zone || "America/New_York";
-      return formatInTimeZone(new Date(dueDate), timeZone, "MMM dd, yyyy 'at' h:mm a");
-    } catch {
-      return "Invalid date";
+    // Only load responses after surveys have loaded
+    if (!surveysLoading) {
+      loadResponses();
     }
-  };
+  }, [private_profile_id, isStudent, publishedSurveys, surveysLoading]);
+
+  // Merge surveys with response status
+  const surveysWithResponse: SurveyWithResponse[] = useMemo(() => {
+    return publishedSurveys.map((survey) => {
+      const response = responses.find((r) => r.survey_id === survey.id);
+
+      let response_status: "not_started" | "in_progress" | "completed" = "not_started";
+      if (response) {
+        if (response.is_submitted) {
+          response_status = "completed";
+        } else {
+          response_status = "in_progress";
+        }
+      }
+
+      return {
+        ...survey,
+        response_status,
+        submitted_at: response?.submitted_at,
+        is_submitted: response?.is_submitted
+      };
+    });
+  }, [publishedSurveys, responses]);
+
+  const getStatusBadge = useCallback(
+    (survey: SurveyWithResponse) => {
+      const status = statusColors[survey.response_status];
+
+      return (
+        <Badge
+          colorPalette={status.colorPalette}
+          bg={`${status.colorPalette}.subtle`}
+          color={`${status.colorPalette}.fg`}
+          px={2}
+          py={1}
+          borderRadius="md"
+          fontSize="sm"
+          fontWeight="medium"
+        >
+          {status.text}
+        </Badge>
+      );
+    },
+    [statusColors]
+  );
+
+  const formatDueDate = useCallback(
+    (dueDate: string) => {
+      try {
+        const timeZone = course.time_zone || "America/New_York";
+        return formatInTimeZone(new Date(dueDate), timeZone, "MMM dd, yyyy 'at' h:mm a");
+      } catch {
+        return "Invalid date";
+      }
+    },
+    [course.time_zone]
+  );
 
   // Filter options for student view
   const filterOptions = useMemo(
@@ -186,19 +181,21 @@ export default function StudentSurveysPage() {
   const filteredSurveys = useMemo(() => {
     switch (activeFilter) {
       case "all":
-        return surveys;
+        return surveysWithResponse;
       case "not_started":
         // Show surveys that are not started or in progress (still available to take)
-        return surveys.filter(
+        return surveysWithResponse.filter(
           (survey) => survey.response_status === "not_started" || survey.response_status === "in_progress"
         );
       case "completed":
         // Show completed surveys
-        return surveys.filter((survey) => survey.response_status === "completed");
+        return surveysWithResponse.filter((survey) => survey.response_status === "completed");
       default:
-        return surveys;
+        return surveysWithResponse;
     }
-  }, [surveys, activeFilter]);
+  }, [surveysWithResponse, activeFilter]);
+
+  const isLoading = surveysLoading || responsesLoading;
 
   if (isLoading) {
     return (
@@ -210,7 +207,7 @@ export default function StudentSurveysPage() {
     );
   }
 
-  if (surveys.length === 0) {
+  if (surveysWithResponse.length === 0) {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
