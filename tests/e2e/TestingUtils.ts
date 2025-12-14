@@ -151,8 +151,10 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
   return data.session.access_token;
 }
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 // Helper function to create a Supabase client authenticated as a specific user
-export async function createAuthenticatedClient(testingUser: TestingUser) {
+export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
   // Create a separate Supabase client for the user (using anon key)
   const userSupabase = createClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -178,6 +180,8 @@ export async function createAuthenticatedClient(testingUser: TestingUser) {
   if (error || !data.session) {
     throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
   }
+
+  await userSupabase.auth.setSession(data.session);
 
   return userSupabase;
 }
