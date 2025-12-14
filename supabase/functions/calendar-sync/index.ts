@@ -34,6 +34,7 @@ interface ClassWithCalendar {
   office_hours_ics_url: string | null;
   events_ics_url: string | null;
   discord_server_id: string | null;
+  time_zone: string;
 }
 
 interface CalendarEvent {
@@ -180,41 +181,133 @@ function simpleHash(str: string): string {
   return hash.toString(16);
 }
 
-// Parse ICS date formats
-function parseICSDate(dateStr: string): Date {
-  // Handle TZID format: TZID=America/New_York:20241210T100000
-  if (dateStr.includes(":")) {
-    dateStr = dateStr.split(":").pop() || dateStr;
+// Helper function to convert a date/time in a specific timezone to UTC
+function convertToUTC(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timezone: string
+): Date {
+  // Create an ISO string for the date/time (without timezone)
+  const isoStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
+
+  try {
+    // Strategy: We'll create a date string that represents this time in the target timezone,
+    // then use Intl to convert it to UTC.
+    //
+    // The trick: Create a date representing midnight UTC on the target date,
+    // then format it in the target timezone to see what time it shows.
+    // Then calculate the offset needed to make it show our desired time.
+
+    // Step 1: Create a reference UTC date (midnight UTC on the target date)
+    const referenceUTC = new Date(
+      `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00Z`
+    );
+
+    // Step 2: Format this UTC date in the target timezone to see what time it represents there
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    });
+
+    const parts = formatter.formatToParts(referenceUTC);
+    const tzYear = parseInt(parts.find((p) => p.type === "year")!.value);
+    const tzMonth = parseInt(parts.find((p) => p.type === "month")!.value) - 1;
+    const tzDay = parseInt(parts.find((p) => p.type === "day")!.value);
+    const tzHour = parseInt(parts.find((p) => p.type === "hour")!.value);
+    const tzMinute = parseInt(parts.find((p) => p.type === "minute")!.value);
+    const tzSecond = parseInt(parts.find((p) => p.type === "second")!.value);
+
+    // Step 3: Calculate how many milliseconds from referenceUTC to get to our target time
+    // We want: year/month/day hour:minute:second in the timezone
+    // referenceUTC shows: tzYear/tzMonth/tzDay tzHour:tzMinute:tzSecond in the timezone
+
+    // Create dates representing both times (as if they were local)
+    const targetTime = new Date(year, month, day, hour, minute, second).getTime();
+    const referenceTimeInTz = new Date(tzYear, tzMonth, tzDay, tzHour, tzMinute, tzSecond).getTime();
+
+    // The difference tells us how much to adjust referenceUTC
+    const offsetMs = targetTime - referenceTimeInTz;
+
+    // Step 4: Apply the offset to get the correct UTC time
+    return new Date(referenceUTC.getTime() + offsetMs);
+  } catch (e) {
+    // Fallback: treat as local time (not ideal, but better than crashing)
+    console.warn(`[convertToUTC] Failed to convert timezone ${timezone} for ${isoStr}, using local time:`, e);
+    return new Date(year, month, day, hour, minute, second);
+  }
+}
+
+// Parse ICS date formats with timezone support
+// Accepts the full ICS line (e.g., "DTSTART;TZID=America/New_York:20241210T100000")
+// or just the value portion, along with a default timezone
+function parseICSDate(icsLine: string, defaultTimezone: string = "UTC"): Date {
+  // Extract TZID parameter if present (e.g., "DTSTART;TZID=America/New_York:20241210T100000")
+  let timezone = defaultTimezone;
+  let dateValue: string;
+
+  const colonIndex = icsLine.indexOf(":");
+  if (colonIndex > 0) {
+    const prefix = icsLine.slice(0, colonIndex);
+    dateValue = icsLine.slice(colonIndex + 1);
+
+    // Check for TZID parameter in the prefix
+    const tzidMatch = prefix.match(/TZID=([^;:]+)/i);
+    if (tzidMatch) {
+      timezone = tzidMatch[1];
+    }
+  } else {
+    // No colon, assume it's just the date value
+    dateValue = icsLine;
   }
 
-  // Remove any VALUE=DATE-TIME or similar prefixes
-  dateStr = dateStr.replace(/^[^:]*:/, "");
+  // Handle UTC format (ends with Z)
+  if (dateValue.endsWith("Z")) {
+    timezone = "UTC";
+    dateValue = dateValue.slice(0, -1);
+  }
 
-  // Handle basic format: 20241210T100000 or 20241210T100000Z
-  if (dateStr.length === 15 || dateStr.length === 16) {
-    const year = parseInt(dateStr.slice(0, 4));
-    const month = parseInt(dateStr.slice(4, 6)) - 1;
-    const day = parseInt(dateStr.slice(6, 8));
-    const hour = parseInt(dateStr.slice(9, 11));
-    const minute = parseInt(dateStr.slice(11, 13));
-    const second = parseInt(dateStr.slice(13, 15));
+  // Handle basic format: 20241210T100000
+  if (dateValue.length === 15) {
+    const year = parseInt(dateValue.slice(0, 4));
+    const month = parseInt(dateValue.slice(4, 6)) - 1;
+    const day = parseInt(dateValue.slice(6, 8));
+    const hour = parseInt(dateValue.slice(9, 11));
+    const minute = parseInt(dateValue.slice(11, 13));
+    const second = parseInt(dateValue.slice(13, 15));
 
-    if (dateStr.endsWith("Z")) {
+    // If UTC, use Date.UTC
+    if (timezone === "UTC") {
       return new Date(Date.UTC(year, month, day, hour, minute, second));
     }
-    return new Date(year, month, day, hour, minute, second);
+
+    // Convert from the specified timezone to UTC
+    return convertToUTC(year, month, day, hour, minute, second, timezone);
   }
 
   // Handle date-only format: 20241210
-  if (dateStr.length === 8) {
-    const year = parseInt(dateStr.slice(0, 4));
-    const month = parseInt(dateStr.slice(4, 6)) - 1;
-    const day = parseInt(dateStr.slice(6, 8));
-    return new Date(year, month, day);
+  if (dateValue.length === 8) {
+    const year = parseInt(dateValue.slice(0, 4));
+    const month = parseInt(dateValue.slice(4, 6)) - 1;
+    const day = parseInt(dateValue.slice(6, 8));
+    // For date-only, create at midnight in the specified timezone
+    if (timezone === "UTC") {
+      return new Date(Date.UTC(year, month, day));
+    }
+    return convertToUTC(year, month, day, 0, 0, 0, timezone);
   }
 
   // Fallback to Date parsing
-  return new Date(dateStr);
+  return new Date(dateValue);
 }
 
 // Parse RRULE into components
@@ -228,7 +321,7 @@ interface RRuleComponents {
   bymonthday?: number[];
 }
 
-function parseRRule(rrule: string): RRuleComponents | null {
+function parseRRule(rrule: string, defaultTimezone: string = "UTC"): RRuleComponents | null {
   const parts = rrule.split(";");
   const result: Partial<RRuleComponents> = { interval: 1 };
 
@@ -247,7 +340,7 @@ function parseRRule(rrule: string): RRuleComponents | null {
         result.count = parseInt(value);
         break;
       case "UNTIL":
-        result.until = parseICSDate(value);
+        result.until = parseICSDate(value, defaultTimezone);
         break;
       case "BYDAY":
         result.byday = value.split(",");
@@ -277,12 +370,12 @@ const dayMap: Record<string, number> = {
 };
 
 // Expand recurring event into individual occurrences
-function expandRecurringEvent(event: ICSEvent, maxDate: Date): ICSEvent[] {
+function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: string = "UTC"): ICSEvent[] {
   if (!event.rrule) {
     return [event];
   }
 
-  const rrule = parseRRule(event.rrule);
+  const rrule = parseRRule(event.rrule, defaultTimezone);
   if (!rrule) {
     console.log(`[expandRecurringEvent] Failed to parse RRULE: ${event.rrule}`);
     return [event];
@@ -380,7 +473,7 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date): ICSEvent[] {
 }
 
 // Parse ICS content into events
-function parseICS(icsContent: string, expandUntil: Date): ICSEvent[] {
+function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string = "UTC"): ICSEvent[] {
   const rawEvents: ICSEvent[] = [];
   const lines = icsContent
     .replace(/\r\n /g, "")
@@ -394,8 +487,8 @@ function parseICS(icsContent: string, expandUntil: Date): ICSEvent[] {
       currentEvent = { rawData: {}, exdatesRaw: [] };
     } else if (line === "END:VEVENT" && currentEvent) {
       if (currentEvent.uid && currentEvent.summary && currentEvent.dtstart && currentEvent.dtend) {
-        // Parse EXDATE values
-        const exdates = currentEvent.exdatesRaw?.map((ex) => parseICSDate(ex)) || [];
+        // Parse EXDATE values - pass full line to preserve TZID
+        const exdates = currentEvent.exdatesRaw?.map((ex) => parseICSDate(ex, defaultTimezone)) || [];
 
         rawEvents.push({
           uid: currentEvent.uid,
@@ -435,10 +528,12 @@ function parseICS(icsContent: string, expandUntil: Date): ICSEvent[] {
             currentEvent.description = value.replace(/\\,/g, ",").replace(/\\n/g, "\n").replace(/\\\\/g, "\\");
             break;
           case "DTSTART":
-            currentEvent.dtstart = parseICSDate(line.slice(line.indexOf(":") + 1));
+            // Pass the full line to preserve TZID parameter
+            currentEvent.dtstart = parseICSDate(line, defaultTimezone);
             break;
           case "DTEND":
-            currentEvent.dtend = parseICSDate(line.slice(line.indexOf(":") + 1));
+            // Pass the full line to preserve TZID parameter
+            currentEvent.dtend = parseICSDate(line, defaultTimezone);
             break;
           case "LOCATION":
             currentEvent.location = value.replace(/\\,/g, ",").replace(/\\n/g, "\n").replace(/\\\\/g, "\\");
@@ -448,11 +543,18 @@ function parseICS(icsContent: string, expandUntil: Date): ICSEvent[] {
             break;
           case "EXDATE":
             // EXDATE can have multiple values separated by commas
-            const exdateValues = line.slice(line.indexOf(":") + 1).split(",");
-            currentEvent.exdatesRaw = [...(currentEvent.exdatesRaw || []), ...exdateValues];
+            // TZID is in the prefix (before colon), values are after colon
+            // Store the full line so parseICSDate can extract TZID for each value
+            const exdatePrefix = line.slice(0, line.indexOf(":"));
+            const exdateLine = line.slice(line.indexOf(":") + 1);
+            const exdateValues = exdateLine.split(",");
+            // Prepend prefix to each value so TZID is preserved
+            const exdateWithPrefix = exdateValues.map((val) => `${exdatePrefix}:${val}`);
+            currentEvent.exdatesRaw = [...(currentEvent.exdatesRaw || []), ...exdateWithPrefix];
             break;
           case "RECURRENCE-ID":
-            currentEvent.recurrenceId = parseICSDate(line.slice(line.indexOf(":") + 1));
+            // Pass the full line to preserve TZID parameter
+            currentEvent.recurrenceId = parseICSDate(line, defaultTimezone);
             break;
         }
       }
@@ -466,7 +568,7 @@ function parseICS(icsContent: string, expandUntil: Date): ICSEvent[] {
       // This is a modified occurrence - it will replace the generated one
       expandedEvents.push(event);
     } else {
-      expandedEvents.push(...expandRecurringEvent(event, expandUntil));
+      expandedEvents.push(...expandRecurringEvent(event, expandUntil, defaultTimezone));
     }
   }
 
@@ -612,9 +714,11 @@ async function syncCalendar(
   }
 
   // Parse ICS content - expand recurring events up to 6 months ahead
+  // Use class timezone as default (ICS TZID will override if present)
   const expandUntil = new Date();
   expandUntil.setMonth(expandUntil.getMonth() + 6);
-  const icsEvents = parseICS(content, expandUntil);
+  const defaultTimezone = classData.time_zone || "UTC";
+  const icsEvents = parseICS(content, expandUntil, defaultTimezone);
   const parsedEvents = icsEvents.map(convertToCalendarEvent);
 
   console.log(`[syncCalendar] Parsed ${parsedEvents.length} events from ICS (including expanded recurrences)`);
@@ -705,6 +809,10 @@ async function syncCalendar(
 
   console.log(`[syncCalendar] Changes: ${toAdd.length} add, ${toUpdate.length} update, ${toDelete.length} delete`);
 
+  // Track mutation errors to prevent marking sync as successful if any fail
+  let hadMutationError = false;
+  const mutationErrors: string[] = [];
+
   // Current time for determining past/future events
   const now = new Date();
   const nowIso = now.toISOString();
@@ -770,7 +878,10 @@ async function syncCalendar(
     );
 
     if (insertError) {
-      console.error(`[syncCalendar] Error inserting events:`, insertError);
+      hadMutationError = true;
+      const errorMsg = `Failed to insert ${toAdd.length} event(s): ${insertError.message}`;
+      mutationErrors.push(errorMsg);
+      console.error(`[syncCalendar] ${errorMsg}`, insertError);
       scope.setContext("insert_error", { error: insertError.message });
     }
   }
@@ -836,7 +947,10 @@ async function syncCalendar(
         .eq("id", existing.id);
 
       if (updateError) {
-        console.error(`[syncCalendar] Error updating event ${existing.id}:`, updateError);
+        hadMutationError = true;
+        const errorMsg = `Failed to update event ${existing.id} (${existing.uid}): ${updateError.message}`;
+        mutationErrors.push(errorMsg);
+        console.error(`[syncCalendar] ${errorMsg}`, updateError);
       }
     }
   }
@@ -886,22 +1000,45 @@ async function syncCalendar(
     const { error: deleteError } = await supabase.from("calendar_events").delete().in("id", deleteIds);
 
     if (deleteError) {
-      console.error(`[syncCalendar] Error batch deleting events:`, deleteError);
+      hadMutationError = true;
+      const errorMsg = `Failed to delete ${toDelete.length} event(s): ${deleteError.message}`;
+      mutationErrors.push(errorMsg);
+      console.error(`[syncCalendar] ${errorMsg}`, deleteError);
     }
   }
 
-  // Update sync state
-  await supabase.from("calendar_sync_state").upsert(
-    {
-      class_id: classData.id,
-      calendar_type: calendarType,
-      last_sync_at: new Date().toISOString(),
-      last_etag: etag,
-      last_hash: contentHash,
-      sync_error: null
-    },
-    { onConflict: "class_id,calendar_type" }
-  );
+  // Update sync state - only advance hash/etag if no mutation errors occurred
+  if (hadMutationError) {
+    // Mutation errors occurred - record error but don't advance hash/etag
+    // This ensures we retry processing the same content on next sync
+    const syncErrorMsg = mutationErrors.join("; ");
+    console.error(
+      `[syncCalendar] Sync completed with errors for ${calendarType} class ${classData.id}: ${syncErrorMsg}`
+    );
+    await supabase.from("calendar_sync_state").upsert(
+      {
+        class_id: classData.id,
+        calendar_type: calendarType,
+        last_sync_at: new Date().toISOString(),
+        sync_error: syncErrorMsg
+        // Note: last_etag and last_hash are NOT updated, so we'll retry with same content
+      },
+      { onConflict: "class_id,calendar_type" }
+    );
+  } else {
+    // No errors - clear sync_error and advance hash/etag to mark success
+    await supabase.from("calendar_sync_state").upsert(
+      {
+        class_id: classData.id,
+        calendar_type: calendarType,
+        last_sync_at: new Date().toISOString(),
+        last_etag: etag,
+        last_hash: contentHash,
+        sync_error: null
+      },
+      { onConflict: "class_id,calendar_type" }
+    );
+  }
 }
 
 // Process announcements via database RPC (transactional, batched)
@@ -1054,7 +1191,7 @@ async function runSync(): Promise<void> {
   // Get all classes with calendar URLs configured
   const { data: classes, error: classesError } = await supabase
     .from("classes")
-    .select("id, office_hours_ics_url, events_ics_url, discord_server_id")
+    .select("id, office_hours_ics_url, events_ics_url, discord_server_id, time_zone")
     .or("office_hours_ics_url.not.is.null,events_ics_url.not.is.null");
 
   if (classesError) {

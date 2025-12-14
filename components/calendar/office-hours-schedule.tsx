@@ -2,7 +2,7 @@
 
 import { CalendarEvent, useCalendarEditUrls, useWeekSchedule } from "@/hooks/useCalendarEvents";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Box, Button, Card, Grid, Heading, HStack, Icon, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Card, Grid, Heading, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { addDays, format, isSameDay, parseISO, startOfWeek } from "date-fns";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -110,7 +110,7 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
     return start;
   }, [weekOffset]);
 
-  const { events, isLoading } = useWeekSchedule(weekStart);
+  const events = useWeekSchedule(weekStart);
 
   // Group events by day
   const eventsByDay = useMemo(() => {
@@ -152,19 +152,6 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
     const endMonth = format(weekEnd, "MMM d, yyyy");
     return `${startMonth} - ${endMonth}`;
   }, [weekStart]);
-
-  if (isLoading) {
-    return (
-      <Card.Root>
-        <Card.Body>
-          <VStack py={8}>
-            <Spinner />
-            <Text color="fg.muted">Loading schedule...</Text>
-          </VStack>
-        </Card.Body>
-      </Card.Root>
-    );
-  }
 
   return (
     <Card.Root>

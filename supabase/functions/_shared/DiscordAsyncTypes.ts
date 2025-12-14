@@ -38,27 +38,48 @@ export type SendMessageArgs = {
 export type UpdateMessageArgs = {
   channel_id: string;
   message_id: string;
-  content?: string;
-  embeds?: Array<{
-    title?: string;
-    description?: string;
-    url?: string;
-    color?: number;
-    fields?: Array<{
-      name: string;
-      value: string;
-      inline?: boolean;
-    }>;
-    footer?: {
-      text: string;
-    };
-    timestamp?: string;
-  }>;
   allowed_mentions?: {
     users?: string[];
     roles?: string[];
   };
-};
+} & (
+  | {
+      content: string;
+      embeds?: Array<{
+        title?: string;
+        description?: string;
+        url?: string;
+        color?: number;
+        fields?: Array<{
+          name: string;
+          value: string;
+          inline?: boolean;
+        }>;
+        footer?: {
+          text: string;
+        };
+        timestamp?: string;
+      }>;
+    }
+  | {
+      embeds: Array<{
+        title?: string;
+        description?: string;
+        url?: string;
+        color?: number;
+        fields?: Array<{
+          name: string;
+          value: string;
+          inline?: boolean;
+        }>;
+        footer?: {
+          text: string;
+        };
+        timestamp?: string;
+      }>;
+      content?: string;
+    }
+);
 
 export type CreateChannelArgs = {
   guild_id: string;

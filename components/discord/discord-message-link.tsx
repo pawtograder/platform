@@ -16,7 +16,6 @@ interface DiscordMessageLinkProps {
 
 /**
  * Component that displays a Discord link button if a Discord message exists for the resource
- * Only visible to staff members
  * Uses cached discord_messages data from CourseController
  */
 export default function DiscordMessageLink({

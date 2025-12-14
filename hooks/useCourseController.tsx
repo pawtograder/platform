@@ -1249,8 +1249,14 @@ export class CourseController {
     this._assignments?.close();
     this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
+    this._calendarEvents?.close();
+    this._calendarEvents = undefined;
+    this._classStaffSettings?.close();
+    this._classStaffSettings = undefined;
     this._discordChannels?.close();
+    this._discordChannels = undefined;
     this._discordMessages?.close();
+    this._discordMessages = undefined;
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1839,7 +1845,21 @@ export function useDiscordChannel(
   channelType: Database["public"]["Enums"]["discord_channel_type"],
   resourceId?: number | null
 ) {
-  const { discordChannels, isStaff } = useCourseController();
+  const controller = useCourseController();
+  const isStaff = controller.isStaff;
+
+  // Only access discordChannels controller if staff (to avoid instantiating it for non-staff)
+  // Use useMemo to conditionally access the controller property only when isStaff is true
+  // This prevents the lazy getter from being called for non-staff users
+  const discordChannelsController = useMemo(() => {
+    if (isStaff) {
+      return controller.discordChannels;
+    }
+    // When not staff, we still need to pass a controller to the hook, but we'll use
+    // a controller that exists (profiles) as a placeholder since the filter always returns false
+    // This satisfies the type requirement without instantiating the staff-only controller
+    return controller.profiles as unknown as TableController<"discord_channels">;
+  }, [controller, isStaff]);
 
   const filter = useCallback(
     (channel: Database["public"]["Tables"]["discord_channels"]["Row"]) =>
@@ -1849,7 +1869,8 @@ export function useDiscordChannel(
   );
 
   // Only search if staff (discord_channels is staff-only)
-  const channel = useFindTableControllerValue(discordChannels, isStaff ? filter : () => false);
+  // When not staff, filter always returns false, so no matching will occur
+  const channel = useFindTableControllerValue(discordChannelsController, isStaff ? filter : () => false);
 
   return channel ?? null;
 }
@@ -1863,7 +1884,21 @@ export function useDiscordMessage(
   resourceType: Database["public"]["Enums"]["discord_resource_type"],
   resourceId: number | null | undefined
 ) {
-  const { discordMessages, isStaff } = useCourseController();
+  const controller = useCourseController();
+  const isStaff = controller.isStaff;
+
+  // Only access discordMessages controller if staff (to avoid instantiating it for non-staff)
+  // Use useMemo to conditionally access the controller property only when isStaff is true
+  // This prevents the lazy getter from being called for non-staff users
+  const discordMessagesController = useMemo(() => {
+    if (isStaff) {
+      return controller.discordMessages;
+    }
+    // When not staff, we still need to pass a controller to the hook, but we'll use
+    // a controller that exists (profiles) as a placeholder since the filter always returns false
+    // This satisfies the type requirement without instantiating the staff-only controller
+    return controller.profiles as unknown as TableController<"discord_messages">;
+  }, [controller, isStaff]);
 
   const filter = useCallback(
     (message: Database["public"]["Tables"]["discord_messages"]["Row"]) =>
@@ -1872,8 +1907,9 @@ export function useDiscordMessage(
   );
 
   // Only search if staff (discord_messages is staff-only) and resourceId is valid
+  // When not staff, filter always returns false, so no matching will occur
   const shouldSearch = isStaff && resourceId !== null && resourceId !== undefined;
-  const message = useFindTableControllerValue(discordMessages, shouldSearch ? filter : () => false);
+  const message = useFindTableControllerValue(discordMessagesController, shouldSearch ? filter : () => false);
 
   return message ?? null;
 }

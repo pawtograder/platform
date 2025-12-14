@@ -37,7 +37,7 @@ function getGlobalLimiter(): Bottleneck {
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
-      id: `discord_global:${Deno.env.get("DISCORD_BOT_TOKEN") || ""}`,
+      id: `discord_global`,
       reservoir: 50,
       reservoirRefreshAmount: 50,
       reservoirRefreshInterval: 1000, // 1 second
@@ -84,7 +84,7 @@ function getChannelLimiter(channelId: string): Bottleneck {
     const host = upstashUrl.replace("https://", "");
     const password = upstashToken;
     limiter = new Bottleneck({
-      id: `discord_channel:${channelId}:${Deno.env.get("DISCORD_BOT_TOKEN") || ""}`,
+      id: `discord_channel:${channelId}`,
       reservoir: 5,
       reservoirRefreshAmount: 5,
       reservoirRefreshInterval: 5000, // 5 seconds

@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarEvent, useAllCalendarEvents, useCalendarEditUrls } from "@/hooks/useCalendarEvents";
-import { Badge, Box, Button, Card, Flex, Heading, HStack, Icon, Spinner, Stack, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, Button, Card, Flex, Heading, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
 import {
   addDays,
   addMonths,
@@ -143,7 +143,7 @@ export default function CalendarScheduleSummary() {
   const [offset, setOffset] = useState(0);
 
   const { officeHoursEditUrl, eventsEditUrl } = useCalendarEditUrls();
-  const { events: allEvents, isLoading } = useAllCalendarEvents();
+  const allEvents = useAllCalendarEvents();
 
   // Calculate date range based on view mode and offset
   const { startDate, endDate, rangeLabel } = useMemo(() => {
@@ -153,7 +153,7 @@ export default function CalendarScheduleSummary() {
     let label: string;
 
     switch (viewMode) {
-      case "today":
+      case "today": {
         const targetDay = addDays(today, offset);
         start = new Date(targetDay);
         start.setHours(0, 0, 0, 0);
@@ -161,18 +161,21 @@ export default function CalendarScheduleSummary() {
         end.setHours(23, 59, 59, 999);
         label = offset === 0 ? "Today" : format(targetDay, "EEEE, MMMM d");
         break;
-      case "week":
+      }
+      case "week": {
         const weekBase = addWeeks(today, offset);
         start = startOfWeek(weekBase, { weekStartsOn: 1 }); // Monday
         end = endOfWeek(weekBase, { weekStartsOn: 1 });
         label = offset === 0 ? "This Week" : `${format(start, "MMM d")} - ${format(end, "MMM d")}`;
         break;
-      case "month":
+      }
+      case "month": {
         const monthBase = addMonths(today, offset);
         start = startOfMonth(monthBase);
         end = endOfMonth(monthBase);
         label = offset === 0 ? "This Month" : format(monthBase, "MMMM yyyy");
         break;
+      }
     }
 
     return { startDate: start, endDate: end, rangeLabel: label };
@@ -217,21 +220,6 @@ export default function CalendarScheduleSummary() {
         return "No events scheduled this month";
     }
   }, [viewMode]);
-
-  if (isLoading) {
-    return (
-      <Card.Root>
-        <Card.Body>
-          <VStack py={4}>
-            <Spinner size="sm" />
-            <Text color="fg.muted" fontSize="sm">
-              Loading schedule...
-            </Text>
-          </VStack>
-        </Card.Body>
-      </Card.Root>
-    );
-  }
 
   return (
     <Card.Root>

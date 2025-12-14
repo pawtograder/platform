@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Button, Card, Heading, HStack, Icon, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Card, Heading, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsPencil } from "react-icons/bs";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useDaySchedule, useCalendarEditUrls, CalendarEvent } from "@/hooks/useCalendarEvents";
@@ -169,7 +169,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
     return date;
   }, [dayOffset]);
 
-  const { events, isLoading } = useDaySchedule(selectedDate);
+  const events = useDaySchedule(selectedDate);
 
   const isToday = useMemo(() => isSameDay(selectedDate, new Date()), [selectedDate]);
 
@@ -190,20 +190,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
         containerRef.current.scrollTop = Math.max(0, scrollTop);
       }
     }
-  }, [isToday, isLoading]);
-
-  if (isLoading) {
-    return (
-      <Card.Root>
-        <Card.Body>
-          <VStack py={8}>
-            <Spinner />
-            <Text color="fg.muted">Loading schedule...</Text>
-          </VStack>
-        </Card.Body>
-      </Card.Root>
-    );
-  }
+  }, [isToday]);
 
   return (
     <Card.Root>
@@ -213,7 +200,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
           <HStack justify="space-between" wrap="wrap" gap={2}>
             <HStack gap={2}>
               <Icon as={BsCalendar} color="blue.500" />
-              {showTitle && <Heading size="sm">Today&apos;s Schedule</Heading>}
+              {showTitle && <Heading size="sm">{isToday ? "Today&apos;s Schedule" : "Schedule"}</Heading>}
             </HStack>
 
             <HStack gap={2}>

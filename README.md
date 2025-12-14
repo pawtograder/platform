@@ -128,7 +128,7 @@ Add the following environment variables to your `.env.local` file:
 
    You can generate an invite URL with these permissions using the OAuth2 URL Generator in the Discord Developer Portal, or manually construct:
 
-   ```
+   ```text
    https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=268896336&scope=bot
    ```
 
@@ -140,16 +140,6 @@ Add the following environment variables to your `.env.local` file:
      - For production: `https://app.pawtograder.com/api/discord/webhook` (or your domain)
    - Copy the webhook's **public key** (found in the webhook settings, labeled "Signing Secret" or "Public Key")
    - Add it to your environment variables as `DISCORD_WEBHOOK_PUBLIC_KEY`:
-     - The public key is hex-encoded (64 characters)
-     - You can include or omit the `0x` prefix
-     - Example: `a1b2c3d4e5f6...` or `0xa1b2c3d4e5f6...`
-   - Enable the "Guild Member Add" event in the webhook settings
-   - Test the webhook by clicking "Send Test Message" - Discord will send a PING event
-   - **Security Note**: The webhook endpoint uses ed25519 signature verification (via `@noble/ed25519`) to ensure all requests are from Discord. Invalid signatures are rejected with a 401 status.
-   - This webhook will automatically:
-     - Verify the request signature
-     - Mark pending Discord invites as used when users join
-     - Enqueue role sync operations to assign Pawtograder roles to users
 
 ### Setting Up Discord Integration for a Class
 

@@ -1954,8 +1954,9 @@ BEGIN
     -- Started working: is_active changed from false to true, or was NULL and now true
     IF (OLD.is_active IS DISTINCT FROM NEW.is_active AND NEW.is_active = true) THEN
       PERFORM public.enqueue_discord_queue_assignment_message(NEW.id, 'started');
-    -- Stopped working: is_active changed from true to false, or ended_at was set
-    ELSIF (OLD.is_active IS DISTINCT FROM NEW.is_active AND NEW.is_active = false) 
+    -- Stopped working: is_active changed from true to false OR ended_at was set
+    -- (mutually exclusive with started condition, ensures single notification)
+    ELSIF (OLD.is_active IS DISTINCT FROM NEW.is_active AND NEW.is_active = false)
        OR (OLD.ended_at IS NULL AND NEW.ended_at IS NOT NULL) THEN
       PERFORM public.enqueue_discord_queue_assignment_message(NEW.id, 'stopped');
     END IF;
@@ -2178,7 +2179,7 @@ BEGIN
 
     UPDATE public.users
     SET
-      discord_username = json_extract_path_text(to_json(NEW.identity_data), 'name'),
+      discord_username = NEW.identity_data->>'name',
       discord_id = NEW.provider_id
     WHERE user_id = NEW.user_id;
 

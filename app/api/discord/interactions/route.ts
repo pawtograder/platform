@@ -175,8 +175,6 @@ async function handleSyncRolesCommand(interaction: DiscordInteraction, scope: Se
     .single();
 
   if (userError || !userData) {
-    // eslint-disable-next-line no-console
-    console.log(`[Discord Interactions] User not found for Discord ID ${discordUserId}`);
     return NextResponse.json({
       type: 4,
       data: {

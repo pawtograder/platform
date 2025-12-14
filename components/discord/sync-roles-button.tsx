@@ -3,7 +3,7 @@
 import { Button, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { BsDiscord, BsArrowRepeat, BsCheckCircle, BsExclamationCircle } from "react-icons/bs";
 import { createClient } from "@/utils/supabase/client";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useIdentity } from "@/hooks/useIdentities";
 import { Tooltip } from "../ui/tooltip";
 
@@ -36,6 +36,16 @@ export default function SyncRolesButton({
   const { identities } = useIdentity();
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [result, setResult] = useState<SyncResult | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   const discordIdentity = identities?.find((identity) => identity.provider === "discord");
 
@@ -71,9 +81,15 @@ export default function SyncRolesButton({
         setSyncState("success");
         setResult(syncResult);
 
+        // Clear any existing timeout
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+
         // Reset to idle after 3 seconds
-        setTimeout(() => {
+        timeoutRef.current = setTimeout(() => {
           setSyncState("idle");
+          timeoutRef.current = null;
         }, 3000);
       }
     } catch (err) {

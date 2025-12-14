@@ -46,10 +46,13 @@ function toMsLatency(enqueuedAt: string): number {
 async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: number, scope: Sentry.Scope) {
   console.log(`[archiveMessage] Archiving message ${msgId}`);
   try {
-    await adminSupabase.schema("pgmq_public").rpc("archive", {
+    const { error } = await adminSupabase.schema("pgmq_public").rpc("archive", {
       queue_name: "discord_async_calls",
       message_id: msgId
     });
+    if (error) {
+      throw error;
+    }
     console.log(`[archiveMessage] Successfully archived message ${msgId}`);
   } catch (error) {
     console.error(`[archiveMessage] Failed to archive message ${msgId}:`, error);
@@ -1083,11 +1086,8 @@ export async function processEnvelope(
           console.error(`[processEnvelope] Some commands failed to register:`, failures);
           scope.setContext("register_commands_failures", { failures });
         }
-
-        console.log(`[processEnvelope] register_commands completed: ${results.length} commands processed`);
-        return true; // Don't retry on partial failure - commands that succeeded are fine
+        return true;
       }
-
       case "batch_role_sync": {
         console.log(`[processEnvelope] Processing batch_role_sync`);
         Sentry.addBreadcrumb({ message: "Running batch Discord role sync", level: "info" });
@@ -1096,11 +1096,11 @@ export async function processEnvelope(
         console.log(`[processEnvelope] batch_role_sync completed: ${JSON.stringify(results.summary)}`);
         return true;
       }
-
-      default:
+      default: {
         const unknownMethod = (envelope as DiscordAsyncEnvelope).method;
         console.error(`[processEnvelope] Unknown async method: ${unknownMethod}`);
         throw new Error(`Unknown async method: ${unknownMethod}`);
+      }
     }
   } catch (error) {
     console.error(`[processEnvelope] Error processing envelope:`, error);
@@ -1155,7 +1155,6 @@ export async function processEnvelope(
       error_message: error instanceof Error ? error.message : String(error),
       requeue_delay_seconds: 120
     });
-    Sentry.captureException(error, scope);
 
     await requeueWithDelay(adminSupabase, envelope, 120, scope); // 2 minutes
     await archiveMessage(adminSupabase, meta.msg_id, scope);

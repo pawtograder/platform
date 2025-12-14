@@ -173,7 +173,7 @@ export default function NotificationPreferencesPanel() {
                   onChange={(e) =>
                     setPreferences((prev) => ({
                       ...prev,
-                      regrade_request_notification: e.target.value as "all" | "only_active_queue" | "none"
+                      regrade_request_notification: e.target.value as "all" | "none"
                     }))
                   }
                 >

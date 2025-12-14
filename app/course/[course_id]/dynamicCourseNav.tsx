@@ -91,7 +91,7 @@ const LinkItems = (courseID: number) => [
       {
         name: "Discord",
         icon: FiMessageSquare,
-        instructor_or_grader_only: true,
+        instructors_or_graders_only: true,
         target: `/course/${courseID}/manage/discord`
       },
       {

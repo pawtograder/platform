@@ -31,14 +31,14 @@ export function useOfficeHoursSchedule() {
     return events.filter((e) => e.calendar_type === "office_hours");
   }, [events]);
 
-  return { events: officeHoursEvents, isLoading: false };
+  return officeHoursEvents;
 }
 
 /**
  * Hook to get office hours events for a specific week
  */
 export function useWeekSchedule(weekStart: Date) {
-  const { events } = useOfficeHoursSchedule();
+  const events = useOfficeHoursSchedule();
 
   const weekEnd = useMemo(() => {
     const end = new Date(weekStart);
@@ -58,7 +58,7 @@ export function useWeekSchedule(weekStart: Date) {
     });
   }, [events, weekStart, weekEnd]);
 
-  return { events: filteredEvents, isLoading: false };
+  return filteredEvents;
 }
 
 /**
@@ -67,14 +67,14 @@ export function useWeekSchedule(weekStart: Date) {
  */
 export function useAllCalendarEvents() {
   const events = useCalendarEvents();
-  return { events, isLoading: false };
+  return events;
 }
 
 /**
  * Hook to get calendar events for a specific day
  */
 export function useDaySchedule(date: Date) {
-  const { events } = useAllCalendarEvents();
+  const events = useAllCalendarEvents();
 
   // Use date string as dependency to avoid object reference issues
   const dateStr = date.toDateString();
@@ -97,7 +97,7 @@ export function useDaySchedule(date: Date) {
     const startTs = dayStart.getTime();
     const endTs = dayEnd.getTime();
 
-    return events.filter((event) => {
+    return events.filter((event: CalendarEvent) => {
       const eventStart = new Date(event.start_time).getTime();
       const eventEnd = new Date(event.end_time).getTime();
       // Event overlaps with day if it starts before day ends AND ends after day starts
@@ -105,7 +105,7 @@ export function useDaySchedule(date: Date) {
     });
   }, [events, dayStart, dayEnd]);
 
-  return { events: filteredEvents, isLoading: false };
+  return filteredEvents;
 }
 
 /**
@@ -139,5 +139,5 @@ export function useCalendarEditUrls() {
     };
   }, [isStaff, settings]);
 
-  return { ...urls, isLoading: false };
+  return { ...urls };
 }
