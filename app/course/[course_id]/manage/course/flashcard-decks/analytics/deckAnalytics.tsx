@@ -3,8 +3,17 @@
 import { useList } from "@refinedev/core";
 import { Box, Heading, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from "@/components/ui/recharts-wrapper";
 
 // Row returned by the new view `flashcard_deck_analytics`.
 type DeckAnalyticsRow = {

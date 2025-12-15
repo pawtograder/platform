@@ -15,12 +15,21 @@ import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
+import { Box, HStack, Spinner, Text, Textarea, VStack } from "@chakra-ui/react";
 import { useCreate, useDelete, useList, useOne, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
+import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+
+// Dynamic import of Monaco Editor to reduce build memory usage
+const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
+  ssr: false,
+  loading: () => <Spinner size="lg" />
+});
+
+// Import Monaco type separately for type checking
+import type { Monaco } from "@monaco-editor/react";
 import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";

@@ -4436,6 +4436,99 @@ export type Database = {
           }
         ];
       };
+      live_poll_responses: {
+        Row: {
+          created_at: string;
+          id: string;
+          is_submitted: boolean;
+          live_poll_id: string;
+          public_profile_id: string | null;
+          response: Json;
+          submitted_at: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          id?: string;
+          is_submitted?: boolean;
+          live_poll_id: string;
+          public_profile_id?: string | null;
+          response?: Json;
+          submitted_at?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          id?: string;
+          is_submitted?: boolean;
+          live_poll_id?: string;
+          public_profile_id?: string | null;
+          response?: Json;
+          submitted_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "live_poll_responses_live_poll_id_fkey";
+            columns: ["live_poll_id"];
+            isOneToOne: false;
+            referencedRelation: "live_polls";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "live_poll_responses_public_profile_id_fkey";
+            columns: ["public_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["public_profile_id"];
+          }
+        ];
+      };
+      live_polls: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          deactivates_at: string | null;
+          id: string;
+          is_live: boolean;
+          question: Json;
+          require_login: boolean;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          deactivates_at?: string | null;
+          id?: string;
+          is_live?: boolean;
+          question?: Json;
+          require_login?: boolean;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          deactivates_at?: string | null;
+          id?: string;
+          is_live?: boolean;
+          question?: Json;
+          require_login?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "live_polls_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "live_polls_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["public_profile_id"];
+          }
+        ];
+      };
       llm_inference_usage: {
         Row: {
           account: string;
@@ -4661,325 +4754,6 @@ export type Database = {
           user_id?: string | null;
         };
         Relationships: [];
-      };
-      poll_question_answers: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          description: string | null;
-          id: number;
-          ordinal: number;
-          poll: number;
-          poll_question: number;
-          title: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          ordinal?: number;
-          poll: number;
-          poll_question: number;
-          title: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          ordinal?: number;
-          poll?: number;
-          poll_question?: number;
-          title?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_question_answers_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_answers_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_answers_poll_question_fkey";
-            columns: ["poll_question"];
-            isOneToOne: false;
-            referencedRelation: "poll_questions";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      poll_question_results: {
-        Row: {
-          count: number;
-          created_at: string;
-          id: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-        };
-        Insert: {
-          count?: number;
-          created_at?: string;
-          id?: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-        };
-        Update: {
-          count?: number;
-          created_at?: string;
-          id?: number;
-          poll?: number;
-          poll_question?: number;
-          poll_question_answer?: number;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_question_results_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_results_poll_question_answer_fkey";
-            columns: ["poll_question_answer"];
-            isOneToOne: false;
-            referencedRelation: "poll_question_answers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_results_poll_question_fkey";
-            columns: ["poll_question"];
-            isOneToOne: false;
-            referencedRelation: "poll_questions";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      poll_questions: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          description: string | null;
-          id: number;
-          poll: number;
-          question_type: string;
-          title: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          poll: number;
-          question_type?: string;
-          title: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          poll?: number;
-          question_type?: string;
-          title?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_questions_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_questions_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      poll_response_answers: {
-        Row: {
-          created_at: string;
-          id: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-          poll_response: number;
-          profile_id: string;
-        };
-        Insert: {
-          created_at?: string;
-          id?: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-          poll_response: number;
-          profile_id?: string;
-        };
-        Update: {
-          created_at?: string;
-          id?: number;
-          poll?: number;
-          poll_question?: number;
-          poll_question_answer?: number;
-          poll_response?: number;
-          profile_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_response_answers_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_poll_question_answer_fkey";
-            columns: ["poll_question_answer"];
-            isOneToOne: false;
-            referencedRelation: "poll_question_answers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_poll_question_fkey";
-            columns: ["poll_question"];
-            isOneToOne: false;
-            referencedRelation: "poll_questions";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_poll_response_fkey";
-            columns: ["poll_response"];
-            isOneToOne: false;
-            referencedRelation: "poll_responses";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
-          }
-        ];
-      };
-      poll_responses: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          ended_at: string | null;
-          id: number;
-          poll: number;
-          profile_id: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          ended_at?: string | null;
-          id?: number;
-          poll: number;
-          profile_id: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          ended_at?: string | null;
-          id?: number;
-          poll?: number;
-          profile_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_responses_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_responses_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_responses_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_responses_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
-          }
-        ];
-      };
-      polls: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          description: string | null;
-          due_date: string | null;
-          flair: Json | null;
-          id: number;
-          name: string;
-          released_at: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          description?: string | null;
-          due_date?: string | null;
-          flair?: Json | null;
-          id?: number;
-          name: string;
-          released_at?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          description?: string | null;
-          due_date?: string | null;
-          flair?: Json | null;
-          id?: number;
-          name?: string;
-          released_at?: string | null;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "polls_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          }
-        ];
       };
       profiles: {
         Row: {
@@ -7784,6 +7558,260 @@ export type Database = {
           }
         ];
       };
+      survey_assignments: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: string;
+          profile_id: string;
+          survey_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: string;
+          profile_id: string;
+          survey_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: string;
+          profile_id?: string;
+          survey_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_assignments_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_assignments_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_assignments_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "survey_assignments_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      survey_responses: {
+        Row: {
+          created_at: string;
+          deleted_at: string | null;
+          id: string;
+          is_submitted: boolean;
+          profile_id: string;
+          response: Json;
+          submitted_at: string | null;
+          survey_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id?: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "survey_responses_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      survey_templates: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          description: string;
+          id: string;
+          scope: Database["public"]["Enums"]["template_scope"];
+          template: Json;
+          title: string;
+          updated_at: string;
+          version: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title?: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_templates_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      surveys: {
+        Row: {
+          allow_response_editing: boolean;
+          assigned_to_all: boolean;
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          deleted_at: string | null;
+          description: string | null;
+          due_date: string | null;
+          id: string;
+          json: Json;
+          status: Database["public"]["Enums"]["survey_status"];
+          survey_id: string;
+          title: string;
+          type: Database["public"]["Enums"]["survey_type"];
+          updated_at: string;
+          validation_errors: string | null;
+          version: number;
+        };
+        Insert: {
+          allow_response_editing?: boolean;
+          assigned_to_all?: boolean;
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title: string;
+          type?: Database["public"]["Enums"]["survey_type"];
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Update: {
+          allow_response_editing?: boolean;
+          assigned_to_all?: boolean;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title?: string;
+          type?: Database["public"]["Enums"]["survey_type"];
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "surveys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       system_settings: {
         Row: {
           created_at: string;
@@ -9584,6 +9612,7 @@ export type Database = {
         };
         Returns: boolean;
       };
+      authorizeforanyclassstaff: { Args: never; Returns: boolean };
       authorizeforassignmentgroup: {
         Args: { _assignment_group_id: number };
         Returns: boolean;
@@ -9654,6 +9683,10 @@ export type Database = {
       };
       can_access_help_request: {
         Args: { help_request_id: number };
+        Returns: boolean;
+      };
+      can_access_poll_response: {
+        Args: { poll_id: string; profile_id: string };
         Returns: boolean;
       };
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
@@ -9801,6 +9834,10 @@ export type Database = {
         Args: { class_id?: number; p_force?: boolean; user_id: string };
         Returns: undefined;
       };
+      create_survey_assignments: {
+        Args: { p_profile_ids: string[]; p_survey_id: string };
+        Returns: undefined;
+      };
       create_system_notification: {
         Args: {
           p_backdrop_dismiss?: boolean;
@@ -9833,6 +9870,7 @@ export type Database = {
         Returns: number;
       };
       custom_access_token_hook: { Args: { event: Json }; Returns: Json };
+      deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
@@ -10400,6 +10438,10 @@ export type Database = {
         Args: { p_user_id: string };
         Returns: boolean;
       };
+      soft_delete_survey: {
+        Args: { p_survey_id: string; p_survey_logical_id: string };
+        Returns: undefined;
+      };
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
@@ -10579,6 +10621,9 @@ export type Database = {
         | "request_resolved"
         | "video_joined"
         | "video_left";
+      survey_status: "draft" | "published" | "closed";
+      survey_type: "assign_all" | "specific" | "peer";
+      template_scope: "global" | "course";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -10743,7 +10788,10 @@ export const Constants = {
         "request_resolved",
         "video_joined",
         "video_left"
-      ]
+      ],
+      survey_status: ["draft", "published", "closed"],
+      survey_type: ["assign_all", "specific", "peer"],
+      template_scope: ["global", "course"]
     }
   }
 } as const;

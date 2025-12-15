@@ -155,7 +155,16 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
   // Discord integration tables (staff-only, broadcast on staff channel)
   discord_channels: ["staff"],
-  discord_messages: ["staff"]
+  discord_messages: ["staff"],
+
+  // Live polls related tables
+  live_polls: ["staff", "students"], // Poll status broadcasts to all
+  live_poll_responses: ["staff"], // Response data only to staff
+
+  // Survey related tables
+  surveys: ["staff"], // Survey metadata (staff-only management)
+  survey_responses: ["staff"], // Response data only to staff
+  survey_assignments: ["staff"] // Assignment data only to staff
 };
 
 /**
@@ -661,6 +670,16 @@ export default class TableController<
     return this._isRefetching;
   }
 
+  private async waitForRefetchToComplete(): Promise<void> {
+    await this.readyPromise;
+    if (this._isRefetching) {
+      return new Promise((resolve) => {
+        this._refetchListeners.push(() => resolve());
+      });
+    }
+    return Promise.resolve();
+  }
+
   /** Extract updated_at from a row-like object as epoch ms; returns null if not present/parsable */
   private _extractUpdatedAtMs(rowLike: unknown): number | null {
     try {
@@ -762,7 +781,7 @@ export default class TableController<
       async () => {
         await this._processBatchedOperations();
       },
-      this._debounceInterval + Math.random() * 1000 * 15
+      this._debounceInterval + Math.random() * 1000 * 5
     ); // Add some jitter to prevent thundering herd
   }
 
@@ -2571,7 +2590,13 @@ export default class TableController<
         `TableController for table '${this._table}' is closed. Cannot call update(${id}). This indicates a stale reference is being used.`
       );
     }
-    const oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+    await this.waitForRefetchToComplete();
+    let oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+    // If row not found, try to fetch it first (similar to getById behavior)
+    if (!oldRow && !this._nonExistantKeys.has(id)) {
+      await this._maybeRefetchKey(id);
+      oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+    }
     if (!oldRow) {
       throw new Error("Row not found");
     }

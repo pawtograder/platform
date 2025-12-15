@@ -37,7 +37,7 @@ import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useList } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -385,6 +385,8 @@ export class CourseController {
   private _classStaffSettings?: TableController<"class_staff_settings">;
   private _discordChannels?: TableController<"discord_channels">;
   private _discordMessages?: TableController<"discord_messages">;
+  private _livePolls?: TableController<"live_polls">;
+  private _surveys?: TableController<"surveys">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -434,6 +436,8 @@ export class CourseController {
       void this.discordChannels; // Triggers lazy creation (staff only)
       void this.discordMessages; // Triggers lazy creation (staff only)
     }
+    void this.livePolls; // Triggers lazy creation
+    void this.surveys; // Triggers lazy creation
 
     // Clear initialData to free memory after all eager controllers are initialized
     this._initialData = undefined;
@@ -834,6 +838,42 @@ export class CourseController {
       });
     }
     return this._discordMessages;
+  }
+
+  get livePolls(): TableController<"live_polls"> {
+    if (!this._livePolls) {
+      this._livePolls = new TableController({
+        client: this.client,
+        table: "live_polls",
+        query: this.client
+          .from("live_polls")
+          .select("*")
+          .eq("class_id", this.courseId)
+          .order("created_at", { ascending: false }),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._livePolls;
+  }
+
+  get surveys(): TableController<"surveys"> {
+    if (!this._surveys) {
+      this._surveys = new TableController({
+        client: this.client,
+        table: "surveys",
+        query: this.client
+          .from("surveys")
+          .select("*")
+          .eq("class_id", this.courseId)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false }),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.surveys
+      });
+    }
+    return this._surveys;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1263,6 +1303,8 @@ export class CourseController {
     this._discordChannels = undefined;
     this._discordMessages?.close();
     this._discordMessages = undefined;
+    this._livePolls?.close();
+    this._surveys?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1918,4 +1960,320 @@ export function useDiscordMessage(
   const message = useFindTableControllerValue(discordMessagesController, shouldSearch ? filter : () => false);
 
   return message ?? null;
+}
+
+/**
+ * Hook to get all live polls for the course with real-time updates
+ */
+export function useLivePolls() {
+  const controller = useCourseController();
+  const [polls, setPolls] = useState<Database["public"]["Tables"]["live_polls"]["Row"][]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.livePolls.list((updatedPolls) => {
+      setPolls(updatedPolls);
+    });
+    setPolls(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return polls;
+}
+
+/**
+ * Hook to get only live (active) polls for the course with real-time updates
+ */
+export function useActiveLivePolls() {
+  const controller = useCourseController();
+  const predicate = useCallback((poll: Database["public"]["Tables"]["live_polls"]["Row"]) => poll.is_live === true, []);
+  const polls = useListTableControllerValues(controller.livePolls, predicate);
+  const isLoading = !controller.livePolls.ready;
+
+  return { polls, isLoading };
+}
+
+/**
+ * Hook to get a single poll by ID with real-time updates
+ */
+export function useLivePoll(pollId: string | undefined) {
+  const { livePolls } = useCourseController();
+  const poll = useTableControllerValueById(livePolls, pollId);
+  return poll;
+}
+
+/**
+ * Helper to extract choices from poll question JSON
+ */
+function extractChoicesFromPollQuestion(pollQuestion: unknown): string[] {
+  if (!pollQuestion || typeof pollQuestion !== "object") {
+    return [];
+  }
+
+  const questionData = pollQuestion as Record<string, unknown> | null;
+  if (!questionData || !Array.isArray(questionData.elements) || questionData.elements.length === 0) {
+    return [];
+  }
+
+  const firstElement = (
+    questionData?.elements as Array<{
+      choices?: string[] | Array<{ text?: string; label?: string; value?: string }>;
+    }>
+  )?.[0];
+
+  const choicesRaw = Array.isArray(firstElement?.choices) ? firstElement.choices : [];
+  return choicesRaw.map((choice) => {
+    if (typeof choice === "string") return choice;
+    if (!choice || typeof choice !== "object") return "";
+    return choice.text || choice.label || choice.value || String(choice);
+  });
+}
+
+/**
+ * Helper to extract answer from poll response
+ * Response format: { "poll_question_0": "Answer" } or { "poll_question_0": ["A", "B"] }
+ */
+function extractPollAnswer(response: unknown): string | string[] | null {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    return null;
+  }
+  const data = response as Record<string, unknown>;
+  const key = Object.keys(data).find((k) => k.startsWith("poll_question_"));
+  if (!key) return null;
+
+  const value = data[key];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+    return value as string[];
+  }
+  return null;
+}
+
+/**
+ * Hook to get poll response counts with instant real-time updates.
+ * Directly increments counts when new responses arrive - no intermediate array processing.
+ *
+ * @param pollId - The poll ID to count responses for
+ * @param pollQuestion - The poll question JSON containing choices
+ */
+export function usePollResponseCounts(pollId: string | undefined, pollQuestion: unknown) {
+  const controller = useCourseController();
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const seenIdsRef = useRef<Set<string>>(new Set());
+
+  // Extract choices from poll question
+  const choices = useMemo(() => extractChoicesFromPollQuestion(pollQuestion), [pollQuestion]);
+
+  useEffect(() => {
+    if (!pollId || choices.length === 0) {
+      setCounts({});
+      seenIdsRef.current.clear();
+      setIsLoading(false);
+      return;
+    }
+
+    // Reset state when pollId changes
+    seenIdsRef.current.clear();
+
+    // Initialize counts for all choices
+    const initialCounts: Record<string, number> = {};
+    choices.forEach((choice) => {
+      initialCounts[choice] = 0;
+    });
+
+    // Fetch initial data and count, then set up real-time subscription
+    const fetchInitial = async () => {
+      const { data, error } = await controller.client
+        .from("live_poll_responses")
+        .select("*")
+        .eq("live_poll_id", pollId);
+
+      if (!error && data) {
+        data.forEach((response) => {
+          seenIdsRef.current.add(response.id);
+          const answer = extractPollAnswer(response.response);
+
+          if (Array.isArray(answer)) {
+            answer.forEach((item: string) => {
+              if (!item.startsWith("other:") && initialCounts.hasOwnProperty(item)) {
+                initialCounts[item]++;
+              }
+            });
+          } else if (
+            typeof answer === "string" &&
+            !answer.startsWith("other:") &&
+            initialCounts.hasOwnProperty(answer)
+          ) {
+            initialCounts[answer]++;
+          }
+        });
+      }
+
+      setCounts(initialCounts);
+      setIsLoading(false);
+
+      // Set up real-time subscription after initial data is loaded
+      // This ensures we don't miss any updates that arrive during the initial fetch
+      const unsubscribe = controller.classRealTimeController.subscribe({ table: "live_poll_responses" }, (message) => {
+        if (message.operation === "INSERT" && message.data) {
+          const responseData = message.data as Database["public"]["Tables"]["live_poll_responses"]["Row"];
+
+          // Only count if it matches our poll and we haven't seen it
+          if (responseData.live_poll_id === pollId && !seenIdsRef.current.has(responseData.id)) {
+            seenIdsRef.current.add(responseData.id);
+
+            const answer = extractPollAnswer(responseData.response);
+
+            // Increment counts directly - instant update!
+            setCounts((prev) => {
+              const updated = { ...prev };
+
+              if (Array.isArray(answer)) {
+                answer.forEach((item: string) => {
+                  if (!item.startsWith("other:") && updated.hasOwnProperty(item)) {
+                    updated[item]++;
+                  }
+                });
+              } else if (typeof answer === "string" && !answer.startsWith("other:") && updated.hasOwnProperty(answer)) {
+                updated[answer]++;
+              }
+
+              return updated;
+            });
+          }
+        }
+      });
+
+      return unsubscribe;
+    };
+
+    let unsubscribeFunc: (() => void) | undefined;
+    fetchInitial().then((unsub) => {
+      unsubscribeFunc = unsub;
+    });
+
+    return () => {
+      unsubscribeFunc?.();
+    };
+  }, [controller, pollId, choices]);
+
+  return { counts, isLoading };
+}
+
+// =============================================================================
+// SURVEY HOOKS
+// =============================================================================
+
+/**
+ * Hook to get all surveys for the course with real-time updates (staff only)
+ */
+export function useSurveys() {
+  const controller = useCourseController();
+  const [surveys, setSurveys] = useState<Database["public"]["Tables"]["surveys"]["Row"][]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.surveys.list((updatedSurveys) => {
+      setSurveys(updatedSurveys);
+    });
+    setSurveys(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return surveys;
+}
+
+/**
+ * Hook to get a single survey by ID with real-time updates
+ */
+export function useSurvey(surveyId: string | undefined) {
+  const { surveys } = useCourseController();
+  const survey = useTableControllerValueById(surveys, surveyId);
+  return survey;
+}
+
+/**
+ * Hook to get only published surveys for the course (for students)
+ */
+export function usePublishedSurveys() {
+  const controller = useCourseController();
+  const predicate = useCallback(
+    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.status === "published" && !survey.deleted_at,
+    []
+  );
+  const surveys = useListTableControllerValues(controller.surveys, predicate);
+  const isLoading = !controller.surveys.ready;
+
+  return { surveys, isLoading };
+}
+
+/**
+ * Type for survey response with profile data
+ */
+export type SurveyResponseWithProfile = Database["public"]["Tables"]["survey_responses"]["Row"] & {
+  profiles: { id: string; name: string | null } | null;
+};
+
+/**
+ * Hook to get survey responses for a specific survey with real-time updates
+ * Uses per-survey loading - creates a TableController scoped to the specific survey
+ */
+export function useSurveyResponses(surveyId: string | undefined) {
+  const controller = useCourseController();
+  const [responses, setResponses] = useState<SurveyResponseWithProfile[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!surveyId) {
+      setResponses([]);
+      setIsLoading(false);
+      return;
+    }
+
+    // Create a TableController scoped to this specific survey
+    const ctrl = new TableController({
+      client: controller.client,
+      table: "survey_responses",
+      query: controller.client
+        .from("survey_responses")
+        .select("*")
+        .eq("survey_id", surveyId)
+        .eq("is_submitted", true)
+        .is("deleted_at", null),
+      classRealTimeController: controller.classRealTimeController,
+      realtimeFilter: { survey_id: surveyId }
+    });
+
+    // Get profiles for joining response data
+    const profilesController = controller.profiles;
+
+    const updateResponsesWithProfiles = (rawResponses: Database["public"]["Tables"]["survey_responses"]["Row"][]) => {
+      // Join with profiles data from the profiles controller
+      const { data: profiles } = profilesController.list(() => {});
+      const profileMap = new Map(profiles.map((p) => [p.id, p]));
+
+      const responsesWithProfiles: SurveyResponseWithProfile[] = rawResponses.map((r) => ({
+        ...r,
+        profiles: profileMap.get(r.profile_id)
+          ? { id: r.profile_id, name: profileMap.get(r.profile_id)?.name ?? null }
+          : null
+      }));
+
+      setResponses(responsesWithProfiles);
+    };
+
+    const { data, unsubscribe } = ctrl.list((updated) => {
+      updateResponsesWithProfiles(updated);
+      setIsLoading(false);
+    });
+
+    updateResponsesWithProfiles(data);
+    setIsLoading(!ctrl.ready);
+
+    return () => {
+      unsubscribe();
+      ctrl.close();
+    };
+  }, [surveyId, controller]);
+
+  return { responses, isLoading };
 }

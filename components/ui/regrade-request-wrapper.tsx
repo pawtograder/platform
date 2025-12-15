@@ -218,7 +218,6 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const { regradeRequests } = useAssignmentController();
-  const regradeRequest = useRegradeRequest(regradeRequestId);
 
   // Reset adjustment to 0 when popover opens
   useEffect(() => {
@@ -278,8 +277,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
             : `Request resolved. Score adjusted by ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} points.`,
         type: "success"
       });
-    } catch (error) {
-      console.error("Error resolving request:", error);
+    } catch {
       toaster.create({
         title: "Error",
         description: "Failed to resolve request. Please try again.",
@@ -288,15 +286,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
     } finally {
       setIsUpdating(false);
     }
-  }, [
-    finalScore,
-    pointsAdjustmentNum,
-    regradeRequestId,
-    privateProfileId,
-    regradeRequests,
-    regradeRequest,
-    initialPoints
-  ]);
+  }, [finalScore, pointsAdjustmentNum, regradeRequestId, privateProfileId, regradeRequests]);
 
   return (
     <PopoverRoot
@@ -532,7 +522,6 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   const [isUpdating, setIsUpdating] = useState(false);
 
   const { regradeRequests } = useAssignmentController();
-  const regradeRequest = useRegradeRequest(regradeRequestId);
 
   // Reset adjustment to 0 when popover opens
   useEffect(() => {
@@ -593,8 +582,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
             : `Request closed. Adjusted by ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts from grader's decision.`,
         type: "success"
       });
-    } catch (error) {
-      console.error("Error closing request:", error);
+    } catch {
       toaster.create({
         title: "Error",
         description: "Failed to close request. Please try again.",
@@ -603,15 +591,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     } finally {
       setIsUpdating(false);
     }
-  }, [
-    finalScore,
-    pointsAdjustmentNum,
-    regradeRequestId,
-    privateProfileId,
-    regradeRequests,
-    regradeRequest,
-    resolvedPoints
-  ]);
+  }, [finalScore, pointsAdjustmentNum, regradeRequestId, privateProfileId, regradeRequests]);
 
   return (
     <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
@@ -845,8 +825,7 @@ function EditablePoints({
         description: `${type === "resolved" ? "Resolved" : "Final"} points have been updated.`,
         type: "success"
       });
-    } catch (error) {
-      console.error("Error updating points:", error);
+    } catch {
       toaster.create({
         title: "Error",
         description: "Failed to update points. Please try again.",
@@ -1008,7 +987,6 @@ export default function RegradeRequestWrapper({
       };
       await submission_regrade_request_comments.create(values);
     } catch (error) {
-      console.error("Error creating comment or updating regrade request:", error);
       toaster.create({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to add comment. Please try again.",
@@ -1043,7 +1021,6 @@ export default function RegradeRequestWrapper({
         type: "success"
       });
     } catch (error) {
-      console.error("Error escalating request:", error);
       toaster.create({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to escalate request. Please try again.",

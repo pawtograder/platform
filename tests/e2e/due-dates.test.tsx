@@ -29,7 +29,7 @@ const labAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"),
 labAssignmentDueDate.setHours(10, 0, 0, 0);
 const groupAssignmentDueDate = addDays(new TZDate(new Date(), "America/New_York"), 14);
 groupAssignmentDueDate.setHours(11, 0, 0, 0);
-test.beforeAll(async () => {
+test.beforeEach(async () => {
   course = await createClass();
   [labLeader, student, student2, instructor] = await createUsersInClass([
     {
@@ -167,6 +167,7 @@ test.beforeAll(async () => {
     throw new Error(`Failed to add student 2 to group: ${member2Error.message}`);
   }
 });
+
 const expectedLabAssignmentDueDate =
   labAssignmentDueDate.getDay() === 1 ? labAssignmentDueDate : previousMonday(labAssignmentDueDate);
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);
@@ -226,6 +227,8 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("link", { name: testLabAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
+    // Wait for the assignment detail page to fully load and the due date component to render
+    await expect(page.locator("text=/Due:/")).toBeVisible({ timeout: 10000 });
     await expect(
       page.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
     ).toBeVisible();
@@ -431,6 +434,9 @@ test.describe("Due Date Exceptions & Extensions", () => {
     if (insertError) {
       throw new Error(`Failed to insert group-level exception: ${insertError.message}`);
     }
+
+    // Reload the page
+    await page.reload();
 
     // Locate the group assignment exceptions table
     const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();

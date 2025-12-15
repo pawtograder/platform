@@ -54,6 +54,7 @@ export type CourseControllerInitialData = {
   gradebookColumns?: Database["public"]["Tables"]["gradebook_columns"]["Row"][];
   discordChannels?: Database["public"]["Tables"]["discord_channels"]["Row"][];
   discordMessages?: Database["public"]["Tables"]["discord_messages"]["Row"][];
+  surveys?: Database["public"]["Tables"]["surveys"]["Row"][];
 };
 
 /**
@@ -221,6 +222,10 @@ export async function fetchCourseControllerData(
     tags: [`discord_messages:${course_id}:${isStaff ? "staff" : "student"}`],
     revalidate: 30 // discord messages are created dynamically but don't change after
   });
+  const surveysClient = await createClientWithCaching({
+    tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -239,7 +244,8 @@ export async function fetchCourseControllerData(
     repositories,
     gradebookColumns,
     discordChannels,
-    discordMessages
+    discordMessages,
+    surveys
   ] = await Promise.all([
     // Profiles
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
@@ -328,6 +334,13 @@ export async function fetchCourseControllerData(
       ? fetchAllPages<Database["public"]["Tables"]["discord_messages"]["Row"]>(
           discordMessagesClient.from("discord_messages").select("*").eq("class_id", course_id)
         )
+      : Promise.resolve(undefined),
+
+    // Surveys (staff-only for management)
+    isStaff
+      ? fetchAllPages<Database["public"]["Tables"]["surveys"]["Row"]>(
+          surveysClient.from("surveys").select("*").eq("class_id", course_id).is("deleted_at", null)
+        )
       : Promise.resolve(undefined)
   ]);
 
@@ -347,7 +360,8 @@ export async function fetchCourseControllerData(
     repositories,
     gradebookColumns,
     discordChannels,
-    discordMessages
+    discordMessages,
+    surveys
   };
 }
 
