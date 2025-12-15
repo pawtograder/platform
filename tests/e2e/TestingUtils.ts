@@ -910,6 +910,7 @@ export async function insertOfficeHoursQueue({ class_id, name }: { class_id: num
       name: name,
       description: "This is a test office hours queue for E2E testing",
       depth: 1,
+      available: true,
       queue_type: "video"
     })
     .select("id")

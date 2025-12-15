@@ -7,9 +7,9 @@ import {
   createClass,
   createUsersInClass,
   insertAssignment,
-  insertOfficeHoursQueue,
   insertPreBakedSubmission,
   loginAsUser,
+  supabase,
   TestingUser
 } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
@@ -47,7 +47,33 @@ test.beforeAll(async () => {
       useMagicLink: true
     }
   ]);
-  await insertOfficeHoursQueue({ class_id: course.id, name: "office-hours" });
+
+  // Find the existing office hours queue (created automatically for each class)
+  const { data: officeHoursQueue, error: queueError } = await supabase
+    .from("help_queues")
+    .select("id")
+    .eq("class_id", course.id)
+    .eq("name", "office-hours")
+    .single();
+
+  if (queueError || !officeHoursQueue) {
+    throw new Error(`Failed to find office hours queue: ${queueError?.message ?? "Queue not found"}`);
+  }
+
+  // Assign instructor to start working on the office hours queue
+  const { error: assignmentError } = await supabase.from("help_queue_assignments").insert({
+    class_id: course.id,
+    help_queue_id: officeHoursQueue.id,
+    ta_profile_id: instructor.private_profile_id,
+    is_active: true,
+    started_at: new Date().toISOString(),
+    ended_at: null,
+    max_concurrent_students: 1
+  });
+  if (assignmentError) {
+    throw new Error(`Failed to assign grader to office hours queue: ${assignmentError.message}`);
+  }
+
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
     class_id: course.id,
