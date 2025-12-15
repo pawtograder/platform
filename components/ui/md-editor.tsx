@@ -1,12 +1,18 @@
 "use client";
-import MDEditor from "@uiw/react-md-editor";
+import dynamic from "next/dynamic";
 import { useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
-import { MDEditorProps } from "@uiw/react-md-editor";
+import type { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { isTextFile, getLanguageFromFile } from "@/lib/utils";
+
+// Dynamic import of MD Editor to reduce build memory usage
+const MDEditor = dynamic(() => import("@uiw/react-md-editor").then((mod) => mod.default), {
+  ssr: false,
+  loading: () => <div>Loading editor...</div>
+});
 // https://github.com/uiwjs/react-md-editor/issues/83
 
 /**
