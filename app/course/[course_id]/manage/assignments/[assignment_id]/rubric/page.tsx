@@ -38,10 +38,19 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
+import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// Dynamic import of Monaco Editor to reduce build memory usage
+const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
+  ssr: false,
+  loading: () => <Spinner size="lg" />
+});
+
+// Import Monaco type separately for type checking
+import type { Monaco } from "@monaco-editor/react";
 import { FaCheck } from "react-icons/fa6";
 import * as Sentry from "@sentry/nextjs";
 import * as YAML from "yaml";

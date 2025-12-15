@@ -25,8 +25,9 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
-import { common, createStarryNight } from "@wooorm/starry-night";
-import "@wooorm/starry-night/style/both";
+// Dynamic import of starry-night to reduce build memory usage
+// Note: The actual loading happens in useEffect, but we need to avoid static import
+import type { createStarryNight } from "@wooorm/starry-night";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
 import { Element, ElementContent, Properties, Root, RootContent } from "hast";
@@ -153,7 +154,14 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
 
   useEffect(() => {
     async function highlight() {
-      const highlighter = await createStarryNight(common);
+      // Dynamic import to reduce build memory usage
+      const starryNightModule = await import("@wooorm/starry-night");
+      // Load CSS styles dynamically - ignore TypeScript error as this is a CSS import
+      // @ts-expect-error - CSS imports don't have TypeScript declarations
+      await import("@wooorm/starry-night/style/both").catch(() => {
+        // Ignore import errors for CSS - styles may already be loaded
+      });
+      const highlighter = await starryNightModule.createStarryNight(starryNightModule.common);
       setStarryNight(highlighter);
     }
     highlight();

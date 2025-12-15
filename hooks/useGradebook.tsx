@@ -17,9 +17,43 @@ import { CourseController, useCourseController } from "./useCourseController";
 
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
+// Dynamic import of mathjs to reduce build memory usage
+// Types are imported statically for type checking, but actual library is loaded dynamically
+import type { ConstantNode, FunctionNode, Matrix, MathJsInstance } from "mathjs";
 import { minimatch } from "minimatch";
 import { useClassProfiles } from "./useClassProfiles";
+
+// Lazy-loaded MathJS instance cache
+let mathjsCache: {
+  all: typeof import("mathjs").all;
+  create: typeof import("mathjs").create;
+  ConstantNode: typeof import("mathjs").ConstantNode;
+  FunctionNode: typeof import("mathjs").FunctionNode;
+  Matrix: typeof import("mathjs").Matrix;
+} | null = null;
+
+async function loadMathJS() {
+  if (!mathjsCache) {
+    const mathjs = await import("mathjs");
+    mathjsCache = {
+      all: mathjs.all,
+      create: mathjs.create,
+      ConstantNode: mathjs.ConstantNode,
+      FunctionNode: mathjs.FunctionNode,
+      Matrix: mathjs.Matrix
+    };
+  }
+  return mathjsCache;
+}
+
+// Synchronous accessor that throws if MathJS isn't loaded yet
+// This should only be called after ensuring MathJS is loaded
+function getMathJS() {
+  if (!mathjsCache) {
+    throw new Error("MathJS not loaded. Call loadMathJS() first.");
+  }
+  return mathjsCache;
+}
 
 export default function useGradebook() {
   const gradebookController = useGradebookController();
@@ -1330,6 +1364,12 @@ export class GradebookController {
   }
 
   public extractAndValidateDependencies(expr: string, column_id: number) {
+    // MathJS is loaded lazily - ensure it's available
+    if (!mathjsCache) {
+      // In practice, this should be pre-loaded, but provide fallback
+      throw new Error("MathJS not loaded. Gradebook calculations require MathJS to be loaded first.");
+    }
+    const { create, all } = getMathJS();
     const math = create(all);
     const exprNode = math.parse(expr);
     const dependencies: Record<string, Set<number>> = {};
@@ -1400,6 +1440,12 @@ export class GradebookController {
   }
 
   createRendererForColumn(column: GradebookColumn): (cell: RendererParams) => React.ReactNode {
+    // MathJS is loaded lazily - ensure it's available
+    if (!mathjsCache) {
+      // In practice, this should be pre-loaded, but provide fallback
+      throw new Error("MathJS not loaded. Gradebook renderer requires MathJS to be loaded first.");
+    }
+    const { create, all } = getMathJS();
     const math = create(all);
     //Remove access to security-sensitive functions
     const securityFunctions = ["import", "createUnit", "reviver", "resolve"];
@@ -1643,6 +1689,14 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   const isInstructorOrGrader = classRole.role === "instructor" || classRole.role === "grader";
   const controller = useRef<GradebookController | null>(null);
   const [ready, setReady] = useState(false);
+
+  // Pre-load MathJS when provider mounts to ensure it's available for calculations
+  useEffect(() => {
+    loadMathJS().catch((error) => {
+      console.error("Failed to load MathJS:", error);
+      Sentry.captureException(error);
+    });
+  }, []);
 
   useEffect(() => {
     return () => {
