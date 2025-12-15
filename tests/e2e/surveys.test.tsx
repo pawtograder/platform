@@ -46,7 +46,7 @@ const seedSurvey = async <T = any,>(
 };
 
 const getAuthedClient = async (user: User) => {
-  const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  const client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
   const access_token = await getAuthTokenForUser(user);
   await client.auth.setSession({ access_token, refresh_token: "ignore" });
   return client;
