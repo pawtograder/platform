@@ -82,7 +82,7 @@ test.describe("Surveys Page", () => {
     }
   };
 
-  test.beforeAll(async () => {
+  test.beforeEach(async () => {
     course = await createClass();
     const users = await createUsersInClass([
       { role: "student", class_id: course.id, name: "Survey Student A", useMagicLink: true },
@@ -91,9 +91,6 @@ test.describe("Surveys Page", () => {
       { role: "grader", class_id: course.id, name: "Survey Grader", useMagicLink: true }
     ]);
     [studentA, studentB, instructor, grader] = users;
-  });
-
-  test.beforeEach(async () => {
     await clearCourseSurveys();
   });
 
