@@ -156,10 +156,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient<Database>(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_ANON_KEY!
-  );
+  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
 
   // Generate magic link using admin client
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
