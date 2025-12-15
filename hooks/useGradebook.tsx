@@ -8,7 +8,7 @@ import {
   GradebookColumnDependencies,
   GradebookColumnStudent
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -1682,21 +1682,26 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   const controller = useRef<GradebookController | null>(null);
   const [ready, setReady] = useState(false);
   const [mathjsLoaded, setMathjsLoaded] = useState(false);
+  const [mathjsError, setMathjsError] = useState<Error | null>(null);
+  const [controllerCreated, setControllerCreated] = useState(false); // Forces re-render when controller is created
 
   // Load MathJS first, then create controller
   useEffect(() => {
     let cancelled = false;
     loadMathJS()
-      .then(() => {
-        if (!cancelled) {
+      .then((cache) => {
+        if (!cancelled && cache) {
+          // Only set loaded if MathJS cache is actually populated
           setMathjsLoaded(true);
+          setMathjsError(null);
         }
       })
       .catch((error) => {
         console.error("Failed to load MathJS:", error);
         Sentry.captureException(error);
         if (!cancelled) {
-          setMathjsLoaded(true); // Set to true even on error to avoid blocking forever
+          setMathjsError(error as Error);
+          // Don't set mathjsLoaded to true on error - this will prevent controller creation
         }
       });
     return () => {
@@ -1713,9 +1718,15 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Create controller after MathJS is loaded
+  // Create controller after MathJS is loaded and verified
   useEffect(() => {
     if (!mathjsLoaded || !gradebook_id || isNaN(Number(gradebook_id))) return;
+    
+    // Double-check that MathJS cache is actually populated before creating controller
+    if (!mathjsCache) {
+      console.error("MathJS cache is not populated despite mathjsLoaded being true");
+      return;
+    }
 
     // If controller exists but class_id or gradebook_id changed, recreate it
     if (
@@ -1725,6 +1736,7 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
       controller.current.close();
       controller.current = null;
       setReady(false);
+      setControllerCreated(false);
     }
 
     // Create controller if it doesn't exist
@@ -1735,6 +1747,8 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
         gradebook_id,
         courseController.classRealTimeController
       );
+      // Force re-render now that controller exists - refs don't trigger re-renders!
+      setControllerCreated(true);
     }
   }, [mathjsLoaded, class_id, gradebook_id, isInstructorOrGrader, courseController.classRealTimeController]);
 
@@ -1742,8 +1756,47 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
     return <Text>Error: Gradebook is not enabled for this course.</Text>;
   }
 
+  // Show error if MathJS failed to load
+  if (mathjsError) {
+    return (
+      <Box p={4}>
+        <VStack gap={4}>
+          <Heading size="md" color="red.500">
+            Failed to Load Gradebook
+          </Heading>
+          <Text>
+            MathJS library failed to load. This is required for gradebook calculations.
+          </Text>
+          <Text fontSize="sm" color="text.subtle">
+            Error: {mathjsError.message}
+          </Text>
+          <Button
+            onClick={() => {
+              setMathjsError(null);
+              setMathjsLoaded(false);
+              // Retry loading MathJS
+              loadMathJS()
+                .then(() => {
+                  if (mathjsCache) {
+                    setMathjsLoaded(true);
+                  }
+                })
+                .catch((error) => {
+                  setMathjsError(error as Error);
+                  Sentry.captureException(error);
+                });
+            }}
+          >
+            Retry
+          </Button>
+        </VStack>
+      </Box>
+    );
+  }
+
   // Show loading screen while MathJS is loading or controller is not ready
-  if (!mathjsLoaded || !controller.current) {
+  // Note: controllerCreated state is used to force re-render after controller.current is set
+  if (!mathjsLoaded || !controller.current || !controllerCreated) {
     return <LoadingScreen />;
   }
 
