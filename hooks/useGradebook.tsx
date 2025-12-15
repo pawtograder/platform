@@ -19,7 +19,7 @@ import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 // Dynamic import of mathjs to reduce build memory usage
 // Types are imported statically for type checking, but actual library is loaded dynamically
-import type { ConstantNode, FunctionNode, Matrix, MathJsInstance } from "mathjs";
+import type { ConstantNode, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import { useClassProfiles } from "./useClassProfiles";
 
@@ -1364,11 +1364,7 @@ export class GradebookController {
   }
 
   public extractAndValidateDependencies(expr: string, column_id: number) {
-    // MathJS is loaded lazily - ensure it's available
-    if (!mathjsCache) {
-      // In practice, this should be pre-loaded, but provide fallback
-      throw new Error("MathJS not loaded. Gradebook calculations require MathJS to be loaded first.");
-    }
+    // MathJS is guaranteed to be loaded before controller creation
     const { create, all } = getMathJS();
     const math = create(all);
     const exprNode = math.parse(expr);
@@ -1440,11 +1436,7 @@ export class GradebookController {
   }
 
   createRendererForColumn(column: GradebookColumn): (cell: RendererParams) => React.ReactNode {
-    // MathJS is loaded lazily - ensure it's available
-    if (!mathjsCache) {
-      // In practice, this should be pre-loaded, but provide fallback
-      throw new Error("MathJS not loaded. Gradebook renderer requires MathJS to be loaded first.");
-    }
+    // MathJS is guaranteed to be loaded before controller creation
     const { create, all } = getMathJS();
     const math = create(all);
     //Remove access to security-sensitive functions
@@ -1689,13 +1681,27 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   const isInstructorOrGrader = classRole.role === "instructor" || classRole.role === "grader";
   const controller = useRef<GradebookController | null>(null);
   const [ready, setReady] = useState(false);
+  const [mathjsLoaded, setMathjsLoaded] = useState(false);
 
-  // Pre-load MathJS when provider mounts to ensure it's available for calculations
+  // Load MathJS first, then create controller
   useEffect(() => {
-    loadMathJS().catch((error) => {
-      console.error("Failed to load MathJS:", error);
-      Sentry.captureException(error);
-    });
+    let cancelled = false;
+    loadMathJS()
+      .then(() => {
+        if (!cancelled) {
+          setMathjsLoaded(true);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load MathJS:", error);
+        Sentry.captureException(error);
+        if (!cancelled) {
+          setMathjsLoaded(true); // Set to true even on error to avoid blocking forever
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1707,9 +1713,9 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Recreate controller if class_id or gradebook_id changes (in useEffect to avoid render issues)
+  // Create controller after MathJS is loaded
   useEffect(() => {
-    if (!gradebook_id || isNaN(Number(gradebook_id))) return;
+    if (!mathjsLoaded || !gradebook_id || isNaN(Number(gradebook_id))) return;
 
     // If controller exists but class_id or gradebook_id changed, recreate it
     if (
@@ -1719,8 +1725,10 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
       controller.current.close();
       controller.current = null;
       setReady(false);
+    }
 
-      // Create new controller immediately
+    // Create controller if it doesn't exist
+    if (controller.current === null) {
       controller.current = new GradebookController(
         isInstructorOrGrader,
         class_id,
@@ -1728,20 +1736,15 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
         courseController.classRealTimeController
       );
     }
-  }, [class_id, gradebook_id, isInstructorOrGrader, courseController.classRealTimeController]);
+  }, [mathjsLoaded, class_id, gradebook_id, isInstructorOrGrader, courseController.classRealTimeController]);
 
   if (!gradebook_id || isNaN(Number(gradebook_id))) {
     return <Text>Error: Gradebook is not enabled for this course.</Text>;
   }
 
-  // Create controller synchronously on first render (before useEffect runs)
-  if (controller.current === null) {
-    controller.current = new GradebookController(
-      isInstructorOrGrader,
-      class_id,
-      gradebook_id,
-      courseController.classRealTimeController
-    );
+  // Show loading screen while MathJS is loading or controller is not ready
+  if (!mathjsLoaded || !controller.current) {
+    return <LoadingScreen />;
   }
 
   return (

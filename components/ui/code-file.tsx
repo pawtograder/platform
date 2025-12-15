@@ -27,7 +27,9 @@ import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } 
 import { useUpdate } from "@refinedev/core";
 // Dynamic import of starry-night to reduce build memory usage
 // Note: The actual loading happens in useEffect, but we need to avoid static import
-import type { createStarryNight } from "@wooorm/starry-night";
+// Derive the type from a type-level import expression to avoid isolatedModules issues
+type StarryNightModule = typeof import("@wooorm/starry-night");
+type StarryNightHighlighter = Awaited<ReturnType<StarryNightModule["createStarryNight"]>>;
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
 import { Element, ElementContent, Properties, Root, RootContent } from "hast";
@@ -116,7 +118,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   const submissionReview = useActiveSubmissionReview();
   const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
 
-  const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
+  const [starryNight, setStarryNight] = useState<StarryNightHighlighter | undefined>(undefined);
   const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
     lineNumber: 0,
     top: 0,

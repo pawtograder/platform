@@ -37,8 +37,8 @@ const nextConfig: NextConfig = {
           maxAsyncRequests: 30, // Limit async chunks
           cacheGroups: {
             default: false,
-            vendors: false,
             // Split large libraries into separate chunks to reduce memory during build
+            // Higher priority cacheGroups are matched first
             monaco: {
               name: "monaco-editor",
               test: /[\\/]node_modules[\\/](@monaco-editor|monaco-editor|monaco-yaml)[\\/]/,
@@ -71,6 +71,15 @@ const nextConfig: NextConfig = {
               name: "mathjs",
               test: /[\\/]node_modules[\\/]mathjs[\\/]/,
               priority: 10,
+              reuseExistingChunk: true,
+              enforce: true
+            },
+            // Fallback vendors cacheGroup for remaining node_modules
+            // Lower priority ensures specific cacheGroups above take precedence
+            vendors: {
+              name: "vendors",
+              test: /[\\/]node_modules[\\/]/,
+              priority: 5,
               reuseExistingChunk: true,
               enforce: true
             }
