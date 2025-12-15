@@ -166,7 +166,7 @@ export default function MessageInput(props: MessageInputProps) {
       }
       dismissMentions();
     },
-    [selectThread, dismissMentions, singleLine, props]
+    [selectThread, dismissMentions, singleLine, editorOnChange]
   );
 
   const handleKeyDown = useCallback(

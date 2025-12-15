@@ -105,7 +105,7 @@ function ThreadActions({
     await discussionThreadTeasers.update(thread.id, {
       pinned: newPinnedStatus
     });
-  }, [thread.id, thread.pinned, thread.class_id, discussionThreadTeasers]);
+  }, [thread.id, thread.pinned, discussionThreadTeasers]);
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">

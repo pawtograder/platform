@@ -52,6 +52,7 @@ export type CourseControllerInitialData = {
   discussionTopics?: DiscussionTopic[];
   repositories?: Database["public"]["Tables"]["repositories"]["Row"][];
   gradebookColumns?: Database["public"]["Tables"]["gradebook_columns"]["Row"][];
+  surveys?: Database["public"]["Tables"]["surveys"]["Row"][];
 };
 
 /**
@@ -211,6 +212,10 @@ export async function fetchCourseControllerData(
     tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`],
     revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
   });
+  const surveysClient = await createClientWithCaching({
+    tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -227,7 +232,8 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns
+    gradebookColumns,
+    surveys
   ] = await Promise.all([
     // Profiles
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
@@ -302,7 +308,14 @@ export async function fetchCourseControllerData(
     // Gradebook columns
     fetchAllPages<Database["public"]["Tables"]["gradebook_columns"]["Row"]>(
       gradebookColumnsClient.from("gradebook_columns").select("*").eq("class_id", course_id)
-    )
+    ),
+
+    // Surveys (staff-only for management)
+    isStaff
+      ? fetchAllPages<Database["public"]["Tables"]["surveys"]["Row"]>(
+          surveysClient.from("surveys").select("*").eq("class_id", course_id).is("deleted_at", null)
+        )
+      : Promise.resolve(undefined)
   ]);
 
   return {
@@ -319,7 +332,8 @@ export async function fetchCourseControllerData(
     assignmentGroupsWithMembers,
     discussionTopics,
     repositories,
-    gradebookColumns
+    gradebookColumns,
+    surveys
   };
 }
 

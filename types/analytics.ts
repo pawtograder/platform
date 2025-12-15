@@ -263,6 +263,48 @@ export interface PageViewedEvent {
 }
 
 // ============================================================================
+// SURVEY EVENTS
+// ============================================================================
+
+export interface SurveyCreatedEvent {
+  course_id: number;
+  survey_id: string;
+  status: "draft" | "published" | "closed";
+  has_due_date: boolean;
+  allow_response_editing: boolean;
+  has_validation_errors: boolean;
+  is_update: boolean;
+}
+
+export interface SurveyUpdatedEvent {
+  course_id: number;
+  survey_id: string;
+  status: "draft" | "published" | "closed";
+  has_due_date: boolean;
+  allow_response_editing: boolean;
+  has_validation_errors?: boolean;
+}
+
+export interface SurveyPublishedEvent {
+  course_id: number;
+  survey_id?: string;
+  has_validation_errors: boolean;
+}
+
+export interface SurveyClosedEvent {
+  course_id: number;
+  survey_id?: string;
+}
+
+export interface SurveyDeletedEvent {
+  course_id: number;
+  survey_id?: string;
+  had_responses: boolean;
+  response_count: number;
+  soft_delete: boolean;
+}
+
+// ============================================================================
 // EVENT MAP (for type safety)
 // ============================================================================
 
@@ -310,6 +352,13 @@ export interface AnalyticsEventMap {
 
   // GitHub Integration
   github_account_linked: GithubAccountLinkedEvent;
+
+  // Surveys
+  survey_created: SurveyCreatedEvent;
+  survey_updated: SurveyUpdatedEvent;
+  survey_published: SurveyPublishedEvent;
+  survey_closed: SurveyClosedEvent;
+  survey_deleted: SurveyDeletedEvent;
 
   // General
   page_viewed: PageViewedEvent;

@@ -1,0 +1,258 @@
+"use client";
+import { CloseButton } from "@/components/ui/close-button";
+import { useColorModeValue } from "@/components/ui/color-mode";
+import { usePollQrCode } from "@/hooks/usePollQrCode";
+import { Json } from "@/utils/supabase/SupabaseTypes";
+import { Box, Link, Text } from "@chakra-ui/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import MultipleChoiceDynamicViewer from "./MultipleChoiceDynamicViewer";
+import PollResponsesHeader from "./PollResponsesHeader";
+import QrCode from "./QrCode";
+
+interface FullscreenElement extends Element {
+  webkitRequestFullscreen?: () => Promise<void>;
+  mozRequestFullScreen?: () => Promise<void>;
+  msRequestFullscreen?: () => Promise<void>;
+}
+
+interface FullscreenDocument extends Document {
+  webkitFullscreenElement?: Element | null;
+  mozFullScreenElement?: Element | null;
+  msFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void>;
+  mozCancelFullScreen?: () => Promise<void>;
+  msExitFullscreen?: () => Promise<void>;
+}
+
+function parseJsonForType(pollQuestion: Json): "radiogroup" | "checkbox" | undefined {
+  const questionData = (pollQuestion ?? {}) as Record<string, unknown>;
+  const elements = Array.isArray(questionData.elements) ? questionData.elements : [];
+  const rawType: unknown = elements[0]?.type;
+
+  if (rawType === "radiogroup" || rawType === "checkbox") {
+    return rawType;
+  }
+
+  if (typeof rawType === "string" && rawType.length > 0) {
+    console.warn(`Unsupported poll question type in SurveyJS JSON: ${rawType}`);
+  }
+
+  return undefined;
+}
+
+type PollResponsesDynamicViewerProps = {
+  courseId: string;
+  pollId: string;
+  pollQuestion: Json;
+};
+
+export default function PollResponsesDynamicViewer({
+  courseId,
+  pollId,
+  pollQuestion
+}: PollResponsesDynamicViewerProps) {
+  const [isPresenting, setIsPresenting] = useState(false);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
+
+  // Define color mode values at the top level (before any conditional returns)
+  const cardBgColor = useColorModeValue("#E5E5E5", "#1A1A1A");
+  const borderColor = useColorModeValue("#D2D2D2", "#2D2D2D");
+  const textColor = useColorModeValue("#000000", "#FFFFFF");
+  const qrLightColor = useColorModeValue("#FFFFFF", "#000000");
+  const qrDarkColor = useColorModeValue("#000000", "#FFFFFF");
+  const errorBoxColor = useColorModeValue("#FF0000", "#FF0000");
+
+  const { type, parseError } = useMemo(() => {
+    try {
+      return { type: parseJsonForType(pollQuestion), parseError: null as Error | null };
+    } catch (error) {
+      return {
+        type: undefined,
+        parseError: error instanceof Error ? error : new Error("Invalid poll question format")
+      };
+    }
+  }, [pollQuestion]);
+
+  // Calculate poll URL
+  const pollUrl = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    const protocol = window.location.protocol || "https:";
+    const hostname = window.location.hostname;
+    const port = window.location.port;
+    const portSegment = (hostname === "localhost" || hostname === "127.0.0.1") && port ? `:${port}` : "";
+    return `${protocol}//${hostname}${portSegment}/poll/${courseId}`;
+  }, [courseId]);
+
+  // Generate and upload QR code to storage (once per course since pollUrl is the same for all polls)
+  const { qrCodeUrl } = usePollQrCode(courseId, pollUrl, qrLightColor, qrDarkColor);
+
+  // Exit fullscreen helper
+  const exitFullscreen = useCallback(async () => {
+    try {
+      const fullscreenDoc = document as FullscreenDocument;
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (fullscreenDoc.webkitExitFullscreen) {
+          await fullscreenDoc.webkitExitFullscreen();
+        } else if (fullscreenDoc.mozCancelFullScreen) {
+          await fullscreenDoc.mozCancelFullScreen();
+        } else if (fullscreenDoc.msExitFullscreen) {
+          await fullscreenDoc.msExitFullscreen();
+        }
+      }
+    } catch (error) {
+      console.error("Error exiting fullscreen:", error);
+    }
+  }, []);
+
+  // Enter fullscreen and start presenting
+  const handlePresent = useCallback(async () => {
+    if (!fullscreenRef.current) return;
+
+    try {
+      const element = fullscreenRef.current as FullscreenElement;
+      let didEnterFullscreen = false;
+      if (element.requestFullscreen) {
+        await element.requestFullscreen();
+        didEnterFullscreen = true;
+      } else if (element.webkitRequestFullscreen) {
+        await element.webkitRequestFullscreen();
+        didEnterFullscreen = true;
+      } else if (element.mozRequestFullScreen) {
+        await element.mozRequestFullScreen();
+        didEnterFullscreen = true;
+      } else if (element.msRequestFullscreen) {
+        await element.msRequestFullscreen();
+        didEnterFullscreen = true;
+      }
+
+      if (didEnterFullscreen) {
+        setIsPresenting(true);
+      }
+    } catch (error) {
+      console.error("Error entering fullscreen:", error);
+      setIsPresenting(false);
+    }
+  }, []);
+
+  // Exit fullscreen and stop presenting
+  const handleClosePresent = useCallback(async () => {
+    await exitFullscreen();
+    setIsPresenting(false);
+  }, [exitFullscreen]);
+
+  // Handle fullscreen change events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const fullscreenDoc = document as FullscreenDocument;
+      const isFullscreen = !!(
+        document.fullscreenElement ||
+        fullscreenDoc.webkitFullscreenElement ||
+        fullscreenDoc.mozFullScreenElement ||
+        fullscreenDoc.msFullscreenElement
+      );
+
+      if (!isFullscreen && isPresenting) {
+        setIsPresenting(false);
+      }
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    document.addEventListener("mozfullscreenchange", handleFullscreenChange);
+    document.addEventListener("MSFullscreenChange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+      document.removeEventListener("mozfullscreenchange", handleFullscreenChange);
+      document.removeEventListener("MSFullscreenChange", handleFullscreenChange);
+    };
+  }, [isPresenting]);
+
+  // Handle Escape key to exit presenting mode
+  useEffect(() => {
+    if (!isPresenting) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        handleClosePresent();
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [isPresenting, handleClosePresent]);
+
+  // Cleanup: exit fullscreen on unmount
+  useEffect(() => {
+    return () => {
+      exitFullscreen();
+    };
+  }, [exitFullscreen]);
+
+  // Render normal view with header, wrapping viewer in fullscreen-able container
+  return (
+    <div>
+      <PollResponsesHeader
+        courseID={courseId}
+        pollUrl={pollUrl}
+        onPresent={handlePresent}
+        qrCodeUrl={qrCodeUrl ?? undefined}
+      />
+      <Box
+        ref={fullscreenRef}
+        mt={isPresenting ? 0 : 4}
+        bg={cardBgColor}
+        w={isPresenting ? "100vw" : "95%"}
+        h={isPresenting ? "100vh" : "100%"}
+        maxW={isPresenting ? "100%" : "1400px"}
+        mx="auto"
+        borderRadius={isPresenting ? "none" : "2xl"}
+        border={isPresenting ? "none" : "1px solid"}
+        borderColor={borderColor}
+        boxShadow={isPresenting ? "none" : "lg"}
+        p={isPresenting ? 8 : 10}
+        display="flex"
+        flexDirection="column"
+        justifyContent="center"
+        alignItems="center"
+        position="relative"
+      >
+        {isPresenting && (
+          <>
+            <Box position="absolute" top={4} right={4} zIndex={10000}>
+              <CloseButton onClick={handleClosePresent} aria-label="Exit fullscreen" size="xl" />
+            </Box>
+            <Box position="absolute" bottom={4} right={4} zIndex={10000} display="flex" alignItems="center" gap={3}>
+              <Text color={textColor} fontSize="lg" fontWeight="medium">
+                Answer at:{" "}
+                <Link
+                  href={pollUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  color="blue.500"
+                  textDecoration="underline"
+                >
+                  {pollUrl}
+                </Link>
+              </Text>
+              <QrCode qrCodeUrl={qrCodeUrl ?? undefined} size="60px" isFullscreen={true} />
+            </Box>
+          </>
+        )}
+        {parseError ? (
+          <Box p={8} color={errorBoxColor}>
+            <Text fontWeight="bold">Unable to display poll</Text>
+            <Text mt={2}>{parseError.message}</Text>
+          </Box>
+        ) : type === "radiogroup" || type === "checkbox" ? (
+          <MultipleChoiceDynamicViewer pollId={pollId} pollQuestion={pollQuestion} />
+        ) : (
+          <div>Unsupported poll question type: {type ?? "unknown"}</div>
+        )}
+      </Box>
+    </div>
+  );
+}

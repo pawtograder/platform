@@ -126,7 +126,7 @@ export async function updateClassSettings({
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  const userSupabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
