@@ -106,7 +106,9 @@ const nextConfig: NextConfig = {
         // Configure TerserPlugin to reduce memory usage
         if (pluginName === "TerserPlugin") {
           // Disable parallel processing to reduce memory usage
-          const terserPlugin = plugin as { options?: { parallel?: boolean; terserOptions?: { compress?: { passes?: number } } } };
+          const terserPlugin = plugin as {
+            options?: { parallel?: boolean; terserOptions?: { compress?: { passes?: number } } };
+          };
           if (terserPlugin.options) {
             terserPlugin.options.parallel = false; // Disable parallel processing to reduce memory
             if (terserPlugin.options.terserOptions?.compress) {

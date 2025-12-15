@@ -1721,7 +1721,7 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   // Create controller after MathJS is loaded and verified
   useEffect(() => {
     if (!mathjsLoaded || !gradebook_id || isNaN(Number(gradebook_id))) return;
-    
+
     // Double-check that MathJS cache is actually populated before creating controller
     if (!mathjsCache) {
       console.error("MathJS cache is not populated despite mathjsLoaded being true");
@@ -1764,9 +1764,7 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
           <Heading size="md" color="red.500">
             Failed to Load Gradebook
           </Heading>
-          <Text>
-            MathJS library failed to load. This is required for gradebook calculations.
-          </Text>
+          <Text>MathJS library failed to load. This is required for gradebook calculations.</Text>
           <Text fontSize="sm" color="text.subtle">
             Error: {mathjsError.message}
           </Text>
