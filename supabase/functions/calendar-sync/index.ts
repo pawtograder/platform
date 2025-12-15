@@ -406,7 +406,7 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
 
     // For WEEKLY with BYDAY, check if current day matches
     if (includeDate && rrule.freq === "WEEKLY" && rrule.byday) {
-      const dayOfWeek = currentDate.getDay();
+      const dayOfWeek = currentDate.getUTCDay();
       // Find the day name(s) for the current day of week
       const dayNames = Object.entries(dayMap)
         .filter((entry) => entry[1] === dayOfWeek)
@@ -420,7 +420,7 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
 
     // For MONTHLY with BYMONTHDAY, check if day matches
     if (includeDate && rrule.freq === "MONTHLY" && rrule.bymonthday) {
-      includeDate = rrule.bymonthday.includes(currentDate.getDate());
+      includeDate = rrule.bymonthday.includes(currentDate.getUTCDate());
     }
 
     if (includeDate) {
@@ -439,31 +439,33 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
       occurrenceCount++;
     }
 
-    // Move to next potential occurrence
+    // Move to next potential occurrence (using UTC operations to avoid DST drift)
     switch (rrule.freq) {
       case "DAILY":
-        currentDate.setDate(currentDate.getDate() + rrule.interval);
+        // Add days using UTC epoch milliseconds to avoid DST issues
+        currentDate.setTime(currentDate.getTime() + rrule.interval * 24 * 60 * 60 * 1000);
         break;
       case "WEEKLY":
         if (rrule.byday && rrule.byday.length > 1) {
-          // For multi-day weekly rules, advance by 1 day
-          currentDate.setDate(currentDate.getDate() + 1);
+          // For multi-day weekly rules, advance by 1 day using UTC epoch milliseconds
+          currentDate.setTime(currentDate.getTime() + 24 * 60 * 60 * 1000);
           // If we've passed a week boundary, skip to maintain interval
           const weeksPassed = Math.floor((currentDate.getTime() - event.dtstart.getTime()) / (7 * 24 * 60 * 60 * 1000));
           if (weeksPassed > 0 && weeksPassed % rrule.interval !== 0) {
-            // Skip to the next valid week
+            // Skip to the next valid week using UTC epoch milliseconds
             const daysToSkip = (rrule.interval - (weeksPassed % rrule.interval)) * 7;
-            currentDate.setDate(currentDate.getDate() + daysToSkip - 1);
+            currentDate.setTime(currentDate.getTime() + (daysToSkip - 1) * 24 * 60 * 60 * 1000);
           }
         } else {
-          currentDate.setDate(currentDate.getDate() + 7 * rrule.interval);
+          // Add weeks using UTC epoch milliseconds
+          currentDate.setTime(currentDate.getTime() + 7 * rrule.interval * 24 * 60 * 60 * 1000);
         }
         break;
       case "MONTHLY":
-        currentDate.setMonth(currentDate.getMonth() + rrule.interval);
+        currentDate.setUTCMonth(currentDate.getUTCMonth() + rrule.interval);
         break;
       case "YEARLY":
-        currentDate.setFullYear(currentDate.getFullYear() + rrule.interval);
+        currentDate.setUTCFullYear(currentDate.getUTCFullYear() + rrule.interval);
         break;
     }
   }
@@ -589,7 +591,7 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
       const dateKey = event.dtstart.toISOString().split("T")[0];
       // Check if this generated occurrence should be replaced by a modified one
       // The modified occurrence has the original UID, our generated has UID_datetime
-      const originalUid = event.uid.includes("_") ? event.uid.split("_")[0] : event.uid;
+      const originalUid = getBaseUid(event.uid);
       const modKey = `${originalUid}_${dateKey}`;
       return !modifiedDates.has(modKey);
     });

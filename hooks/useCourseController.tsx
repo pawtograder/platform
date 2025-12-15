@@ -760,12 +760,18 @@ export class CourseController {
 
       query = query.order("start_time", { ascending: true }).limit(1000);
 
+      // Realtime filter must match query constraints to prevent students from receiving
+      // calendar events they shouldn't see (e.g., non-office_hours events)
+      const realtimeFilter = !this.isStaff
+        ? { class_id: this.courseId, calendar_type: "office_hours" }
+        : { class_id: this.courseId };
+
       this._calendarEvents = new TableController({
         client: this.client,
         table: "calendar_events",
         query,
         classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId }
+        realtimeFilter
       });
     }
     return this._calendarEvents;

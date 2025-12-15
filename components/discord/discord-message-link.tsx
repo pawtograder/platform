@@ -44,7 +44,7 @@ export default function DiscordMessageLink({
         variant={variant}
         size={size}
         onClick={() => {
-          window.open(discordUrl, "_blank");
+          window.open(discordUrl, "_blank", "noopener,noreferrer");
         }}
         aria-label="Open Discord message"
       >

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { verify } from "@noble/ed25519";
 
@@ -147,25 +147,8 @@ async function handleSyncRolesCommand(interaction: DiscordInteraction, scope: Se
     });
   }
 
-  // Get Supabase client
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    scope.setTag("error_type", "missing_supabase_config");
-    Sentry.captureMessage("Missing Supabase configuration for Discord interactions", {
-      level: "error"
-    });
-    return NextResponse.json({
-      type: 4,
-      data: {
-        content: "❌ Server configuration error. Please contact an administrator.",
-        flags: 64
-      }
-    });
-  }
-
-  const adminSupabase = createAdminClient<Database>(supabaseUrl, supabaseServiceKey);
+  // Get Supabase admin client
+  const adminSupabase = createAdminClient<Database>();
 
   // Find user by Discord ID
   const { data: userData, error: userError } = await adminSupabase
