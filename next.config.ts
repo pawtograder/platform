@@ -14,7 +14,6 @@ const nextConfig: NextConfig = {
       "react-markdown"
     ]
   },
-  swcMinify: true,
   // Optimize webpack for reduced memory usage during build
   webpack: (config, { isServer, dev }) => {
     // Optimize cache to reduce memory usage
