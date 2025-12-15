@@ -28,6 +28,7 @@ declare
     comment_assignment_id bigint;
     comment_author_id uuid;
     comment_points integer;
+    comment_regrade_request_id bigint;
     param_count int;
     new_regrade_request_id bigint;
     grading_rubric_id bigint;
@@ -52,34 +53,46 @@ begin
     
     -- Get submission info based on which comment type was provided
     if submission_file_comment_id is not null then
-        select sfc.submission_id, sfc.submission_review_id, sfc.class_id, sfc.author, s.assignment_id, sfc.points
-        into comment_submission_id, comment_submission_review_id, comment_class_id, comment_author_id, comment_assignment_id, comment_points
+        select sfc.submission_id, sfc.submission_review_id, sfc.class_id, sfc.author, s.assignment_id, sfc.points, sfc.regrade_request_id
+        into comment_submission_id, comment_submission_review_id, comment_class_id, comment_author_id, comment_assignment_id, comment_points, comment_regrade_request_id
         from public.submission_file_comments sfc
         inner join public.submissions s on s.id = sfc.submission_id
         where sfc.id = submission_file_comment_id;
-        
+
         if not found then
             raise exception 'Submission file comment not found';
         end if;
+
+        if comment_regrade_request_id is not null then
+            raise exception 'A regrade request already exists for this comment';
+        end if;
     elsif submission_comment_id is not null then
-        select sc.submission_id, sc.submission_review_id, sc.class_id, sc.author, s.assignment_id, sc.points
-        into comment_submission_id, comment_submission_review_id, comment_class_id, comment_author_id, comment_assignment_id, comment_points
+        select sc.submission_id, sc.submission_review_id, sc.class_id, sc.author, s.assignment_id, sc.points, sc.regrade_request_id
+        into comment_submission_id, comment_submission_review_id, comment_class_id, comment_author_id, comment_assignment_id, comment_points, comment_regrade_request_id
         from public.submission_comments sc
         inner join public.submissions s on s.id = sc.submission_id
         where sc.id = submission_comment_id;
-        
+
         if not found then
             raise exception 'Submission comment not found';
         end if;
+
+        if comment_regrade_request_id is not null then
+            raise exception 'A regrade request already exists for this comment';
+        end if;
     elsif submission_artifact_comment_id is not null then
-        select sac.submission_id, sac.submission_review_id, sac.class_id, sac.author, s.assignment_id, sac.points
-        into comment_submission_id, comment_submission_review_id, comment_class_id, comment_author_id, comment_assignment_id, comment_points
+        select sac.submission_id, sac.submission_review_id, sac.class_id, sac.author, s.assignment_id, sac.points, sac.regrade_request_id
+        into comment_submission_id, comment_submission_review_id, comment_class_id, comment_author_id, comment_assignment_id, comment_points, comment_regrade_request_id
         from public.submission_artifact_comments sac
         inner join public.submissions s on s.id = sac.submission_id
         where sac.id = submission_artifact_comment_id;
-        
+
         if not found then
             raise exception 'Submission artifact comment not found';
+        end if;
+
+        if comment_regrade_request_id is not null then
+            raise exception 'A regrade request already exists for this comment';
         end if;
     end if;
     

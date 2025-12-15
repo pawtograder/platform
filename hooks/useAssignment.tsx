@@ -567,7 +567,7 @@ export function useAssignmentController() {
 
 /**
  * Returns the current assignment data from the AssignmentController.
- * This hook provides access to assignment properties like release_date, regrade_deadline_hours, etc.
+ * This hook provides access to assignment properties like release_date, regrade_deadlin, etc.
  */
 export function useAssignmentData() {
   const controller = useAssignmentController();
