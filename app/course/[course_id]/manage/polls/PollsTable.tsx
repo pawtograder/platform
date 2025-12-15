@@ -204,7 +204,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                         >
                           View Poll
                         </MenuItem>
-                        <MenuItem value="delete"  onClick={() => handleDelete(poll.id)} colorPalette="red">
+                        <MenuItem value="delete" onClick={() => handleDelete(poll.id)} colorPalette="red">
                           <FaTrash />
                           Delete Poll
                         </MenuItem>

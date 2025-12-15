@@ -668,7 +668,7 @@ export default class TableController<
 
   private async waitForRefetchToComplete(): Promise<void> {
     await this.readyPromise;
-    if(this._isRefetching){
+    if (this._isRefetching) {
       return new Promise((resolve) => {
         this._refetchListeners.push(() => resolve());
       });
