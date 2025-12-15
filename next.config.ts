@@ -88,19 +88,45 @@ const nextConfig: NextConfig = {
       };
     }
 
-    // Reduce memory usage by limiting parallel processing
+    // Reduce memory usage by limiting parallel processing in minimizers
     // This helps prevent OOM errors during build
     if (config.optimization?.minimizer) {
       config.optimization.minimizer = config.optimization.minimizer.map((plugin: unknown) => {
-        if (
-          plugin &&
-          typeof plugin === "object" &&
-          "constructor" in plugin &&
-          plugin.constructor.name === "SwcMinify"
-        ) {
-          // SWC minifier is already memory-efficient
+        if (!plugin || typeof plugin !== "object" || !("constructor" in plugin)) {
           return plugin;
         }
+
+        const pluginName = plugin.constructor.name;
+
+        // SWC minifier is already memory-efficient, no changes needed
+        if (pluginName === "SwcMinify") {
+          return plugin;
+        }
+
+        // Configure TerserPlugin to reduce memory usage
+        if (pluginName === "TerserPlugin") {
+          // Disable parallel processing to reduce memory usage
+          const terserPlugin = plugin as { options?: { parallel?: boolean; terserOptions?: { compress?: { passes?: number } } } };
+          if (terserPlugin.options) {
+            terserPlugin.options.parallel = false; // Disable parallel processing to reduce memory
+            if (terserPlugin.options.terserOptions?.compress) {
+              terserPlugin.options.terserOptions.compress.passes = 1; // Reduce optimization passes to save memory
+            }
+          }
+          return plugin;
+        }
+
+        // Configure CssMinimizerPlugin to reduce memory usage
+        if (pluginName === "CssMinimizerPlugin") {
+          // Disable parallel processing to reduce memory usage
+          const cssPlugin = plugin as { options?: { parallel?: boolean } };
+          if (cssPlugin.options) {
+            cssPlugin.options.parallel = false; // Disable parallel processing to reduce memory
+          }
+          return plugin;
+        }
+
+        // Unknown minimizer, return unchanged
         return plugin;
       });
     }
