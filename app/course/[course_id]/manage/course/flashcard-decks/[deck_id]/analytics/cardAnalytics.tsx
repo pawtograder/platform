@@ -4,8 +4,17 @@ import { useList } from "@refinedev/core";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Heading, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { useColorModeValue } from "@/components/ui/color-mode";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from "@/components/ui/recharts-wrapper";
 
 // Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
