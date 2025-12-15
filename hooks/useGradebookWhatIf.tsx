@@ -10,9 +10,6 @@ import { Spinner } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { toaster } from "@/components/ui/toaster";
 
-// Track shown errors to avoid spamming the user with duplicate toasts
-const shownExpressionErrors = new Set<string>();
-
 const TRACE_WHAT_IF_CALCULATIONS = false;
 
 export type ExpressionContext = {
@@ -72,6 +69,8 @@ class GradebookWhatIfController {
   private _subscribers: (() => void)[] = [];
   private _gradebookUnsubscribe: (() => void) | null = null;
   private _assignments: AssignmentForStudentDashboard[] = [];
+  // Track shown errors to avoid spamming the user with duplicate toasts (scoped per controller instance)
+  private _shownExpressionErrors = new Set<string>();
 
   constructor(
     private gradebookController: GradebookController,
@@ -849,8 +848,8 @@ class GradebookWhatIfController {
             });
             // Show toast only once per column to avoid spamming the user
             const errorKey = `${columnId}`;
-            if (!shownExpressionErrors.has(errorKey)) {
-              shownExpressionErrors.add(errorKey);
+            if (!this._shownExpressionErrors.has(errorKey)) {
+              this._shownExpressionErrors.add(errorKey);
               toaster.create({
                 title: "Grade calculation error",
                 description: `Unable to calculate "${column.name || column.slug}". We've been notified and are looking into it.`,
@@ -951,6 +950,8 @@ class GradebookWhatIfController {
       this._gradebookUnsubscribe();
       this._gradebookUnsubscribe = null;
     }
+    // Clear error tracking Set when controller is cleaned up
+    this._shownExpressionErrors.clear();
   }
 }
 
