@@ -569,7 +569,8 @@ export default function AssignmentForm({
         ...values,
         release_date: appendTimezoneOffset(values.release_date, timezone),
         due_date: appendTimezoneOffset(values.due_date, timezone),
-        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone)
+        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone),
+        regrade_deadline: appendTimezoneOffset(values.regrade_deadline, timezone)
       };
       try {
         await onSubmit(valuesWithDates);
@@ -767,6 +768,38 @@ export default function AssignmentForm({
           </Fieldset.Content>
           <GroupConfigurationSubform form={form} timezone={timezone} />
           <SelfEvaluationSubform form={form} />
+          <Fieldset.Content>
+            <Field
+              label={`Regrade Request Deadline (${course.time_zone})`}
+              helperText="The deadline after which students cannot submit new regrade requests. Leave empty for no deadline."
+              errorText={errors.regrade_deadline?.message?.toString()}
+              invalid={!!errors.regrade_deadline}
+            >
+              <Controller
+                name="regrade_deadline"
+                control={control}
+                rules={{ required: false }}
+                render={({ field }) => {
+                  const hasATimezoneOffset =
+                    field.value &&
+                    (field.value.charAt(field.value.length - 6) === "+" ||
+                      field.value.charAt(field.value.length - 6) === "-");
+                  const localValue =
+                    field.value && hasATimezoneOffset
+                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                      : field.value;
+                  return (
+                    <Input
+                      type="datetime-local"
+                      value={localValue || ""}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                    />
+                  );
+                }}
+              />
+            </Field>
+          </Fieldset.Content>
           <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
