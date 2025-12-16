@@ -59,7 +59,8 @@ test.beforeAll(async () => {
     // Insert lab section leader
     const { error: leaderError } = await supabase.from("lab_section_leaders").insert({
       lab_section_id: labSectionData.id,
-      profile_id: instructor1!.private_profile_id
+      profile_id: instructor1!.private_profile_id,
+      class_id: course.id
     });
     if (leaderError) {
       throw new Error(`Failed to create lab section leader: ${leaderError.message}`);
@@ -91,7 +92,7 @@ test.describe("Lab Sections Page", () => {
     // Wait for the multi-select to be available and select instructor2
     await page.waitForSelector('[role="combobox"]', { timeout: 10000 });
     await page.locator('[role="combobox"]').click();
-    await page.getByText(new RegExp(instructor2!.private_profile_name || "Lab Sections Instructor 2")).click();
+    await page.getByText(instructor2!.private_profile_name || "Lab Sections Instructor 2", { exact: true }).click();
     await page.getByPlaceholder("Optional description").fill(labSectionDescription);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.locator(`text=${labSectionName}`).first()).toBeVisible();

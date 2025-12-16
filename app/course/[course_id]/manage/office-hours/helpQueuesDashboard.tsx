@@ -42,7 +42,7 @@ export default function HelpQueuesDashboard() {
   const queues = useHelpQueues();
   const allQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
-  const { isConnected, connectionStatus, isLoading } = useConnectionStatus();
+  const { isConnected, connectionStatus } = useConnectionStatus();
 
   // Filter assignments for current TA
   const activeAssignments = useMemo(() => {
@@ -132,10 +132,6 @@ export default function HelpQueuesDashboard() {
       });
     }
   };
-
-  if (isLoading) {
-    return <Text>Loading office-hour queues…</Text>;
-  }
 
   return (
     <Stack spaceY="4">

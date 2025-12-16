@@ -2,6 +2,7 @@
 
 import { CalendarEvent, useAllCalendarEvents } from "@/hooks/useCalendarEvents";
 import { Box, Button, Card, Flex, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   addDays,
   addMonths,
@@ -20,6 +21,10 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
 import { isUrl, CalendarColorPalette } from "./calendar-utils";
 import { useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { useParams, useRouter } from "next/navigation";
+import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useIsStudent, useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
+import { calculateEventLayouts, formatTime, EventLayout } from "./calendar-layout-utils";
 
 type ViewMode = "today" | "week" | "month";
 
@@ -28,189 +33,205 @@ const START_HOUR = 8; // 8 AM
 const END_HOUR = 22; // 10 PM
 const TOTAL_HOURS = END_HOUR - START_HOUR;
 const LEFT_OFFSET = 60; // Space for time labels
-const RIGHT_PADDING = 8; // Right padding
-const EVENT_GAP = 2; // Gap between side-by-side events
 
-interface EventLayout {
-  top: number;
-  height: number;
-  left: number;
-  width: number;
-  column: number;
+function CurrentTimeIndicator() {
+  const [now, setNow] = useState(new Date());
+
+  // Update time every minute
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const currentHour = now.getHours() + now.getMinutes() / 60;
+
+  // Only show if within visible range
+  if (currentHour < START_HOUR || currentHour > END_HOUR) {
+    return null;
+  }
+
+  const top = (currentHour - START_HOUR) * HOUR_HEIGHT;
+
+  return (
+    <Box position="absolute" top={`${top}px`} left="0" right="0" height="2px" bg="red.500" zIndex={10}>
+      <Box
+        position="absolute"
+        left={`${LEFT_OFFSET + 4}px`}
+        top="-10px"
+        bg="red.500"
+        color="white"
+        fontSize="xs"
+        px={2}
+        py={0.5}
+        borderRadius="full"
+        fontWeight="medium"
+      >
+        {format(now, "h:mm a")}
+      </Box>
+    </Box>
+  );
 }
 
-function getEventTimeRange(event: CalendarEvent): { start: number; end: number } {
-  const start = parseISO(event.start_time);
-  const end = parseISO(event.end_time);
+function CompactCurrentTimeIndicator({ leftOffset = 0 }: { leftOffset?: number }) {
+  const [now, setNow] = useState(new Date());
 
-  const startHour = start.getHours() + start.getMinutes() / 60;
-  const endHour = end.getHours() + end.getMinutes() / 60;
+  // Update time every minute
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
-  return {
-    start: Math.max(startHour, START_HOUR),
-    end: Math.min(endHour, END_HOUR)
-  };
+  const currentHour = now.getHours() + now.getMinutes() / 60;
+
+  // Only show if within visible range
+  if (currentHour < START_HOUR || currentHour > END_HOUR) {
+    return null;
+  }
+
+  const top = (currentHour - START_HOUR) * HOUR_HEIGHT;
+
+  return (
+    <Box position="absolute" top={`${top}px`} left={`${leftOffset}px`} right="0" height="2px" bg="red.500" zIndex={10}>
+      <Box
+        position="absolute"
+        left="4px"
+        top="-10px"
+        bg="red.500"
+        color="white"
+        fontSize="2xs"
+        px={1.5}
+        py={0.25}
+        borderRadius="full"
+        fontWeight="medium"
+      >
+        {format(now, "h:mm a")}
+      </Box>
+    </Box>
+  );
 }
 
-function calculateEventLayouts(
-  events: CalendarEvent[],
-  containerWidth: number,
-  leftOffset: number = LEFT_OFFSET
-): Map<number, EventLayout> {
-  const layouts = new Map<number, EventLayout>();
+interface QueueButtonProps {
+  queueName: string;
+  accentColor: string;
+  isVeryShort: boolean;
+  context: "calendar-schedule-summary" | "office-hours-schedule";
+  isAbsolute?: boolean;
+}
 
-  if (events.length === 0) {
-    return layouts;
-  }
+function QueueButton({ queueName, accentColor, isVeryShort, context, isAbsolute = true }: QueueButtonProps) {
+  const { course_id } = useParams();
+  const router = useRouter();
+  const isStudent = useIsStudent();
+  const isStaff = useIsGraderOrInstructor();
+  const helpQueues = useHelpQueues();
+  const allQueueAssignments = useHelpQueueAssignments();
 
-  // Sort events by start time, then by duration (shorter first for better packing)
-  const sortedEvents = [...events].sort((a, b) => {
-    const rangeA = getEventTimeRange(a);
-    const rangeB = getEventTimeRange(b);
-    if (rangeA.start !== rangeB.start) {
-      return rangeA.start - rangeB.start;
-    }
-    return rangeB.end - rangeB.start - (rangeA.end - rangeA.start); // Longer events first
-  });
+  // Find queue by name
+  const queue = useMemo(() => {
+    return helpQueues?.find((q) => q.name === queueName) || null;
+  }, [helpQueues, queueName]);
 
-  // Track which events are in which columns
-  const eventColumns = new Map<number, number>();
-  const columns: Array<Array<{ start: number; end: number }>> = []; // Each column contains event time ranges
+  // Check if queue has active assignment (for students)
+  const hasActiveAssignment = useMemo(() => {
+    if (!queue || !allQueueAssignments) return false;
+    return allQueueAssignments.some((assignment) => assignment.help_queue_id === queue.id && assignment.is_active);
+  }, [queue, allQueueAssignments]);
 
-  // Assign columns to events
-  for (const event of sortedEvents) {
-    const range = getEventTimeRange(event);
+  const controller = useOfficeHoursController();
+  const { helpQueueAssignments } = controller;
+  const { private_profile_id: taProfileId } = useClassProfiles();
 
-    // Find the first column where this event doesn't overlap with any existing event
-    let assignedColumn = -1;
-    for (let colIdx = 0; colIdx < columns.length; colIdx++) {
-      const column = columns[colIdx];
-      // Check if this event overlaps with any event in this column
-      // Two events overlap if: event1.start < event2.end AND event1.end > event2.start
-      const overlaps = column.some((existingRange) => {
-        return range.start < existingRange.end && range.end > existingRange.start;
-      });
-
-      if (!overlaps) {
-        assignedColumn = colIdx;
-        break;
-      }
-    }
-
-    // If no suitable column found, create a new one
-    if (assignedColumn === -1) {
-      assignedColumn = columns.length;
-      columns.push([]);
-    }
-
-    // Add event to the assigned column
-    columns[assignedColumn].push({ start: range.start, end: range.end });
-    eventColumns.set(event.id, assignedColumn);
-  }
-
-  // Calculate available width for events
-  const availableWidth = containerWidth - leftOffset - RIGHT_PADDING;
-
-  // First pass: calculate width for each event based on max concurrent events during its time range
-  const eventWidths = new Map<number, number>();
-
-  for (const event of sortedEvents) {
-    const range = getEventTimeRange(event);
-
-    // Find all events that overlap with this event
-    const overlappingEvents = sortedEvents.filter((otherEvent) => {
-      if (otherEvent.id === event.id) return false;
-      const otherRange = getEventTimeRange(otherEvent);
-      return range.start < otherRange.end && range.end > otherRange.start;
-    });
-
-    // Calculate maximum concurrent events at any point during this event's time range
-    // Sample at start, end, and midpoints to find the maximum
-    const samplePoints = [
-      range.start,
-      range.end,
-      (range.start + range.end) / 2,
-      range.start + (range.end - range.start) * 0.25,
-      range.start + (range.end - range.start) * 0.75
-    ];
-
-    let maxConcurrent = 1; // At least this event itself
-    for (const sampleTime of samplePoints) {
-      const concurrent =
-        overlappingEvents.filter((otherEvent) => {
-          const otherRange = getEventTimeRange(otherEvent);
-          return sampleTime >= otherRange.start && sampleTime < otherRange.end;
-        }).length + 1; // +1 for the current event
-      maxConcurrent = Math.max(maxConcurrent, concurrent);
-    }
-
-    // Calculate width based on maximum concurrent events during this event's time range
-    const eventWidth =
-      maxConcurrent > 0 ? (availableWidth - (maxConcurrent - 1) * EVENT_GAP) / maxConcurrent : availableWidth;
-
-    eventWidths.set(event.id, eventWidth);
-  }
-
-  // Second pass: calculate positions using the calculated widths
-  for (const event of sortedEvents) {
-    const range = getEventTimeRange(event);
-    const column = eventColumns.get(event.id) || 0;
-    const eventWidth = eventWidths.get(event.id) || availableWidth;
-
-    const top = (range.start - START_HOUR) * HOUR_HEIGHT;
-    const height = Math.max((range.end - range.start) * HOUR_HEIGHT, 20); // Minimum height of 20px for compact view
-
-    // Calculate left position: sum widths of events in previous columns that overlap with this event
-    let leftOffsetForColumn = 0;
-    for (let colIdx = 0; colIdx < column; colIdx++) {
-      const columnEvents = columns[colIdx];
-      // Check if any event in this column overlaps with current event
-      const hasOverlap = columnEvents.some((colRange) => {
-        return range.start < colRange.end && range.end > colRange.start;
-      });
-      if (hasOverlap) {
-        // Find the event in this column that overlaps and use its width
-        const overlappingEventInColumn = sortedEvents.find((otherEvent) => {
-          const otherRange = getEventTimeRange(otherEvent);
-          const otherColumn = eventColumns.get(otherEvent.id) || -1;
-          return otherColumn === colIdx && range.start < otherRange.end && range.end > otherRange.start;
-        });
-        if (overlappingEventInColumn) {
-          const otherWidth = eventWidths.get(overlappingEventInColumn.id) || eventWidth;
-          leftOffsetForColumn += otherWidth + EVENT_GAP;
-        } else {
-          // Fallback: use current event's width
-          leftOffsetForColumn += eventWidth + EVENT_GAP;
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (context === "office-hours-schedule") {
+      // For office-hours-schedule, do the same as "start working" button
+      if (queue && taProfileId) {
+        try {
+          await helpQueueAssignments.create({
+            class_id: Number(course_id),
+            help_queue_id: queue.id,
+            ta_profile_id: taProfileId,
+            is_active: true,
+            started_at: new Date().toISOString(),
+            ended_at: null,
+            max_concurrent_students: 1
+          });
+        } catch {
+          // Error handling is done via toaster in the calling component
         }
       }
+    } else if (context === "calendar-schedule-summary") {
+      if (isStaff) {
+        // Navigate to office hours dashboard
+        router.push(`/course/${course_id}/manage/office-hours`);
+      } else if (isStudent && queue) {
+        // Navigate to queue page to join
+        router.push(`/course/${course_id}/office-hours/${queue.id}`);
+      }
     }
+  };
 
-    const left = leftOffset + leftOffsetForColumn;
+  const isDisabled = context === "calendar-schedule-summary" && isStudent && !hasActiveAssignment;
 
-    layouts.set(event.id, {
-      top,
-      height,
-      left,
-      width: eventWidth,
-      column
-    });
+  // Define base styles based on whether button should be absolutely positioned
+  const baseStyles = isAbsolute
+    ? {
+        position: "absolute" as const,
+        top: isVeryShort ? "2px" : "4px",
+        right: isVeryShort ? "2px" : "4px"
+      }
+    : {};
+
+  const buttonContent = (
+    <Button
+      {...baseStyles}
+      bg={accentColor}
+      color="white"
+      fontSize="2xs"
+      fontWeight="semibold"
+      px={isVeryShort ? 1 : 1.5}
+      py={isVeryShort ? 0.25 : 0.5}
+      borderRadius="sm"
+      maxW={isAbsolute ? "45%" : "100%"}
+      overflow="hidden"
+      textOverflow="ellipsis"
+      whiteSpace="nowrap"
+      lineHeight="1.2"
+      cursor={isDisabled ? "not-allowed" : "pointer"}
+      opacity={isDisabled ? 0.6 : 1}
+      onClick={handleClick}
+      disabled={isDisabled}
+      _hover={isDisabled ? {} : { opacity: 0.9, transform: "scale(1.05)" }}
+      _disabled={{ cursor: "not-allowed", opacity: 0.6 }}
+      title={queueName}
+      size="xs"
+      variant="solid"
+    >
+      {queueName}
+    </Button>
+  );
+
+  if (context === "calendar-schedule-summary" && isStudent) {
+    const tooltipText = hasActiveAssignment ? "Click to join the queue" : "This queue is not currently active";
+    return <Tooltip content={tooltipText}>{buttonContent}</Tooltip>;
   }
 
-  return layouts;
-}
-
-function formatTime(dateStr: string): string {
-  const date = parseISO(dateStr);
-  return format(date, "h:mm a");
+  return buttonContent;
 }
 
 interface TimelineEventBlockProps {
   event: CalendarEvent;
   layout: EventLayout;
   getEventColor: (queueName: string | null | undefined, isOfficeHours: boolean) => CalendarColorPalette;
+  context?: "calendar-schedule-summary" | "office-hours-schedule";
 }
 
-function TimelineEventBlock({ event, layout, getEventColor }: TimelineEventBlockProps) {
+function TimelineEventBlock({
+  event,
+  layout,
+  getEventColor,
+  context = "calendar-schedule-summary"
+}: TimelineEventBlockProps) {
   const { top, height, left, width } = layout;
   const isOfficeHours = event.calendar_type === "office_hours";
   const colors = getEventColor(event.queue_name, isOfficeHours);
@@ -252,26 +273,12 @@ function TimelineEventBlock({ event, layout, getEventColor }: TimelineEventBlock
       title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
     >
       {event.queue_name && !isVeryShort && (
-        <Box
-          position="absolute"
-          top="4px"
-          right="4px"
-          bg={accentColor}
-          color="white"
-          fontSize="2xs"
-          fontWeight="semibold"
-          px={1.5}
-          py={0.5}
-          borderRadius="sm"
-          maxW="45%"
-          overflow="hidden"
-          textOverflow="ellipsis"
-          whiteSpace="nowrap"
-          lineHeight="1.2"
-          title={event.queue_name}
-        >
-          {event.queue_name}
-        </Box>
+        <QueueButton
+          queueName={event.queue_name}
+          accentColor={accentColor}
+          isVeryShort={isVeryShort}
+          context={context}
+        />
       )}
 
       {isVeryShort ? (
@@ -341,7 +348,7 @@ function TimelineEventBlock({ event, layout, getEventColor }: TimelineEventBlock
           >
             {event.title}
           </Text>
-          {event.organizer_name && (
+          {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="xs"
               color="fg.muted"
@@ -458,10 +465,16 @@ interface CompactDayColumnProps {
   useTimeline?: boolean;
   containerWidth?: number;
   eventLayouts?: Map<number, EventLayout>;
+  showCurrentTime?: boolean;
 }
 
 // Compact timeline event block for week view
-function CompactTimelineEventBlock({ event, layout, getEventColor }: TimelineEventBlockProps) {
+function CompactTimelineEventBlock({
+  event,
+  layout,
+  getEventColor,
+  context = "calendar-schedule-summary"
+}: TimelineEventBlockProps) {
   const { top, height, left, width } = layout;
   const isOfficeHours = event.calendar_type === "office_hours";
   const colors = getEventColor(event.queue_name, isOfficeHours);
@@ -502,26 +515,12 @@ function CompactTimelineEventBlock({ event, layout, getEventColor }: TimelineEve
       title={`${event.title}${event.organizer_name ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
     >
       {event.queue_name && !isVeryShort && (
-        <Box
-          position="absolute"
-          top="2px"
-          right="2px"
-          bg={accentColor}
-          color="white"
-          fontSize="2xs"
-          fontWeight="semibold"
-          px={1}
-          py={0}
-          borderRadius="xs"
-          maxW="35%"
-          overflow="hidden"
-          textOverflow="ellipsis"
-          whiteSpace="nowrap"
-          lineHeight="1.1"
-          title={event.queue_name}
-        >
-          {event.queue_name}
-        </Box>
+        <QueueButton
+          queueName={event.queue_name}
+          accentColor={accentColor}
+          isVeryShort={isVeryShort}
+          context={context}
+        />
       )}
 
       {isVeryShort ? (
@@ -550,7 +549,7 @@ function CompactTimelineEventBlock({ event, layout, getEventColor }: TimelineEve
           >
             {event.title}
           </Text>
-          {event.organizer_name && (
+          {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
               color="fg.muted"
@@ -591,7 +590,7 @@ function CompactTimelineEventBlock({ event, layout, getEventColor }: TimelineEve
           >
             {event.title}
           </Text>
-          {event.organizer_name && (
+          {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
               color="fg.muted"
@@ -638,7 +637,7 @@ function CompactTimelineEventBlock({ event, layout, getEventColor }: TimelineEve
 }
 
 // Compact timeline axis for week view - smaller left offset
-const COMPACT_LEFT_OFFSET = 35; // Smaller space for time labels in compact view (exported for use in calculations)
+const COMPACT_LEFT_OFFSET = 35; // Smaller space for time labels in compact view
 
 function CompactTimeAxis() {
   const hours = Array.from({ length: TOTAL_HOURS }, (_, i) => START_HOUR + i);
@@ -674,7 +673,8 @@ function CompactDayColumn({
   isToday,
   useTimeline,
   containerWidth,
-  eventLayouts
+  eventLayouts,
+  showCurrentTime = false
 }: CompactDayColumnProps) {
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
@@ -708,6 +708,7 @@ function CompactDayColumn({
           flex={1}
         >
           {/* No CompactTimeAxis here - it's shared on the left */}
+          {showCurrentTime && isToday && <CompactCurrentTimeIndicator leftOffset={0} />}
           {events.map((event) => {
             const layout = eventLayouts.get(event.id);
             if (!layout) return null;
@@ -759,9 +760,13 @@ function CompactDayColumn({
                     </Text>
                   )}
                   {event.queue_name && (
-                    <Text fontSize="2xs" color={accentColor} fontWeight="medium" mt={0.5} lineClamp={1}>
-                      {event.queue_name}
-                    </Text>
+                    <QueueButton
+                      queueName={event.queue_name}
+                      accentColor={accentColor}
+                      isVeryShort={false}
+                      context="calendar-schedule-summary"
+                      isAbsolute={false}
+                    />
                   )}
                 </Box>
               );
@@ -790,8 +795,9 @@ function EventsList({
   getEventColor,
   startDate,
   endDate,
-  containerRef: parentContainerRef
-}: EventsListProps) {
+  containerRef: parentContainerRef,
+  offset
+}: EventsListProps & { offset: number }) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const weekContainerRef = useRef<HTMLDivElement>(null);
@@ -864,7 +870,7 @@ function EventsList({
   }, []);
   const dayEvents = sortedEvents;
   const eventLayouts = useMemo(() => {
-    return calculateEventLayouts(dayEvents, containerWidth);
+    return calculateEventLayouts(dayEvents, containerWidth, START_HOUR, END_HOUR, LEFT_OFFSET, 20);
   }, [dayEvents, containerWidth]);
 
   // Generate all days in the week (always compute, but only use if viewMode === "week")
@@ -914,7 +920,7 @@ function EventsList({
       const dateKey = format(day, "yyyy-MM-dd");
       const dayEvents = groupedEvents[dateKey] || [];
       // Use left offset of 0 since the time axis is separate on the left
-      const layouts = calculateEventLayouts(dayEvents, weekDayColumnWidth, 0);
+      const layouts = calculateEventLayouts(dayEvents, weekDayColumnWidth, START_HOUR, END_HOUR, 0, 20);
       layoutsMap.set(dateKey, layouts);
     });
 
@@ -982,18 +988,33 @@ function EventsList({
 
   // Use timeline view for "today" mode
   if (viewMode === "today") {
+    // Check if viewing today (offset === 0 means we're viewing today)
+    const viewingToday = offset === 0;
+
     return (
       <Box
         ref={containerRef}
         position="relative"
         width="100%"
+        minW={0}
         height="300px"
         overflowY="auto"
+        overflowX="hidden"
         borderWidth="1px"
         borderRadius="md"
+        boxSizing="border-box"
       >
-        <Box ref={timelineRef} position="relative" width="100%" height={`${TOTAL_HOURS * HOUR_HEIGHT}px`} bg="bg.panel">
+        <Box
+          ref={timelineRef}
+          position="relative"
+          width="100%"
+          height={`${TOTAL_HOURS * HOUR_HEIGHT}px`}
+          bg="bg.panel"
+          minW={0}
+          boxSizing="border-box"
+        >
           <TimeAxis />
+          {viewingToday && <CurrentTimeIndicator />}
           {dayEvents.map((event) => {
             const layout = eventLayouts.get(event.id);
             if (!layout) return null;
@@ -1007,8 +1028,13 @@ function EventsList({
   // Week view - days side-by-side with compact timeline layout (shows overlapping events side-by-side)
   // Single shared time axis on the left
   if (viewMode === "week") {
+    // Check if today is in the displayed week
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const isViewingCurrentWeek = today >= startDate && today <= endDate;
+
     return (
-      <HStack ref={weekContainerRef} align="flex-start" gap={0} overflowX="auto" width="100%">
+      <HStack ref={weekContainerRef} align="flex-start" gap={0} width="100%" minW={0} overflowX="hidden">
         {/* Shared time axis on the left */}
         <Box
           position="relative"
@@ -1022,7 +1048,7 @@ function EventsList({
         </Box>
 
         {/* Day columns */}
-        <HStack align="flex-start" gap={2} flex={1}>
+        <HStack align="flex-start" gap={2} flex={1} minW={0}>
           {filteredWeekDays.map((day) => {
             const dateKey = format(day, "yyyy-MM-dd");
             const dayEvents = groupedEvents[dateKey] || [];
@@ -1039,6 +1065,7 @@ function EventsList({
                 useTimeline={true}
                 containerWidth={weekDayColumnWidth}
                 eventLayouts={dayEventLayouts}
+                showCurrentTime={isViewingCurrentWeek}
               />
             );
           })}
@@ -1049,6 +1076,11 @@ function EventsList({
 
   // Month view - rows of weeks with consistent column count
   // Single shared time axis on the left for each week row
+  // Check if today is in the displayed month
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isViewingCurrentMonth = today >= startDate && today <= endDate;
+
   return (
     <VStack align="stretch" gap={3}>
       {monthWeeks.map((weekDays, weekIndex) => {
@@ -1059,18 +1091,24 @@ function EventsList({
         const timeAxisWidth = COMPACT_LEFT_OFFSET;
         const dayColumnWidth = numDays > 0 ? Math.max(150, (containerWidth - timeAxisWidth - gapSpace) / numDays) : 200;
 
+        // Check if this week contains today
+        const weekContainsToday = weekDays.some((day) => isSameDay(day, todayDate));
+
         weekDays.forEach((day) => {
           const dateKey = format(day, "yyyy-MM-dd");
           const dayEvents = groupedEvents[dateKey] || [];
           if (dayEvents.length > 0) {
             // Use left offset of 0 since the time axis is separate on the left
-            weekEventLayouts.set(dateKey, calculateEventLayouts(dayEvents, dayColumnWidth, 0));
+            weekEventLayouts.set(
+              dateKey,
+              calculateEventLayouts(dayEvents, dayColumnWidth, START_HOUR, END_HOUR, 0, 20)
+            );
           }
         });
 
         return (
-          <Box key={weekIndex}>
-            <HStack align="flex-start" gap={0} overflowX="auto">
+          <Box key={weekIndex} width="100%" minW={0}>
+            <HStack align="flex-start" gap={0} width="100%" minW={0} overflowX="hidden">
               {/* Shared time axis on the left */}
               <Box
                 position="relative"
@@ -1081,10 +1119,13 @@ function EventsList({
                 borderColor="border.muted"
               >
                 <CompactTimeAxis />
+                {isViewingCurrentMonth && weekContainsToday && (
+                  <CompactCurrentTimeIndicator leftOffset={COMPACT_LEFT_OFFSET} />
+                )}
               </Box>
 
               {/* Day columns */}
-              <HStack align="flex-start" gap={2} flex={1}>
+              <HStack align="flex-start" gap={2} flex={1} minW={0}>
                 {weekDays.map((day) => {
                   const dateKey = format(day, "yyyy-MM-dd");
                   const dayEvents = groupedEvents[dateKey] || [];
@@ -1321,7 +1362,7 @@ export default function CalendarScheduleSummary() {
           )}
 
           {/* Events list */}
-          <Box maxH="600px" overflowY="auto" width="100%">
+          <Box maxH="600px" overflowY="auto" overflowX="hidden" width="100%" minW={0} boxSizing="border-box">
             <EventsList
               events={filteredEvents}
               viewMode={viewMode}
@@ -1330,6 +1371,7 @@ export default function CalendarScheduleSummary() {
               startDate={startDate}
               endDate={endDate}
               containerRef={cardBodyRef}
+              offset={offset}
             />
           </Box>
         </VStack>

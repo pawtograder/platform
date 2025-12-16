@@ -905,7 +905,8 @@ export async function createLabSectionWithStudents({
     const { error: leadersError } = await supabase.from("lab_section_leaders").insert(
       leaders.map((leader) => ({
         lab_section_id: lab_section_id,
-        profile_id: leader.private_profile_id
+        profile_id: leader.private_profile_id,
+        class_id: class_id || 1
       }))
     );
     if (leadersError) {

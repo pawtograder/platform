@@ -6,8 +6,8 @@ import { LabSection } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { format } from "date-fns";
 import { Calendar, Clock, User } from "lucide-react";
-import { createClient } from "@/utils/supabase/client";
-import { useEffect, useState } from "react";
+import { useListTableControllerValues, useTableControllerTableValues } from "@/lib/TableController";
+import { useCallback, useMemo } from "react";
 
 const DAYS_OF_WEEK: Record<string, string> = {
   monday: "Monday",
@@ -22,8 +22,6 @@ const DAYS_OF_WEEK: Record<string, string> = {
 export default function StudentLabSection() {
   const controller = useCourseController();
   const { role } = useClassProfiles();
-  const supabase = createClient();
-  const [labLeaders, setLabLeaders] = useState<string[]>([]);
 
   // Get lab sections data
   const { data: labSections } = controller.listLabSections();
@@ -31,29 +29,26 @@ export default function StudentLabSection() {
   // Find the student's lab section
   const studentLabSection = labSections?.find((labSection: LabSection) => labSection.id === role?.lab_section_id);
 
-  // Fetch lab section leaders
-  useEffect(() => {
-    const fetchLeaders = async () => {
-      if (!studentLabSection?.id) {
-        setLabLeaders([]);
-        return;
-      }
+  // Get lab section leaders for this section using TableController
+  const labSectionLeadersFilter = useCallback(
+    (leader: { lab_section_id: number }) => leader.lab_section_id === studentLabSection?.id,
+    [studentLabSection?.id]
+  );
+  const labSectionLeaders = useListTableControllerValues(controller.labSectionLeaders, labSectionLeadersFilter);
 
-      const { data: leaders } = await supabase
-        .from("lab_section_leaders")
-        .select("profiles(name)")
-        .eq("lab_section_id", studentLabSection.id);
+  // Get all profiles to create a lookup map
+  const allProfiles = useTableControllerTableValues(controller.profiles);
 
-      if (leaders) {
-        const leaderNames = leaders
-          .map((l) => (l.profiles as { name: string | null })?.name)
-          .filter((name): name is string => name !== null);
-        setLabLeaders(leaderNames);
-      }
-    };
-
-    fetchLeaders();
-  }, [studentLabSection?.id, supabase]);
+  // Get profile names for the leaders
+  const labLeaders = useMemo(() => {
+    if (!labSectionLeaders || labSectionLeaders.length === 0 || !allProfiles) {
+      return [];
+    }
+    const profileMap = new Map(allProfiles.map((p) => [p.id, p]));
+    return labSectionLeaders
+      .map((leader) => profileMap.get(leader.profile_id)?.name)
+      .filter((name): name is string => name !== null && name !== undefined);
+  }, [labSectionLeaders, allProfiles]);
 
   if (!studentLabSection) {
     return null; // Don't show anything if no lab section is assigned

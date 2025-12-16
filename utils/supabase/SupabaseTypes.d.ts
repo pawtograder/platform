@@ -4317,24 +4317,34 @@ export type Database = {
       };
       lab_section_leaders: {
         Row: {
+          class_id: number;
           created_at: string;
           id: number;
           lab_section_id: number;
           profile_id: string;
         };
         Insert: {
+          class_id: number;
           created_at?: string;
           id?: number;
           lab_section_id: number;
           profile_id: string;
         };
         Update: {
+          class_id?: number;
           created_at?: string;
           id?: number;
           lab_section_id?: number;
           profile_id?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: "lab_section_leaders_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
           {
             foreignKeyName: "lab_section_leaders_lab_section_id_fkey";
             columns: ["lab_section_id"];

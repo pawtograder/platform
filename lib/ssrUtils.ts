@@ -55,6 +55,7 @@ export type CourseControllerInitialData = {
   discordChannels?: Database["public"]["Tables"]["discord_channels"]["Row"][];
   discordMessages?: Database["public"]["Tables"]["discord_messages"]["Row"][];
   surveys?: Database["public"]["Tables"]["surveys"]["Row"][];
+  labSectionLeaders?: Database["public"]["Tables"]["lab_section_leaders"]["Row"][];
 };
 
 /**
@@ -226,6 +227,10 @@ export async function fetchCourseControllerData(
     tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`],
     revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
   });
+  const labSectionLeadersClient = await createClientWithCaching({
+    tags: [`lab_section_leaders:${course_id}:${isStaff ? "staff" : "student"}`],
+    revalidate: 60 // lab section leaders don't change often
+  });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -245,7 +250,8 @@ export async function fetchCourseControllerData(
     gradebookColumns,
     discordChannels,
     discordMessages,
-    surveys
+    surveys,
+    labSectionLeaders
   ] = await Promise.all([
     // Profiles
     fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
@@ -341,7 +347,12 @@ export async function fetchCourseControllerData(
       ? fetchAllPages<Database["public"]["Tables"]["surveys"]["Row"]>(
           surveysClient.from("surveys").select("*").eq("class_id", course_id).is("deleted_at", null)
         )
-      : Promise.resolve(undefined)
+      : Promise.resolve(undefined),
+
+    // Lab section leaders (filtered by class_id directly)
+    fetchAllPages<Database["public"]["Tables"]["lab_section_leaders"]["Row"]>(
+      labSectionLeadersClient.from("lab_section_leaders").select("*").eq("class_id", course_id)
+    )
   ]);
 
   return {
@@ -361,7 +372,8 @@ export async function fetchCourseControllerData(
     gradebookColumns,
     discordChannels,
     discordMessages,
-    surveys
+    surveys,
+    labSectionLeaders
   };
 }
 

@@ -4,186 +4,16 @@ import { Box, Button, Card, Heading, HStack, Icon, Link, Text, VStack } from "@c
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useDaySchedule, useAllCalendarEvents, CalendarEvent } from "@/hooks/useCalendarEvents";
-import { format, parseISO, isSameDay } from "date-fns";
+import { format, isSameDay } from "date-fns";
 import { isUrl, CalendarColorPalette } from "./calendar-utils";
 import { useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { calculateEventLayouts, formatTime, EventLayout } from "./calendar-layout-utils";
 
 const HOUR_HEIGHT = 60; // pixels per hour
 const START_HOUR = 8; // 8 AM
 const END_HOUR = 22; // 10 PM
 const TOTAL_HOURS = END_HOUR - START_HOUR;
 const LEFT_OFFSET = 60; // Space for time labels
-const RIGHT_PADDING = 8; // Right padding
-const EVENT_GAP = 2; // Gap between side-by-side events
-
-interface EventLayout {
-  top: number;
-  height: number;
-  left: number;
-  width: number;
-  column: number;
-}
-
-function getEventTimeRange(event: CalendarEvent): { start: number; end: number } {
-  const start = parseISO(event.start_time);
-  const end = parseISO(event.end_time);
-
-  const startHour = start.getHours() + start.getMinutes() / 60;
-  const endHour = end.getHours() + end.getMinutes() / 60;
-
-  return {
-    start: Math.max(startHour, START_HOUR),
-    end: Math.min(endHour, END_HOUR)
-  };
-}
-
-function calculateEventLayouts(events: CalendarEvent[], containerWidth: number): Map<number, EventLayout> {
-  const layouts = new Map<number, EventLayout>();
-
-  if (events.length === 0) {
-    return layouts;
-  }
-
-  // Sort events by start time, then by duration (shorter first for better packing)
-  const sortedEvents = [...events].sort((a, b) => {
-    const rangeA = getEventTimeRange(a);
-    const rangeB = getEventTimeRange(b);
-    if (rangeA.start !== rangeB.start) {
-      return rangeA.start - rangeB.start;
-    }
-    return rangeB.end - rangeB.start - (rangeA.end - rangeA.start); // Longer events first
-  });
-
-  // Track which events are in which columns
-  const eventColumns = new Map<number, number>();
-  const columns: Array<Array<{ start: number; end: number }>> = []; // Each column contains event time ranges
-
-  // Assign columns to events
-  for (const event of sortedEvents) {
-    const range = getEventTimeRange(event);
-
-    // Find the first column where this event doesn't overlap with any existing event
-    let assignedColumn = -1;
-    for (let colIdx = 0; colIdx < columns.length; colIdx++) {
-      const column = columns[colIdx];
-      // Check if this event overlaps with any event in this column
-      // Two events overlap if: event1.start < event2.end AND event1.end > event2.start
-      const overlaps = column.some((existingRange) => {
-        return range.start < existingRange.end && range.end > existingRange.start;
-      });
-
-      if (!overlaps) {
-        assignedColumn = colIdx;
-        break;
-      }
-    }
-
-    // If no suitable column found, create a new one
-    if (assignedColumn === -1) {
-      assignedColumn = columns.length;
-      columns.push([]);
-    }
-
-    // Add event to the assigned column
-    columns[assignedColumn].push({ start: range.start, end: range.end });
-    eventColumns.set(event.id, assignedColumn);
-  }
-
-  // Calculate available width for events
-  const availableWidth = containerWidth - LEFT_OFFSET - RIGHT_PADDING;
-
-  // First pass: calculate width for each event based on max concurrent events during its time range
-  const eventWidths = new Map<number, number>();
-
-  for (const event of sortedEvents) {
-    const range = getEventTimeRange(event);
-
-    // Find all events that overlap with this event
-    const overlappingEvents = sortedEvents.filter((otherEvent) => {
-      if (otherEvent.id === event.id) return false;
-      const otherRange = getEventTimeRange(otherEvent);
-      return range.start < otherRange.end && range.end > otherRange.start;
-    });
-
-    // Calculate maximum concurrent events at any point during this event's time range
-    // Sample at start, end, and midpoints to find the maximum
-    const samplePoints = [
-      range.start,
-      range.end,
-      (range.start + range.end) / 2,
-      range.start + (range.end - range.start) * 0.25,
-      range.start + (range.end - range.start) * 0.75
-    ];
-
-    let maxConcurrent = 1; // At least this event itself
-    for (const sampleTime of samplePoints) {
-      const concurrent =
-        overlappingEvents.filter((otherEvent) => {
-          const otherRange = getEventTimeRange(otherEvent);
-          return sampleTime >= otherRange.start && sampleTime < otherRange.end;
-        }).length + 1; // +1 for the current event
-      maxConcurrent = Math.max(maxConcurrent, concurrent);
-    }
-
-    // Calculate width based on maximum concurrent events during this event's time range
-    const eventWidth =
-      maxConcurrent > 0 ? (availableWidth - (maxConcurrent - 1) * EVENT_GAP) / maxConcurrent : availableWidth;
-
-    eventWidths.set(event.id, eventWidth);
-  }
-
-  // Second pass: calculate positions using the calculated widths
-  for (const event of sortedEvents) {
-    const range = getEventTimeRange(event);
-    const column = eventColumns.get(event.id) || 0;
-    const eventWidth = eventWidths.get(event.id) || availableWidth;
-
-    const top = (range.start - START_HOUR) * HOUR_HEIGHT;
-    const height = Math.max((range.end - range.start) * HOUR_HEIGHT, 30); // Minimum height of 30px
-
-    // Calculate left position: sum widths of events in previous columns that overlap with this event
-    let leftOffsetForColumn = 0;
-    for (let colIdx = 0; colIdx < column; colIdx++) {
-      const columnEvents = columns[colIdx];
-      // Check if any event in this column overlaps with current event
-      const hasOverlap = columnEvents.some((colRange) => {
-        return range.start < colRange.end && range.end > colRange.start;
-      });
-      if (hasOverlap) {
-        // Find the event in this column that overlaps and use its width
-        const overlappingEventInColumn = sortedEvents.find((otherEvent) => {
-          const otherRange = getEventTimeRange(otherEvent);
-          const otherColumn = eventColumns.get(otherEvent.id) || -1;
-          return otherColumn === colIdx && range.start < otherRange.end && range.end > otherRange.start;
-        });
-        if (overlappingEventInColumn) {
-          const otherWidth = eventWidths.get(overlappingEventInColumn.id) || eventWidth;
-          leftOffsetForColumn += otherWidth + EVENT_GAP;
-        } else {
-          // Fallback: use current event's width
-          leftOffsetForColumn += eventWidth + EVENT_GAP;
-        }
-      }
-    }
-
-    const left = LEFT_OFFSET + leftOffsetForColumn;
-
-    layouts.set(event.id, {
-      top,
-      height,
-      left,
-      width: eventWidth,
-      column
-    });
-  }
-
-  return layouts;
-}
-
-function formatTime(dateStr: string): string {
-  const date = parseISO(dateStr);
-  return format(date, "h:mm a");
-}
 
 interface EventBlockProps {
   event: CalendarEvent;
@@ -296,7 +126,7 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
           >
             {event.title}
           </Text>
-          {event.organizer_name && (
+          {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
               color="fg.muted"
@@ -552,7 +382,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
 
   // Calculate event layouts with side-by-side overlapping
   const eventLayouts = useMemo(() => {
-    return calculateEventLayouts(events, containerWidth);
+    return calculateEventLayouts(events, containerWidth, START_HOUR, END_HOUR, LEFT_OFFSET, 30);
   }, [events, containerWidth]);
 
   // Get unique queues for legend with event counts for the selected day

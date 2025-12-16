@@ -1085,8 +1085,12 @@ export async function addDependencySourceFunctions({
       }));
       console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
 
+      // Filter out entries with max_score <= 0 before sorting and selecting to drop
+      // These entries should be preserved and not count toward drop_lowest
+      const validEntries = value.filter((v) => (v.max_score ?? 0) > 0);
+
       // Sort to identify which items to drop by relative score (score/max_score), but preserve original order in output
-      const sorted = [...value].sort((a, b) => {
+      const sorted = [...validEntries].sort((a, b) => {
         const aScore = a.score ?? 0;
         const bScore = b.score ?? 0;
         const aMaxScore = a.max_score ?? 1;
@@ -1105,10 +1109,12 @@ export async function addDependencySourceFunctions({
         }
       }
 
-      // Return items in original order, excluding those marked for dropping
+      // Return items in original order, excluding only those marked for dropping that have max_score > 0
+      // Preserve all entries with max_score <= 0 untouched
       const ret: GradebookColumnStudentWithMaxScore[] = [];
       for (const v of value) {
-        if (!toDrop.has(v)) {
+        // Only exclude items that were chosen to drop AND have max_score > 0
+        if (!(toDrop.has(v) && (v.max_score ?? 0) > 0)) {
           ret.push(v);
         }
       }

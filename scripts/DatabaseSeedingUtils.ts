@@ -1441,7 +1441,8 @@ export class DatabaseSeeder {
     if (labSections && labSections.length > 0) {
       const labSectionLeadersData = labSections.map((section, i) => ({
         lab_section_id: section.id,
-        profile_id: instructors[i % instructors.length].private_profile_id
+        profile_id: instructors[i % instructors.length].private_profile_id,
+        class_id: class_id
       }));
       await this.rateLimitManager.trackAndLimit(
         "lab_section_leaders",

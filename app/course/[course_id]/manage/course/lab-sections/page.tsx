@@ -215,7 +215,8 @@ function CreateLabSectionModal({
             const { error: insertError } = await supabase.from("lab_section_leaders").insert(
               data.lab_leader_ids.map((profile_id) => ({
                 lab_section_id: labSectionId,
-                profile_id
+                profile_id,
+                class_id: Number(course_id)
               }))
             );
 
@@ -239,7 +240,8 @@ function CreateLabSectionModal({
             const { error: insertError } = await supabase.from("lab_section_leaders").insert(
               data.lab_leader_ids.map((profile_id) => ({
                 lab_section_id: labSectionId,
-                profile_id
+                profile_id,
+                class_id: Number(course_id)
               }))
             );
 

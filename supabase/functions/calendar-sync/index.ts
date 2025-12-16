@@ -639,7 +639,7 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
 
     // Move to next potential occurrence in local time
     switch (rrule.freq) {
-      case "DAILY":
+      case "DAILY": {
         currentDay += rrule.interval;
         // Handle month/year rollover
         const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
@@ -652,7 +652,8 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
           }
         }
         break;
-      case "WEEKLY":
+      }
+      case "WEEKLY": {
         if (rrule.byday && rrule.byday.length > 1) {
           // For multi-day weekly rules, advance by 1 day
           currentDay++;
@@ -683,7 +684,8 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
           }
         }
         break;
-      case "MONTHLY":
+      }
+      case "MONTHLY": {
         currentMonth += rrule.interval;
         while (currentMonth > 11) {
           currentMonth -= 12;
@@ -695,7 +697,8 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
           currentDay = maxDay;
         }
         break;
-      case "YEARLY":
+      }
+      case "YEARLY": {
         currentYear += rrule.interval;
         // Adjust day if it's invalid for the new year (e.g., Feb 29 in non-leap year)
         const maxDayYearly = new Date(currentYear, currentMonth + 1, 0).getDate();
@@ -703,6 +706,7 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
           currentDay = maxDayYearly;
         }
         break;
+      }
     }
   }
 

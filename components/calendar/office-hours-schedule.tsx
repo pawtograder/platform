@@ -7,6 +7,10 @@ import { useMemo, useState } from "react";
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
 import { isUrl, CalendarColorPalette } from "./calendar-utils";
 import { useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { useParams } from "next/navigation";
+import { useHelpQueues, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { toaster } from "@/components/ui/toaster";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -36,6 +40,38 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
   const monthName = format(date, "MMM");
+  const { course_id } = useParams();
+  const controller = useOfficeHoursController();
+  const { helpQueueAssignments } = controller;
+  const { private_profile_id: taProfileId } = useClassProfiles();
+  const helpQueues = useHelpQueues();
+
+  const handleQueueClick = async (queueName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const queue = helpQueues?.find((q) => q.name === queueName);
+    if (queue && taProfileId) {
+      try {
+        await helpQueueAssignments.create({
+          class_id: Number(course_id),
+          help_queue_id: queue.id,
+          ta_profile_id: taProfileId,
+          is_active: true,
+          started_at: new Date().toISOString(),
+          ended_at: null,
+          max_concurrent_students: 1
+        });
+        toaster.success({
+          title: "Success",
+          description: "Started working on queue"
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Error",
+          description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+        });
+      }
+    }
+  };
 
   return (
     <VStack align="stretch" minH="120px">
@@ -103,9 +139,17 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                     </Text>
                   ))}
                 {event.queue_name && (
-                  <Text fontSize="xs" color={colors.accent} fontWeight="medium">
+                  <Box
+                    as="button"
+                    fontSize="xs"
+                    color={colors.accent}
+                    fontWeight="medium"
+                    onClick={(e) => handleQueueClick(event.queue_name!, e)}
+                    _hover={{ textDecoration: "underline" }}
+                    cursor="pointer"
+                  >
                     {event.queue_name}
-                  </Text>
+                  </Box>
                 )}
               </Box>
             );

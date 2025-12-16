@@ -1,10 +1,11 @@
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { Skeleton } from "@/components/ui/skeleton";
-import StudentLabSection from "@/components/ui/student-lab-section";
-import { createClient } from "@/utils/supabase/server";
 import { Survey, SurveyResponse } from "@/types/survey";
+import { createClient } from "@/utils/supabase/server";
 import {
+  Accordion,
   Box,
+  Button,
   CardBody,
   CardHeader,
   CardRoot,
@@ -13,16 +14,21 @@ import {
   DataListItemValue,
   DataListRoot,
   Heading,
+  HStack,
+  Icon,
   Stack,
-  VStack,
-  Button,
-  Text
+  Text,
+  VStack
 } from "@chakra-ui/react";
+import { format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
+import { BsCalendar, BsChevronDown } from "react-icons/bs";
 
+import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
+import { headers } from "next/headers";
 import Link from "next/link";
 import RegradeRequestsTable from "./RegradeRequestsTable";
 
@@ -109,13 +115,158 @@ export default async function StudentDashboard({
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
 
+  const { data: course } = await supabase
+    .from("classes")
+    .select("time_zone, office_hours_ics_url, events_ics_url")
+    .eq("id", course_id)
+    .single();
+
+  const hasCalendar = course?.office_hours_ics_url || course?.events_ics_url;
+
+  // Get user role to fetch section information
+  const headersList = await headers();
+  const user_id = headersList.get("X-User-ID");
+  const { data: userRole } = user_id
+    ? await supabase
+        .from("user_roles")
+        .select("class_section_id, lab_section_id")
+        .eq("class_id", course_id)
+        .eq("user_id", user_id)
+        .eq("disabled", false)
+        .single()
+    : { data: null };
+
+  // Fetch class section if assigned
+  const { data: classSection } = userRole?.class_section_id
+    ? await supabase.from("class_sections").select("*").eq("id", userRole.class_section_id).single()
+    : { data: null };
+
+  // Fetch lab section if assigned
+  const { data: labSection } = userRole?.lab_section_id
+    ? await supabase.from("lab_sections").select("*").eq("id", userRole.lab_section_id).single()
+    : { data: null };
+
+  // Fetch lab section leaders if lab section exists
+  let labLeaders: string[] = [];
+  if (labSection?.id) {
+    const { data: leaders } = await supabase
+      .from("lab_section_leaders")
+      .select("profiles(name)")
+      .eq("lab_section_id", labSection.id);
+    if (leaders) {
+      labLeaders = leaders
+        .map((l) => (l.profiles as { name: string | null })?.name)
+        .filter((name): name is string => name !== null);
+    }
+  }
+
+  const DAYS_OF_WEEK: Record<string, string> = {
+    monday: "Monday",
+    tuesday: "Tuesday",
+    wednesday: "Wednesday",
+    thursday: "Thursday",
+    friday: "Friday",
+    saturday: "Saturday",
+    sunday: "Sunday"
+  };
+
+  const formatTime = (time: string) => {
+    return format(new Date(`2000-01-01T${time}`), "h:mm a");
+  };
+
+  const getDayDisplayName = (day: string) => {
+    return DAYS_OF_WEEK[day] || day;
+  };
+
   return (
     <VStack spaceY={0} align="stretch" p={2}>
       {identities.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
       <Heading size="xl">Course Dashboard</Heading>
 
-      <StudentLabSection />
+      {/* Compact Section Info */}
+      {(classSection || labSection) && (
+        <CardRoot>
+          <CardBody>
+            <HStack gap={4} align="flex-start" flexWrap="wrap">
+              {/* Course Section */}
+              {classSection && (
+                <Box flex={1} minW="200px">
+                  <Text fontSize="xs" color="fg.muted" mb={1} fontWeight="medium">
+                    Your Course Section
+                  </Text>
+                  <Text fontWeight="semibold" fontSize="sm" mb={1}>
+                    {classSection.name}
+                  </Text>
+                  {classSection.meeting_times && (
+                    <Text fontSize="xs" color="fg.muted">
+                      {classSection.meeting_times}
+                    </Text>
+                  )}
+                  {classSection.meeting_location && (
+                    <Text fontSize="xs" color="fg.muted">
+                      📍 {classSection.meeting_location}
+                    </Text>
+                  )}
+                </Box>
+              )}
+
+              {/* Lab Section */}
+              {labSection && (
+                <Box flex={1} minW="200px">
+                  <Text fontSize="xs" color="fg.muted" mb={1} fontWeight="medium">
+                    Your Lab Section
+                  </Text>
+                  <Text fontWeight="semibold" fontSize="sm" mb={1}>
+                    {labSection.name}
+                  </Text>
+                  {labSection.day_of_week && (
+                    <Text fontSize="xs" color="fg.muted">
+                      {getDayDisplayName(labSection.day_of_week)}
+                      {labSection.start_time && ` • ${formatTime(labSection.start_time)}`}
+                      {labSection.end_time && ` - ${formatTime(labSection.end_time)}`}
+                    </Text>
+                  )}
+                  {labSection.meeting_location && (
+                    <Text fontSize="xs" color="fg.muted">
+                      📍 {labSection.meeting_location}
+                    </Text>
+                  )}
+                  {labLeaders.length > 0 && (
+                    <Text fontSize="xs" color="fg.muted">
+                      👤 {labLeaders.join(", ")}
+                    </Text>
+                  )}
+                </Box>
+              )}
+            </HStack>
+          </CardBody>
+        </CardRoot>
+      )}
+
+      {/* Calendar Schedule Section */}
+      {hasCalendar && (
+        <Accordion.Root collapsible defaultValue={[]}>
+          <Accordion.Item value="schedule">
+            <Accordion.ItemTrigger>
+              <HStack gap={2} justifyContent="space-between" w="100%">
+                <HStack gap={2}>
+                  <Icon as={BsCalendar} color="blue.500" />
+                  <Heading size="sm">Schedule</Heading>
+                </HStack>
+                <Accordion.ItemIndicator>
+                  <Icon as={BsChevronDown} />
+                </Accordion.ItemIndicator>
+              </HStack>
+            </Accordion.ItemTrigger>
+            <Accordion.ItemContent>
+              <Accordion.ItemBody>
+                <CalendarScheduleSummary />
+              </Accordion.ItemBody>
+            </Accordion.ItemContent>
+          </Accordion.Item>
+        </Accordion.Root>
+      )}
       <Box>
         <Heading size="lg" mb={4}>
           Upcoming Assignments

@@ -294,7 +294,11 @@ export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: 
       setTeaser(undefined);
       return;
     }
+    let unmounted = false;
     const { unsubscribe, data } = controller.discussionThreadTeasers.getById(id, (data) => {
+      if (unmounted) {
+        return;
+      }
       if (watchFields) {
         setTeaser((oldTeaser) => {
           if (!oldTeaser) {
@@ -313,7 +317,10 @@ export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: 
       }
     });
     setTeaser(data as DiscussionThreadTeaser);
-    return unsubscribe;
+    return () => {
+      unmounted = true;
+      unsubscribe();
+    };
   }, [controller, id, watchFields]);
   return teaser;
 }
@@ -369,6 +376,7 @@ export class CourseController {
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _labSectionLeaders?: TableController<"lab_section_leaders">;
   private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
@@ -428,6 +436,7 @@ export class CourseController {
     void this.tags; // Triggers lazy creation
     void this.labSections; // Triggers lazy creation
     void this.labSectionMeetings; // Triggers lazy creation
+    void this.labSectionLeaders; // Triggers lazy creation
     void this.classSections; // Triggers lazy creation
     void this.discussionTopics; // Triggers lazy creation
     void this.repositories; // Triggers lazy creation
@@ -557,6 +566,20 @@ export class CourseController {
       });
     }
     return this._labSectionMeetings;
+  }
+
+  get labSectionLeaders(): TableController<"lab_section_leaders"> {
+    if (!this._labSectionLeaders) {
+      this._labSectionLeaders = new TableController({
+        client: this.client,
+        table: "lab_section_leaders",
+        query: this.client.from("lab_section_leaders").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.labSectionLeaders
+      });
+    }
+    return this._labSectionLeaders;
   }
 
   get classSections(): TableController<"class_sections"> {
@@ -1290,6 +1313,7 @@ export class CourseController {
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
+    this._labSectionLeaders?.close();
     this._studentDeadlineExtensions?.close();
     this._assignmentDueDateExceptions?.close();
     this._assignments?.close();

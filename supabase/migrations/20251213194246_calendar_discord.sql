@@ -3576,18 +3576,44 @@ CREATE TABLE IF NOT EXISTS "public"."lab_section_leaders" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "lab_section_id" bigint NOT NULL REFERENCES "public"."lab_sections"("id") ON DELETE CASCADE,
     "profile_id" uuid NOT NULL REFERENCES "public"."profiles"("id") ON DELETE CASCADE,
+    "class_id" bigint NOT NULL REFERENCES "public"."classes"("id") ON DELETE CASCADE,
     CONSTRAINT "lab_section_leaders_unique" UNIQUE ("lab_section_id", "profile_id")
 );
 
--- 2. Migrate existing data from lab_leader_id
-INSERT INTO "public"."lab_section_leaders" ("lab_section_id", "profile_id")
-SELECT "id", "lab_leader_id"
+-- 2. Migrate existing data from lab_leader_id (including class_id)
+INSERT INTO "public"."lab_section_leaders" ("lab_section_id", "profile_id", "class_id")
+SELECT "id", "lab_leader_id", "class_id"
 FROM "public"."lab_sections"
 WHERE "lab_leader_id" IS NOT NULL;
 
 -- 3. Add indexes
 CREATE INDEX "lab_section_leaders_lab_section_id_idx" ON "public"."lab_section_leaders" ("lab_section_id");
 CREATE INDEX "lab_section_leaders_profile_id_idx" ON "public"."lab_section_leaders" ("profile_id");
+CREATE INDEX "lab_section_leaders_class_id_idx" ON "public"."lab_section_leaders" ("class_id");
+
+-- 4. Add trigger to maintain class_id consistency with lab_sections
+CREATE OR REPLACE FUNCTION public.sync_lab_section_leaders_class_id()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Ensure class_id matches the lab_section's class_id
+  SELECT class_id INTO NEW.class_id
+  FROM public.lab_sections
+  WHERE id = NEW.lab_section_id;
+  
+  IF NEW.class_id IS NULL THEN
+    RAISE EXCEPTION 'lab_section_id % does not exist', NEW.lab_section_id;
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_sync_lab_section_leaders_class_id
+  BEFORE INSERT OR UPDATE OF lab_section_id ON public.lab_section_leaders
+  FOR EACH ROW
+  EXECUTE FUNCTION public.sync_lab_section_leaders_class_id();
 
 -- 4. Enable RLS
 ALTER TABLE "public"."lab_section_leaders" ENABLE ROW LEVEL SECURITY;
@@ -3597,16 +3623,14 @@ ALTER TABLE "public"."lab_section_leaders" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "instructors_manage_lab_section_leaders" ON "public"."lab_section_leaders"
     TO "authenticated"
     USING (EXISTS (
-        SELECT 1 FROM "public"."lab_sections" ls
-        JOIN "public"."user_privileges" up ON up.class_id = ls.class_id
-        WHERE ls.id = lab_section_id
+        SELECT 1 FROM "public"."user_privileges" up
+        WHERE up.class_id = lab_section_leaders.class_id
         AND up.user_id = auth.uid()
         AND up.role = 'instructor'
     ))
     WITH CHECK (EXISTS (
-        SELECT 1 FROM "public"."lab_sections" ls
-        JOIN "public"."user_privileges" up ON up.class_id = ls.class_id
-        WHERE ls.id = lab_section_id
+        SELECT 1 FROM "public"."user_privileges" up
+        WHERE up.class_id = lab_section_leaders.class_id
         AND up.user_id = auth.uid()
         AND up.role = 'instructor'
     ));
@@ -3615,9 +3639,8 @@ CREATE POLICY "instructors_manage_lab_section_leaders" ON "public"."lab_section_
 CREATE POLICY "class_members_view_lab_section_leaders" ON "public"."lab_section_leaders"
     FOR SELECT TO "authenticated"
     USING (EXISTS (
-        SELECT 1 FROM "public"."lab_sections" ls
-        JOIN "public"."user_privileges" up ON up.class_id = ls.class_id
-        WHERE ls.id = lab_section_id
+        SELECT 1 FROM "public"."user_privileges" up
+        WHERE up.class_id = lab_section_leaders.class_id
         AND up.user_id = auth.uid()
     ));
 
@@ -3638,14 +3661,14 @@ DECLARE
   v_operation text;
   v_data jsonb;
 BEGIN
-  -- Get class_id from lab_sections table
+  -- Get class_id directly from the row (no join needed)
   IF TG_OP = 'DELETE' THEN
-    SELECT class_id INTO v_class_id FROM public.lab_sections WHERE id = OLD.lab_section_id;
+    v_class_id := OLD.class_id;
     v_row_id := OLD.id;
     v_operation := 'DELETE';
     v_data := row_to_json(OLD)::jsonb;
   ELSE
-    SELECT class_id INTO v_class_id FROM public.lab_sections WHERE id = NEW.lab_section_id;
+    v_class_id := NEW.class_id;
     v_row_id := NEW.id;
     v_operation := TG_OP;
     v_data := row_to_json(NEW)::jsonb;
