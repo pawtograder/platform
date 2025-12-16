@@ -249,7 +249,7 @@ function TimelineEventBlock({ event, layout, getEventColor }: TimelineEventBlock
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.organizer_name || event.title}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
     >
       {event.queue_name && !isVeryShort && (
         <Box
@@ -300,7 +300,7 @@ function TimelineEventBlock({ event, layout, getEventColor }: TimelineEventBlock
           >
             {event.title}
           </Text>
-          {event.organizer_name && (
+          {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
               color="fg.muted"
@@ -745,7 +745,7 @@ function CompactDayColumn({
                   <Text fontWeight="medium" fontSize="2xs" lineClamp={1} mb={0.5}>
                     {event.title}
                   </Text>
-                  {event.organizer_name && (
+                  {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
                     <Text fontSize="2xs" color="fg.muted" lineClamp={1} mb={0.5}>
                       👤 {event.organizer_name}
                     </Text>

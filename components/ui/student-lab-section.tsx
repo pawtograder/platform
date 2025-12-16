@@ -115,9 +115,7 @@ export default function StudentLabSection() {
               <Text fontSize="sm" color="fg.muted">
                 Lab Leader{labLeaders.length > 1 ? "s" : ""}
               </Text>
-              <Text fontWeight="medium">
-                {labLeaders.length > 0 ? labLeaders.join(", ") : "TBA"}
-              </Text>
+              <Text fontWeight="medium">{labLeaders.length > 0 ? labLeaders.join(", ") : "TBA"}</Text>
             </VStack>
           </HStack>
 

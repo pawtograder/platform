@@ -539,10 +539,7 @@ export async function processEnvelope(
                 }
 
                 // Add email link if email_data is provided (always add, even if resolved)
-                if (
-                  envelope.email_data &&
-                  typeof envelope.email_data === "object"
-                ) {
+                if (envelope.email_data && typeof envelope.email_data === "object") {
                   const emailData = envelope.email_data as {
                     student_emails?: string | null;
                     assignee_email?: string | null;
@@ -672,12 +669,7 @@ export async function processEnvelope(
         }
 
         // Add email link if email_data is provided (always add, even if resolved)
-        if (
-          envelope.email_data &&
-          typeof envelope.email_data === "object" &&
-          args.embeds &&
-          args.embeds.length > 0
-        ) {
+        if (envelope.email_data && typeof envelope.email_data === "object" && args.embeds && args.embeds.length > 0) {
           const emailData = envelope.email_data as {
             student_emails?: string | null;
             assignee_email?: string | null;

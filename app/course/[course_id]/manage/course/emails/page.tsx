@@ -739,9 +739,10 @@ function EmailsInnerPage() {
                     }}
                     options={labSectionsData?.data.map((section) => {
                       // Get leaders for this section
-                      const sectionLeaders = labSectionLeadersData?.data
-                        ?.filter((leader) => leader.lab_section_id === section.id)
-                        .map((leader) => leader.profile_id) || [];
+                      const sectionLeaders =
+                        labSectionLeadersData?.data
+                          ?.filter((leader) => leader.lab_section_id === section.id)
+                          .map((leader) => leader.profile_id) || [];
                       const leaderCount = sectionLeaders.length;
                       return {
                         label: `${section.name}${leaderCount > 0 ? ` (${leaderCount} leader${leaderCount > 1 ? "s" : ""})` : " (No leaders)"}`,

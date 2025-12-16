@@ -242,7 +242,7 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.title}${event.organizer_name ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
     >
       {/* Floating queue badge at top-right */}
       {event.queue_name && !isVeryShort && (
@@ -279,7 +279,7 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
           lineHeight="1.3"
           width="100%"
         >
-          {event.organizer_name || event.title}
+          {event.title}
         </Text>
       ) : isShort ? (
         // Short events: Name and time stacked tightly
@@ -352,7 +352,7 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
           >
             {event.title}
           </Text>
-          {event.organizer_name && (
+          {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="xs"
               color="fg.muted"
