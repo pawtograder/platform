@@ -1341,13 +1341,32 @@ async function enqueueCalendarChangeAnnouncement(
     return;
   }
 
+  // Get the class timezone
+  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", classId).single();
+
+  const classTimezone = normalizeTimezone(classData?.time_zone || "UTC");
+
   const emoji = changeType === "added" ? "📅" : changeType === "removed" ? "❌" : "✏️";
   const action = changeType === "added" ? "added to" : changeType === "removed" ? "removed from" : "updated in";
 
   const startDate = new Date(startTime);
   const endDate = new Date(endTime);
-  const dateStr = startDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-  const timeStr = `${startDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} - ${endDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
+
+  // Format dates using the class timezone
+  const dateFormatter = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: classTimezone
+  });
+  const timeFormatter = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: classTimezone
+  });
+
+  const dateStr = dateFormatter.format(startDate);
+  const timeStr = `${timeFormatter.format(startDate)} - ${timeFormatter.format(endDate)}`;
 
   await supabase.schema("pgmq_public").rpc("send", {
     queue_name: "discord_async_calls",

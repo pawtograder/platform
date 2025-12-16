@@ -15,16 +15,15 @@ import {
   DataListRoot,
   Heading,
   HStack,
-  Icon,
   Stack,
   Text,
   VStack
 } from "@chakra-ui/react";
 import { format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { BsCalendar, BsChevronDown } from "react-icons/bs";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { CalendarAccordionTrigger } from "@/components/calendar/calendar-accordion-trigger";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TZDate } from "@date-fns/tz";
@@ -248,17 +247,7 @@ export default async function StudentDashboard({
       {hasCalendar && (
         <Accordion.Root collapsible defaultValue={[]}>
           <Accordion.Item value="schedule">
-            <Accordion.ItemTrigger>
-              <HStack gap={2} justifyContent="space-between" w="100%">
-                <HStack gap={2}>
-                  <Icon as={BsCalendar} color="blue.500" />
-                  <Heading size="sm">Schedule</Heading>
-                </HStack>
-                <Accordion.ItemIndicator>
-                  <Icon as={BsChevronDown} />
-                </Accordion.ItemIndicator>
-              </HStack>
-            </Accordion.ItemTrigger>
+            <CalendarAccordionTrigger />
             <Accordion.ItemContent>
               <Accordion.ItemBody>
                 <CalendarScheduleSummary />

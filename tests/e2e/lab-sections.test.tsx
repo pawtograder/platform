@@ -39,7 +39,7 @@ test.beforeAll(async () => {
       useMagicLink: true
     }
   ]);
-  // Create 10 lab sections
+  // Create 20 lab sections
   const daysOfWeek = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   for (let i = 0; i < 20; i++) {
     const { data: labSectionData, error: labSectionError } = await supabase

@@ -8,7 +8,7 @@ import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-
 import { isUrl, CalendarColorPalette } from "./calendar-utils";
 import { useCalendarColorsFromEvents } from "./CalendarColorContext";
 import { useParams } from "next/navigation";
-import { useHelpQueues, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 
@@ -45,31 +45,73 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
   const { helpQueueAssignments } = controller;
   const { private_profile_id: taProfileId } = useClassProfiles();
   const helpQueues = useHelpQueues();
+  const allAssignments = useHelpQueueAssignments();
 
   const handleQueueClick = async (queueName: string, e: React.MouseEvent) => {
     e.stopPropagation();
+
+    if (!taProfileId) {
+      return;
+    }
+
     const queue = helpQueues?.find((q) => q.name === queueName);
-    if (queue && taProfileId) {
-      try {
-        await helpQueueAssignments.create({
-          class_id: Number(course_id),
-          help_queue_id: queue.id,
-          ta_profile_id: taProfileId,
-          is_active: true,
-          started_at: new Date().toISOString(),
-          ended_at: null,
-          max_concurrent_students: 1
-        });
-        toaster.success({
-          title: "Success",
-          description: "Started working on queue"
-        });
-      } catch (error) {
-        toaster.error({
-          title: "Error",
-          description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
-        });
-      }
+
+    // Check that queue exists
+    if (!queue) {
+      toaster.error({
+        title: "Error",
+        description: `Queue "${queueName}" not found`
+      });
+      return;
+    }
+
+    // Check that queue is active
+    if (!queue.is_active) {
+      toaster.error({
+        title: "Queue Inactive",
+        description: `The queue "${queueName}" is not currently active`
+      });
+      return;
+    }
+
+    // Check for existing active assignment for this TA and queue
+    const existingActiveAssignment = allAssignments?.find(
+      (assignment) =>
+        assignment.help_queue_id === queue.id &&
+        assignment.ta_profile_id === taProfileId &&
+        assignment.is_active === true
+    );
+
+    if (existingActiveAssignment) {
+      toaster.error({
+        title: "Already Active",
+        description: `You are already working on the queue "${queueName}"`
+      });
+      return;
+    }
+
+    // Default max_concurrent_students (matches database default)
+    const maxConcurrentStudents = 3;
+
+    try {
+      await helpQueueAssignments.create({
+        class_id: Number(course_id),
+        help_queue_id: queue.id,
+        ta_profile_id: taProfileId,
+        is_active: true,
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        max_concurrent_students: maxConcurrentStudents
+      });
+      toaster.success({
+        title: "Success",
+        description: "Started working on queue"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+      });
     }
   };
 
@@ -210,8 +252,6 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
     return grouped;
   }, [events, weekStart]);
 
-  const today = useMemo(() => new Date(), []);
-
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   }, [weekStart]);
@@ -265,7 +305,7 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
             {weekDays.map((date) => {
               const dateKey = format(date, "yyyy-MM-dd");
               const dayEvents = eventsByDay[dateKey] || [];
-              const isToday = isSameDay(date, today);
+              const isToday = isSameDay(date, new Date());
 
               return (
                 <DayColumn

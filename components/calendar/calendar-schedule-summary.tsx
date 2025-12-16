@@ -3,6 +3,7 @@
 import { CalendarEvent, useAllCalendarEvents } from "@/hooks/useCalendarEvents";
 import { Box, Button, Card, Flex, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
+import { toaster } from "@/components/ui/toaster";
 import {
   addDays,
   addMonths,
@@ -156,8 +157,15 @@ function QueueButton({ queueName, accentColor, isVeryShort, context, isAbsolute 
             ended_at: null,
             max_concurrent_students: 1
           });
-        } catch {
-          // Error handling is done via toaster in the calling component
+          toaster.success({
+            title: "Success",
+            description: "Started working on queue"
+          });
+        } catch (error) {
+          toaster.error({
+            title: "Error",
+            description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+          });
         }
       }
     } else if (context === "calendar-schedule-summary") {
@@ -786,6 +794,7 @@ interface EventsListProps {
   startDate: Date;
   endDate: Date;
   containerRef?: React.RefObject<HTMLDivElement>;
+  scrollableContainerRef?: React.RefObject<HTMLDivElement>;
 }
 
 function EventsList({
@@ -796,6 +805,7 @@ function EventsList({
   startDate,
   endDate,
   containerRef: parentContainerRef,
+  scrollableContainerRef,
   offset
 }: EventsListProps & { offset: number }) {
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -803,27 +813,74 @@ function EventsList({
   const weekContainerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
 
-  // Update container width on resize - measure the parent container for full available width
+  // Update container width on resize - measure the scrollable container and account for padding/scrollbars
   useEffect(() => {
     const updateWidth = () => {
-      // Prefer measuring the parent container (Card.Body) for full available width
-      if (parentContainerRef?.current) {
-        setContainerWidth(parentContainerRef.current.clientWidth);
-      } else if (viewMode === "today" && containerRef.current) {
+      // Helper to get available width accounting for padding and scrollbars
+      const getAvailableWidth = (element: HTMLElement | null): number | null => {
+        if (!element) return null;
+
+        // clientWidth excludes scrollbar but includes padding
+        // We want the actual content width, so we need to account for padding
+        const computedStyle = window.getComputedStyle(element);
+        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+        const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
+
+        // clientWidth already excludes scrollbar, so we just subtract padding
+        return element.clientWidth - paddingLeft - paddingRight;
+      };
+
+      // Prefer measuring the scrollable container wrapper (accounts for scrollbars)
+      if (scrollableContainerRef?.current) {
+        const width = getAvailableWidth(scrollableContainerRef.current);
+        if (width !== null) {
+          setContainerWidth(width);
+          return;
+        }
+      }
+
+      // Fallback to measuring specific containers based on view mode
+      if (viewMode === "today" && containerRef.current) {
         // For today view, measure the scrollable container
-        setContainerWidth(containerRef.current.clientWidth);
+        const width = getAvailableWidth(containerRef.current);
+        if (width !== null) {
+          setContainerWidth(width);
+          return;
+        }
       } else if (viewMode === "week" && weekContainerRef.current) {
         // For week view, measure the HStack container
-        setContainerWidth(weekContainerRef.current.clientWidth);
-      } else if (containerRef.current) {
-        // Fallback
-        setContainerWidth(containerRef.current.clientWidth);
+        const width = getAvailableWidth(weekContainerRef.current);
+        if (width !== null) {
+          setContainerWidth(width);
+          return;
+        }
+      }
+
+      // Final fallback: measure parent container but account for padding
+      if (parentContainerRef?.current) {
+        const width = getAvailableWidth(parentContainerRef.current);
+        if (width !== null) {
+          setContainerWidth(width);
+          return;
+        }
+      }
+
+      // Last resort fallback
+      if (containerRef.current) {
+        const width = getAvailableWidth(containerRef.current);
+        if (width !== null) {
+          setContainerWidth(width);
+        }
       }
     };
 
     updateWidth();
     const resizeObserver = new ResizeObserver(updateWidth);
 
+    // Observe the scrollable container first (most accurate)
+    if (scrollableContainerRef?.current) {
+      resizeObserver.observe(scrollableContainerRef.current);
+    }
     if (parentContainerRef?.current) {
       resizeObserver.observe(parentContainerRef.current);
     }
@@ -836,7 +893,7 @@ function EventsList({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [viewMode, parentContainerRef]);
+  }, [viewMode, parentContainerRef, scrollableContainerRef]);
 
   // Sort events by start time
   const sortedEvents = useMemo(() => {
@@ -1164,6 +1221,7 @@ export default function CalendarScheduleSummary() {
   const [viewMode, setViewMode] = useState<ViewMode>("today");
   const [offset, setOffset] = useState(0);
   const cardBodyRef = useRef<HTMLDivElement>(null);
+  const scrollableContainerRef = useRef<HTMLDivElement>(null);
 
   const allEvents = useAllCalendarEvents();
 
@@ -1362,7 +1420,15 @@ export default function CalendarScheduleSummary() {
           )}
 
           {/* Events list */}
-          <Box maxH="600px" overflowY="auto" overflowX="hidden" width="100%" minW={0} boxSizing="border-box">
+          <Box
+            ref={scrollableContainerRef}
+            maxH="600px"
+            overflowY="auto"
+            overflowX="hidden"
+            width="100%"
+            minW={0}
+            boxSizing="border-box"
+          >
             <EventsList
               events={filteredEvents}
               viewMode={viewMode}
@@ -1371,6 +1437,7 @@ export default function CalendarScheduleSummary() {
               startDate={startDate}
               endDate={endDate}
               containerRef={cardBodyRef}
+              scrollableContainerRef={scrollableContainerRef}
               offset={offset}
             />
           </Box>
