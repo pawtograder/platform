@@ -175,7 +175,7 @@ function CreateLabSectionModal({
         if (!data.lab_leader_ids || data.lab_leader_ids.length === 0) {
           toaster.error({
             title: "Validation Error",
-            description: "At least one lab leader is required"
+            description: "At least one lab facilitator is required"
           });
           setIsLoading(false);
           return;
@@ -338,7 +338,7 @@ function CreateLabSectionModal({
                   </HStack>
 
                   <Field.Root invalid={!!errors.lab_leader_ids}>
-                    <Field.Label>Lab Leaders</Field.Label>
+                    <Field.Label>Lab Facilitators</Field.Label>
                     <Select
                       isMulti
                       options={staffRoles?.data?.map((role) => ({
@@ -354,7 +354,7 @@ function CreateLabSectionModal({
                           shouldValidate: true
                         });
                       }}
-                      placeholder="Select lab leaders..."
+                      placeholder="Select lab facilitators..."
                     />
                     <Field.ErrorText>{errors.lab_leader_ids?.message}</Field.ErrorText>
                   </Field.Root>
@@ -810,7 +810,7 @@ function LabSectionsTable() {
                 <Table.ColumnHeader>Name</Table.ColumnHeader>
                 <Table.ColumnHeader>Schedule</Table.ColumnHeader>
                 <Table.ColumnHeader>Room Location</Table.ColumnHeader>
-                <Table.ColumnHeader>Lab Leader</Table.ColumnHeader>
+                <Table.ColumnHeader>Lab Facilitators</Table.ColumnHeader>
                 <Table.ColumnHeader>Upcoming Meetings</Table.ColumnHeader>
                 <Table.ColumnHeader>Students</Table.ColumnHeader>
                 <Table.ColumnHeader>Actions</Table.ColumnHeader>

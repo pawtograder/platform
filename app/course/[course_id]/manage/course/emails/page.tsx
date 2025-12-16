@@ -745,7 +745,7 @@ function EmailsInnerPage() {
                           .map((leader) => leader.profile_id) || [];
                       const leaderCount = sectionLeaders.length;
                       return {
-                        label: `${section.name}${leaderCount > 0 ? ` (${leaderCount} leader${leaderCount > 1 ? "s" : ""})` : " (No leaders)"}`,
+                        label: `${section.name}${leaderCount > 0 ? ` (${leaderCount} facilitator${leaderCount > 1 ? "s" : ""})` : " (No facilitators)"}`,
                         value: section.id
                       };
                     })}

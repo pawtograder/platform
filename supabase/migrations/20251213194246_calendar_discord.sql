@@ -2400,7 +2400,7 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.update_regrade_request_status(regrade_request_id bigint, new_status regrade_status, profile_id uuid, resolved_points integer DEFAULT NULL::integer, closed_points integer DEFAULT NULL::integer)
+CREATE OR REPLACE FUNCTION public.update_regrade_request_status(regrade_request_id bigint, new_status regrade_status, profile_id uuid, resolved_points numeric DEFAULT NULL::numeric, closed_points numeric DEFAULT NULL::numeric)
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -2408,8 +2408,8 @@ CREATE OR REPLACE FUNCTION public.update_regrade_request_status(regrade_request_
 AS $function$
 declare
     current_request record;
-    param_resolved_points integer;
-    param_closed_points integer;
+    param_resolved_points numeric;
+    param_closed_points numeric;
 begin
     param_resolved_points := resolved_points;
     param_closed_points := closed_points;
@@ -3761,3 +3761,5 @@ GRANT EXECUTE ON FUNCTION "public"."create_help_request_notification"(bigint, te
 REVOKE ALL ON FUNCTION "public"."trigger_discord_role_sync_for_user"(bigint) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION "public"."trigger_discord_role_sync_for_user"(bigint) TO "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."trigger_discord_role_sync_for_user"(bigint) TO "service_role";
+
+ALTER TABLE public.submission_regrade_requests ALTER COLUMN initial_points TYPE numeric USING initial_points::numeric;

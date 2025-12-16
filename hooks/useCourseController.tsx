@@ -5,6 +5,7 @@ import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
   PossiblyTentativeResult,
   useFindTableControllerValue,
+  useIsTableControllerReady,
   useListTableControllerValues,
   useTableControllerTableValues,
   useTableControllerValueById
@@ -1532,8 +1533,11 @@ export function useAssignmentDueDate(
   const controller = useCourseController();
   const course = useCourse();
   const time_zone = course.time_zone;
-  const [labSections, setLabSections] = useState<LabSection[]>();
-  const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
+
+  const labSections = useTableControllerTableValues(controller.labSections) as LabSection[];
+  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings) as LabSectionMeeting[];
+  const labSectionsReady = useIsTableControllerReady(controller.labSections);
+  const labSectionMeetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
 
   const dueDateExceptionsFilter = useCallback(
     (e: AssignmentDueDateException) => {
@@ -1552,23 +1556,6 @@ export function useAssignmentDueDate(
     controller.assignmentDueDateExceptions,
     dueDateExceptionsFilter
   );
-
-  useEffect(() => {
-    const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>
-      setLabSections(data)
-    );
-    setLabSections(labSections);
-
-    const { data: labSectionMeetings, unsubscribe: unsubscribeLabMeetings } = controller.listLabSectionMeetings(
-      (data) => setLabSectionMeetings(data)
-    );
-    setLabSectionMeetings(labSectionMeetings);
-
-    return () => {
-      unsubscribeLabSections();
-      unsubscribeLabMeetings();
-    };
-  }, [controller]);
 
   const ret = useMemo(() => {
     if (!assignment.due_date) {
@@ -1590,7 +1577,8 @@ export function useAssignmentDueDate(
     let effectiveDueDate = originalDueDate;
     let labSectionId: number | null = null;
 
-    if (hasLabScheduling && labSections && labSectionMeetings) {
+    // Only compute lab-based due date if data is ready and we have lab scheduling
+    if (hasLabScheduling && labSectionsReady && labSectionMeetingsReady) {
       // Get student's lab section
       if (options?.studentPrivateProfileId) {
         labSectionId = controller.getStudentLabSectionId(options.studentPrivateProfileId);
@@ -1651,7 +1639,17 @@ export function useAssignmentDueDate(
       labSectionId,
       time_zone
     };
-  }, [dueDateExceptions, labSections, labSectionMeetings, assignment, controller, options, time_zone]);
+  }, [
+    dueDateExceptions,
+    labSections,
+    labSectionMeetings,
+    labSectionsReady,
+    labSectionMeetingsReady,
+    assignment,
+    controller,
+    options,
+    time_zone
+  ]);
 
   return ret;
 }
