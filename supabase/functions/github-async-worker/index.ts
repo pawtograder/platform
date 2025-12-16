@@ -32,7 +32,6 @@ type QueueMessage<T> = {
   message: T;
 };
 
-
 function toMsLatency(enqueuedAt: string): number {
   try {
     const start = new Date(enqueuedAt).getTime();

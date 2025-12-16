@@ -115,7 +115,11 @@ function describeRecurringSeries(events: ParsedEvent[], classTimezone: string): 
   const dayPattern = detectDayPattern(sorted);
 
   // Date range
-  const startDateStr = firstStart.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: classTimezone });
+  const startDateStr = firstStart.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: classTimezone
+  });
   const endDateStr = lastStart.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: classTimezone });
 
   return `${dayPattern} ${timeStr} (${startDateStr} - ${endDateStr}, ${events.length} sessions)`;
@@ -130,7 +134,12 @@ function formatTimeRange(start: Date, end: Date, classTimezone: string): string 
 
 // Format single event description
 function formatSingleEventDescription(start: Date, end: Date, classTimezone: string): string {
-  const dateStr = start.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: classTimezone });
+  const dateStr = start.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: classTimezone
+  });
   const timeStr = formatTimeRange(start, end, classTimezone);
   return `${dateStr} ${timeStr}`;
 }
