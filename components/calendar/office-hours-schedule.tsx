@@ -1,12 +1,12 @@
 "use client";
 
-import { CalendarEvent, useCalendarEditUrls, useWeekSchedule } from "@/hooks/useCalendarEvents";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Box, Button, Card, Grid, Heading, HStack, Icon, Text, VStack } from "@chakra-ui/react";
+import { CalendarEvent, useWeekSchedule, useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
+import { Box, Button, Card, Grid, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { addDays, format, isSameDay, parseISO, startOfWeek } from "date-fns";
-import Link from "next/link";
 import { useMemo, useState } from "react";
-import { BsCalendar, BsChevronLeft, BsChevronRight, BsPencil } from "react-icons/bs";
+import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
+import { isUrl, CalendarColorPalette } from "./calendar-utils";
+import { useCalendarColorsFromEvents } from "./CalendarColorContext";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -29,9 +29,10 @@ interface DayColumnProps {
   date: Date;
   events: CalendarEvent[];
   isToday: boolean;
+  getOfficeHoursColor: (queueName: string | null | undefined) => CalendarColorPalette;
 }
 
-function DayColumn({ date, events, isToday }: DayColumnProps) {
+function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProps) {
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
   const monthName = format(date, "MMM");
@@ -58,34 +59,57 @@ function DayColumn({ date, events, isToday }: DayColumnProps) {
             No office hours
           </Text>
         ) : (
-          events.map((event) => (
-            <Box
-              key={event.id}
-              bg="blue.50"
-              _dark={{ bg: "blue.900" }}
-              borderRadius="md"
-              p={2}
-              borderLeftWidth="3px"
-              borderLeftColor="blue.400"
-            >
-              <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
-                {event.organizer_name || event.title}
-              </Text>
-              <Text fontSize="xs" color="fg.muted">
-                {formatDateRange(event.start_time, event.end_time)}
-              </Text>
-              {event.location && (
-                <Text fontSize="xs" color="fg.muted" lineClamp={1}>
-                  📍 {event.location}
+          events.map((event) => {
+            const colors = getOfficeHoursColor(event.queue_name);
+            return (
+              <Box
+                key={event.id}
+                bg={colors.bg}
+                _dark={{ bg: colors.bgDark }}
+                borderRadius="md"
+                p={2}
+                borderWidth="1px"
+                borderColor={colors.border}
+                borderLeftWidth="3px"
+                borderLeftColor={colors.accent}
+              >
+                <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
+                  {event.organizer_name || event.title}
                 </Text>
-              )}
-              {event.queue_name && (
-                <Text fontSize="xs" color="blue.500">
-                  {event.queue_name}
+                <Text fontSize="xs" color="fg.muted">
+                  {formatDateRange(event.start_time, event.end_time)}
                 </Text>
-              )}
-            </Box>
-          ))
+                {event.location &&
+                  (isUrl(event.location) ? (
+                    <Link
+                      href={event.location}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      fontSize="xs"
+                      color={colors.accent}
+                      fontWeight="medium"
+                      display="flex"
+                      alignItems="center"
+                      gap={1}
+                      _hover={{ textDecoration: "underline" }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Icon as={BsCameraVideo} boxSize={3} />
+                      Join virtual call
+                    </Link>
+                  ) : (
+                    <Text fontSize="xs" color="fg.muted" lineClamp={1}>
+                      📍 {event.location}
+                    </Text>
+                  ))}
+                {event.queue_name && (
+                  <Text fontSize="xs" color={colors.accent} fontWeight="medium">
+                    {event.queue_name}
+                  </Text>
+                )}
+              </Box>
+            );
+          })
         )}
       </VStack>
     </VStack>
@@ -100,9 +124,6 @@ interface OfficeHoursScheduleProps {
 export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursScheduleProps) {
   const [weekOffset, setWeekOffset] = useState(0);
 
-  const isStaff = useIsGraderOrInstructor();
-  const { officeHoursEditUrl } = useCalendarEditUrls();
-
   const weekStart = useMemo(() => {
     const today = new Date();
     const start = getWeekStart(today);
@@ -110,7 +131,12 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
     return start;
   }, [weekOffset]);
 
+  // Get all office hours events for consistent color assignment
+  const allOfficeHoursEvents = useOfficeHoursSchedule();
   const events = useWeekSchedule(weekStart);
+
+  // Get color functions from the hook (colors assigned in order, no hashing)
+  const { getOfficeHoursColor } = useCalendarColorsFromEvents(allOfficeHoursEvents);
 
   // Group events by day
   const eventsByDay = useMemo(() => {
@@ -165,16 +191,6 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
             </HStack>
 
             <HStack gap={2}>
-              {/* Edit button for staff */}
-              {isStaff && officeHoursEditUrl && (
-                <Button size="xs" variant="ghost" colorPalette="blue" asChild>
-                  <Link href={officeHoursEditUrl}>
-                    <Icon as={BsPencil} mr={1} />
-                    Edit Calendar
-                  </Link>
-                </Button>
-              )}
-
               {/* Week navigation */}
               <HStack gap={1}>
                 <Button
@@ -207,7 +223,15 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
               const dayEvents = eventsByDay[dateKey] || [];
               const isToday = isSameDay(date, today);
 
-              return <DayColumn key={dateKey} date={date} events={dayEvents} isToday={isToday} />;
+              return (
+                <DayColumn
+                  key={dateKey}
+                  date={date}
+                  events={dayEvents}
+                  isToday={isToday}
+                  getOfficeHoursColor={getOfficeHoursColor}
+                />
+              );
             })}
           </Grid>
 

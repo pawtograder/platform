@@ -537,6 +537,72 @@ export async function processEnvelope(
                   }
                   updateArgs.embeds[0].fields = fields;
                 }
+
+                // Add email link if email_data is provided (always add, even if resolved)
+                if (
+                  envelope.email_data &&
+                  typeof envelope.email_data === "object"
+                ) {
+                  const emailData = envelope.email_data as {
+                    student_emails?: string | null;
+                    assignee_email?: string | null;
+                    class_name?: string | null;
+                  };
+                  const studentEmails = emailData.student_emails;
+                  const assigneeEmail = emailData.assignee_email;
+                  const className = emailData.class_name;
+
+                  let helpRequestUrl = "";
+                  if (envelope.resource_type === "help_request" && envelope.resource_id && envelope.class_id) {
+                    helpRequestUrl = `https://${appUrl}/course/${envelope.class_id}/office-hours/request/${envelope.resource_id}`;
+                  }
+
+                  // Build mailto link with course name in subject
+                  const subjectText = className
+                    ? `Re: [${className}] Help Request #${envelope.resource_id || ""}`
+                    : `Re: Help Request #${envelope.resource_id || ""}`;
+                  const subject = encodeURIComponent(subjectText);
+                  const bodyParts: string[] = [];
+                  if (helpRequestUrl) {
+                    bodyParts.push(`View this help request in Pawtograder: ${helpRequestUrl}`);
+                  }
+                  bodyParts.push("");
+                  bodyParts.push("---");
+                  bodyParts.push("");
+                  bodyParts.push("Follow-up message:");
+                  const body = encodeURIComponent(bodyParts.join("\n"));
+
+                  // Build mailto link - always include it, even if student emails are null
+                  let mailtoLink: string;
+                  if (studentEmails) {
+                    mailtoLink = `mailto:${encodeURIComponent(studentEmails)}?subject=${subject}&body=${body}`;
+                    if (assigneeEmail) {
+                      mailtoLink += `&cc=${encodeURIComponent(assigneeEmail)}`;
+                    }
+                  } else {
+                    // If no student emails, create mailto link with just subject and body
+                    mailtoLink = `mailto:?subject=${subject}&body=${body}`;
+                    if (assigneeEmail) {
+                      mailtoLink += `&cc=${encodeURIComponent(assigneeEmail)}`;
+                    }
+                  }
+
+                  const fields = updateArgs.embeds[0].fields || [];
+                  const emailFieldIndex = fields.findIndex(
+                    (f) => f.name.toLowerCase().includes("email") || f.name.toLowerCase().includes("📧")
+                  );
+                  const emailField = {
+                    name: "📧 Email students",
+                    value: `[Email students](${mailtoLink})`,
+                    inline: false
+                  };
+                  if (emailFieldIndex >= 0) {
+                    fields[emailFieldIndex] = emailField;
+                  } else {
+                    fields.push(emailField);
+                  }
+                  updateArgs.embeds[0].fields = fields;
+                }
               }
 
               await discord.updateMessage(updateArgs, scope);
@@ -602,6 +668,76 @@ export async function processEnvelope(
             }
           } else {
             console.warn(`[processEnvelope] APP_URL not configured, skipping deep link`);
+          }
+        }
+
+        // Add email link if email_data is provided (always add, even if resolved)
+        if (
+          envelope.email_data &&
+          typeof envelope.email_data === "object" &&
+          args.embeds &&
+          args.embeds.length > 0
+        ) {
+          const emailData = envelope.email_data as {
+            student_emails?: string | null;
+            assignee_email?: string | null;
+            class_name?: string | null;
+          };
+          const studentEmails = emailData.student_emails;
+          const assigneeEmail = emailData.assignee_email;
+          const className = emailData.class_name;
+
+          const appUrl = Deno.env.get("APP_URL");
+          let helpRequestUrl = "";
+          if (appUrl && envelope.resource_type === "help_request" && envelope.resource_id && envelope.class_id) {
+            helpRequestUrl = `https://${appUrl}/course/${envelope.class_id}/office-hours/request/${envelope.resource_id}`;
+          }
+
+          // Build mailto link with course name in subject
+          const subjectText = className
+            ? `Re: [${className}] Help Request #${envelope.resource_id || ""}`
+            : `Re: Help Request #${envelope.resource_id || ""}`;
+          const subject = encodeURIComponent(subjectText);
+          const bodyParts: string[] = [];
+          if (helpRequestUrl) {
+            bodyParts.push(`View this help request in Pawtograder: ${helpRequestUrl}`);
+          }
+          bodyParts.push("");
+          bodyParts.push("---");
+          bodyParts.push("");
+          bodyParts.push("Follow-up message:");
+          const body = encodeURIComponent(bodyParts.join("\n"));
+
+          // Build mailto link - always include it, even if student emails are null
+          let mailtoLink: string;
+          if (studentEmails) {
+            mailtoLink = `mailto:${encodeURIComponent(studentEmails)}?subject=${subject}&body=${body}`;
+            if (assigneeEmail) {
+              mailtoLink += `&cc=${encodeURIComponent(assigneeEmail)}`;
+            }
+          } else {
+            // If no student emails, create mailto link with just subject and body
+            mailtoLink = `mailto:?subject=${subject}&body=${body}`;
+            if (assigneeEmail) {
+              mailtoLink += `&cc=${encodeURIComponent(assigneeEmail)}`;
+            }
+          }
+
+          // Check if email field already exists
+          const hasEmailField = args.embeds[0].fields?.some(
+            (f) => f.name.toLowerCase().includes("email") || f.name.toLowerCase().includes("📧")
+          );
+
+          if (!hasEmailField) {
+            args.embeds[0].fields = [
+              ...(args.embeds[0].fields || []),
+              {
+                name: "📧 Email students",
+                value: `[Email students](${mailtoLink})`,
+                inline: false
+              }
+            ];
+            console.log(`[processEnvelope] Added email link to embed`);
           }
         }
 

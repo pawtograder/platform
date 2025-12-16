@@ -954,6 +954,22 @@ export type LabSectionMeeting = GetResult<
   "*"
 >;
 
+export type LabSectionLeader = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_section_leaders"]["Row"],
+  "lab_section_leaders",
+  Database["public"]["Tables"]["lab_section_leaders"]["Relationships"],
+  "*"
+>;
+
+export type LabSectionWithLeaders = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*, lab_section_leaders(*, profiles(*))"
+>;
+
 export type LabSectionWithLeader = GetResult<
   Database["public"],
   Database["public"]["Tables"]["lab_sections"]["Row"],

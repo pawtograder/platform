@@ -2,10 +2,12 @@
 
 import { useCourseController } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { LabSection, LabSectionWithLeader } from "@/utils/supabase/DatabaseTypes";
+import { LabSection } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { format } from "date-fns";
 import { Calendar, Clock, User } from "lucide-react";
+import { createClient } from "@/utils/supabase/client";
+import { useEffect, useState } from "react";
 
 const DAYS_OF_WEEK: Record<string, string> = {
   monday: "Monday",
@@ -20,14 +22,38 @@ const DAYS_OF_WEEK: Record<string, string> = {
 export default function StudentLabSection() {
   const controller = useCourseController();
   const { role } = useClassProfiles();
+  const supabase = createClient();
+  const [labLeaders, setLabLeaders] = useState<string[]>([]);
 
   // Get lab sections data
   const { data: labSections } = controller.listLabSections();
 
   // Find the student's lab section
-  const studentLabSection = labSections?.find((labSection: LabSection) => labSection.id === role?.lab_section_id) as
-    | LabSectionWithLeader
-    | undefined;
+  const studentLabSection = labSections?.find((labSection: LabSection) => labSection.id === role?.lab_section_id);
+
+  // Fetch lab section leaders
+  useEffect(() => {
+    const fetchLeaders = async () => {
+      if (!studentLabSection?.id) {
+        setLabLeaders([]);
+        return;
+      }
+
+      const { data: leaders } = await supabase
+        .from("lab_section_leaders")
+        .select("profiles(name)")
+        .eq("lab_section_id", studentLabSection.id);
+
+      if (leaders) {
+        const leaderNames = leaders
+          .map((l) => (l.profiles as { name: string | null })?.name)
+          .filter((name): name is string => name !== null);
+        setLabLeaders(leaderNames);
+      }
+    };
+
+    fetchLeaders();
+  }, [studentLabSection?.id, supabase]);
 
   if (!studentLabSection) {
     return null; // Don't show anything if no lab section is assigned
@@ -87,9 +113,11 @@ export default function StudentLabSection() {
             <User size={16} />
             <VStack gap={1} align="start">
               <Text fontSize="sm" color="fg.muted">
-                Lab Leader
+                Lab Leader{labLeaders.length > 1 ? "s" : ""}
               </Text>
-              <Text fontWeight="medium">{studentLabSection.profiles?.name || "TBA"}</Text>
+              <Text fontWeight="medium">
+                {labLeaders.length > 0 ? labLeaders.join(", ") : "TBA"}
+              </Text>
             </VStack>
           </HStack>
 

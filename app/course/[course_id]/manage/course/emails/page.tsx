@@ -8,7 +8,7 @@ import {
   Submission,
   Tag,
   UserRole,
-  LabSectionWithLeader
+  LabSection
 } from "@/utils/supabase/DatabaseTypes";
 import { Button, Field, Fieldset, Heading, Input, Box, Flex, Text, Checkbox } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
@@ -226,14 +226,32 @@ function EmailsInnerPage() {
     }
   });
 
-  const { data: labSectionsData } = useList<LabSectionWithLeader>({
+  const { data: labSectionsData } = useList<LabSection>({
     resource: "lab_sections",
-    meta: {
-      select: "*, profiles!lab_sections_lab_leader_id_fkey(*)"
-    },
     filters: [{ field: "class_id", operator: "eq", value: course_id }],
     queryOptions: {
       enabled: !!course_id
+    }
+  });
+
+  // Fetch lab section leaders separately
+  const { data: labSectionLeadersData } = useList({
+    resource: "lab_section_leaders",
+    meta: {
+      select: "lab_section_id, profile_id"
+    },
+    filters:
+      labSectionsData?.data && labSectionsData.data.length > 0
+        ? [
+            {
+              operator: "in",
+              field: "lab_section_id",
+              value: labSectionsData.data.map((section) => section.id)
+            }
+          ]
+        : [],
+    queryOptions: {
+      enabled: !!labSectionsData?.data && labSectionsData.data.length > 0
     }
   });
 
@@ -567,9 +585,11 @@ function EmailsInnerPage() {
     if (includeInstructors) {
       roles.push("instructor");
     }
-    const labSectionLeaders = labSectionsData?.data
-      .filter((section) => labSectionIds.includes(section.id))
-      .map((section) => section.lab_leader_id);
+    // Get all lab section leader profile IDs for selected sections
+    const labSectionLeaders =
+      labSectionLeadersData?.data
+        ?.filter((leader) => labSectionIds.includes(leader.lab_section_id))
+        .map((leader) => leader.profile_id) || [];
     return (
       userRolesData?.data
         .filter((userRole) => {
@@ -718,8 +738,13 @@ function EmailsInnerPage() {
                       );
                     }}
                     options={labSectionsData?.data.map((section) => {
+                      // Get leaders for this section
+                      const sectionLeaders = labSectionLeadersData?.data
+                        ?.filter((leader) => leader.lab_section_id === section.id)
+                        .map((leader) => leader.profile_id) || [];
+                      const leaderCount = sectionLeaders.length;
                       return {
-                        label: `${section.name} (${section.profiles?.name || "No leader"})`,
+                        label: `${section.name}${leaderCount > 0 ? ` (${leaderCount} leader${leaderCount > 1 ? "s" : ""})` : " (No leaders)"}`,
                         value: section.id
                       };
                     })}

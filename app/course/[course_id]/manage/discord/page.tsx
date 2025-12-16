@@ -4,7 +4,7 @@ import { Box, Button, Field, Heading, HStack, Icon, Input, Stack, Text, VStack, 
 import { BsDiscord, BsInfoCircle, BsCalendar } from "react-icons/bs";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useUpdate, useList } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
 import { useState, useEffect } from "react";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
@@ -12,7 +12,6 @@ import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot, PopoverTrigger
 import LinkDiscordAccount from "@/components/discord/link-account";
 import PendingInvites from "@/components/discord/pending-invites";
 import { SyncRolesPanel } from "@/components/discord/sync-roles-button";
-import { createClient } from "@/utils/supabase/client";
 
 /**
  * Admin page for configuring Discord server integration for a class
@@ -32,27 +31,7 @@ export default function DiscordManagementPage() {
   // Calendar integration state
   const [officeHoursIcsUrl, setOfficeHoursIcsUrl] = useState(course?.office_hours_ics_url || "");
   const [eventsIcsUrl, setEventsIcsUrl] = useState(course?.events_ics_url || "");
-  const [officeHoursEditUrl, setOfficeHoursEditUrl] = useState("");
-  const [eventsEditUrl, setEventsEditUrl] = useState("");
   const [isCalendarSaving, setIsCalendarSaving] = useState(false);
-
-  // Fetch staff settings for edit URLs
-  const { data: staffSettings } = useList({
-    resource: "class_staff_settings",
-    filters: [{ field: "class_id", operator: "eq", value: course?.id }],
-    queryOptions: { enabled: !!course?.id && isStaff }
-  });
-
-  // Update edit URLs when staff settings are loaded
-  useEffect(() => {
-    if (staffSettings?.data) {
-      const settings = staffSettings.data as { setting_key: string; setting_value: string | null }[];
-      const ohEditUrl = settings.find((s) => s.setting_key === "office_hours_calendar_edit_url");
-      const evEditUrl = settings.find((s) => s.setting_key === "events_calendar_edit_url");
-      if (ohEditUrl) setOfficeHoursEditUrl(ohEditUrl.setting_value || "");
-      if (evEditUrl) setEventsEditUrl(evEditUrl.setting_value || "");
-    }
-  }, [staffSettings?.data]);
 
   // Update ICS URLs when course changes
   useEffect(() => {
@@ -110,7 +89,6 @@ export default function DiscordManagementPage() {
 
   const handleCalendarSave = async () => {
     setIsCalendarSaving(true);
-    const supabase = createClient();
 
     try {
       // Save ICS URLs to classes table
@@ -122,42 +100,6 @@ export default function DiscordManagementPage() {
           events_ics_url: eventsIcsUrl.trim() || null
         }
       });
-
-      // Save edit URLs to class_staff_settings table (upsert)
-      if (officeHoursEditUrl.trim()) {
-        await supabase.from("class_staff_settings").upsert(
-          {
-            class_id: course.id,
-            setting_key: "office_hours_calendar_edit_url",
-            setting_value: officeHoursEditUrl.trim()
-          },
-          { onConflict: "class_id,setting_key" }
-        );
-      } else {
-        // Delete if empty
-        await supabase
-          .from("class_staff_settings")
-          .delete()
-          .eq("class_id", course.id)
-          .eq("setting_key", "office_hours_calendar_edit_url");
-      }
-
-      if (eventsEditUrl.trim()) {
-        await supabase.from("class_staff_settings").upsert(
-          {
-            class_id: course.id,
-            setting_key: "events_calendar_edit_url",
-            setting_value: eventsEditUrl.trim()
-          },
-          { onConflict: "class_id,setting_key" }
-        );
-      } else {
-        await supabase
-          .from("class_staff_settings")
-          .delete()
-          .eq("class_id", course.id)
-          .eq("setting_key", "events_calendar_edit_url");
-      }
 
       toaster.success({
         title: "Calendar settings saved",
@@ -328,7 +270,7 @@ export default function DiscordManagementPage() {
                 <Heading size="md">Calendar Integration</Heading>
                 {isCalendarConfigured && (
                   <Text fontSize="sm" color="fg.muted" fontWeight="normal">
-                    (Configured)
+                    (Configured, will auto-sync every 5 minutes)
                   </Text>
                 )}
               </HStack>
@@ -348,10 +290,6 @@ export default function DiscordManagementPage() {
                         <Text fontSize="sm">
                           <strong>ICS URLs:</strong> URLs to ICS calendar files that will be polled every 5 minutes.
                           These are public read URLs (e.g., from Google Calendar, Outlook, etc.).
-                        </Text>
-                        <Text fontSize="sm">
-                          <strong>Edit URLs:</strong> Links to edit the calendars. These are only visible to staff
-                          members and appear as edit buttons in the schedule views.
                         </Text>
                         <Text fontSize="sm">
                           <strong>Office Hours Calendar:</strong> For staff schedules. Event titles should be in the
@@ -389,18 +327,6 @@ export default function DiscordManagementPage() {
               </Field.Root>
 
               <Field.Root>
-                <Field.Label>Office Hours Calendar Edit URL (Staff Only)</Field.Label>
-                <Input
-                  value={officeHoursEditUrl}
-                  onChange={(e) => setOfficeHoursEditUrl(e.target.value)}
-                  placeholder="https://calendar.google.com/calendar/r?cid=..."
-                  readOnly={!isInstructor}
-                  disabled={!isInstructor}
-                />
-                <Field.HelperText>Link to edit the calendar. Only visible to staff.</Field.HelperText>
-              </Field.Root>
-
-              <Field.Root>
                 <Field.Label>Events Calendar ICS URL</Field.Label>
                 <Input
                   value={eventsIcsUrl}
@@ -412,18 +338,6 @@ export default function DiscordManagementPage() {
                 <Field.HelperText>
                   Public ICS feed URL for staff events (meetings, etc.). Not shown to students.
                 </Field.HelperText>
-              </Field.Root>
-
-              <Field.Root>
-                <Field.Label>Events Calendar Edit URL (Staff Only)</Field.Label>
-                <Input
-                  value={eventsEditUrl}
-                  onChange={(e) => setEventsEditUrl(e.target.value)}
-                  placeholder="https://calendar.google.com/calendar/r?cid=..."
-                  readOnly={!isInstructor}
-                  disabled={!isInstructor}
-                />
-                <Field.HelperText>Link to edit the events calendar. Only visible to staff.</Field.HelperText>
               </Field.Root>
 
               {isInstructor && (

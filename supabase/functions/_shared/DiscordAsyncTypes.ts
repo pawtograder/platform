@@ -167,4 +167,10 @@ export type DiscordAsyncEnvelope = {
   channel_type?: "general" | "assignment" | "lab" | "office_hours" | "regrades" | "scheduling" | "operations"; // For tracking in discord_channels table
   // For role tracking (create_role method)
   role_type?: "student" | "grader" | "instructor"; // For tracking in discord_roles table
+  // For email link generation (help requests)
+  email_data?: {
+    student_emails?: string | null; // Formatted as "Name <email>"
+    assignee_email?: string | null;
+    class_name?: string | null;
+  };
 };

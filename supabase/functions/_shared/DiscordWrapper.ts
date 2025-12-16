@@ -228,7 +228,8 @@ export async function updateMessage(
       `/channels/${args.channel_id}/messages/${args.message_id}`,
       {
         content: args.content,
-        embeds: args.embeds
+        embeds: args.embeds,
+        allowed_mentions: args.allowed_mentions
       },
       scope
     );

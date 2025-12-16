@@ -504,9 +504,7 @@ BEGIN
   END IF;
 
   -- Broadcast to staff channel
-  PERFORM realtime.broadcast(
-    'class:' || v_class_id || ':staff',
-    'broadcast',
+  PERFORM realtime.send(
     jsonb_build_object(
       'type', 'table_change',
       'table', 'discord_channels',
@@ -515,7 +513,10 @@ BEGIN
       'class_id', v_class_id,
       'data', v_data,
       'timestamp', now()::text
-    )
+    ),
+    'broadcast',
+    'class:' || v_class_id || ':staff',
+    true
   );
 
   IF TG_OP = 'DELETE' THEN
@@ -553,9 +554,7 @@ BEGIN
   END IF;
 
   -- Broadcast to staff channel
-  PERFORM realtime.broadcast(
-    'class:' || v_class_id || ':staff',
-    'broadcast',
+  PERFORM realtime.send(
     jsonb_build_object(
       'type', 'table_change',
       'table', 'discord_messages',
@@ -564,7 +563,10 @@ BEGIN
       'class_id', v_class_id,
       'data', v_data,
       'timestamp', now()::text
-    )
+    ),
+    'broadcast',
+    'class:' || v_class_id || ':staff',
+    true
   );
 
   IF TG_OP = 'DELETE' THEN
@@ -733,8 +735,11 @@ DECLARE
   v_status_emoji text;
   v_feedback RECORD;
   v_feedback_emoji text;
+  v_student_emails text;
+  v_assignee_email text;
+  v_assignee_name text;
 BEGIN
-  -- Get help request details
+  -- Get help request details (including assignee)
   SELECT 
     hr.id,
     hr.class_id,
@@ -742,7 +747,8 @@ BEGIN
     hr.status,
     hr.request,
     hr.created_at,
-    hr.created_by
+    hr.created_by,
+    hr.assignee
   INTO v_help_request
   FROM public.help_requests hr
   WHERE hr.id = p_help_request_id;
@@ -751,8 +757,8 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Get class Discord info
-  SELECT c.discord_server_id, c.slug
+  -- Get class Discord info and name
+  SELECT c.discord_server_id, c.slug, c.name
   INTO v_class
   FROM public.classes c
   WHERE c.id = v_help_request.class_id;
@@ -783,18 +789,59 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Get student names (may be empty if students haven't been added yet)
-  SELECT string_agg(p.name, ', ')
-  INTO v_student_names
+  -- Get student names and emails (may be empty if students haven't been added yet)
+  -- Join on both private_profile_id OR public_profile_id to handle both private and public help requests
+  SELECT 
+    string_agg(DISTINCT p.name, ', '),
+    string_agg(
+      DISTINCT format('%s <%s>', COALESCE(NULLIF(p.name, ''), 'Student'), u.email),
+      ', '
+    ) FILTER (WHERE u.email IS NOT NULL)
+  INTO v_student_names, v_student_emails
   FROM public.help_request_students hrs
   JOIN public.profiles p ON p.id = hrs.profile_id
+  LEFT JOIN public.user_roles ur ON (
+    (ur.private_profile_id = p.id OR ur.public_profile_id = p.id) 
+    AND ur.class_id = v_help_request.class_id
+  )
+  LEFT JOIN public.users u ON u.user_id = ur.user_id
   WHERE hrs.help_request_id = p_help_request_id;
 
-  -- Fall back to creator's name if no students found yet
-  IF v_student_names IS NULL THEN
-    SELECT p.name INTO v_student_names
+  -- Fall back to creator's name/email if no students found yet
+  -- Join on both private_profile_id OR public_profile_id to handle both private and public help requests
+  IF v_student_names IS NULL OR v_student_emails IS NULL THEN
+    SELECT 
+      p.name,
+      CASE 
+        WHEN u.email IS NOT NULL THEN format('%s <%s>', COALESCE(NULLIF(p.name, ''), 'Student'), u.email)
+        ELSE NULL
+      END
+    INTO v_student_names, v_student_emails
     FROM public.profiles p
-    WHERE p.id = v_help_request.created_by;
+    LEFT JOIN public.user_roles ur ON (
+      (ur.private_profile_id = p.id OR ur.public_profile_id = p.id) 
+      AND ur.class_id = v_help_request.class_id
+    )
+    LEFT JOIN public.users u ON u.user_id = ur.user_id
+    WHERE p.id = v_help_request.created_by
+      AND u.email IS NOT NULL;
+  END IF;
+
+  -- Get assignee email and name if assigned
+  -- Join on both private_profile_id OR public_profile_id to handle both private and public help requests
+  IF v_help_request.assignee IS NOT NULL THEN
+    SELECT 
+      p.name,
+      u.email
+    INTO v_assignee_name, v_assignee_email
+    FROM public.profiles p
+    LEFT JOIN public.user_roles ur ON (
+      (ur.private_profile_id = p.id OR ur.public_profile_id = p.id) 
+      AND ur.class_id = v_help_request.class_id
+    )
+    LEFT JOIN public.users u ON u.user_id = ur.user_id
+    WHERE p.id = v_help_request.assignee
+      AND u.email IS NOT NULL;
   END IF;
 
   -- Determine status color and emoji
@@ -865,6 +912,9 @@ BEGIN
     );
   END IF;
 
+  -- Email link will be added by worker function using email_data from envelope
+  -- This ensures we have access to app URL for the help request link in email body
+
   -- Always check if message already exists first (handles race conditions and updates)
   DECLARE
     v_existing_message_id text;
@@ -888,7 +938,14 @@ BEGIN
             'content', v_message_content,
             'embeds', jsonb_build_array(v_embed)
           ),
-          'class_id', v_help_request.class_id
+          'class_id', v_help_request.class_id,
+          'resource_type', 'help_request',
+          'resource_id', p_help_request_id,
+          'email_data', jsonb_build_object(
+            'student_emails', v_student_emails,
+            'assignee_email', v_assignee_email,
+            'class_name', v_class.name
+          )
         )
       );
       RETURN;
@@ -905,9 +962,14 @@ BEGIN
         'content', v_message_content,
         'embeds', jsonb_build_array(v_embed)
       ),
-      'class_id', v_help_request.class_id,
-      'resource_type', 'help_request',
-      'resource_id', p_help_request_id
+          'class_id', v_help_request.class_id,
+          'resource_type', 'help_request',
+          'resource_id', p_help_request_id,
+          'email_data', jsonb_build_object(
+            'student_emails', v_student_emails,
+            'assignee_email', v_assignee_email,
+            'class_name', v_class.name
+          )
     )
   );
 END;
@@ -3469,3 +3531,154 @@ SELECT cron.schedule(
 
 COMMENT ON FUNCTION public.invoke_calendar_sync_background_task() IS 
 'Invokes the calendar-sync edge function to poll ICS feeds and update calendar_events';
+
+-- Trigger function to sync calendar when ICS URLs change
+CREATE OR REPLACE FUNCTION public.trigger_calendar_sync_on_url_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  -- Check if either ICS URL changed
+  IF (OLD.office_hours_ics_url IS DISTINCT FROM NEW.office_hours_ics_url)
+     OR (OLD.events_ics_url IS DISTINCT FROM NEW.events_ics_url) THEN
+    -- Invoke calendar sync to immediately sync the changed feed(s)
+    PERFORM public.invoke_calendar_sync_background_task();
+  END IF;
+  
+  RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Log error but don't fail the update
+    RAISE WARNING 'Error in trigger_calendar_sync_on_url_change for class_id=%: %', NEW.id, SQLERRM;
+    RETURN NEW;
+END;
+$function$
+;
+
+-- Trigger to sync calendar when ICS URLs are updated
+DROP TRIGGER IF EXISTS trg_calendar_sync_on_url_change ON public.classes;
+CREATE TRIGGER trg_calendar_sync_on_url_change
+  AFTER UPDATE OF office_hours_ics_url, events_ics_url ON public.classes
+  FOR EACH ROW
+  EXECUTE FUNCTION trigger_calendar_sync_on_url_change();
+
+COMMENT ON FUNCTION public.trigger_calendar_sync_on_url_change() IS 
+'Trigger function that automatically syncs calendar when ICS feed URLs are changed on a class';
+
+-- Migration: Multiple Lab Leaders
+-- Changes lab leader relationship from single foreign key to many-to-many junction table
+
+-- 1. Create junction table
+CREATE TABLE IF NOT EXISTS "public"."lab_section_leaders" (
+    "id" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "lab_section_id" bigint NOT NULL REFERENCES "public"."lab_sections"("id") ON DELETE CASCADE,
+    "profile_id" uuid NOT NULL REFERENCES "public"."profiles"("id") ON DELETE CASCADE,
+    CONSTRAINT "lab_section_leaders_unique" UNIQUE ("lab_section_id", "profile_id")
+);
+
+-- 2. Migrate existing data from lab_leader_id
+INSERT INTO "public"."lab_section_leaders" ("lab_section_id", "profile_id")
+SELECT "id", "lab_leader_id"
+FROM "public"."lab_sections"
+WHERE "lab_leader_id" IS NOT NULL;
+
+-- 3. Add indexes
+CREATE INDEX "lab_section_leaders_lab_section_id_idx" ON "public"."lab_section_leaders" ("lab_section_id");
+CREATE INDEX "lab_section_leaders_profile_id_idx" ON "public"."lab_section_leaders" ("profile_id");
+
+-- 4. Enable RLS
+ALTER TABLE "public"."lab_section_leaders" ENABLE ROW LEVEL SECURITY;
+
+-- 5. RLS Policies (inline auth for performance - avoids function call overhead)
+-- Instructors can manage lab section leaders
+CREATE POLICY "instructors_manage_lab_section_leaders" ON "public"."lab_section_leaders"
+    TO "authenticated"
+    USING (EXISTS (
+        SELECT 1 FROM "public"."lab_sections" ls
+        JOIN "public"."user_privileges" up ON up.class_id = ls.class_id
+        WHERE ls.id = lab_section_id
+        AND up.user_id = auth.uid()
+        AND up.role = 'instructor'
+    ))
+    WITH CHECK (EXISTS (
+        SELECT 1 FROM "public"."lab_sections" ls
+        JOIN "public"."user_privileges" up ON up.class_id = ls.class_id
+        WHERE ls.id = lab_section_id
+        AND up.user_id = auth.uid()
+        AND up.role = 'instructor'
+    ));
+
+-- Class members can view lab section leaders
+CREATE POLICY "class_members_view_lab_section_leaders" ON "public"."lab_section_leaders"
+    FOR SELECT TO "authenticated"
+    USING (EXISTS (
+        SELECT 1 FROM "public"."lab_sections" ls
+        JOIN "public"."user_privileges" up ON up.class_id = ls.class_id
+        WHERE ls.id = lab_section_id
+        AND up.user_id = auth.uid()
+    ));
+
+-- 6. Grant permissions
+GRANT ALL ON TABLE "public"."lab_section_leaders" TO "authenticated";
+GRANT ALL ON TABLE "public"."lab_section_leaders" TO "service_role";
+
+-- 7. Broadcast trigger for realtime updates (see docs/data-architecture.md)
+CREATE OR REPLACE FUNCTION public.broadcast_lab_section_leaders_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_class_id bigint;
+  v_row_id bigint;
+  v_operation text;
+  v_data jsonb;
+BEGIN
+  -- Get class_id from lab_sections table
+  IF TG_OP = 'DELETE' THEN
+    SELECT class_id INTO v_class_id FROM public.lab_sections WHERE id = OLD.lab_section_id;
+    v_row_id := OLD.id;
+    v_operation := 'DELETE';
+    v_data := row_to_json(OLD)::jsonb;
+  ELSE
+    SELECT class_id INTO v_class_id FROM public.lab_sections WHERE id = NEW.lab_section_id;
+    v_row_id := NEW.id;
+    v_operation := TG_OP;
+    v_data := row_to_json(NEW)::jsonb;
+  END IF;
+
+  -- Broadcast to staff channel (lab section management is staff-only)
+  PERFORM realtime.send(
+    jsonb_build_object(
+      'type', 'table_change',
+      'table', 'lab_section_leaders',
+      'operation', v_operation,
+      'row_id', v_row_id,
+      'class_id', v_class_id,
+      'data', v_data,
+      'timestamp', now()::text
+    ),
+    'broadcast',
+    'class:' || v_class_id || ':staff',
+    true
+  );
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  ELSE
+    RETURN NEW;
+  END IF;
+END;
+$$;
+
+CREATE TRIGGER trg_broadcast_lab_section_leaders_change
+  AFTER INSERT OR UPDATE OR DELETE ON public.lab_section_leaders
+  FOR EACH ROW
+  EXECUTE FUNCTION public.broadcast_lab_section_leaders_change();
+
+-- 8. Drop the old column
+ALTER TABLE "public"."lab_sections" DROP COLUMN "lab_leader_id";

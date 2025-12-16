@@ -1104,7 +1104,7 @@ export async function addDependencySourceFunctions({
           numDropped++;
         }
       }
-      
+
       // Return items in original order, excluding those marked for dropping
       const ret: GradebookColumnStudentWithMaxScore[] = [];
       for (const v of value) {

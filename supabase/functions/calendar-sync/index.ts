@@ -15,6 +15,7 @@ interface ICSEvent {
   rrule?: string;
   exdates?: Date[];
   recurrenceId?: Date;
+  timezone?: string; // Original timezone from DTSTART TZID parameter
 }
 
 interface ParsedEvent {
@@ -182,6 +183,7 @@ function simpleHash(str: string): string {
 }
 
 // Helper function to convert a date/time in a specific timezone to UTC
+// Uses Intl.DateTimeFormat to reliably convert timezone-aware dates to UTC
 function convertToUTC(
   year: number,
   month: number,
@@ -191,25 +193,20 @@ function convertToUTC(
   second: number,
   timezone: string
 ): Date {
-  // Create an ISO string for the date/time (without timezone)
-  const isoStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
+  // Normalize timezone to IANA format
+  const normalizedTimezone = normalizeTimezone(timezone);
 
   try {
-    // Strategy: We'll create a date string that represents this time in the target timezone,
-    // then use Intl to convert it to UTC.
-    //
-    // The trick: Create a date representing midnight UTC on the target date,
-    // then format it in the target timezone to see what time it shows.
-    // Then calculate the offset needed to make it show our desired time.
+    // Strategy: Use Intl.DateTimeFormat to find the UTC time that, when formatted
+    // in the target timezone, shows our target date/time.
 
-    // Step 1: Create a reference UTC date (midnight UTC on the target date)
-    const referenceUTC = new Date(
-      `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00Z`
-    );
+    // Start with a reasonable initial guess: treat the time as if it were UTC
+    // This will be close for most timezones
+    let candidateUTC = new Date(Date.UTC(year, month, day, hour, minute, second));
 
-    // Step 2: Format this UTC date in the target timezone to see what time it represents there
-    const formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
+    // Create formatter for target timezone
+    const tzFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: normalizedTimezone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -219,37 +216,184 @@ function convertToUTC(
       hour12: false
     });
 
-    const parts = formatter.formatToParts(referenceUTC);
-    const tzYear = parseInt(parts.find((p) => p.type === "year")!.value);
-    const tzMonth = parseInt(parts.find((p) => p.type === "month")!.value) - 1;
-    const tzDay = parseInt(parts.find((p) => p.type === "day")!.value);
-    const tzHour = parseInt(parts.find((p) => p.type === "hour")!.value);
-    const tzMinute = parseInt(parts.find((p) => p.type === "minute")!.value);
-    const tzSecond = parseInt(parts.find((p) => p.type === "second")!.value);
+    // Iteratively refine until we find the exact UTC time
+    let iterations = 0;
+    const maxIterations = 20; // Allow more iterations for edge cases
 
-    // Step 3: Calculate how many milliseconds from referenceUTC to get to our target time
-    // We want: year/month/day hour:minute:second in the timezone
-    // referenceUTC shows: tzYear/tzMonth/tzDay tzHour:tzMinute:tzSecond in the timezone
+    while (iterations < maxIterations) {
+      const tzParts = tzFormatter.formatToParts(candidateUTC);
+      const tzYear = parseInt(tzParts.find((p) => p.type === "year")!.value);
+      const tzMonth = parseInt(tzParts.find((p) => p.type === "month")!.value);
+      const tzDay = parseInt(tzParts.find((p) => p.type === "day")!.value);
+      const tzHour = parseInt(tzParts.find((p) => p.type === "hour")!.value);
+      const tzMinute = parseInt(tzParts.find((p) => p.type === "minute")!.value);
+      const tzSecond = parseInt(tzParts.find((p) => p.type === "second")!.value);
 
-    // Create dates representing both times (as if they were local)
-    const targetTime = new Date(year, month, day, hour, minute, second).getTime();
-    const referenceTimeInTz = new Date(tzYear, tzMonth, tzDay, tzHour, tzMinute, tzSecond).getTime();
+      // Check if we've found the exact match
+      if (
+        tzYear === year &&
+        tzMonth === month + 1 &&
+        tzDay === day &&
+        tzHour === hour &&
+        tzMinute === minute &&
+        tzSecond === second
+      ) {
+        return candidateUTC;
+      }
 
-    // The difference tells us how much to adjust referenceUTC
-    const offsetMs = targetTime - referenceTimeInTz;
+      // Calculate the difference more accurately
+      // We need to adjust candidateUTC so that when formatted in timezone, it shows our target
+      // The key insight: if candidateUTC shows tzHour:tzMinute:tzSecond in the timezone,
+      // and we want hour:minute:second, we need to adjust by the time difference
 
-    // Step 4: Apply the offset to get the correct UTC time
-    return new Date(referenceUTC.getTime() + offsetMs);
+      // Calculate total seconds difference in the timezone's local time representation
+      const targetTotalSeconds = hour * 3600 + minute * 60 + second;
+      const tzTotalSeconds = tzHour * 3600 + tzMinute * 60 + tzSecond;
+      let secondsDiff = targetTotalSeconds - tzTotalSeconds;
+
+      // Account for day differences (which can cause hour rollover)
+      const targetDate = new Date(Date.UTC(year, month, day));
+      const tzDate = new Date(Date.UTC(tzYear, tzMonth - 1, tzDay));
+      const dayDiffMs = targetDate.getTime() - tzDate.getTime();
+
+      // If days differ, we need to account for that
+      // The day difference in milliseconds, plus the time difference
+      const totalAdjustmentMs = dayDiffMs + secondsDiff * 1000;
+
+      // Apply adjustment
+      candidateUTC = new Date(candidateUTC.getTime() + totalAdjustmentMs);
+
+      iterations++;
+    }
+
+    // If we didn't converge exactly, return the best guess
+    // (This should rarely happen, but log it for debugging)
+    if (iterations >= maxIterations) {
+      console.warn(
+        `[convertToUTC] Did not converge exactly after ${maxIterations} iterations for ${year}-${month + 1}-${day} ${hour}:${minute}:${second} in ${normalizedTimezone}, using best guess`
+      );
+    }
+    return candidateUTC;
   } catch (e) {
-    // Fallback: treat as local time (not ideal, but better than crashing)
-    console.warn(`[convertToUTC] Failed to convert timezone ${timezone} for ${isoStr}, using local time:`, e);
-    return new Date(year, month, day, hour, minute, second);
+    // Fallback: log error and use UTC (better than wrong timezone)
+    console.warn(
+      `[convertToUTC] Failed to convert timezone ${normalizedTimezone} (original: ${timezone}) for ${year}-${month + 1}-${day} ${hour}:${minute}:${second}:`,
+      e
+    );
+    return new Date(Date.UTC(year, month, day, hour, minute, second));
   }
+}
+
+// Map common timezone names to IANA timezone identifiers
+// ICS files may contain Windows-style or display names instead of IANA identifiers
+function normalizeTimezone(timezone: string): string {
+  // If it's already a valid IANA identifier (contains /), return as-is
+  if (timezone.includes("/")) {
+    return timezone;
+  }
+
+  // Map common timezone names to IANA identifiers
+  const timezoneMap: Record<string, string> = {
+    // US Eastern Time
+    "Eastern Standard Time": "America/New_York",
+    "Eastern Time": "America/New_York",
+    EST: "America/New_York",
+    EDT: "America/New_York",
+    ET: "America/New_York",
+
+    // US Central Time
+    "Central Standard Time": "America/Chicago",
+    "Central Time": "America/Chicago",
+    CST: "America/Chicago",
+    CDT: "America/Chicago",
+    CT: "America/Chicago",
+
+    // US Mountain Time
+    "Mountain Standard Time": "America/Denver",
+    "Mountain Time": "America/Denver",
+    MST: "America/Denver",
+    MDT: "America/Denver",
+    MT: "America/Denver",
+
+    // US Pacific Time
+    "Pacific Standard Time": "America/Los_Angeles",
+    "Pacific Time": "America/Los_Angeles",
+    PST: "America/Los_Angeles",
+    PDT: "America/Los_Angeles",
+    PT: "America/Los_Angeles",
+
+    // US Alaska Time
+    "Alaska Standard Time": "America/Anchorage",
+    "Alaska Time": "America/Anchorage",
+    AKST: "America/Anchorage",
+    AKDT: "America/Anchorage",
+
+    // US Hawaii Time
+    "Hawaiian Standard Time": "Pacific/Honolulu",
+    "Hawaii Time": "Pacific/Honolulu",
+    HST: "Pacific/Honolulu",
+
+    // UTC
+    UTC: "UTC",
+    GMT: "UTC",
+    "Greenwich Mean Time": "UTC",
+    "Coordinated Universal Time": "UTC",
+
+    // Common European timezones
+    "Central European Time": "Europe/Paris",
+    CET: "Europe/Paris",
+    CEST: "Europe/Paris",
+    "British Summer Time": "Europe/London",
+    BST: "Europe/London",
+    "GMT Standard Time": "Europe/London"
+  };
+
+  // Normalize the input (case-insensitive, trim whitespace)
+  const normalized = timezone.trim();
+  const mapped = timezoneMap[normalized] || timezoneMap[normalized.toUpperCase()];
+
+  if (mapped) {
+    return mapped;
+  }
+
+  // If not found in map, try to validate it as an IANA timezone
+  // If it fails validation, return UTC as fallback
+  try {
+    // Try to use it - if it's invalid, Intl will throw
+    Intl.DateTimeFormat(undefined, { timeZone: normalized });
+    return normalized;
+  } catch {
+    console.warn(`[normalizeTimezone] Unknown timezone "${timezone}", using UTC as fallback`);
+    return "UTC";
+  }
+}
+
+// Extract timezone from ICS line (e.g., "DTSTART;TZID=America/New_York:20241210T100000")
+function extractTimezoneFromICSLine(icsLine: string, defaultTimezone: string = "UTC"): string {
+  const colonIndex = icsLine.indexOf(":");
+  if (colonIndex > 0) {
+    const prefix = icsLine.slice(0, colonIndex);
+    const tzidMatch = prefix.match(/TZID=([^;:]+)/i);
+    if (tzidMatch) {
+      const extractedTz = tzidMatch[1];
+      // Normalize the timezone to IANA format
+      return normalizeTimezone(extractedTz);
+    }
+  }
+
+  // Check if date value ends with Z (UTC indicator)
+  const dateValue = colonIndex > 0 ? icsLine.slice(colonIndex + 1) : icsLine;
+  if (dateValue.endsWith("Z")) {
+    return "UTC";
+  }
+
+  return normalizeTimezone(defaultTimezone);
 }
 
 // Parse ICS date formats with timezone support
 // Accepts the full ICS line (e.g., "DTSTART;TZID=America/New_York:20241210T100000")
 // or just the value portion, along with a default timezone
+// Returns a Date object in UTC, which can be converted to ISO string for Postgres timestamptz
 function parseICSDate(icsLine: string, defaultTimezone: string = "UTC"): Date {
   // Extract TZID parameter if present (e.g., "DTSTART;TZID=America/New_York:20241210T100000")
   let timezone = defaultTimezone;
@@ -263,7 +407,7 @@ function parseICSDate(icsLine: string, defaultTimezone: string = "UTC"): Date {
     // Check for TZID parameter in the prefix
     const tzidMatch = prefix.match(/TZID=([^;:]+)/i);
     if (tzidMatch) {
-      timezone = tzidMatch[1];
+      timezone = normalizeTimezone(tzidMatch[1]);
     }
   } else {
     // No colon, assume it's just the date value
@@ -274,6 +418,9 @@ function parseICSDate(icsLine: string, defaultTimezone: string = "UTC"): Date {
   if (dateValue.endsWith("Z")) {
     timezone = "UTC";
     dateValue = dateValue.slice(0, -1);
+  } else {
+    // Normalize timezone to IANA format
+    timezone = normalizeTimezone(timezone);
   }
 
   // Handle basic format: 20241210T100000
@@ -370,6 +517,7 @@ const dayMap: Record<string, number> = {
 };
 
 // Expand recurring event into individual occurrences
+// Expands in the original timezone to maintain consistent local times (e.g., always 10:00 AM Eastern)
 function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: string = "UTC"): ICSEvent[] {
   if (!event.rrule) {
     return [event];
@@ -381,15 +529,49 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
     return [event];
   }
 
-  const occurrences: ICSEvent[] = [];
+  // Use the event's timezone if available, otherwise use default
+  // Normalize to IANA format
+  const eventTimezone = normalizeTimezone(event.timezone || defaultTimezone);
+
+  // Extract local time components from dtstart in the original timezone
+  // This ensures recurring events maintain the same local time even when DST changes
+  const tzFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: eventTimezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+
+  const startParts = tzFormatter.formatToParts(event.dtstart);
+  const startYear = parseInt(startParts.find((p) => p.type === "year")!.value);
+  const startMonth = parseInt(startParts.find((p) => p.type === "month")!.value) - 1; // 0-indexed
+  const startDay = parseInt(startParts.find((p) => p.type === "day")!.value);
+  const startHour = parseInt(startParts.find((p) => p.type === "hour")!.value);
+  const startMinute = parseInt(startParts.find((p) => p.type === "minute")!.value);
+  const startSecond = parseInt(startParts.find((p) => p.type === "second")!.value);
+
+  // Calculate duration in milliseconds
   const duration = event.dtend.getTime() - event.dtstart.getTime();
+
+  const occurrences: ICSEvent[] = [];
   const exdateSet = new Set(event.exdates?.map((d) => d.toISOString().split("T")[0]) || []);
 
   // Limit expansion: max 1 year ahead or 500 occurrences
   const maxOccurrences = Math.min(rrule.count || 500, 500);
   const effectiveUntil = rrule.until ? new Date(Math.min(rrule.until.getTime(), maxDate.getTime())) : maxDate;
 
-  const currentDate = new Date(event.dtstart);
+  // Start with the original local time components
+  let currentYear = startYear;
+  let currentMonth = startMonth;
+  let currentDay = startDay;
+  const currentHour = startHour;
+  const currentMinute = startMinute;
+  const currentSecond = startSecond;
+
   let occurrenceCount = 0;
 
   // Generate a unique occurrence UID
@@ -398,79 +580,135 @@ function expandRecurringEvent(event: ICSEvent, maxDate: Date, defaultTimezone: s
     return `${baseUid}_${dateStr}`;
   };
 
-  while (currentDate <= effectiveUntil && occurrenceCount < maxOccurrences) {
-    const dateKey = currentDate.toISOString().split("T")[0];
+  while (occurrenceCount < maxOccurrences) {
+    // Convert current local time components to UTC Date
+    const occurrenceStartUTC = convertToUTC(
+      currentYear,
+      currentMonth,
+      currentDay,
+      currentHour,
+      currentMinute,
+      currentSecond,
+      eventTimezone
+    );
+
+    // Check if we've exceeded the effective until date
+    if (occurrenceStartUTC > effectiveUntil) {
+      break;
+    }
+
+    const dateKey = occurrenceStartUTC.toISOString().split("T")[0];
 
     // Check if this date should be included
     let includeDate = !exdateSet.has(dateKey);
 
     // For WEEKLY with BYDAY, check if current day matches
     if (includeDate && rrule.freq === "WEEKLY" && rrule.byday) {
-      const dayOfWeek = currentDate.getUTCDay();
-      // Find the day name(s) for the current day of week
-      const dayNames = Object.entries(dayMap)
-        .filter((entry) => entry[1] === dayOfWeek)
-        .map((entry) => entry[0]);
+      // Get day of week by formatting the occurrence start date in the timezone
+      // Use a formatter that gives us the weekday
+      const weekdayFormatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: eventTimezone,
+        weekday: "short"
+      });
+      const weekdayStr = weekdayFormatter.format(occurrenceStartUTC).toUpperCase().slice(0, 2);
       includeDate = rrule.byday.some((day) => {
-        // Handle formats like "1MO" (first Monday) or just "MO"
         const dayPart = day.replace(/^-?\d+/, "");
-        return dayNames.includes(dayPart);
+        return dayPart === weekdayStr;
       });
     }
 
     // For MONTHLY with BYMONTHDAY, check if day matches
     if (includeDate && rrule.freq === "MONTHLY" && rrule.bymonthday) {
-      includeDate = rrule.bymonthday.includes(currentDate.getUTCDate());
+      includeDate = rrule.bymonthday.includes(currentDay);
     }
 
     if (includeDate) {
-      const occurrenceStart = new Date(currentDate);
-      const occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
+      const occurrenceEndUTC = new Date(occurrenceStartUTC.getTime() + duration);
 
       occurrences.push({
-        uid: makeOccurrenceUid(event.uid, occurrenceStart),
+        uid: makeOccurrenceUid(event.uid, occurrenceStartUTC),
         summary: event.summary,
         description: event.description,
-        dtstart: occurrenceStart,
-        dtend: occurrenceEnd,
-        location: event.location
-        // Don't include rrule in expanded occurrences
+        dtstart: occurrenceStartUTC,
+        dtend: occurrenceEndUTC,
+        location: event.location,
+        timezone: eventTimezone
       });
       occurrenceCount++;
     }
 
-    // Move to next potential occurrence (using UTC operations to avoid DST drift)
+    // Move to next potential occurrence in local time
     switch (rrule.freq) {
       case "DAILY":
-        // Add days using UTC epoch milliseconds to avoid DST issues
-        currentDate.setTime(currentDate.getTime() + rrule.interval * 24 * 60 * 60 * 1000);
+        currentDay += rrule.interval;
+        // Handle month/year rollover
+        const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+        if (currentDay > daysInMonth) {
+          currentDay = 1;
+          currentMonth++;
+          if (currentMonth > 11) {
+            currentMonth = 0;
+            currentYear++;
+          }
+        }
         break;
       case "WEEKLY":
         if (rrule.byday && rrule.byday.length > 1) {
-          // For multi-day weekly rules, advance by 1 day using UTC epoch milliseconds
-          currentDate.setTime(currentDate.getTime() + 24 * 60 * 60 * 1000);
-          // If we've passed a week boundary, skip to maintain interval
-          const weeksPassed = Math.floor((currentDate.getTime() - event.dtstart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-          if (weeksPassed > 0 && weeksPassed % rrule.interval !== 0) {
-            // Skip to the next valid week using UTC epoch milliseconds
-            const daysToSkip = (rrule.interval - (weeksPassed % rrule.interval)) * 7;
-            currentDate.setTime(currentDate.getTime() + (daysToSkip - 1) * 24 * 60 * 60 * 1000);
+          // For multi-day weekly rules, advance by 1 day
+          currentDay++;
+          const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+          if (currentDay > daysInMonth) {
+            currentDay = 1;
+            currentMonth++;
+            if (currentMonth > 11) {
+              currentMonth = 0;
+              currentYear++;
+            }
           }
         } else {
-          // Add weeks using UTC epoch milliseconds
-          currentDate.setTime(currentDate.getTime() + 7 * rrule.interval * 24 * 60 * 60 * 1000);
+          // Add weeks (7 days)
+          currentDay += 7 * rrule.interval;
+          const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+          while (currentDay > daysInMonth) {
+            currentDay -= daysInMonth;
+            currentMonth++;
+            if (currentMonth > 11) {
+              currentMonth = 0;
+              currentYear++;
+            }
+            const newDaysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+            if (currentDay > newDaysInMonth) {
+              currentDay = newDaysInMonth;
+            }
+          }
         }
         break;
       case "MONTHLY":
-        currentDate.setUTCMonth(currentDate.getUTCMonth() + rrule.interval);
+        currentMonth += rrule.interval;
+        while (currentMonth > 11) {
+          currentMonth -= 12;
+          currentYear++;
+        }
+        // Adjust day if it's invalid for the new month (e.g., Feb 30 -> Feb 28/29)
+        const maxDay = new Date(currentYear, currentMonth + 1, 0).getDate();
+        if (currentDay > maxDay) {
+          currentDay = maxDay;
+        }
         break;
       case "YEARLY":
-        currentDate.setUTCFullYear(currentDate.getUTCFullYear() + rrule.interval);
+        currentYear += rrule.interval;
+        // Adjust day if it's invalid for the new year (e.g., Feb 29 in non-leap year)
+        const maxDayYearly = new Date(currentYear, currentMonth + 1, 0).getDate();
+        if (currentDay > maxDayYearly) {
+          currentDay = maxDayYearly;
+        }
         break;
     }
   }
 
-  console.log(`[expandRecurringEvent] Expanded ${event.uid} (${rrule.freq}) into ${occurrences.length} occurrences`);
+  console.log(
+    `[expandRecurringEvent] Expanded ${event.uid} (${rrule.freq}) into ${occurrences.length} occurrences in timezone ${eventTimezone}`
+  );
   return occurrences;
 }
 
@@ -482,7 +720,9 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
     .replace(/\r\n\t/g, "")
     .split(/\r?\n/);
 
-  let currentEvent: (Partial<ICSEvent> & { rawData: Record<string, string>; exdatesRaw?: string[] }) | null = null;
+  let currentEvent:
+    | (Partial<ICSEvent> & { rawData: Record<string, string>; exdatesRaw?: string[]; dtstartTimezone?: string })
+    | null = null;
 
   for (const line of lines) {
     if (line === "BEGIN:VEVENT") {
@@ -501,7 +741,8 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
           location: currentEvent.location,
           rrule: currentEvent.rrule,
           exdates: exdates.length > 0 ? exdates : undefined,
-          recurrenceId: currentEvent.recurrenceId
+          recurrenceId: currentEvent.recurrenceId,
+          timezone: currentEvent.dtstartTimezone || defaultTimezone
         });
       }
       currentEvent = null;
@@ -532,6 +773,8 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
           case "DTSTART":
             // Pass the full line to preserve TZID parameter
             currentEvent.dtstart = parseICSDate(line, defaultTimezone);
+            // Extract and store the timezone for recurring event expansion
+            currentEvent.dtstartTimezone = extractTimezoneFromICSLine(line, defaultTimezone);
             break;
           case "DTEND":
             // Pass the full line to preserve TZID parameter
@@ -601,6 +844,7 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
 }
 
 // Convert ICS event to ParsedEvent
+// Dates are converted to ISO strings (UTC) which Postgres will store as timestamptz
 function convertToCalendarEvent(event: ICSEvent): ParsedEvent {
   const { name, queue } = parseEventTitle(event.summary);
 
@@ -608,6 +852,8 @@ function convertToCalendarEvent(event: ICSEvent): ParsedEvent {
     uid: event.uid,
     title: event.summary,
     description: event.description,
+    // toISOString() produces UTC ISO strings (e.g., "2024-12-10T10:00:00.000Z")
+    // Postgres timestamptz will parse these correctly and store as UTC internally
     start_time: event.dtstart.toISOString(),
     end_time: event.dtend.toISOString(),
     location: event.location,
@@ -719,7 +965,8 @@ async function syncCalendar(
   // Use class timezone as default (ICS TZID will override if present)
   const expandUntil = new Date();
   expandUntil.setMonth(expandUntil.getMonth() + 6);
-  const defaultTimezone = classData.time_zone || "UTC";
+  // Normalize timezone to IANA format (class timezone should already be IANA, but normalize to be safe)
+  const defaultTimezone = normalizeTimezone(classData.time_zone || "UTC");
   const icsEvents = parseICS(content, expandUntil, defaultTimezone);
   const parsedEvents = icsEvents.map(convertToCalendarEvent);
 

@@ -782,7 +782,7 @@ export class CourseController {
   }
 
   /**
-   * Staff-only settings for this class (e.g., calendar edit URLs).
+   * Staff-only settings for this class.
    * Only visible to staff (enforced by RLS).
    */
   get classStaffSettings(): TableController<"class_staff_settings"> {

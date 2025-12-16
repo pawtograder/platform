@@ -113,6 +113,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   notifications: [], // Only triggers email queue, no realtime broadcasts
   // Tables broadcast via class:$class_id:staff channel
   assignment_due_date_exceptions: ["staff"],
+  lab_section_leaders: ["staff"],
   lab_section_meetings: ["staff", "students"],
   lab_sections: ["staff", "students"],
   student_deadline_extensions: ["staff"],
