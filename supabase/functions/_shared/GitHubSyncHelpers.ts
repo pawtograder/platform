@@ -10,8 +10,8 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
-import { getCreateContentLimiter } from "../github-async-worker/index.ts";
 import * as github from "./GitHubWrapper.ts";
+import { getCreateContentLimiter } from "./GitHubWrapper.ts";
 import { Redis } from "./Redis.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 

@@ -129,6 +129,57 @@ async function retryWithBackoff<T>(
   throw lastError!;
 }
 
+const createContentLimiters = new Map<string, Bottleneck>();
+/**
+ * GitHub limits the number of content-creating requests per organization per-minute and per-hour
+ * This includes repository creation and organization invitations (same rate limit bucket)
+ * @param org GitHub organization
+ * @returns Bottleneck limiter instance
+ */
+export function getCreateContentLimiter(org: string): Bottleneck {
+  const key = org || "unknown";
+  const existing = createContentLimiters.get(key);
+  if (existing) return existing;
+  let limiter: Bottleneck;
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+  if (upstashUrl && upstashToken) {
+    const host = upstashUrl.replace("https://", "");
+    const password = upstashToken;
+    limiter = new Bottleneck({
+      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 50,
+      reservoirRefreshAmount: 50,
+      reservoirRefreshInterval: 60_000,
+      maxConcurrent: 50,
+      datastore: "ioredis",
+      timeout: 600000, // 10 minutes
+      clearDatastore: false,
+      clientOptions: {
+        host,
+        password,
+        username: "default",
+        tls: {},
+        port: 6379
+      },
+      Redis
+    });
+    limiter.on("error", (err: Error) => console.error(err));
+  } else {
+    console.log("No Upstash URL or token found, using local limiter");
+    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
+    limiter = new Bottleneck({
+      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 10,
+      maxConcurrent: 10,
+      reservoirRefreshAmount: 10,
+      reservoirRefreshInterval: 60_000
+    });
+  }
+  createContentLimiters.set(key, limiter);
+  return limiter;
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
   jti: string;
@@ -999,12 +1050,15 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   }
 
   try {
-    const resp = await octokit.request("POST /orgs/{org}/invitations", {
-      org,
-      role: "direct_member",
-      invitee_id: userID,
-      team_ids: [teamID]
-    });
+    const limiter = getCreateContentLimiter(org);
+    const resp = await limiter.schedule(() =>
+      octokit.request("POST /orgs/{org}/invitations", {
+        org,
+        role: "direct_member",
+        invitee_id: userID,
+        team_ids: [teamID]
+      })
+    );
     scope?.addBreadcrumb({
       category: "github",
       message: `Invitation response: ${JSON.stringify(resp.data)}`,

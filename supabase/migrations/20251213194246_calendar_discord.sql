@@ -581,7 +581,7 @@ $function$
 CREATE OR REPLACE FUNCTION public.check_discord_role_sync_after_link(p_user_id uuid)
  RETURNS void
  LANGUAGE plpgsql
- SECURITY DEFINER
+ SECURITY INVOKER
  SET search_path TO 'public'
 AS $function$
 DECLARE
@@ -1552,7 +1552,7 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.enqueue_discord_roles_creation(p_class_id bigint, p_guild_id text DEFAULT NULL::text)
+CREATE OR REPLACE FUNCTION public.enqueue_discord_roles_creation(p_class_id bigint,   p_guild_id text DEFAULT NULL::text)
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -3705,3 +3705,59 @@ CREATE TRIGGER trg_broadcast_lab_section_leaders_change
 
 -- 8. Drop the old column
 ALTER TABLE "public"."lab_sections" DROP COLUMN "lab_leader_id";
+
+-- Grant/Revoke permissions for security definer functions
+-- Functions that should only be called by service_role (triggers, background tasks, internal operations)
+
+REVOKE ALL ON FUNCTION "public"."check_discord_role_sync_after_link"(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."check_discord_role_sync_after_link"(uuid) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_batch_role_sync"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_batch_role_sync"() TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_channel_creation"(bigint, discord_channel_type, bigint, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_channel_creation"(bigint, discord_channel_type, bigint, text, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_help_request_message"(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_help_request_message"(bigint, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_invites_for_existing_users"(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_invites_for_existing_users"(bigint, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_queue_assignment_message"(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_queue_assignment_message"(bigint, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_register_commands"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_register_commands"() TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_regrade_request_message"(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_regrade_request_message"(bigint, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_role_creation"(bigint, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_role_creation"(bigint, text, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_role_sync"(uuid, bigint, app_role, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_role_sync"(uuid, bigint, app_role, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."enqueue_discord_roles_creation"(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."enqueue_discord_roles_creation"(bigint, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."insert_discord_message"(bigint, text, text, text, bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."insert_discord_message"(bigint, text, text, text, bigint) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."mark_discord_invite_used"(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."mark_discord_invite_used"(uuid, text) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."process_calendar_announcements"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."process_calendar_announcements"() TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."sync_existing_users_after_roles_created"(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."sync_existing_users_after_roles_created"(bigint) TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."create_help_request_notification"(bigint, text, bigint, bigint, text, uuid, text, uuid, text, help_request_status, text, boolean, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."create_help_request_notification"(bigint, text, bigint, bigint, text, uuid, text, uuid, text, help_request_status, text, boolean, text) TO "service_role";
+
+-- Function that can be called by authenticated users (for their own role sync)
+REVOKE ALL ON FUNCTION "public"."trigger_discord_role_sync_for_user"(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."trigger_discord_role_sync_for_user"(bigint) TO "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."trigger_discord_role_sync_for_user"(bigint) TO "service_role";

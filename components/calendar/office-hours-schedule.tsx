@@ -204,7 +204,6 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
 
 interface OfficeHoursScheduleProps {
   showTitle?: boolean;
-  compact?: boolean;
 }
 
 export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursScheduleProps) {

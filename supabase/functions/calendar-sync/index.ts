@@ -89,13 +89,13 @@ function groupEventsByBaseUid<T extends { uid: string }>(events: T[]): Map<strin
 }
 
 // Generate human-readable description of a recurring series
-function describeRecurringSeries(events: ParsedEvent[]): string {
+function describeRecurringSeries(events: ParsedEvent[], classTimezone: string): string {
   if (events.length === 0) return "";
   if (events.length === 1) {
     // Single event - just show the date
     const start = new Date(events[0].start_time);
     const end = new Date(events[0].end_time);
-    return formatSingleEventDescription(start, end);
+    return formatSingleEventDescription(start, end, classTimezone);
   }
 
   // Sort events by start time
@@ -109,29 +109,29 @@ function describeRecurringSeries(events: ParsedEvent[]): string {
   const firstEnd = new Date(firstEvent.end_time);
 
   // Get time of day
-  const timeStr = formatTimeRange(firstStart, firstEnd);
+  const timeStr = formatTimeRange(firstStart, firstEnd, classTimezone);
 
   // Detect day pattern
   const dayPattern = detectDayPattern(sorted);
 
   // Date range
-  const startDateStr = firstStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const endDateStr = lastStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const startDateStr = firstStart.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: classTimezone });
+  const endDateStr = lastStart.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: classTimezone });
 
   return `${dayPattern} ${timeStr} (${startDateStr} - ${endDateStr}, ${events.length} sessions)`;
 }
 
 // Format time range like "10:00 AM - 12:00 PM"
-function formatTimeRange(start: Date, end: Date): string {
-  const startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  const endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+function formatTimeRange(start: Date, end: Date, classTimezone: string): string {
+  const startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: classTimezone });
+  const endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: classTimezone });
   return `${startTime} - ${endTime}`;
 }
 
 // Format single event description
-function formatSingleEventDescription(start: Date, end: Date): string {
-  const dateStr = start.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-  const timeStr = formatTimeRange(start, end);
+function formatSingleEventDescription(start: Date, end: Date, classTimezone: string): string {
+  const dateStr = start.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: classTimezone });
+  const timeStr = formatTimeRange(start, end, classTimezone);
   return `${dateStr} ${timeStr}`;
 }
 
@@ -1410,9 +1410,13 @@ async function enqueueRecurringSeriesAnnouncement(
     return;
   }
 
+  // Get the class timezone
+  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", classId).single();
+  const classTimezone = normalizeTimezone(classData?.time_zone || "UTC");
+
   const firstEvent = events[0];
   const eventTitle = firstEvent.organizer_name || firstEvent.title;
-  const seriesDescription = describeRecurringSeries(events);
+  const seriesDescription = describeRecurringSeries(events, classTimezone);
 
   const emoji = changeType === "added" ? "📅" : changeType === "removed" ? "❌" : "✏️";
   const action = changeType === "added" ? "added to" : changeType === "removed" ? "removed from" : "updated in";
