@@ -1085,15 +1085,32 @@ export async function addDependencySourceFunctions({
       }));
       console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
 
-      const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      // Sort to identify which items to drop by relative score (score/max_score), but preserve original order in output
+      const sorted = [...value].sort((a, b) => {
+        const aScore = a.score ?? 0;
+        const bScore = b.score ?? 0;
+        const aMaxScore = a.max_score ?? 1;
+        const bMaxScore = b.max_score ?? 1;
+        // Calculate relative scores (percentage)
+        const aRatio = aMaxScore > 0 ? aScore / aMaxScore : 0;
+        const bRatio = bMaxScore > 0 ? bScore / bMaxScore : 0;
+        return aRatio - bRatio;
+      });
+      const toDrop = new Set<GradebookColumnStudentWithMaxScore>();
       let numDropped = 0;
       for (const v of sorted) {
         if (numDropped < count && v.is_droppable) {
+          toDrop.add(v);
           numDropped++;
-          continue;
         }
-        ret.push(v);
+      }
+      
+      // Return items in original order, excluding those marked for dropping
+      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      for (const v of value) {
+        if (!toDrop.has(v)) {
+          ret.push(v);
+        }
       }
 
       // Log output values
