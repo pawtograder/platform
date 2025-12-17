@@ -323,8 +323,9 @@ test.describe("Custom Discussion Topics", () => {
     await expect(page.getByRole("option", { name: "HW1 Discussion", exact: true })).toBeVisible();
 
     // ===== STEP 5: Delete the custom discussion topic (as instructor) =====
-    await loginAsUser(page, instructor!, course);
-    await page.goto(`/course/${course.id}/manage/discussion-topics`);
+    await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
+    await expect(page.getByRole("menuitem", { name: "Discussion Topics" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "Discussion Topics" }).click();
     await page.waitForURL("**/manage/discussion-topics");
 
     // Find and click the Delete button for the custom topic
