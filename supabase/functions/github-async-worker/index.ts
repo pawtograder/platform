@@ -1,9 +1,7 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { Redis } from "../_shared/Redis.ts";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
@@ -15,7 +13,7 @@ import type {
   SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
+import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
@@ -33,54 +31,6 @@ type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
-
-const createContentLimiters = new Map<string, Bottleneck>();
-/**
- * GitHub limits the number of content-creating requests per organization per-minute and per-hour
- * @param org GitHub organization
- * @returns
- */
-export function getCreateContentLimiter(org: string): Bottleneck {
-  const key = org || "unknown";
-  const existing = createContentLimiters.get(key);
-  if (existing) return existing;
-  let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 50,
-      reservoirRefreshAmount: 50,
-      reservoirRefreshInterval: 60_000,
-      maxConcurrent: 50,
-      datastore: "ioredis",
-      timeout: 600000, // 10 minutes
-      clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default"
-      },
-      Redis
-    });
-    limiter.on("error", (err: Error) => console.error(err));
-  } else {
-    console.log("No Upstash URL or token found, using local limiter");
-    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
-    limiter = new Bottleneck({
-      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 10,
-      maxConcurrent: 10,
-      reservoirRefreshAmount: 10,
-      reservoirRefreshInterval: 60_000
-    });
-  }
-  createContentLimiters.set(key, limiter);
-  return limiter;
-}
 
 function toMsLatency(enqueuedAt: string): number {
   try {

@@ -703,3 +703,15 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/github-user-sync/deno.json"
 entrypoint = "./functions/github-user-sync/index.ts"
+
+[functions.discord-async-worker]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-async-worker/deno.json"
+entrypoint = "./functions/discord-async-worker/index.ts"
+
+[functions.calendar-sync]
+enabled = true
+verify_jwt = false
+import_map = "./functions/calendar-sync/deno.json"
+entrypoint = "./functions/calendar-sync/index.ts"

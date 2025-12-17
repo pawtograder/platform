@@ -28,6 +28,7 @@ import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import LinkAccount from "@/components/github/link-account";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
+import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -165,7 +166,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .concat(allReviewAssignmentsSummary?.filter((summary) => (summary.incomplete_reviews ?? 0) === 0).slice(0, 2));
   const { data: course, error: courseError } = await supabase
     .from("classes")
-    .select("time_zone")
+    .select("time_zone, office_hours_ics_url, events_ics_url")
     .eq("id", course_id)
     .single();
 
@@ -250,11 +251,20 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const hourStats = extractWorkflowStats(workflowStatsHour);
   const dayStats = extractWorkflowStats(workflowStatsDay);
 
+  const hasCalendar = course?.office_hours_ics_url || course?.events_ics_url;
+
   return (
     <VStack spaceY={0} align="stretch" p={2}>
       {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
       <Heading size="xl">Course Dashboard</Heading>
+
+      {/* Calendar Schedule Section */}
+      {hasCalendar && (
+        <Box>
+          <CalendarScheduleSummary />
+        </Box>
+      )}
 
       {/* Review Assignments Section */}
       {reviewAssignmentsSummary && reviewAssignmentsSummary.length > 0 && (

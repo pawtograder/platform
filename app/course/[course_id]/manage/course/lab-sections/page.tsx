@@ -35,13 +35,15 @@ import { useForm } from "react-hook-form";
 import { FaCalendar, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
+import { Select, MultiValue } from "chakra-react-select";
 
 interface CreateLabSectionData {
   name: string;
   day_of_week: DayOfWeek;
   start_time: string;
   end_time?: string;
-  lab_leader_id: string;
+  lab_leader_ids: string[];
   meeting_location?: string;
   description?: string;
 }
@@ -73,23 +75,27 @@ function CreateLabSectionModal({
 }) {
   const { course_id } = useParams();
   const controller = useCourseController();
+  const supabase = createClient();
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedLeaders, setSelectedLeaders] = useState<MultiValue<{ value: string; label: string }>>([]);
 
   const {
     register,
     handleSubmit,
     formState: { errors },
-    reset
+    reset,
+    setValue
   } = useForm<CreateLabSectionData>({
     defaultValues: {
       name: "",
       day_of_week: "monday",
       start_time: "10:00",
       end_time: "11:00",
-      lab_leader_id: "",
+      lab_leader_ids: [],
       meeting_location: "",
       description: ""
-    }
+    },
+    mode: "onChange"
   });
 
   // Get instructors and graders for lab leader selection
@@ -110,6 +116,33 @@ function CreateLabSectionModal({
     }
   });
 
+  // Fetch existing lab section leaders when editing
+  useEffect(() => {
+    const fetchLeaders = async () => {
+      if (initialData?.id && initialData.lab_leader_ids) {
+        // Fetch profile names for the selected leader IDs
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, name")
+          .in("id", initialData.lab_leader_ids);
+
+        if (profiles) {
+          const leaderOptions = profiles.map((p) => ({
+            value: p.id,
+            label: p.name || "Unknown"
+          }));
+          setSelectedLeaders(leaderOptions);
+        }
+      } else {
+        setSelectedLeaders([]);
+      }
+    };
+
+    if (isOpen) {
+      fetchLeaders();
+    }
+  }, [initialData, isOpen, supabase]);
+
   useEffect(() => {
     if (initialData) {
       reset({
@@ -117,7 +150,7 @@ function CreateLabSectionModal({
         day_of_week: initialData.day_of_week,
         start_time: initialData.start_time,
         end_time: initialData.end_time,
-        lab_leader_id: initialData.lab_leader_id,
+        lab_leader_ids: initialData.lab_leader_ids || [],
         meeting_location: initialData.meeting_location,
         description: initialData.description
       });
@@ -127,7 +160,7 @@ function CreateLabSectionModal({
         day_of_week: "monday",
         start_time: "10:00",
         end_time: "11:00",
-        lab_leader_id: "",
+        lab_leader_ids: [],
         meeting_location: "",
         description: ""
       });
@@ -138,12 +171,21 @@ function CreateLabSectionModal({
     async (data: CreateLabSectionData) => {
       setIsLoading(true);
       try {
+        // Validate at least one lab leader
+        if (!data.lab_leader_ids || data.lab_leader_ids.length === 0) {
+          toaster.error({
+            title: "Validation Error",
+            description: "At least one lab facilitator is required"
+          });
+          setIsLoading(false);
+          return;
+        }
+
         const labSectionData = {
           name: data.name,
           day_of_week: data.day_of_week,
           start_time: data.start_time,
           end_time: data.end_time || null,
-          lab_leader_id: data.lab_leader_id || null,
           meeting_location: data.meeting_location || null,
           description: data.description || null,
           class_id: Number(course_id),
@@ -152,15 +194,62 @@ function CreateLabSectionModal({
           sis_crn: null
         };
 
+        let labSectionId: number;
+
         if (initialData) {
+          // Update lab section
           await controller.labSections.update(initialData.id, labSectionData);
+          labSectionId = initialData.id;
+
+          // Update lab section leaders: delete existing and insert new ones
+          const { error: deleteError } = await supabase
+            .from("lab_section_leaders")
+            .delete()
+            .eq("lab_section_id", labSectionId);
+
+          if (deleteError) {
+            throw new Error(`Failed to delete existing leaders: ${deleteError.message}`);
+          }
+
+          if (data.lab_leader_ids.length > 0) {
+            const { error: insertError } = await supabase.from("lab_section_leaders").insert(
+              data.lab_leader_ids.map((profile_id) => ({
+                lab_section_id: labSectionId,
+                profile_id,
+                class_id: Number(course_id)
+              }))
+            );
+
+            if (insertError) {
+              throw new Error(`Failed to insert leaders: ${insertError.message}`);
+            }
+          }
+
           // Refresh lab section meetings after update to show recalculated meetings
           await controller.labSectionMeetings.refetchAll();
           toaster.success({
             title: "Lab section updated successfully"
           });
         } else {
-          await controller.labSections.create(labSectionData);
+          // Create lab section
+          const result = await controller.labSections.create(labSectionData);
+          labSectionId = result.id;
+
+          // Insert lab section leaders
+          if (data.lab_leader_ids.length > 0) {
+            const { error: insertError } = await supabase.from("lab_section_leaders").insert(
+              data.lab_leader_ids.map((profile_id) => ({
+                lab_section_id: labSectionId,
+                profile_id,
+                class_id: Number(course_id)
+              }))
+            );
+
+            if (insertError) {
+              throw new Error(`Failed to insert leaders: ${insertError.message}`);
+            }
+          }
+
           toaster.success({
             title: "Lab section created successfully"
           });
@@ -176,7 +265,7 @@ function CreateLabSectionModal({
         setIsLoading(false);
       }
     },
-    [initialData, controller, course_id, onSuccess, onClose]
+    [initialData, controller, course_id, onSuccess, onClose, supabase]
   );
 
   return (
@@ -248,19 +337,26 @@ function CreateLabSectionModal({
                     </Field.Root>
                   </HStack>
 
-                  <Field.Root invalid={!!errors.lab_leader_id}>
-                    <Field.Label>Lab Leader</Field.Label>
-                    <NativeSelect.Root>
-                      <NativeSelect.Field {...register("lab_leader_id", { required: "Lab leader is required" })}>
-                        <option value="">Select a lab leader...</option>
-                        {staffRoles?.data?.map((role) => (
-                          <option key={role.private_profile_id} value={role.private_profile_id}>
-                            {role.profiles?.name} ({role.role})
-                          </option>
-                        ))}
-                      </NativeSelect.Field>
-                    </NativeSelect.Root>
-                    <Field.ErrorText>{errors.lab_leader_id?.message}</Field.ErrorText>
+                  <Field.Root invalid={!!errors.lab_leader_ids}>
+                    <Field.Label>Lab Facilitators</Field.Label>
+                    <Select
+                      isMulti
+                      options={staffRoles?.data?.map((role) => ({
+                        value: role.private_profile_id,
+                        label: `${role.profiles?.name || "Unknown"} (${role.role})`
+                      }))}
+                      value={selectedLeaders}
+                      onChange={(selected) => {
+                        const newLeaders = selected || [];
+                        setSelectedLeaders(newLeaders);
+                        const leaderIds = newLeaders.map((s) => s.value);
+                        setValue("lab_leader_ids", leaderIds, {
+                          shouldValidate: true
+                        });
+                      }}
+                      placeholder="Select lab facilitators..."
+                    />
+                    <Field.ErrorText>{errors.lab_leader_ids?.message}</Field.ErrorText>
                   </Field.Root>
 
                   <Field.Root invalid={!!errors.meeting_location}>
@@ -549,9 +645,12 @@ function CreateMeetingModal({
 
 function LabSectionsTable() {
   const controller = useCourseController();
+  const supabase = createClient();
   const sectionsReady = useIsTableControllerReady(controller.labSections);
   const meetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [labSectionLeadersMap, setLabSectionLeadersMap] = useState<Map<number, string[]>>(new Map());
+  const [leadersRefreshKey, setLeadersRefreshKey] = useState(0);
 
   const {
     isOpen: isCreateModalOpen,
@@ -583,20 +682,55 @@ function LabSectionsTable() {
 
   // Get lab section meetings from course controller
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
-  const profiles = useTableControllerTableValues(controller.profiles);
+
+  // Fetch lab section leaders for all sections
+  useEffect(() => {
+    const fetchLeaders = async () => {
+      if (labSections.length === 0) return;
+
+      const { data: leaders } = await supabase
+        .from("lab_section_leaders")
+        .select("lab_section_id, profile_id, profiles(name)")
+        .in(
+          "lab_section_id",
+          labSections.map((s) => s.id)
+        );
+
+      if (leaders) {
+        const map = new Map<number, string[]>();
+        leaders.forEach((leader) => {
+          const sectionId = leader.lab_section_id;
+          const profileName = (leader.profiles as { name: string })?.name || "Unknown";
+          if (!map.has(sectionId)) {
+            map.set(sectionId, []);
+          }
+          map.get(sectionId)!.push(profileName);
+        });
+        setLabSectionLeadersMap(map);
+      }
+    };
+
+    fetchLeaders();
+  }, [labSections, supabase, leadersRefreshKey]);
 
   const handleCreateNew = () => {
     openCreateModal(undefined);
   };
 
-  const handleEdit = (labSection: LabSection) => {
+  const handleEdit = async (labSection: LabSection) => {
+    // Fetch current leaders for this section
+    const { data: leaders } = await supabase
+      .from("lab_section_leaders")
+      .select("profile_id")
+      .eq("lab_section_id", labSection.id);
+
     openCreateModal({
       id: labSection.id,
       name: labSection.name,
       day_of_week: labSection.day_of_week as DayOfWeek,
       start_time: labSection.start_time || "",
       end_time: labSection.end_time || undefined,
-      lab_leader_id: labSection.lab_leader_id || "",
+      lab_leader_ids: leaders?.map((l) => l.profile_id) || [],
       meeting_location: labSection.meeting_location || undefined,
       description: labSection.description || undefined
     });
@@ -620,7 +754,8 @@ function LabSectionsTable() {
   };
 
   const handleModalSuccess = () => {
-    // No need to manually invalidate - table controller handles this automatically
+    // Trigger refresh of lab section leaders map
+    setLeadersRefreshKey((prev) => prev + 1);
   };
 
   const formatTime = (time: string) => {
@@ -675,7 +810,7 @@ function LabSectionsTable() {
                 <Table.ColumnHeader>Name</Table.ColumnHeader>
                 <Table.ColumnHeader>Schedule</Table.ColumnHeader>
                 <Table.ColumnHeader>Room Location</Table.ColumnHeader>
-                <Table.ColumnHeader>Lab Leader</Table.ColumnHeader>
+                <Table.ColumnHeader>Lab Facilitators</Table.ColumnHeader>
                 <Table.ColumnHeader>Upcoming Meetings</Table.ColumnHeader>
                 <Table.ColumnHeader>Students</Table.ColumnHeader>
                 <Table.ColumnHeader>Actions</Table.ColumnHeader>
@@ -707,11 +842,21 @@ function LabSectionsTable() {
                     <Text>{labSection.meeting_location || "Not specified"}</Text>
                   </Table.Cell>
                   <Table.Cell>
-                    <Text>
-                      {labSection.lab_leader_id
-                        ? profiles?.find((p) => p.id === labSection.lab_leader_id)?.name || "Unknown"
-                        : "Not assigned"}
-                    </Text>
+                    {(() => {
+                      const leaders = labSectionLeadersMap.get(labSection.id) || [];
+                      if (leaders.length === 0) {
+                        return <Text color="fg.muted">Not assigned</Text>;
+                      }
+                      return (
+                        <VStack gap={1} align="start">
+                          {leaders.map((name, idx) => (
+                            <Text key={idx} fontSize="sm">
+                              {name}
+                            </Text>
+                          ))}
+                        </VStack>
+                      );
+                    })()}
                   </Table.Cell>
                   <Table.Cell>
                     {(() => {

@@ -1085,15 +1085,38 @@ export async function addDependencySourceFunctions({
       }));
       console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
 
-      const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      // Filter out entries with max_score <= 0 before sorting and selecting to drop
+      // These entries should be preserved and not count toward drop_lowest
+      const validEntries = value.filter((v) => (v.max_score ?? 0) > 0);
+
+      // Sort to identify which items to drop by relative score (score/max_score), but preserve original order in output
+      const sorted = [...validEntries].sort((a, b) => {
+        const aScore = a.score ?? 0;
+        const bScore = b.score ?? 0;
+        const aMaxScore = a.max_score ?? 1;
+        const bMaxScore = b.max_score ?? 1;
+        // Calculate relative scores (percentage)
+        const aRatio = aMaxScore > 0 ? aScore / aMaxScore : 0;
+        const bRatio = bMaxScore > 0 ? bScore / bMaxScore : 0;
+        return aRatio - bRatio;
+      });
+      const toDrop = new Set<GradebookColumnStudentWithMaxScore>();
       let numDropped = 0;
       for (const v of sorted) {
         if (numDropped < count && v.is_droppable) {
+          toDrop.add(v);
           numDropped++;
-          continue;
         }
-        ret.push(v);
+      }
+
+      // Return items in original order, excluding only those marked for dropping that have max_score > 0
+      // Preserve all entries with max_score <= 0 untouched
+      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      for (const v of value) {
+        // Only exclude items that were chosen to drop AND have max_score > 0
+        if (!(toDrop.has(v) && (v.max_score ?? 0) > 0)) {
+          ret.push(v);
+        }
       }
 
       // Log output values

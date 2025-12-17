@@ -2,32 +2,23 @@
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { Assignment, HelpRequest, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
-import {
-  Accordion,
-  AvatarGroup,
-  Badge,
-  Box,
-  Flex,
-  HStack,
-  Icon,
-  IconButton,
-  Input,
-  Stack,
-  Text
-} from "@chakra-ui/react";
+import { Accordion, Badge, Box, Flex, HStack, Icon, IconButton, Input, Separator, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BsArrowLeft,
   BsBoxArrowUpRight,
   BsCheck,
-  BsClipboardCheck,
-  BsClipboardCheckFill,
-  BsCode,
+  BsCheckCircle,
   BsChevronDown,
+  BsClock,
+  BsCode,
   BsFileEarmark,
+  BsHandIndex,
   BsPencil,
   BsPeople,
+  BsPersonCheck,
+  BsPersonDash,
   BsShield,
   BsStar,
   BsTrash,
@@ -52,7 +43,6 @@ import {
   useHelpRequest,
   useHelpRequestFeedback,
   useHelpRequestFileReferences,
-  useHelpRequestMessages,
   useHelpRequestStudents,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
@@ -60,6 +50,8 @@ import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import Link from "next/link";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
 import StudentSummaryTrigger from "../ui/student-summary";
+import DiscordMessageLink from "@/components/discord/discord-message-link";
+import { formatDistanceToNow } from "date-fns";
 
 /**
  * Office hours form and UI helper types
@@ -84,12 +76,85 @@ type EditingFileReference = HelpRequestFormFileReference & {
 };
 
 /**
+ * Status configuration for help requests
+ */
+const statusConfig: Record<string, { colorPalette: string; icon: typeof BsClock; label: string }> = {
+  open: { colorPalette: "blue", icon: BsClock, label: "Open" },
+  in_progress: { colorPalette: "orange", icon: BsClock, label: "In Progress" },
+  resolved: { colorPalette: "green", icon: BsCheckCircle, label: "Resolved" },
+  closed: { colorPalette: "gray", icon: BsXCircle, label: "Closed" }
+};
+
+/**
+ * Component for displaying help request status badge
+ */
+const HelpRequestStatusBadge = ({ status }: { status: string }) => {
+  const config = statusConfig[status] || statusConfig.open;
+  return (
+    <Badge colorPalette={config.colorPalette} size="sm">
+      <Icon as={config.icon} mr={1} />
+      {config.label}
+    </Badge>
+  );
+};
+
+/**
+ * Formats elapsed time in HH:MM:SS or MM:SS format
+ */
+const formatElapsedTime = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, "0")}`;
+};
+
+/**
+ * Timer component that shows elapsed time since help started
+ * Updates every second while mounted
+ */
+const HelpingTimer = ({ startTime }: { startTime: string }) => {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const startDate = new Date(startTime);
+
+    // Calculate initial elapsed time
+    const calculateElapsed = () => {
+      const now = new Date();
+      return Math.floor((now.getTime() - startDate.getTime()) / 1000);
+    };
+
+    setElapsedSeconds(calculateElapsed());
+
+    // Update every second
+    const interval = setInterval(() => {
+      setElapsedSeconds(calculateElapsed());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  return (
+    <Badge colorPalette="orange" variant="surface" size="sm">
+      <Icon as={BsClock} mr={1} />
+      {formatElapsedTime(elapsedSeconds)}
+    </Badge>
+  );
+};
+
+/**
  * Component for managing help request assignment status and actions
  * @param request - The help request object
+ * @param compact - Whether to show compact view (badge only)
  * @returns JSX element for assignment controls
  */
-const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
+const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequest; compact?: boolean }) => {
   const { private_profile_id } = useClassProfiles();
+  const profiles = useAllProfilesForClass();
 
   // Get student data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -99,10 +164,16 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
   const controller = useOfficeHoursController();
   const { helpRequests, studentHelpActivity } = controller;
 
+  // Get assignee name
+  const assigneeName = useMemo(() => {
+    if (!request.assignee) return null;
+    const profile = profiles.find((p) => p.id === request.assignee);
+    return profile?.name || "Unknown";
+  }, [request.assignee, profiles]);
+
   // Helper function to log activity for all students in the request
   const logActivityForAllStudents = useCallback(
     async (activityType: "request_updated" | "request_resolved", description: string) => {
-      // Get all student associations for this help request
       const requestStudents = helpRequestStudentData;
 
       for (const student of requestStudents) {
@@ -129,17 +200,44 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
   const canShowActions = request.status === "open" || request.status === "in_progress";
 
+  // Compact view for metadata display
+  if (compact) {
+    if (request.assignee === private_profile_id) {
+      return (
+        <Badge colorPalette="green" size="sm">
+          Assigned to you
+        </Badge>
+      );
+    } else if (request.assignee) {
+      return (
+        <Badge colorPalette="blue" size="sm">
+          {assigneeName}
+        </Badge>
+      );
+    }
+    return (
+      <Badge colorPalette="gray" variant="outline" size="sm">
+        Unassigned
+      </Badge>
+    );
+  }
+
+  // Full view with actions
   if (request.assignee === private_profile_id) {
     return (
       <HStack gap={2}>
-        <Badge colorPalette="green" fontSize="xs">
-          Assigned to you
+        <Badge colorPalette="green" size="sm">
+          <Icon as={BsPersonCheck} mr={1} />
+          Helping
         </Badge>
+        {/* Timer showing how long help has been in progress (uses updated_at as proxy) */}
+        {request.status === "in_progress" && request.updated_at && <HelpingTimer startTime={request.updated_at} />}
         {canShowActions && (
-          <Tooltip content="Drop assignment and return to queue" showArrow disabled={isRequestInactive}>
-            <IconButton
-              aria-label="Drop Assignment"
-              size="sm"
+          <Tooltip content="Stop helping and return to queue" showArrow>
+            <Button
+              aria-label="Stop Helping"
+              size="xs"
+              variant="ghost"
               colorPalette="red"
               disabled={isRequestInactive}
               onClick={async () => {
@@ -151,50 +249,51 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
                 });
               }}
             >
-              <Icon as={BsClipboardCheckFill} />
-            </IconButton>
+              <Icon as={BsPersonDash} />
+              Stop
+            </Button>
           </Tooltip>
         )}
       </HStack>
     );
   } else if (request.assignee) {
     return (
-      <Badge colorPalette="blue" fontSize="xs">
-        Assigned to {request.assignee}
-      </Badge>
+      <HStack gap={2}>
+        <Badge colorPalette="blue" size="sm">
+          <Icon as={BsPersonCheck} mr={1} />
+          {assigneeName}
+        </Badge>
+        {/* Timer showing how long help has been in progress */}
+        {request.status === "in_progress" && request.updated_at && <HelpingTimer startTime={request.updated_at} />}
+      </HStack>
     );
   } else {
+    // Unassigned - show prominent "Start Helping" button
     return (
-      <HStack gap={2}>
-        <Badge colorPalette="gray" variant="outline" fontSize="xs">
-          Not assigned
-        </Badge>
+      <>
         {canShowActions && (
-          <Tooltip content="Take assignment and mark as in progress" showArrow disabled={isRequestInactive}>
-            <IconButton
-              aria-label="Assume Assignment"
-              variant="ghost"
-              size="sm"
-              colorPalette="green"
-              disabled={isRequestInactive}
-              onClick={async () => {
-                await helpRequests.update(request.id, {
-                  assignee: private_profile_id,
-                  status: "in_progress"
-                });
-                await logActivityForAllStudents("request_updated", "Request assigned and marked as in progress");
-
-                toaster.success({
-                  title: "Help request successfully updated",
-                  description: `Help request ${request.id} updated`
-                });
-              }}
-            >
-              <Icon as={BsClipboardCheck} />
-            </IconButton>
-          </Tooltip>
+          <Button
+            aria-label="Start Helping"
+            size="sm"
+            colorPalette="green"
+            disabled={isRequestInactive}
+            onClick={async () => {
+              await helpRequests.update(request.id, {
+                assignee: private_profile_id,
+                status: "in_progress"
+              });
+              await logActivityForAllStudents("request_updated", "Request assigned and marked as in progress");
+              toaster.success({
+                title: "You're now helping!",
+                description: "This request has been assigned to you."
+              });
+            }}
+          >
+            <Icon as={BsHandIndex} />
+            Start Helping
+          </Button>
         )}
-      </HStack>
+      </>
     );
   }
 };
@@ -683,10 +782,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
 
 /**
  * Component to display and manage students associated with a help request
- * @param request - The help request object
- * @param students - Array of student profiles associated with the request
- * @param currentUserCanEdit - Whether the current user can edit the student list
- * @returns JSX element for student management
+ * Shows avatars and names in a compact, clean format
  */
 const HelpRequestStudents = ({
   request,
@@ -716,7 +812,6 @@ const HelpRequestStudents = ({
   // Helper function to log activity for all students in the request
   const logActivityForAllStudents = useCallback(
     async (activityType: "request_updated" | "request_resolved", description: string) => {
-      // Get all student associations for this help request
       const requestStudents = helpRequestStudentData;
 
       for (const student of requestStudents) {
@@ -748,27 +843,18 @@ const HelpRequestStudents = ({
   const handleSaveChanges = async () => {
     try {
       const originalStudentIds = students.map((student) => student.id);
-
-      // Calculate which students to add (in new selection but not in original)
       const studentsToAdd = selectedStudents.filter((id) => !originalStudentIds.includes(id));
-
-      // Calculate which students to remove (in original but not in new selection)
       const studentsToRemove = originalStudentIds.filter((id) => !selectedStudents.includes(id));
 
-      // Remove students that are no longer selected
       if (studentsToRemove.length > 0 && currentAssociations.length > 0) {
-        // Find the association records to delete
         const associationsToDelete = currentAssociations.filter((association) =>
           studentsToRemove.includes(association.profile_id)
         );
-
-        // Delete each association
         for (const association of associationsToDelete) {
           await helpRequestStudents.delete(association.id!);
         }
       }
 
-      // Add new students
       if (studentsToAdd.length > 0) {
         for (const studentId of studentsToAdd) {
           await helpRequestStudents.create({
@@ -800,59 +886,49 @@ const HelpRequestStudents = ({
 
   if (isEditing) {
     return (
-      <Box>
-        <HStack justify="space-between" align="start">
-          <Box flex="1">
-            <StudentGroupPicker
-              selectedStudents={selectedStudents}
-              onSelectionChange={setSelectedStudents}
-              placeholder="Search and select students..."
-              invalid={selectedStudents.length === 0}
-              errorMessage={selectedStudents.length === 0 ? "At least one student must be selected" : undefined}
-              minSelections={1}
-              helperText="At least one student must remain associated with this help request."
-            />
-          </Box>
-          <HStack>
-            <Button size="sm" onClick={handleCancelEdit}>
+      <Box w="100%">
+        <Stack gap={2}>
+          <StudentGroupPicker
+            selectedStudents={selectedStudents}
+            onSelectionChange={setSelectedStudents}
+            placeholder="Search and select students..."
+            invalid={selectedStudents.length === 0}
+            errorMessage={selectedStudents.length === 0 ? "At least one student must be selected" : undefined}
+            minSelections={1}
+            helperText="At least one student must remain associated with this help request."
+          />
+          <HStack gap={2} justify="flex-end">
+            <Button size="xs" variant="ghost" onClick={handleCancelEdit}>
               Cancel
             </Button>
-            <Button size="sm" colorPalette="blue" onClick={handleSaveChanges} disabled={selectedStudents.length === 0}>
+            <Button size="xs" colorPalette="blue" onClick={handleSaveChanges} disabled={selectedStudents.length === 0}>
               Save
             </Button>
           </HStack>
-        </HStack>
+        </Stack>
       </Box>
     );
   }
 
   return (
-    <Box>
-      <HStack justify="space-between" align="center">
-        <HStack>
-          <Icon as={BsPeople} />
-          <Text fontSize="sm" fontWeight="medium">
-            Students ({students.length}):
-          </Text>
-          <HStack>
-            {students.map((student, index) => (
-              <React.Fragment key={student.id}>
-                <Text fontSize="sm">{student.name}</Text>
-                {isInstructorOrGrader && (
-                  <StudentSummaryTrigger student_id={student.id} course_id={parseInt(course_id as string, 10)} />
-                )}
-                {index < students.length - 1 && ","}
-              </React.Fragment>
-            ))}
-          </HStack>
+    <HStack gap={2} flexWrap="wrap" align="center">
+      {students.map((student) => (
+        <HStack key={student.id} gap={1}>
+          <PersonAvatar uid={student.id} size="2xs" />
+          <Text fontSize="sm">{student.name}</Text>
+          {isInstructorOrGrader && (
+            <StudentSummaryTrigger student_id={student.id} course_id={parseInt(course_id as string, 10)} />
+          )}
         </HStack>
-        {currentUserCanEdit && request.status !== "resolved" && request.status !== "closed" && (
-          <IconButton aria-label="Edit student list" size="sm" variant="ghost" onClick={handleEditClick}>
-            <Icon as={BsPencil} />
+      ))}
+      {currentUserCanEdit && request.status !== "resolved" && request.status !== "closed" && (
+        <Tooltip content="Edit students" showArrow>
+          <IconButton aria-label="Edit student list" size="xs" variant="ghost" onClick={handleEditClick}>
+            <Icon as={BsPencil} boxSize={3} />
           </IconButton>
-        )}
-      </HStack>
-    </Box>
+        </Tooltip>
+      )}
+    </HStack>
   );
 };
 
@@ -880,7 +956,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     () => allHelpRequestStudents.filter((student) => student.help_request_id === request?.id),
     [allHelpRequestStudents, request?.id]
   );
-  const helpRequestMessages = useHelpRequestMessages(request_id);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -984,16 +1059,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     }
   }, [students]);
 
-  // Generate unique participant IDs for avatars
-  const participantIds = useMemo(() => {
-    return Array.from(
-      new Set([
-        ...studentIds, // Include all students in the request
-        ...helpRequestMessages.map((msg) => msg.author)
-      ])
-    ).slice(0, 5);
-  }, [studentIds, helpRequestMessages]);
-
   // Modal success handlers
   const handleModerationSuccess = useCallback(() => {
     moderationModal.closeModal();
@@ -1061,20 +1126,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
   }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
 
-  const closeRequest = useCallback(async () => {
-    // For students, show feedback modal first
-    if (role.role === "student") {
-      feedbackModal.openModal({ action: "close" });
-      return;
-    }
-
-    // For instructors/graders, close directly
-    await helpRequests.update(request_id, {
-      status: "closed"
-    });
-    await logActivityForAllStudents("request_updated", "Request closed by instructor");
-  }, [helpRequests, request_id, logActivityForAllStudents, role.role, feedbackModal]);
-
   /**
    * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
    */
@@ -1115,6 +1166,12 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     }
   }, [params.course_id, request_id, requestTitle]);
 
+  // Format creation time
+  const createdTimeAgo = useMemo(() => {
+    if (!request?.created_at) return "";
+    return formatDistanceToNow(new Date(request.created_at), { addSuffix: true });
+  }, [request?.created_at]);
+
   return (
     <Flex
       direction="column"
@@ -1122,156 +1179,198 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       maxW={{ base: "md", md: "full" }}
       mx="auto"
       height={isPopOut ? "100vh" : "calc(100vh - var(--nav-height))"}
-      justify="space-between"
-      align={{ base: "stretch", md: "center" }}
     >
-      <Flex width="100%" px={{ base: 2, md: 4 }} py={{ base: 2, md: 4 }}>
-        <HStack gap={{ base: 2, md: 4 }} flex="1" flexWrap={{ base: "wrap", md: "nowrap" }}>
-          {/* Back Button - Hide in popout mode */}
-          {!isPopOut && pathname.includes("/manage/office-hours/request/") && (
-            <IconButton aria-label="Go back" variant="ghost" onClick={handleBackNavigation} size="sm">
-              <Icon as={BsArrowLeft} />
-            </IconButton>
-          )}
-
-          <Stack spaceY="2">
-            <Text fontWeight="medium">{requestTitle}</Text>
-            {/* Students Management */}
-            {request && (
-              <HelpRequestStudents
-                request={request}
-                students={students}
-                currentUserCanEdit={!readOnly && canAccessRequestControls}
-                currentAssociations={helpRequestStudentData}
-              />
-            )}
-          </Stack>
-
-          {/* Control Buttons */}
-          <HStack gap={2} flexWrap={{ base: "wrap", md: "nowrap" }}>
-            {/* Pop Out Button - Available to all users, hide if already popped out */}
-            {!isPopOut && (
-              <Tooltip content="Pop out chat to new window" showArrow>
-                <IconButton aria-label="Pop out chat" size="sm" variant="ghost" onClick={popOutChat}>
-                  <Icon as={BsBoxArrowUpRight} />
-                </IconButton>
-              </Tooltip>
+      {/* Header Section */}
+      <Box
+        width="100%"
+        borderBottomWidth="1px"
+        borderColor="border.subtle"
+        bg="bg.subtle"
+        px={{ base: 3, md: 4 }}
+        py={3}
+      >
+        {/* Top Row: Back button, Title, Status, Actions */}
+        <Flex justify="space-between" align="center" mb={2}>
+          <HStack gap={2}>
+            {/* Back Button - Hide in popout mode */}
+            {!isPopOut && pathname.includes("/manage/office-hours/request/") && (
+              <IconButton aria-label="Go back" variant="ghost" onClick={handleBackNavigation} size="sm">
+                <Icon as={BsArrowLeft} />
+              </IconButton>
             )}
 
-            {/* Help Request Watch Button - Available to all users */}
-            <HelpRequestWatchButton helpRequestId={request_id} variant="ghost" size="sm" />
+            {/* Title */}
+            <Text fontWeight="semibold" fontSize="lg">
+              {requestTitle}
+            </Text>
 
-            {/* Video Call Controls - Available to all users with video access (disabled in read-only mode) */}
-            {!readOnly && canAccessVideoControls && request && (
-              <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
+            {/* Status Badge */}
+            {request && <HelpRequestStatusBadge status={request.status} />}
+
+            {/* Privacy Badge */}
+            {request?.is_private && (
+              <Badge colorPalette="purple" size="sm" variant="outline">
+                Private
+              </Badge>
             )}
+          </HStack>
 
-            {/* Request Management Controls - Available to Instructors/Graders and Students Associated with Request (disabled in read-only mode) */}
-            {!readOnly && canAccessRequestControls && request && (
-              <>
-                {/* Instructor/Grader Only Controls */}
-                {isInstructorOrGrader && (
-                  <>
-                    {/* Assignment Management */}
-                    <HelpRequestAssignment request={request} />
-                    {/* Moderation Action Button */}
-                    <Tooltip content="Moderate">
-                      <Button
-                        size="sm"
-                        colorPalette="orange"
-                        variant="surface"
-                        onClick={() => moderationModal.openModal()}
-                      >
-                        <Icon as={BsShield} fontSize="md!" />
-                      </Button>
-                    </Tooltip>
+          {/* Primary Actions */}
+          <HStack gap={2}>
+            {/* Start Helping Button - Prominent for unassigned requests (Staff only) */}
+            {isInstructorOrGrader &&
+              !readOnly &&
+              request &&
+              !request.assignee &&
+              (request.status === "open" || request.status === "in_progress") && (
+                <HelpRequestAssignment request={request} />
+              )}
 
-                    {/* Karma Entry Button */}
-                    <Tooltip content="Karma">
-                      <Button size="sm" colorPalette="yellow" variant="surface" onClick={() => karmaModal.openModal()}>
-                        <Icon as={BsStar} fontSize="md!" />
-                      </Button>
-                    </Tooltip>
-                  </>
-                )}
+            {/* Resolve Button */}
+            {!readOnly &&
+              canAccessRequestControls &&
+              request &&
+              request.status !== "resolved" &&
+              request.status !== "closed" && (
+                <PopConfirm
+                  triggerLabel="Resolve Request"
+                  trigger={
+                    <Button size="sm" colorPalette="blue" variant="outline">
+                      <Icon as={BsCheck} />
+                      Resolve
+                    </Button>
+                  }
+                  confirmHeader="Resolve Request"
+                  confirmText="Are you sure you want to resolve this request?"
+                  onConfirm={resolveRequest}
+                />
+              )}
 
-                {/* Resolve Button - Available to Instructors/Graders and Students Associated with Request */}
-                {request.status !== "resolved" && request.status !== "closed" && (
-                  <PopConfirm
-                    triggerLabel="Resolve Request"
-                    trigger={
-                      <Button size="sm" colorPalette="green">
-                        <Icon as={BsCheck} fontSize="md!" />
-                        Resolve
-                      </Button>
-                    }
-                    confirmHeader="Resolve Request"
-                    confirmText="Are you sure you want to resolve this request?"
-                    onConfirm={resolveRequest}
-                  />
-                )}
-
-                {/* Close Button - Available to Instructors/Graders and Students Associated with Request */}
-                {request.status !== "closed" && (
-                  <PopConfirm
-                    triggerLabel="Close Request"
-                    trigger={
-                      <Button
-                        size="sm"
-                        colorPalette="red"
-                        visibility={
-                          request.status === "open" || request.status === "in_progress" ? "visible" : "hidden"
-                        }
-                      >
-                        <Icon as={BsXCircle} fontSize="md!" />
-                        Close
-                      </Button>
-                    }
-                    confirmHeader="Close Request"
-                    confirmText="Are you sure you want to close this request? This will mark it as closed without resolving it."
-                    onConfirm={closeRequest}
-                  />
-                )}
-              </>
-            )}
-            {/* Provide Feedback Button - Available to Students Associated with Closed/Resolved Requests without Existing Feedback from the currently-logged in student */}
+            {/* Provide Feedback Button for resolved requests */}
             {readOnly && !hasExistingFeedback && canAccessRequestControls && !isInstructorOrGrader && (
-              <Button size="sm" onClick={provideFeedback}>
-                <Icon as={BsStar} fontSize="md" />
+              <Button size="sm" colorPalette="blue" onClick={provideFeedback}>
+                <Icon as={BsStar} />
                 Provide Feedback
               </Button>
             )}
           </HStack>
-        </HStack>
+        </Flex>
 
-        <AvatarGroup size="sm" display={{ base: "none", md: "flex" }}>
-          {/* Show avatars of all participants who have sent messages and all students in the request */}
-          {participantIds.map((participantId) => (
-            <PersonAvatar key={`participant-${participantId}`} uid={participantId} size="sm" />
-          ))}
-        </AvatarGroup>
-      </Flex>
+        {/* Metadata Row */}
+        <Flex
+          direction={{ base: "column", md: "row" }}
+          gap={{ base: 2, md: 4 }}
+          align={{ base: "stretch", md: "center" }}
+          justify="space-between"
+        >
+          {/* Left Side: Metadata */}
+          <HStack gap={4} flexWrap="wrap" fontSize="sm" color="fg.muted">
+            {/* Students */}
+            {request && (
+              <HStack gap={1}>
+                <Icon as={BsPeople} />
+                <HelpRequestStudents
+                  request={request}
+                  students={students}
+                  currentUserCanEdit={!readOnly && canAccessRequestControls}
+                  currentAssociations={helpRequestStudentData}
+                />
+              </HStack>
+            )}
 
-      {/* File References Section */}
-      <Box width="100%" px={{ base: 2, md: 4 }} borderBottomWidth="1px">
-        {request && <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />}
+            {/* Created Time */}
+            {request && (
+              <HStack gap={1}>
+                <Icon as={BsClock} />
+                <Text fontSize="sm">{createdTimeAgo}</Text>
+              </HStack>
+            )}
+
+            {/* Assignment (Staff only) */}
+            {isInstructorOrGrader && request && (
+              <HStack gap={1}>
+                <Icon as={BsPersonCheck} />
+                <HelpRequestAssignment request={request} compact />
+              </HStack>
+            )}
+          </HStack>
+
+          {/* Right Side: Secondary Actions Toolbar */}
+          <HStack gap={1} flexWrap="wrap">
+            {/* Pop Out Button */}
+            {!isPopOut && (
+              <Tooltip content="Pop out chat" showArrow>
+                <IconButton aria-label="Pop out chat" size="xs" variant="ghost" onClick={popOutChat}>
+                  <Icon as={BsBoxArrowUpRight} boxSize={3} />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {/* Watch Button */}
+            <HelpRequestWatchButton helpRequestId={request_id} variant="ghost" size="xs" />
+
+            {/* Discord Link (Staff only) */}
+            {isInstructorOrGrader && request && (
+              <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
+            )}
+
+            {/* Video Call Controls */}
+            {!readOnly && canAccessVideoControls && request && (
+              <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
+            )}
+
+            {/* Staff Actions Separator */}
+            {isInstructorOrGrader && !readOnly && request && (
+              <>
+                <Separator orientation="vertical" height="20px" />
+
+                {/* Assignment status (only when already assigned) */}
+                {request.assignee && <HelpRequestAssignment request={request} />}
+
+                {/* Moderation */}
+                <Tooltip content="Moderation" showArrow>
+                  <IconButton
+                    aria-label="Moderation"
+                    size="xs"
+                    variant="ghost"
+                    colorPalette="orange"
+                    onClick={() => moderationModal.openModal()}
+                  >
+                    <Icon as={BsShield} boxSize={3} />
+                  </IconButton>
+                </Tooltip>
+
+                {/* Karma */}
+                <Tooltip content="Karma" showArrow>
+                  <IconButton
+                    aria-label="Karma"
+                    size="xs"
+                    variant="ghost"
+                    colorPalette="yellow"
+                    onClick={() => karmaModal.openModal()}
+                  >
+                    <Icon as={BsStar} boxSize={3} />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+          </HStack>
+        </Flex>
+
+        {/* Code References Section (collapsible) */}
+        {request && (
+          <Box mt={2}>
+            <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
+          </Box>
+        )}
       </Box>
 
-      <Flex
-        width="100%"
-        overflow="auto"
-        height={{ base: "auto", md: "full" }}
-        justify="center"
-        align={{ base: "stretch", md: "center" }}
-      >
-        <RealtimeChat
-          request_id={request_id}
-          helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
-          readOnly={readOnly}
-        />
+      {/* Chat Section */}
+      <Flex flex="1" width="100%" overflow="auto" justify="center" align="stretch">
+        <RealtimeChat request_id={request_id} helpRequestStudentIds={studentIds} readOnly={readOnly} />
       </Flex>
 
-      {/* Moderation and Karma Modals - Instructor/Grader Only */}
+      {/* Modals */}
       {isInstructorOrGrader && (
         <>
           <CreateModerationActionModal
@@ -1279,7 +1378,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             onClose={moderationModal.closeModal}
             onSuccess={handleModerationSuccess}
           />
-
           <CreateKarmaEntryModal
             isOpen={karmaModal.isOpen}
             onClose={karmaModal.closeModal}
@@ -1288,7 +1386,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         </>
       )}
 
-      {/* Feedback Modal - Student Only */}
       {role.role === "student" && (
         <HelpRequestFeedbackModal
           isOpen={feedbackModal.isOpen}

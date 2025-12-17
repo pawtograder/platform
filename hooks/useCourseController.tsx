@@ -5,6 +5,7 @@ import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
   PossiblyTentativeResult,
   useFindTableControllerValue,
+  useIsTableControllerReady,
   useListTableControllerValues,
   useTableControllerTableValues,
   useTableControllerValueById
@@ -294,7 +295,11 @@ export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: 
       setTeaser(undefined);
       return;
     }
+    let unmounted = false;
     const { unsubscribe, data } = controller.discussionThreadTeasers.getById(id, (data) => {
+      if (unmounted) {
+        return;
+      }
       if (watchFields) {
         setTeaser((oldTeaser) => {
           if (!oldTeaser) {
@@ -313,7 +318,10 @@ export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: 
       }
     });
     setTeaser(data as DiscussionThreadTeaser);
-    return unsubscribe;
+    return () => {
+      unmounted = true;
+      unsubscribe();
+    };
   }, [controller, id, watchFields]);
   return teaser;
 }
@@ -369,6 +377,7 @@ export class CourseController {
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _labSectionLeaders?: TableController<"lab_section_leaders">;
   private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
@@ -381,6 +390,10 @@ export class CourseController {
   private _gradebookColumns?: TableController<"gradebook_columns">;
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
+  private _calendarEvents?: TableController<"calendar_events">;
+  private _classStaffSettings?: TableController<"class_staff_settings">;
+  private _discordChannels?: TableController<"discord_channels">;
+  private _discordMessages?: TableController<"discord_messages">;
   private _livePolls?: TableController<"live_polls">;
   private _surveys?: TableController<"surveys">;
 
@@ -424,10 +437,17 @@ export class CourseController {
     void this.tags; // Triggers lazy creation
     void this.labSections; // Triggers lazy creation
     void this.labSectionMeetings; // Triggers lazy creation
+    void this.labSectionLeaders; // Triggers lazy creation
     void this.classSections; // Triggers lazy creation
     void this.discussionTopics; // Triggers lazy creation
     void this.repositories; // Triggers lazy creation
     void this.gradebookColumns; // Triggers lazy creation
+    if (this.isStaff) {
+      void this.discordChannels; // Triggers lazy creation (staff only)
+      void this.discordMessages; // Triggers lazy creation (staff only)
+    }
+    void this.livePolls; // Triggers lazy creation
+    void this.surveys; // Triggers lazy creation
 
     // Clear initialData to free memory after all eager controllers are initialized
     this._initialData = undefined;
@@ -547,6 +567,20 @@ export class CourseController {
       });
     }
     return this._labSectionMeetings;
+  }
+
+  get labSectionLeaders(): TableController<"lab_section_leaders"> {
+    if (!this._labSectionLeaders) {
+      this._labSectionLeaders = new TableController({
+        client: this.client,
+        table: "lab_section_leaders",
+        query: this.client.from("lab_section_leaders").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.labSectionLeaders
+      });
+    }
+    return this._labSectionLeaders;
   }
 
   get classSections(): TableController<"class_sections"> {
@@ -737,6 +771,97 @@ export class CourseController {
       });
     }
     return this._discussionTopics;
+  }
+
+  /**
+   * Calendar events for this class.
+   * Students can only see office_hours events, staff can see all.
+   */
+  get calendarEvents(): TableController<"calendar_events"> {
+    if (!this._calendarEvents) {
+      let query = this.client.from("calendar_events").select("*").eq("class_id", this.courseId);
+
+      // Students can only see office_hours events (enforced by RLS, but filter here too for efficiency)
+      if (!this.isStaff) {
+        query = query.eq("calendar_type", "office_hours");
+      }
+
+      query = query.order("start_time", { ascending: true }).limit(1000);
+
+      // Realtime filter must match query constraints to prevent students from receiving
+      // calendar events they shouldn't see (e.g., non-office_hours events)
+      const realtimeFilter = !this.isStaff
+        ? { class_id: this.courseId, calendar_type: "office_hours" }
+        : { class_id: this.courseId };
+
+      this._calendarEvents = new TableController({
+        client: this.client,
+        table: "calendar_events",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter
+      });
+    }
+    return this._calendarEvents;
+  }
+
+  /**
+   * Staff-only settings for this class.
+   * Only visible to staff (enforced by RLS).
+   */
+  get classStaffSettings(): TableController<"class_staff_settings"> {
+    if (!this._classStaffSettings) {
+      const query = this.client.from("class_staff_settings").select("*").eq("class_id", this.courseId);
+
+      this._classStaffSettings = new TableController({
+        client: this.client,
+        table: "class_staff_settings",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._classStaffSettings;
+  }
+
+  /**
+   * Discord channels for this class.
+   * Only visible to staff (enforced by RLS).
+   */
+  get discordChannels(): TableController<"discord_channels"> {
+    if (!this._discordChannels) {
+      const query = this.client.from("discord_channels").select("*").eq("class_id", this.courseId);
+
+      this._discordChannels = new TableController({
+        client: this.client,
+        table: "discord_channels",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.discordChannels
+      });
+    }
+    return this._discordChannels;
+  }
+
+  /**
+   * Discord messages for this class (tracks which Discord messages correspond to help requests, regrade requests, etc).
+   * Only visible to staff (enforced by RLS).
+   */
+  get discordMessages(): TableController<"discord_messages"> {
+    if (!this._discordMessages) {
+      const query = this.client.from("discord_messages").select("*").eq("class_id", this.courseId);
+
+      this._discordMessages = new TableController({
+        client: this.client,
+        table: "discord_messages",
+        query,
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId },
+        initialData: this._initialData?.discordMessages
+      });
+    }
+    return this._discordMessages;
   }
 
   get livePolls(): TableController<"live_polls"> {
@@ -1189,11 +1314,21 @@ export class CourseController {
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
+    this._labSectionLeaders?.close();
+    this._labSectionLeaders = undefined;
     this._studentDeadlineExtensions?.close();
     this._assignmentDueDateExceptions?.close();
     this._assignments?.close();
     this._assignmentGroupsWithMembers?.close();
     this._classSections?.close();
+    this._calendarEvents?.close();
+    this._calendarEvents = undefined;
+    this._classStaffSettings?.close();
+    this._classStaffSettings = undefined;
+    this._discordChannels?.close();
+    this._discordChannels = undefined;
+    this._discordMessages?.close();
+    this._discordMessages = undefined;
     this._livePolls?.close();
     this._surveys?.close();
 
@@ -1399,8 +1534,11 @@ export function useAssignmentDueDate(
   const controller = useCourseController();
   const course = useCourse();
   const time_zone = course.time_zone;
-  const [labSections, setLabSections] = useState<LabSection[]>();
-  const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
+
+  const labSections = useTableControllerTableValues(controller.labSections) as LabSection[];
+  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings) as LabSectionMeeting[];
+  const labSectionsReady = useIsTableControllerReady(controller.labSections);
+  const labSectionMeetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
 
   const dueDateExceptionsFilter = useCallback(
     (e: AssignmentDueDateException) => {
@@ -1419,23 +1557,6 @@ export function useAssignmentDueDate(
     controller.assignmentDueDateExceptions,
     dueDateExceptionsFilter
   );
-
-  useEffect(() => {
-    const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>
-      setLabSections(data)
-    );
-    setLabSections(labSections);
-
-    const { data: labSectionMeetings, unsubscribe: unsubscribeLabMeetings } = controller.listLabSectionMeetings(
-      (data) => setLabSectionMeetings(data)
-    );
-    setLabSectionMeetings(labSectionMeetings);
-
-    return () => {
-      unsubscribeLabSections();
-      unsubscribeLabMeetings();
-    };
-  }, [controller]);
 
   const ret = useMemo(() => {
     if (!assignment.due_date) {
@@ -1457,7 +1578,8 @@ export function useAssignmentDueDate(
     let effectiveDueDate = originalDueDate;
     let labSectionId: number | null = null;
 
-    if (hasLabScheduling && labSections && labSectionMeetings) {
+    // Only compute lab-based due date if data is ready and we have lab scheduling
+    if (hasLabScheduling && labSectionsReady && labSectionMeetingsReady) {
       // Get student's lab section
       if (options?.studentPrivateProfileId) {
         labSectionId = controller.getStudentLabSectionId(options.studentPrivateProfileId);
@@ -1518,7 +1640,17 @@ export function useAssignmentDueDate(
       labSectionId,
       time_zone
     };
-  }, [dueDateExceptions, labSections, labSectionMeetings, assignment, controller, options, time_zone]);
+  }, [
+    dueDateExceptions,
+    labSections,
+    labSectionMeetings,
+    labSectionsReady,
+    labSectionMeetingsReady,
+    assignment,
+    controller,
+    options,
+    time_zone
+  ]);
 
   return ret;
 }
@@ -1773,6 +1905,84 @@ export function useDiscussionTopics() {
   }, [controller]);
 
   return topics;
+}
+
+/**
+ * Hook to get a discord channel by type and resource_id
+ * Useful for finding the channel for a specific help queue, assignment, etc.
+ * Uses useFindTableControllerValue for efficient lookup
+ */
+export function useDiscordChannel(
+  channelType: Database["public"]["Enums"]["discord_channel_type"],
+  resourceId?: number | null
+) {
+  const controller = useCourseController();
+  const isStaff = controller.isStaff;
+
+  // Only access discordChannels controller if staff (to avoid instantiating it for non-staff)
+  // Use useMemo to conditionally access the controller property only when isStaff is true
+  // This prevents the lazy getter from being called for non-staff users
+  const discordChannelsController = useMemo(() => {
+    if (isStaff) {
+      return controller.discordChannels;
+    }
+    // When not staff, we still need to pass a controller to the hook, but we'll use
+    // a controller that exists (profiles) as a placeholder since the filter always returns false
+    // This satisfies the type requirement without instantiating the staff-only controller
+    return controller.profiles as unknown as TableController<"discord_channels">;
+  }, [controller, isStaff]);
+
+  const filter = useCallback(
+    (channel: Database["public"]["Tables"]["discord_channels"]["Row"]) =>
+      channel.channel_type === channelType &&
+      (resourceId === undefined || resourceId === null || channel.resource_id === resourceId),
+    [channelType, resourceId]
+  );
+
+  // Only search if staff (discord_channels is staff-only)
+  // When not staff, filter always returns false, so no matching will occur
+  const channel = useFindTableControllerValue(discordChannelsController, isStaff ? filter : () => false);
+
+  return channel ?? null;
+}
+
+/**
+ * Hook to get a discord message by resource type and resource_id
+ * Useful for finding the Discord message for a help request, regrade request, etc.
+ * Uses useFindTableControllerValue for efficient lookup
+ */
+export function useDiscordMessage(
+  resourceType: Database["public"]["Enums"]["discord_resource_type"],
+  resourceId: number | null | undefined
+) {
+  const controller = useCourseController();
+  const isStaff = controller.isStaff;
+
+  // Only access discordMessages controller if staff (to avoid instantiating it for non-staff)
+  // Use useMemo to conditionally access the controller property only when isStaff is true
+  // This prevents the lazy getter from being called for non-staff users
+  const discordMessagesController = useMemo(() => {
+    if (isStaff) {
+      return controller.discordMessages;
+    }
+    // When not staff, we still need to pass a controller to the hook, but we'll use
+    // a controller that exists (profiles) as a placeholder since the filter always returns false
+    // This satisfies the type requirement without instantiating the staff-only controller
+    return controller.profiles as unknown as TableController<"discord_messages">;
+  }, [controller, isStaff]);
+
+  const filter = useCallback(
+    (message: Database["public"]["Tables"]["discord_messages"]["Row"]) =>
+      message.resource_type === resourceType && message.resource_id === resourceId,
+    [resourceType, resourceId]
+  );
+
+  // Only search if staff (discord_messages is staff-only) and resourceId is valid
+  // When not staff, filter always returns false, so no matching will occur
+  const shouldSearch = isStaff && resourceId !== null && resourceId !== undefined;
+  const message = useFindTableControllerValue(discordMessagesController, shouldSearch ? filter : () => false);
+
+  return message ?? null;
 }
 
 /**

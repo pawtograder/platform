@@ -186,7 +186,8 @@ export default function HelpRequestFeedbackModal({
                 <Box p={4} borderRadius="md" borderWidth="1px">
                   <Text fontSize="sm" lineHeight="1.5">
                     <strong>Your feedback is important!</strong> It helps instructors and TAs understand how to improve
-                    the help experience and ensures quality assistance for all students.
+                    the help experience and ensures quality assistance for all students. Your feedback will be shared
+                    with the course staff, along with a link to this help request.
                   </Text>
                 </Box>
               </Stack>

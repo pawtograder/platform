@@ -46,6 +46,7 @@
     "@langchain/openai": "^0.6.9",
     "@monaco-editor/react": "^4.7.0",
     "@next/eslint-plugin-next": "^15.1.6",
+    "@noble/ed25519": "^3.0.0",
     "@octokit/app": "^15.1.6",
     "@octokit/auth-app": "^7.2.1",
     "@octokit/core": "^6.1.5",

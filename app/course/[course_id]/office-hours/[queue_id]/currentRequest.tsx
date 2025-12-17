@@ -11,6 +11,9 @@ import { useMemo } from "react";
 export default function CurrentRequest({ request, position }: { request: HelpRequest; position: number }) {
   const assignee = useUserProfile(request.assignee);
 
+  // Check if request is active (not resolved/closed)
+  const isActive = request.status === "open" || request.status === "in_progress";
+
   // Memoize position display to prevent unnecessary recalculations
   const positionDisplay = useMemo(() => {
     return position > 0 ? position : "-";
@@ -43,23 +46,26 @@ export default function CurrentRequest({ request, position }: { request: HelpReq
 
   return (
     <Box width="100%" maxW={{ base: "md", md: "full" }} mx="auto">
-      <DataList.Root>
-        <DataList.Item>
-          <DataList.ItemLabel>Your position in the queue</DataList.ItemLabel>
-          <DataList.ItemValue>{positionDisplay}</DataList.ItemValue>
-        </DataList.Item>
-        <DataList.Item>
-          <DataList.ItemLabel>Assignment Status:</DataList.ItemLabel>
-          <DataList.ItemValue>
-            <HStack gap={2}>
-              {assignmentStatus.badge}
-              <Text fontSize="sm" fontWeight="medium" color={assignee ? "fg.default" : "fg.muted"}>
-                {assignmentStatus.text}
-              </Text>
-            </HStack>
-          </DataList.ItemValue>
-        </DataList.Item>
-      </DataList.Root>
+      {/* Only show metadata for active requests */}
+      {isActive && (
+        <DataList.Root>
+          <DataList.Item>
+            <DataList.ItemLabel>Your position in the queue</DataList.ItemLabel>
+            <DataList.ItemValue>{positionDisplay}</DataList.ItemValue>
+          </DataList.Item>
+          <DataList.Item>
+            <DataList.ItemLabel>Assignment Status:</DataList.ItemLabel>
+            <DataList.ItemValue>
+              <HStack gap={2}>
+                {assignmentStatus.badge}
+                <Text fontSize="sm" fontWeight="medium" color={assignee ? "fg.default" : "fg.muted"}>
+                  {assignmentStatus.text}
+                </Text>
+              </HStack>
+            </DataList.ItemValue>
+          </DataList.Item>
+        </DataList.Root>
+      )}
 
       <Flex
         height={{ base: "auto", md: "100vh" }}

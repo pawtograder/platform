@@ -11,6 +11,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { toaster } from "@/components/ui/toaster";
 import type { NotificationPreferences } from "@/utils/supabase/DatabaseTypes";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIdentity } from "@/hooks/useIdentities";
 
 /**
  * Component for managing user notification preferences for help requests.
@@ -19,7 +20,10 @@ import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 export default function NotificationPreferencesPanel() {
   const { course_id } = useParams();
   const { user } = useAuthState();
+  const { identities } = useIdentity();
   const classId = Number(course_id);
+  const discordIdentity = identities?.find((identity) => identity.provider === "discord");
+  const hasDiscordLinked = !!discordIdentity;
 
   const [preferences, setPreferences] = useState<NotificationPreferences>({
     /*
@@ -31,6 +35,7 @@ export default function NotificationPreferencesPanel() {
     user_id: user?.id || "",
     class_id: classId,
     help_request_creation_notification: "all",
+    regrade_request_notification: "all",
     updated_at: new Date().toISOString()
   });
 
@@ -55,7 +60,11 @@ export default function NotificationPreferencesPanel() {
   // Load existing preferences when data is available
   useEffect(() => {
     if (existingPreferences?.data?.[0]) {
-      setPreferences(existingPreferences.data[0]);
+      setPreferences({
+        ...existingPreferences.data[0],
+        // Ensure regrade_request_notification has a default if not present
+        regrade_request_notification: existingPreferences.data[0].regrade_request_notification || "all"
+      });
     }
   }, [existingPreferences]);
 
@@ -78,6 +87,7 @@ export default function NotificationPreferencesPanel() {
           id: preferences.id,
           values: {
             help_request_creation_notification: preferences.help_request_creation_notification,
+            regrade_request_notification: preferences.regrade_request_notification,
             updated_at: new Date().toISOString()
           }
         });
@@ -88,7 +98,8 @@ export default function NotificationPreferencesPanel() {
           values: {
             user_id: user.id,
             class_id: classId,
-            help_request_creation_notification: preferences.help_request_creation_notification
+            help_request_creation_notification: preferences.help_request_creation_notification,
+            regrade_request_notification: preferences.regrade_request_notification
           }
         });
       }
@@ -118,6 +129,10 @@ export default function NotificationPreferencesPanel() {
     );
   }
 
+  const discordHelperText = hasDiscordLinked
+    ? "You have Discord linked. Default is NO email notifications (you'll receive Discord notifications instead)."
+    : "If you link Discord, the default will be NO email notifications.";
+
   return (
     <Box>
       <Heading size="md" mb={4}>
@@ -128,7 +143,7 @@ export default function NotificationPreferencesPanel() {
           <Stack spaceY={6}>
             <Field
               label="Help Request Creation Notifications"
-              helperText="Choose how you want to be notified when new help requests are created in your class"
+              helperText={`Choose how you want to be notified when new help requests are created in your class. ${discordHelperText}`}
             >
               <NativeSelect.Root>
                 <NativeSelect.Field
@@ -145,6 +160,25 @@ export default function NotificationPreferencesPanel() {
                     Only active queue: Get notified for help requests in your active queue.
                   </option>
                   <option value="none">None: No notifications for help request creations.</option>
+                </NativeSelect.Field>
+              </NativeSelect.Root>
+            </Field>
+            <Field
+              label="Regrade Request Notifications"
+              helperText={`Choose how you want to be notified about regrade requests. ${discordHelperText}`}
+            >
+              <NativeSelect.Root>
+                <NativeSelect.Field
+                  value={preferences.regrade_request_notification || "all"}
+                  onChange={(e) =>
+                    setPreferences((prev) => ({
+                      ...prev,
+                      regrade_request_notification: e.target.value as "all" | "none"
+                    }))
+                  }
+                >
+                  <option value="all">All: Get notified for all regrade request activity.</option>
+                  <option value="none">None: No email notifications for regrade requests.</option>
                 </NativeSelect.Field>
               </NativeSelect.Root>
             </Field>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, VStack } from "@chakra-ui/react";
+import { Box, Flex, Heading, HStack, Stack, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
@@ -17,6 +17,8 @@ import {
 } from "@/hooks/useOfficeHoursRealtime";
 import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
+import { useCourseController } from "@/hooks/useCourseController";
+import CalendarDayView from "@/components/calendar/calendar-day-view";
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -29,14 +31,18 @@ import { toaster } from "@/components/ui/toaster";
  */
 export default function HelpQueuesDashboard() {
   const { course_id } = useParams();
+  const { course } = useCourseController();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
+
+  // Check if any calendar is configured
+  const hasCalendar = !!(course?.office_hours_ics_url || course?.events_ics_url);
 
   // Get data using individual hooks
   const queues = useHelpQueues();
   const allQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
-  const { isConnected, connectionStatus, isLoading } = useConnectionStatus();
+  const { isConnected, connectionStatus } = useConnectionStatus();
 
   // Filter assignments for current TA
   const activeAssignments = useMemo(() => {
@@ -48,7 +54,7 @@ export default function HelpQueuesDashboard() {
     return allHelpRequests.filter((request) => request.status !== "resolved" && request.status !== "closed");
   }, [allHelpRequests]);
 
-  // Group all active assignments by queue
+  // Group all active assignments by queue (used for both sorting and display)
   const activeAssignmentsByQueue = useMemo(() => {
     const assignments = allQueueAssignments.filter((assignment) => assignment.is_active);
 
@@ -64,6 +70,21 @@ export default function HelpQueuesDashboard() {
       {} as Record<number, HelpQueueAssignment[]>
     );
   }, [allQueueAssignments]);
+
+  const sortedQueues = useMemo(() => {
+    return [...queues].sort((a, b) => {
+      // Sort queues with active assignments first
+      const aHasActive = (activeAssignmentsByQueue[a.id]?.length ?? 0) > 0;
+      const bHasActive = (activeAssignmentsByQueue[b.id]?.length ?? 0) > 0;
+
+      if (aHasActive !== bHasActive) {
+        return aHasActive ? -1 : 1;
+      }
+
+      // Within each group, sort alphabetically by name
+      return a.name.localeCompare(b.name);
+    });
+  }, [queues, activeAssignmentsByQueue]);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -112,10 +133,6 @@ export default function HelpQueuesDashboard() {
     }
   };
 
-  if (isLoading) {
-    return <Text>Loading office-hour queues…</Text>;
-  }
-
   return (
     <Stack spaceY="4">
       {/* Connection Status Indicator */}
@@ -125,7 +142,19 @@ export default function HelpQueuesDashboard() {
         </Alert>
       )}
 
-      {queues.map((queue) => {
+      {/* Today's Calendar Schedule - only show if calendar is configured */}
+      {hasCalendar && (
+        <Box>
+          <CalendarDayView />
+        </Box>
+      )}
+
+      {/* Queue Management Section */}
+      <Heading size="sm" mt={hasCalendar ? 4 : 0}>
+        Help Queues
+      </Heading>
+
+      {sortedQueues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
         const activeStaff = queueAssignments.map((assignment: HelpQueueAssignment) => assignment.ta_profile_id);

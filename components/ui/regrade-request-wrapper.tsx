@@ -40,6 +40,7 @@ import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+import DiscordMessageLink from "@/components/discord/discord-message-link";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -1181,6 +1182,16 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
               </VStack>
+              {/* Discord Link for grader/instructor */}
+              {isGraderOrInstructor && regradeRequest.status !== "draft" && (
+                <DiscordMessageLink
+                  resourceType="regrade_request"
+                  resourceId={regradeRequest.id}
+                  size="sm"
+                  variant="ghost"
+                />
+              )}
+
               {/* Resolve Button for opened status + grader/instructor */}
               {regradeRequest.status === "opened" && isGraderOrInstructor && (
                 <ResolveRequestPopover

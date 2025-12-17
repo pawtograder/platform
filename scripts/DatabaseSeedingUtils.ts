@@ -1427,8 +1427,7 @@ export class DatabaseSeeder {
       name: `Lab ${String.fromCharCode(65 + i)}`,
       day_of_week: "monday" as const,
       start_time: "09:00",
-      end_time: "10:00",
-      lab_leader_id: instructors[i % instructors.length].private_profile_id
+      end_time: "10:00"
     }));
 
     console.log(`Creating ${labSectionsData.length} lab sections`);
@@ -1437,6 +1436,20 @@ export class DatabaseSeeder {
       () => supabase.from("lab_sections").insert(labSectionsData).select("id, name"),
       labSectionsData.length
     );
+
+    // Insert lab section leaders into junction table
+    if (labSections && labSections.length > 0) {
+      const labSectionLeadersData = labSections.map((section, i) => ({
+        lab_section_id: section.id,
+        profile_id: instructors[i % instructors.length].private_profile_id,
+        class_id: class_id
+      }));
+      await this.rateLimitManager.trackAndLimit(
+        "lab_section_leaders",
+        () => supabase.from("lab_section_leaders").insert(labSectionLeadersData).select(),
+        labSectionLeadersData.length
+      );
+    }
 
     // Define tag types
     const studentTagTypes = defineTagTypes("Student", config.sectionsAndTagsConfig!.numStudentTags);

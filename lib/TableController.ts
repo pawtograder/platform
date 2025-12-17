@@ -113,6 +113,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   notifications: [], // Only triggers email queue, no realtime broadcasts
   // Tables broadcast via class:$class_id:staff channel
   assignment_due_date_exceptions: ["staff"],
+  lab_section_leaders: ["staff"],
   lab_section_meetings: ["staff", "students"],
   lab_sections: ["staff", "students"],
   student_deadline_extensions: ["staff"],
@@ -152,6 +153,10 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   help_request_messages: ["help_request"],
   help_request_students: ["help_request"],
   student_help_activity: ["help_request"],
+
+  // Discord integration tables (staff-only, broadcast on staff channel)
+  discord_channels: ["staff"],
+  discord_messages: ["staff"],
 
   // Live polls related tables
   live_polls: ["staff", "students"], // Poll status broadcasts to all

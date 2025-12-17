@@ -1165,6 +1165,115 @@ export type Database = {
           }
         ];
       };
+      calendar_events: {
+        Row: {
+          calendar_type: string;
+          change_announced_at: string | null;
+          class_id: number;
+          created_at: string;
+          description: string | null;
+          end_announced_at: string | null;
+          end_time: string;
+          id: number;
+          location: string | null;
+          organizer_name: string | null;
+          queue_name: string | null;
+          raw_ics_data: Json | null;
+          start_announced_at: string | null;
+          start_time: string;
+          title: string;
+          uid: string;
+          updated_at: string;
+        };
+        Insert: {
+          calendar_type: string;
+          change_announced_at?: string | null;
+          class_id: number;
+          created_at?: string;
+          description?: string | null;
+          end_announced_at?: string | null;
+          end_time: string;
+          id?: number;
+          location?: string | null;
+          organizer_name?: string | null;
+          queue_name?: string | null;
+          raw_ics_data?: Json | null;
+          start_announced_at?: string | null;
+          start_time: string;
+          title: string;
+          uid: string;
+          updated_at?: string;
+        };
+        Update: {
+          calendar_type?: string;
+          change_announced_at?: string | null;
+          class_id?: number;
+          created_at?: string;
+          description?: string | null;
+          end_announced_at?: string | null;
+          end_time?: string;
+          id?: number;
+          location?: string | null;
+          organizer_name?: string | null;
+          queue_name?: string | null;
+          raw_ics_data?: Json | null;
+          start_announced_at?: string | null;
+          start_time?: string;
+          title?: string;
+          uid?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendar_events_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      calendar_sync_state: {
+        Row: {
+          calendar_type: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          last_etag: string | null;
+          last_hash: string | null;
+          last_sync_at: string | null;
+          sync_error: string | null;
+        };
+        Insert: {
+          calendar_type: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          last_etag?: string | null;
+          last_hash?: string | null;
+          last_sync_at?: string | null;
+          sync_error?: string | null;
+        };
+        Update: {
+          calendar_type?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          last_etag?: string | null;
+          last_hash?: string | null;
+          last_sync_at?: string | null;
+          sync_error?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendar_sync_state_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       class_metrics_totals: {
         Row: {
           active_graders_total: number | null;
@@ -1316,13 +1425,51 @@ export type Database = {
           }
         ];
       };
+      class_staff_settings: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          setting_key: string;
+          setting_value: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          setting_key: string;
+          setting_value?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          setting_key?: string;
+          setting_value?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_staff_settings_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       classes: {
         Row: {
           archived: boolean | null;
           course_title: string | null;
           created_at: string;
           description: string | null;
+          discord_channel_group_id: string | null;
+          discord_server_id: string | null;
           end_date: string | null;
+          events_ics_url: string | null;
           features: Json | null;
           github_org: string | null;
           gradebook_id: number | null;
@@ -1330,6 +1477,7 @@ export type Database = {
           is_demo: boolean;
           late_tokens_per_student: number;
           name: string | null;
+          office_hours_ics_url: string | null;
           slug: string | null;
           start_date: string | null;
           term: number | null;
@@ -1340,7 +1488,10 @@ export type Database = {
           course_title?: string | null;
           created_at?: string;
           description?: string | null;
+          discord_channel_group_id?: string | null;
+          discord_server_id?: string | null;
           end_date?: string | null;
+          events_ics_url?: string | null;
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
@@ -1348,6 +1499,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
           term?: number | null;
@@ -1358,7 +1510,10 @@ export type Database = {
           course_title?: string | null;
           created_at?: string;
           description?: string | null;
+          discord_channel_group_id?: string | null;
+          discord_server_id?: string | null;
           end_date?: string | null;
+          events_ics_url?: string | null;
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
@@ -1366,6 +1521,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
           term?: number | null;
@@ -1377,6 +1533,215 @@ export type Database = {
             columns: ["gradebook_id"];
             isOneToOne: false;
             referencedRelation: "gradebooks";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Json;
+          error_message: string | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Json | null;
+          log_id: number | null;
+          method: string;
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method: string;
+          original_msg_id?: number | null;
+          retry_count: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method?: string;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_async_worker_dlq_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_channels: {
+        Row: {
+          channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          class_id: number;
+          created_at: string;
+          discord_channel_id: string;
+          id: number;
+          resource_id: number | null;
+        };
+        Insert: {
+          channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          class_id: number;
+          created_at?: string;
+          discord_channel_id: string;
+          id?: number;
+          resource_id?: number | null;
+        };
+        Update: {
+          channel_type?: Database["public"]["Enums"]["discord_channel_type"];
+          class_id?: number;
+          created_at?: string;
+          discord_channel_id?: string;
+          id?: number;
+          resource_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_channels_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_invites: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          expires_at: string;
+          guild_id: string;
+          id: number;
+          invite_code: string;
+          invite_url: string;
+          used: boolean;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          expires_at: string;
+          guild_id: string;
+          id?: number;
+          invite_code: string;
+          invite_url: string;
+          used?: boolean;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          expires_at?: string;
+          guild_id?: string;
+          id?: number;
+          invite_code?: string;
+          invite_url?: string;
+          used?: boolean;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_invites_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discord_invites_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      discord_messages: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          discord_channel_id: string;
+          discord_message_id: string;
+          id: number;
+          resource_id: number;
+          resource_type: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          discord_channel_id: string;
+          discord_message_id: string;
+          id?: number;
+          resource_id: number;
+          resource_type: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          discord_channel_id?: string;
+          discord_message_id?: string;
+          id?: number;
+          resource_id?: number;
+          resource_type?: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_roles: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          discord_role_id: string;
+          id: number;
+          role_type: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          discord_role_id: string;
+          id?: number;
+          role_type: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          discord_role_id?: string;
+          id?: number;
+          role_type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_roles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           }
         ];
@@ -3953,6 +4318,59 @@ export type Database = {
           }
         ];
       };
+      lab_section_leaders: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          lab_section_id: number;
+          profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          lab_section_id: number;
+          profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          lab_section_id?: number;
+          profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lab_section_leaders_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lab_section_leaders_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lab_section_leaders_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lab_section_leaders_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       lab_section_meetings: {
         Row: {
           cancelled: boolean;
@@ -4010,7 +4428,6 @@ export type Database = {
           description: string | null;
           end_time: string | null;
           id: number;
-          lab_leader_id: string | null;
           meeting_location: string | null;
           meeting_times: string | null;
           name: string;
@@ -4026,7 +4443,6 @@ export type Database = {
           description?: string | null;
           end_time?: string | null;
           id?: number;
-          lab_leader_id?: string | null;
           meeting_location?: string | null;
           meeting_times?: string | null;
           name: string;
@@ -4042,7 +4458,6 @@ export type Database = {
           description?: string | null;
           end_time?: string | null;
           id?: number;
-          lab_leader_id?: string | null;
           meeting_location?: string | null;
           meeting_times?: string | null;
           name?: string;
@@ -4057,20 +4472,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "lab_sections_lab_leader_id_fkey";
-            columns: ["lab_leader_id"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "lab_sections_lab_leader_id_fkey";
-            columns: ["lab_leader_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -4282,6 +4683,7 @@ export type Database = {
           created_at: string;
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id: number;
+          regrade_request_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           updated_at: string;
           user_id: string;
         };
@@ -4290,6 +4692,7 @@ export type Database = {
           created_at?: string;
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
+          regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           updated_at?: string;
           user_id: string;
         };
@@ -4298,6 +4701,7 @@ export type Database = {
           created_at?: string;
           help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
+          regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           updated_at?: string;
           user_id?: string;
         };
@@ -7697,6 +8101,8 @@ export type Database = {
         Row: {
           avatar_url: string | null;
           created_at: string;
+          discord_id: string | null;
+          discord_username: string | null;
           email: string | null;
           github_user_id: string | null;
           github_username: string | null;
@@ -7708,6 +8114,8 @@ export type Database = {
         Insert: {
           avatar_url?: string | null;
           created_at?: string;
+          discord_id?: string | null;
+          discord_username?: string | null;
           email?: string | null;
           github_user_id?: string | null;
           github_username?: string | null;
@@ -7719,6 +8127,8 @@ export type Database = {
         Update: {
           avatar_url?: string | null;
           created_at?: string;
+          discord_id?: string | null;
+          discord_username?: string | null;
           email?: string | null;
           github_user_id?: string | null;
           github_username?: string | null;
@@ -9261,8 +9671,8 @@ export type Database = {
         Returns: boolean;
       };
       authorizeforpoll:
-        | { Args: { class__id: number; poll__id: number }; Returns: boolean }
-        | { Args: { poll__id: number }; Returns: boolean };
+        | { Args: { poll__id: number }; Returns: boolean }
+        | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
       bulk_assign_reviews: {
         Args: {
@@ -9337,6 +9747,10 @@ export type Database = {
           p_user_id: string;
         };
         Returns: boolean;
+      };
+      check_discord_role_sync_after_link: {
+        Args: { p_user_id: string };
+        Returns: undefined;
       };
       check_github_error_threshold: {
         Args: { p_org: string; p_threshold: number; p_window_minutes: number };
@@ -9518,6 +9932,51 @@ export type Database = {
       enqueue_autograder_reruns: {
         Args: { p_class_id: number; p_submission_ids: number[] };
         Returns: Json;
+      };
+      enqueue_discord_batch_role_sync: { Args: never; Returns: undefined };
+      enqueue_discord_channel_creation: {
+        Args: {
+          p_channel_name?: string;
+          p_channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          p_class_id: number;
+          p_guild_id?: string;
+          p_resource_id?: number;
+        };
+        Returns: undefined;
+      };
+      enqueue_discord_help_request_message: {
+        Args: { p_action?: string; p_help_request_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_invites_for_existing_users: {
+        Args: { p_class_id: number; p_guild_id: string };
+        Returns: undefined;
+      };
+      enqueue_discord_queue_assignment_message: {
+        Args: { p_action?: string; p_queue_assignment_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_register_commands: { Args: never; Returns: undefined };
+      enqueue_discord_regrade_request_message: {
+        Args: { p_action?: string; p_regrade_request_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_role_creation: {
+        Args: { p_class_id: number; p_guild_id?: string; p_role_type: string };
+        Returns: undefined;
+      };
+      enqueue_discord_role_sync: {
+        Args: {
+          p_action?: string;
+          p_class_id: number;
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_user_id: string;
+        };
+        Returns: undefined;
+      };
+      enqueue_discord_roles_creation: {
+        Args: { p_class_id: number; p_guild_id?: string };
+        Returns: undefined;
       };
       enqueue_github_archive_repo: {
         Args: {
@@ -9886,6 +10345,21 @@ export type Database = {
         Args: { p_class_id: number; p_updates: Json };
         Returns: boolean;
       };
+      insert_discord_message: {
+        Args: {
+          p_class_id: number;
+          p_discord_channel_id: string;
+          p_discord_message_id: string;
+          p_resource_id: number;
+          p_resource_type: string;
+        };
+        Returns: undefined;
+      };
+      invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
+      invoke_discord_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_email_batch_processor_background_task: {
         Args: never;
         Returns: undefined;
@@ -9907,8 +10381,8 @@ export type Database = {
         Returns: boolean;
       };
       is_instructor_for_class:
-        | { Args: { _person_id: string; classid: number }; Returns: boolean }
-        | { Args: { _class_id: number; _person_id: string }; Returns: boolean };
+        | { Args: { _class_id: number; _person_id: string }; Returns: boolean }
+        | { Args: { _person_id: string; classid: number }; Returns: boolean };
       is_instructor_for_student: {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
@@ -9935,6 +10409,18 @@ export type Database = {
         };
         Returns: undefined;
       };
+      mark_discord_invite_used: {
+        Args: { p_guild_id: string; p_user_id: string };
+        Returns: undefined;
+      };
+      only_calendar_or_discord_ids_changed: {
+        Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
+        Returns: boolean;
+      };
+      only_discord_ids_changed: {
+        Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
+        Returns: boolean;
+      };
       open_github_circuit: {
         Args: {
           p_event: string;
@@ -9945,6 +10431,7 @@ export type Database = {
         };
         Returns: number;
       };
+      process_calendar_announcements: { Args: never; Returns: Json };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
@@ -10008,6 +10495,10 @@ export type Database = {
         Args: { _submission_id: number };
         Returns: boolean;
       };
+      sync_existing_users_after_roles_created: {
+        Args: { p_class_id: number };
+        Returns: undefined;
+      };
       sync_lab_section_meetings: {
         Args: { lab_section_id_param: number };
         Returns: undefined;
@@ -10032,6 +10523,10 @@ export type Database = {
           inserts_per_second: number;
           operation: string;
         }[];
+      };
+      trigger_discord_role_sync_for_user: {
+        Args: { p_class_id?: number };
+        Returns: Json;
       };
       trigger_sis_sync: { Args: { p_class_id?: number }; Returns: Json };
       unregister_realtime_subscription: {
@@ -10091,16 +10586,27 @@ export type Database = {
         };
         Returns: boolean;
       };
-      update_regrade_request_status: {
-        Args: {
-          closed_points?: number;
-          new_status: Database["public"]["Enums"]["regrade_status"];
-          profile_id: string;
-          regrade_request_id: number;
-          resolved_points?: number;
-        };
-        Returns: boolean;
-      };
+      update_regrade_request_status:
+        | {
+            Args: {
+              closed_points?: number;
+              new_status: Database["public"]["Enums"]["regrade_status"];
+              profile_id: string;
+              regrade_request_id: number;
+              resolved_points?: number;
+            };
+            Returns: boolean;
+          }
+        | {
+            Args: {
+              closed_points?: number;
+              new_status: Database["public"]["Enums"]["regrade_status"];
+              profile_id: string;
+              regrade_request_id: number;
+              resolved_points?: number;
+            };
+            Returns: boolean;
+          };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;
@@ -10122,6 +10628,15 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+      discord_channel_type:
+        | "general"
+        | "assignment"
+        | "lab"
+        | "office_hours"
+        | "regrades"
+        | "scheduling"
+        | "operations";
+      discord_resource_type: "help_request" | "regrade_request";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -10285,6 +10800,8 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+      discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades", "scheduling", "operations"],
+      discord_resource_type: ["help_request", "regrade_request"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",

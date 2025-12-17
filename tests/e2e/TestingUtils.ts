@@ -891,6 +891,7 @@ let labSectionIdx = 1;
 export async function createLabSectionWithStudents({
   class_id,
   lab_leader,
+  lab_leaders,
   day_of_week,
   students,
   start_time,
@@ -898,7 +899,8 @@ export async function createLabSectionWithStudents({
   name
 }: {
   class_id?: number;
-  lab_leader: TestingUser;
+  lab_leader?: TestingUser; // Deprecated, use lab_leaders instead
+  lab_leaders?: TestingUser[];
   day_of_week: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
   students: TestingUser[];
   start_time?: string;
@@ -907,10 +909,16 @@ export async function createLabSectionWithStudents({
 }) {
   const lab_section_name = name ?? `Lab #${labSectionIdx} (${day_of_week})`;
   labSectionIdx++;
+
+  // Support both old lab_leader and new lab_leaders for backwards compatibility
+  const leaders = lab_leaders || (lab_leader ? [lab_leader] : []);
+  if (leaders.length === 0) {
+    throw new Error("At least one lab leader is required");
+  }
+
   const { data: labSectionData, error: labSectionError } = await supabase
     .from("lab_sections")
     .insert({
-      lab_leader_id: lab_leader.private_profile_id,
       name: lab_section_name,
       day_of_week: day_of_week,
       class_id: class_id || 1,
@@ -923,6 +931,21 @@ export async function createLabSectionWithStudents({
     throw new Error(`Failed to create lab section: ${labSectionError.message}`);
   }
   const lab_section_id = labSectionData.id;
+
+  // Insert lab section leaders into junction table
+  if (leaders.length > 0) {
+    const { error: leadersError } = await supabase.from("lab_section_leaders").insert(
+      leaders.map((leader) => ({
+        lab_section_id: lab_section_id,
+        profile_id: leader.private_profile_id,
+        class_id: class_id || 1
+      }))
+    );
+    if (leadersError) {
+      throw new Error(`Failed to create lab section leaders: ${leadersError.message}`);
+    }
+  }
+
   for (const student of students) {
     await supabase
       .from("user_roles")
@@ -942,6 +965,7 @@ export async function insertOfficeHoursQueue({ class_id, name }: { class_id: num
       name: name,
       description: "This is a test office hours queue for E2E testing",
       depth: 1,
+      available: true,
       queue_type: "video"
     })
     .select("id")
