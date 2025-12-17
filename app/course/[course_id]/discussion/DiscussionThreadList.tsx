@@ -237,6 +237,17 @@ export default function DiscussionThreadList() {
     }
   };
 
+  /**
+   * Type definition for filter collection items.
+   * Includes an optional `disabled` flag used to mark divider/separator items
+   * as non-selectable.
+   */
+  type FilterItem = {
+    value: string;
+    label: string;
+    disabled?: boolean;
+  };
+
   // Create collections for Select components
   // Group topics into general topics and assignment-linked topics for better organization
   const filterCollection = useMemo(() => {
@@ -244,7 +255,7 @@ export default function DiscussionThreadList() {
     const generalTopics = topics?.filter((t) => !t.assignment_id).sort((a, b) => a.ordinal - b.ordinal) || [];
     const assignmentTopics = topics?.filter((t) => t.assignment_id).sort((a, b) => a.ordinal - b.ordinal) || [];
 
-    const items: { value: string; label: string }[] = [
+    const items: FilterItem[] = [
       { value: "all", label: "All Threads" },
       { value: "unanswered", label: "Unanswered Questions" },
       { value: "answered", label: "Answered Questions" },
@@ -258,7 +269,9 @@ export default function DiscussionThreadList() {
 
     // Add assignment-linked topics with assignment name in label
     if (assignmentTopics.length > 0) {
-      items.push({ value: "divider-assignment", label: "── Assignment Topics ──" });
+      // Divider item is marked as disabled to prevent selection.
+      // Uses a special "divider-" prefix for identification in rendering logic.
+      items.push({ value: "divider-assignment", label: "Assignment Topics", disabled: true });
       assignmentTopics.forEach((topic) => {
         const assignmentTitle = topic.assignment_id ? assignmentMap.get(topic.assignment_id) : undefined;
         const label = assignmentTitle ? `${topic.topic} (${assignmentTitle})` : topic.topic;
@@ -313,7 +326,14 @@ export default function DiscussionThreadList() {
                     collection={filterCollection}
                     size="sm"
                     value={filterOption ? [filterOption] : []}
-                    onValueChange={(details) => setFilterOption(details.value[0] || "all")}
+                    onValueChange={(details) => {
+                      const newValue = details.value[0];
+                      // Safeguard: skip divider values to prevent invalid filter state
+                      if (newValue && newValue.startsWith("divider-")) {
+                        return;
+                      }
+                      setFilterOption(newValue || "all");
+                    }}
                     width="100%"
                   >
                     <Select.Label display="none">Filter discussion threads</Select.Label>
@@ -328,12 +348,37 @@ export default function DiscussionThreadList() {
                     <Portal>
                       <Select.Positioner>
                         <Select.Content>
-                          {filterCollection.items.map((item) => (
-                            <Select.Item key={item.value} item={item}>
-                              {item.label}
-                              <Select.ItemIndicator />
-                            </Select.Item>
-                          ))}
+                          {filterCollection.items.map((item) => {
+                            // Render divider items as visual separators (disabled, non-selectable)
+                            const isDivider = item.value.startsWith("divider-");
+                            if (isDivider) {
+                              return (
+                                <Box
+                                  key={item.value}
+                                  role="separator"
+                                  aria-disabled="true"
+                                  py="1.5"
+                                  px="2"
+                                  cursor="default"
+                                  userSelect="none"
+                                >
+                                  <HStack gap="2">
+                                    <Separator flex="1" />
+                                    <Text fontSize="xs" fontWeight="medium" color="fg.muted">
+                                      {item.label}
+                                    </Text>
+                                    <Separator flex="1" />
+                                  </HStack>
+                                </Box>
+                              );
+                            }
+                            return (
+                              <Select.Item key={item.value} item={item}>
+                                {item.label}
+                                <Select.ItemIndicator />
+                              </Select.Item>
+                            );
+                          })}
                         </Select.Content>
                       </Select.Positioner>
                     </Portal>
