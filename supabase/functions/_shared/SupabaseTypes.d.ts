@@ -2075,36 +2075,77 @@ export type Database = {
       };
       discussion_topics: {
         Row: {
+          assignment_id: number | null;
           class_id: number;
           color: string;
           created_at: string;
           description: string;
           id: number;
+          instructor_created: boolean;
           ordinal: number;
           topic: string;
           updated_at: string;
         };
         Insert: {
+          assignment_id?: number | null;
           class_id: number;
           color: string;
           created_at?: string;
           description: string;
           id?: number;
+          instructor_created?: boolean;
           ordinal?: number;
           topic: string;
           updated_at?: string;
         };
         Update: {
+          assignment_id?: number | null;
           class_id?: number;
           color?: string;
           created_at?: string;
           description?: string;
           id?: number;
+          instructor_created?: boolean;
           ordinal?: number;
           topic?: string;
           updated_at?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "discussion_topics_class_id_fkey";
             columns: ["class_id"];
@@ -10586,27 +10627,16 @@ export type Database = {
         };
         Returns: boolean;
       };
-      update_regrade_request_status:
-        | {
-            Args: {
-              closed_points?: number;
-              new_status: Database["public"]["Enums"]["regrade_status"];
-              profile_id: string;
-              regrade_request_id: number;
-              resolved_points?: number;
-            };
-            Returns: boolean;
-          }
-        | {
-            Args: {
-              closed_points?: number;
-              new_status: Database["public"]["Enums"]["regrade_status"];
-              profile_id: string;
-              regrade_request_id: number;
-              resolved_points?: number;
-            };
-            Returns: boolean;
-          };
+      update_regrade_request_status: {
+        Args: {
+          closed_points?: number;
+          new_status: Database["public"]["Enums"]["regrade_status"];
+          profile_id: string;
+          regrade_request_id: number;
+          resolved_points?: number;
+        };
+        Returns: boolean;
+      };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;
