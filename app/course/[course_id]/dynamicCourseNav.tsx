@@ -30,6 +30,7 @@ import {
   FiClock,
   FiCompass,
   FiFileText,
+  FiHash,
   FiMenu,
   FiMessageSquare,
   FiSettings,
@@ -137,6 +138,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/lab-sections`
       },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
+      {
+        name: "Discussion Topics",
+        icon: FiHash,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/discussion-topics`
+      },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
         name: "Due Date Extensions",

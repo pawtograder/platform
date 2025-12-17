@@ -7,6 +7,7 @@ import { MenuContent, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  useAssignments,
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
   useDiscussionThreadTeasers,
@@ -147,10 +148,20 @@ export default function DiscussionThreadList() {
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const list = useDiscussionThreadTeasers();
   const topics = useDiscussionTopics();
+  const assignments = useAssignments();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOption, setFilterOption] = useState("all");
   const [sortOption, setSortOption] = useState("newest");
+
+  /**
+   * Create a map of assignment IDs to assignment titles for display in filter.
+   */
+  const assignmentMap = useMemo(() => {
+    const map = new Map<number, string>();
+    assignments.forEach((a) => map.set(a.id, a.title));
+    return map;
+  }, [assignments]);
 
   const processedList = useMemo(() => {
     let filteredList = list;
@@ -227,16 +238,36 @@ export default function DiscussionThreadList() {
   };
 
   // Create collections for Select components
+  // Group topics into general topics and assignment-linked topics for better organization
   const filterCollection = useMemo(() => {
-    const items = [
+    // Separate topics into general (no assignment link) and assignment-linked
+    const generalTopics = topics?.filter((t) => !t.assignment_id).sort((a, b) => a.ordinal - b.ordinal) || [];
+    const assignmentTopics = topics?.filter((t) => t.assignment_id).sort((a, b) => a.ordinal - b.ordinal) || [];
+
+    const items: { value: string; label: string }[] = [
       { value: "all", label: "All Threads" },
       { value: "unanswered", label: "Unanswered Questions" },
       { value: "answered", label: "Answered Questions" },
-      { value: "my_posts", label: "My Posts" },
-      ...(topics?.map((topic) => ({ value: `topic-${topic.id}`, label: topic.topic })) || [])
+      { value: "my_posts", label: "My Posts" }
     ];
+
+    // Add general topics
+    generalTopics.forEach((topic) => {
+      items.push({ value: `topic-${topic.id}`, label: topic.topic });
+    });
+
+    // Add assignment-linked topics with assignment name in label
+    if (assignmentTopics.length > 0) {
+      items.push({ value: "divider-assignment", label: "── Assignment Topics ──" });
+      assignmentTopics.forEach((topic) => {
+        const assignmentTitle = topic.assignment_id ? assignmentMap.get(topic.assignment_id) : undefined;
+        const label = assignmentTitle ? `${topic.topic} (${assignmentTitle})` : topic.topic;
+        items.push({ value: `topic-${topic.id}`, label });
+      });
+    }
+
     return createListCollection({ items });
-  }, [topics]);
+  }, [topics, assignmentMap]);
 
   const sortCollection = useMemo(() => {
     const items = [

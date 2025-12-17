@@ -192,3 +192,150 @@ test.describe("Discussion Thread Page", () => {
     await argosScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });
+
+test.describe("Custom Discussion Topics", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("An instructor can view the discussion topics management page", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    // Navigate to Course Settings > Discussion Topics
+    await page.getByRole("button", { name: "Course Settings" }).click();
+    await page.getByRole("menuitem", { name: "Discussion Topics" }).click();
+    await page.waitForURL("**/manage/discussion-topics");
+
+    // Verify the page loaded correctly
+    await expect(page.getByRole("heading", { name: "Discussion Topics" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create Topic" })).toBeVisible();
+
+    // Verify default topics are shown with lock icon (non-editable)
+    await expect(page.getByText("Default", { exact: false })).toBeVisible();
+    await expect(page.getByText("Default topics cannot be modified")).toBeVisible();
+
+    await argosScreenshot(page, "Discussion Topics Management Page");
+  });
+
+  test("An instructor can create a custom discussion topic", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/discussion-topics`);
+    await page.waitForURL("**/manage/discussion-topics");
+
+    // Click Create Topic button
+    await page.getByRole("button", { name: "Create Topic" }).click();
+
+    // Verify the modal opened
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByText("Create New Discussion Topic")).toBeVisible();
+
+    // Fill in the form
+    await page.getByRole("textbox", { name: "Topic Name" }).fill("Homework 1 Questions");
+    await page.locator("textarea").fill("Ask questions about Homework 1 here");
+
+    // Select a color (green)
+    await page.locator('select[name="color"]').selectOption("green");
+
+    // Submit the form
+    await page.getByRole("button", { name: "Create Topic" }).click();
+
+    // Wait for the modal to close and verify the topic was created
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByText("Homework 1 Questions")).toBeVisible();
+    await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
+
+    await argosScreenshot(page, "After Creating Custom Topic");
+  });
+
+  test("An instructor can edit a custom discussion topic", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/discussion-topics`);
+    await page.waitForURL("**/manage/discussion-topics");
+
+    // Find and click the Edit button for the custom topic
+    const customTopicRow = page.locator("div").filter({ hasText: "Homework 1 Questions" }).first();
+    await customTopicRow.getByRole("button", { name: "Edit" }).click();
+
+    // Verify the edit modal opened
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByText("Edit Discussion Topic")).toBeVisible();
+
+    // Change the topic name
+    await page.getByRole("textbox", { name: "Topic Name" }).clear();
+    await page.getByRole("textbox", { name: "Topic Name" }).fill("HW1 Discussion");
+
+    // Submit the form
+    await page.getByRole("button", { name: "Update Topic" }).click();
+
+    // Wait for the modal to close and verify the topic was updated
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByText("HW1 Discussion")).toBeVisible();
+
+    await argosScreenshot(page, "After Editing Custom Topic");
+  });
+
+  test("Custom topic appears in new thread form", async ({ page }) => {
+    await loginAsUser(page, student1!, course);
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
+    await page.getByRole("link").filter({ hasText: "New Thread" }).click();
+
+    // Verify the custom topic appears in the topic selector
+    await expect(page.getByText("HW1 Discussion")).toBeVisible();
+    await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
+
+    await argosScreenshot(page, "New Thread Form With Custom Topic");
+  });
+
+  test("Custom topic appears in thread list filter", async ({ page }) => {
+    await loginAsUser(page, student1!, course);
+    const navRegion = await page.locator("#course-nav");
+    await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
+
+    // Open the filter menu
+    await page
+      .getByRole("button")
+      .filter({ has: page.locator("[data-icon='filter']") })
+      .click();
+
+    // Open the filter dropdown
+    await page.locator('[aria-label="Filter discussion threads"]').click();
+
+    // Verify the custom topic appears in the filter options
+    await expect(page.getByRole("option", { name: "HW1 Discussion" })).toBeVisible();
+  });
+
+  test("An instructor can delete a custom discussion topic", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/discussion-topics`);
+    await page.waitForURL("**/manage/discussion-topics");
+
+    // Find and click the Delete button for the custom topic
+    const customTopicRow = page.locator("div").filter({ hasText: "HW1 Discussion" }).first();
+    await customTopicRow.getByRole("button", { name: "Delete" }).click();
+
+    // Confirm the deletion in the popconfirm dialog
+    await expect(page.getByText("Delete Topic")).toBeVisible();
+    await page.getByRole("button", { name: "Confirm" }).click();
+
+    // Verify the topic was deleted
+    await expect(page.getByText("HW1 Discussion")).not.toBeVisible();
+
+    await argosScreenshot(page, "After Deleting Custom Topic");
+  });
+
+  test("Default topics cannot be edited or deleted", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/discussion-topics`);
+    await page.waitForURL("**/manage/discussion-topics");
+
+    // Find a default topic row (e.g., "Assignments")
+    const defaultTopicRow = page.locator("div").filter({ hasText: "Assignments" }).first();
+
+    // Verify Edit and Delete buttons are not present for default topics
+    await expect(defaultTopicRow.getByRole("button", { name: "Edit" })).not.toBeVisible();
+    await expect(defaultTopicRow.getByRole("button", { name: "Delete" })).not.toBeVisible();
+
+    // Verify the "cannot be modified" message is shown
+    await expect(page.getByText("Default topics cannot be modified")).toBeVisible();
+  });
+});
