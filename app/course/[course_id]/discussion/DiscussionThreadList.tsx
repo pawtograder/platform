@@ -296,7 +296,7 @@ export default function DiscussionThreadList() {
           </Button>
           <MenuRoot open={isFilterOpen} onOpenChange={(e) => setIsFilterOpen(e.open)}>
             <MenuTrigger asChild>
-              <Button size="sm" variant="outline" colorPalette="gray">
+              <Button size="sm" variant="outline" colorPalette="gray" data-testid="filter-threads-button">
                 <Icon as={FaFilter} />
               </Button>
             </MenuTrigger>
@@ -318,7 +318,7 @@ export default function DiscussionThreadList() {
                   >
                     <Select.Label display="none">Filter discussion threads</Select.Label>
                     <Select.Control>
-                      <Select.Trigger>
+                      <Select.Trigger data-testid="filter-dropdown">
                         <Select.ValueText placeholder="Filter by..." />
                       </Select.Trigger>
                       <Select.IndicatorGroup>
@@ -337,7 +337,7 @@ export default function DiscussionThreadList() {
                         </Select.Content>
                       </Select.Positioner>
                     </Portal>
-                    <Select.HiddenSelect aria-label="Filter discussion threads" />
+                    <Select.HiddenSelect />
                   </Select.Root>
 
                   <Select.Root
