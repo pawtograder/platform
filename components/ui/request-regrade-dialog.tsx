@@ -8,14 +8,17 @@ import {
   DialogTitle,
   DialogTrigger
 } from "@/components/ui/dialog";
-import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import { useAssignmentData, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController } from "@/hooks/useSubmission";
 import { SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Text, VStack } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toaster } from "./toaster";
+import { Alert } from "@/components/ui/alert";
+import { format, formatDistanceToNow } from "date-fns";
+
 export default function RequestRegradeDialog({
   comment
 }: {
@@ -25,6 +28,7 @@ export default function RequestRegradeDialog({
   const submission = useSubmission();
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
+  const assignment = useAssignmentData();
 
   const isGroupSubmission = submission.assignment_group_id !== null;
   const rubricCheck = useRubricCheck(comment?.rubric_check_id);
@@ -32,6 +36,22 @@ export default function RequestRegradeDialog({
   const { mutateAsync: createRegradeRequest } = useCreate({
     resource: "rpc/create_regrade_request"
   });
+
+  // Calculate regrade deadline status
+  const regradeDeadlineInfo = useMemo(() => {
+    const regradeDeadline = assignment.regrade_deadline;
+
+    // If no deadline is set, regrades are always allowed
+    if (!regradeDeadline) {
+      return { hasDeadline: false, isPastDeadline: false, deadline: null };
+    }
+
+    const deadline = new Date(regradeDeadline);
+    const now = new Date();
+    const isPastDeadline = now > deadline;
+
+    return { hasDeadline: true, isPastDeadline, deadline };
+  }, [assignment.regrade_deadline]);
   const handleConfirmCreateRegradeRequest = useCallback(async () => {
     try {
       if ("submission_file_id" in comment) {
@@ -78,6 +98,21 @@ export default function RequestRegradeDialog({
   }, [comment, private_profile_id, createRegradeRequest, submissionController]);
 
   const pointsText = rubricCriteria?.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
+
+  // If deadline has passed, show a disabled button with explanation
+  if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {
+    return (
+      <Box pl={2} pb={2} w="100%">
+        <Button size="sm" colorPalette="gray" variant="outline" w="100%" disabled title="Regrade deadline has passed">
+          Regrade deadline passed
+        </Button>
+        <Text fontSize="xs" color="fg.muted" mt={1}>
+          The deadline was {format(regradeDeadlineInfo.deadline, "MMM d, yyyy 'at' h:mm a")}
+        </Text>
+      </Box>
+    );
+  }
+
   return (
     <Box pl={2} pb={2} w="100%">
       <DialogRoot open={isRegradeDialogOpen} onOpenChange={(e) => setIsRegradeDialogOpen(e.open)}>
@@ -96,6 +131,14 @@ export default function RequestRegradeDialog({
                 You are about to request a regrade for this comment that affected your score by{" "}
                 <strong>{pointsText} points</strong>.
               </Text>
+
+              {regradeDeadlineInfo.hasDeadline && regradeDeadlineInfo.deadline && (
+                <Alert status="warning" title="Regrade Request Deadline">
+                  Regrade requests must be submitted by{" "}
+                  <strong>{format(regradeDeadlineInfo.deadline, "MMM d, yyyy 'at' h:mm a")}</strong> (
+                  {formatDistanceToNow(regradeDeadlineInfo.deadline, { addSuffix: true })}).
+                </Alert>
+              )}
 
               {isGroupSubmission && (
                 <Box bg="bg.info" p={3} borderRadius="md" w="100%">

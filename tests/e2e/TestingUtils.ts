@@ -151,6 +151,38 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
   return data.session.access_token;
 }
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// Helper function to create a Supabase client authenticated as a specific user
+export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
+  // Create a separate Supabase client for the user (using anon key)
+  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+
+  // Generate magic link using admin client
+  const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
+    email: testingUser.email,
+    type: "magiclink"
+  });
+
+  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
+  }
+
+  // Verify the OTP to get a session
+  const { data, error } = await userSupabase.auth.verifyOtp({
+    token_hash: magicLinkData.properties.hashed_token,
+    type: "magiclink"
+  });
+
+  if (error || !data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  }
+
+  await userSupabase.auth.setSession(data.session);
+
+  return userSupabase;
+}
+
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
@@ -953,7 +985,9 @@ export async function insertAssignment({
   allow_not_graded_submissions,
   class_id,
   rateLimitManager,
-  name
+  name,
+  regrade_deadline,
+  release_date
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -961,6 +995,8 @@ export async function insertAssignment({
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
+  regrade_deadline?: string | null;
+  release_date?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -994,12 +1030,13 @@ export async function insertAssignment({
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,
-      release_date: addDays(new Date(), -1).toUTCString(),
+      release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
       slug: `assignment-${currentAssignmentIdx}`,
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
-      self_review_setting_id: self_review_setting_id
+      self_review_setting_id: self_review_setting_id,
+      regrade_deadline: regrade_deadline
     })
     .select("id")
     .single();
