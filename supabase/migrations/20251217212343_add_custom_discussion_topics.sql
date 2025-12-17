@@ -12,7 +12,7 @@ alter table "public"."discussion_topics" validate constraint "discussion_topics_
   as permissive
   for insert
   to authenticated
-with check (public.authorizeforclassinstructor(class_id));
+with check (public.authorizeforclassinstructor(class_id) AND instructor_created = true);
 
 
 
@@ -21,7 +21,7 @@ with check (public.authorizeforclassinstructor(class_id));
   as permissive
   for delete
   to authenticated
-using (public.authorizeforclassinstructor(class_id));
+using (public.authorizeforclassinstructor(class_id) AND instructor_created = true);
 
 
 
@@ -31,7 +31,7 @@ using (public.authorizeforclassinstructor(class_id));
   for update
   to authenticated
 using (public.authorizeforclassinstructor(class_id))
-with check (public.authorizeforclassinstructor(class_id));
+with check (public.authorizeforclassinstructor(class_id) AND instructor_created = true);
 
 
 
