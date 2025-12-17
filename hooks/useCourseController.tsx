@@ -1315,6 +1315,7 @@ export class CourseController {
     this._labSections?.close();
     this._labSectionMeetings?.close();
     this._labSectionLeaders?.close();
+    this._labSectionLeaders = undefined;
     this._studentDeadlineExtensions?.close();
     this._assignmentDueDateExceptions?.close();
     this._assignments?.close();
