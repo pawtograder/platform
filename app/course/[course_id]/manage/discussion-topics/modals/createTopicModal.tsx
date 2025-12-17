@@ -85,12 +85,12 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
 
   /**
    * Calculate the next ordinal value based on existing topics.
-   * Custom topics start at ordinal 10+ to leave room for default topics.
+   * Simply returns MAX(ordinal) + 1, or 1 if no topics exist.
    */
   const nextOrdinal = useMemo(() => {
-    if (!existingTopics || existingTopics.length === 0) return 10;
+    if (!existingTopics || existingTopics.length === 0) return 1;
     const maxOrdinal = Math.max(...existingTopics.map((t) => t.ordinal));
-    return Math.max(10, maxOrdinal + 1);
+    return maxOrdinal + 1;
   }, [existingTopics]);
 
   /**
