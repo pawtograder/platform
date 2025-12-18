@@ -736,6 +736,7 @@ export type Database = {
           description: string | null;
           due_date: string;
           gradebook_column_id: number | null;
+          grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
@@ -769,6 +770,7 @@ export type Database = {
           description?: string | null;
           due_date: string;
           gradebook_column_id?: number | null;
+          grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -802,6 +804,7 @@ export type Database = {
           description?: string | null;
           due_date?: string;
           gradebook_column_id?: number | null;
+          grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;

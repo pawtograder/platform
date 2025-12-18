@@ -1,12 +1,13 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import {
+  useGraderPseudonymousMode,
   useRubricCheck,
   useRubricChecksByRubric,
   useRubricCriteria,
   useRubricCriteriaByRubric,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
   useSubmissionController,
@@ -648,6 +649,11 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const review = useActiveSubmissionReview();
   const rubric = useRubricWithParts(review?.rubric_id);
   const [selectOpen, setSelectOpen] = useState(true);
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -981,7 +987,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
               }
               allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
               defaultSingleLine={true}
-              sendMessage={async (message, profile_id) => {
+              sendMessage={async (message) => {
                 let points = selectedCheckOption.check?.points;
                 if (selectedSubOption !== null) {
                   points = selectedSubOption.points;
@@ -1005,7 +1011,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   class_id: file.class_id,
                   submission_file_id: file.id,
                   submission_id: submission.id,
-                  author: profile_id,
+                  // Use the determined author profile based on grader pseudonymous mode
+                  author: authorProfileId,
                   released: review ? review.released : true,
                   points: points ?? null,
                   submission_review_id: submissionReviewId ?? null,

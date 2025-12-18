@@ -41,6 +41,7 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
   useAssignmentController,
+  useGraderPseudonymousMode,
   useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
@@ -1194,6 +1195,11 @@ function SubmissionCommentForm({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const submissionController = useSubmissionController();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -1225,7 +1231,7 @@ function SubmissionCommentForm({
         }
         placeholder={"Comment"}
         sendButtonText="Add Check"
-        sendMessage={async (message, profile_id) => {
+        sendMessage={async (message) => {
           let comment = message || "";
           if (selectedOptionIndex !== undefined) {
             comment = selectedOption?.label + "\n" + comment;
@@ -1241,7 +1247,8 @@ function SubmissionCommentForm({
             rubric_check_id: check.id,
             class_id: submission.class_id,
             submission_id: submission.id,
-            author: profile_id,
+            // Use the determined author profile based on grader pseudonymous mode
+            author: authorProfileId,
             points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
             released: submissionReview?.released ?? true,
             submission_review_id: submissionReview?.id ?? null,
