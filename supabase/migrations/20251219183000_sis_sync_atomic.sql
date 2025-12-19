@@ -215,8 +215,7 @@ BEGIN
     SET
       meeting_location = COALESCE(u.meeting_location, cs.meeting_location),
       meeting_times = COALESCE(u.meeting_times, cs.meeting_times),
-      campus = COALESCE(u.campus, cs.campus),
-      updated_at = now()
+      campus = COALESCE(u.campus, cs.campus)
     FROM tmp_section_updates u
     WHERE u.section_type = 'class'
       AND cs.class_id = p_class_id
@@ -231,8 +230,7 @@ BEGIN
       campus = COALESCE(u.campus, ls.campus),
       day_of_week = COALESCE(u.day_of_week, ls.day_of_week),
       start_time = COALESCE(u.start_time, ls.start_time),
-      end_time = COALESCE(u.end_time, ls.end_time),
-      updated_at = now()
+      end_time = COALESCE(u.end_time, ls.end_time)
     FROM tmp_section_updates u
     WHERE u.section_type = 'lab'
       AND ls.class_id = p_class_id
