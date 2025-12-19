@@ -101,7 +101,7 @@ function WhatIfScoreCell({
   const max_score = column.max_score ?? 100;
   let scoreToShow: string | number | null | undefined = "N/A";
   if (score !== null && score !== undefined) {
-    scoreToShow = Math.round(score);
+    scoreToShow = score;
   } else if (submissionStatus.status === "no-submission") {
     scoreToShow = "Not Submitted";
   } else if (submissionStatus.status === "found") {
