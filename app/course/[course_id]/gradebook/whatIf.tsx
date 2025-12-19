@@ -39,6 +39,16 @@ import { FaExclamationTriangle, FaMagic } from "react-icons/fa";
 import { FaPencil } from "react-icons/fa6";
 import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
 
+/**
+ * Render a grade cell that displays the student's current score, status text, optional rendered expression, and an inline "What If" editor when enabled.
+ *
+ * @param column - The gradebook column to display; used to determine rendering, max score, and expression output.
+ * @param private_profile_id - The student's private profile ID used to fetch their grade and submission status.
+ * @param isEditing - When true, the cell shows a numeric input to edit the hypothetical ("What If") grade.
+ * @param setIsEditing - Callback to toggle the editing state for this cell.
+ *
+ * @returns The JSX element representing the score cell, including optional expression rendering, max score, a What If editor, and an instructor override indicator when applicable.
+ */
 function WhatIfScoreCell({
   column,
   private_profile_id,
@@ -101,7 +111,7 @@ function WhatIfScoreCell({
   const max_score = column.max_score ?? 100;
   let scoreToShow: string | number | null | undefined = "N/A";
   if (score !== null && score !== undefined) {
-    scoreToShow = Math.round(score);
+    scoreToShow = score;
   } else if (submissionStatus.status === "no-submission") {
     scoreToShow = "Not Submitted";
   } else if (submissionStatus.status === "found") {
