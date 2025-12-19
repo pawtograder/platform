@@ -1141,13 +1141,14 @@ export default function RegradeRequestWrapper({
                 {regradeRequest.closed_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
+                    {/* Note: Instructors always sign final decisions with their real identity */}
                     {isInstructor ? (
                       <EditablePoints
                         points={regradeRequest.closed_points}
                         isAdditive={rubricCriteria?.is_additive ?? true}
                         regradeRequestId={regradeRequest.id}
                         type="closed"
-                        privateProfileId={authorProfileId}
+                        privateProfileId={private_profile_id}
                       />
                     ) : (
                       regradeRequest.closed_points || 0
@@ -1234,12 +1235,13 @@ export default function RegradeRequestWrapper({
               )}
 
               {/* Close Button for escalated status + instructor */}
+              {/* Note: Instructors always sign final decisions with their real identity (private_profile_id) */}
               {regradeRequest.status === "escalated" && isInstructor && (
                 <CloseRequestPopover
                   initialPoints={regradeRequest.initial_points}
                   resolvedPoints={regradeRequest.resolved_points}
                   regradeRequestId={regradeRequest.id}
-                  privateProfileId={authorProfileId}
+                  privateProfileId={private_profile_id}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
                 />

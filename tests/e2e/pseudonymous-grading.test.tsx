@@ -84,6 +84,12 @@ const SELF_REVIEW_COMMENT = "This is my self-review comment for pseudonymous gra
 const GRADING_REVIEW_COMMENT_1 = "Great work on this implementation! - Pseudonymous grading test";
 const GRADING_REVIEW_COMMENT_2 = "Excellent code quality - Pseudonymous grading test";
 
+// Regrade request comments
+const REGRADE_REQUEST_COMMENT = "I believe my work deserves more points because of the detailed implementation.";
+const GRADER_REGRADE_RESPONSE = "I reviewed your submission again. The points are fair based on the rubric criteria.";
+const STUDENT_ESCALATION_COMMENT = "I still disagree. Please have an instructor review this.";
+const INSTRUCTOR_FINAL_DECISION = "After careful review, I agree the original grading was appropriate.";
+
 test.describe("Pseudonymous grading - graders appear as pseudonyms to students", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -254,5 +260,144 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     });
     await page.waitForTimeout(100);
     await argosScreenshot(page, "Pseudonymous grading - Student sees only pseudonym");
+  });
+
+  test("Student can request a regrade and sees grader's pseudonym in responses", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+
+    // Find the region with aria-label 'Grading checks on line 4' and request a regrade
+    const region = page.getByRole("region", { name: "Grading checks on line 4" });
+    await expect(region).toBeVisible();
+    await region.getByRole("button", { name: "Request regrade for this check" }).click();
+    await page.getByRole("button", { name: "Draft Regrade Request" }).click();
+
+    // Add comment and open the regrade request
+    await region.getByPlaceholder("Add a comment to open this").click();
+    await region.getByPlaceholder("Add a comment to open this").fill(REGRADE_REQUEST_COMMENT);
+    await region.getByLabel("Open Request", { exact: true }).click();
+
+    await expect(region.getByText(REGRADE_REQUEST_COMMENT)).toBeVisible();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await argosScreenshot(page, "Pseudonymous grading - Student opens regrade request");
+  });
+
+  test("Instructor resolves regrade with pseudonymous profile and adds comment", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+
+    const region = page.getByRole("region", { name: "Grading checks on line 4" });
+
+    // Add a comment to the regrade request
+    await region.getByPlaceholder("Add a comment to continue the").click();
+    await region.getByPlaceholder("Add a comment to continue the").fill(GRADER_REGRADE_RESPONSE);
+    await region.getByLabel("Add Comment", { exact: true }).click();
+
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+
+    // Instructor should see their own pseudonym AND real name in their comment
+    // The format should be "Pseudonym (Real Name)"
+    await expect(region).toContainText(instructor!.public_profile_name);
+    await expect(region).toContainText(`(${instructor!.private_profile_name})`);
+
+    await argosScreenshot(page, "Pseudonymous grading - Instructor sees real name in regrade comment");
+
+    // Resolve the regrade request
+    await region.getByRole("button", { name: "Resolve Request" }).click();
+    await page.getByRole("button", { name: "Resolve with No Change" }).click();
+  });
+
+  test("Student sees grader pseudonym (not real name) in regrade response", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+
+    const region = page.getByRole("region", { name: "Grading checks on line 4" });
+
+    // Student should see the grader's comment
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
+
+    // Student should see the grader's pseudonym
+    await expect(region).toContainText(instructor!.public_profile_name);
+
+    // Student should NOT see the grader's real name
+    await expect(region).not.toContainText(`(${instructor!.private_profile_name})`);
+
+    await argosScreenshot(page, "Pseudonymous grading - Student sees only pseudonym in regrade");
+  });
+
+  test("Student escalates the regrade request", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+
+    const region = page.getByRole("region", { name: "Grading checks on line 4" });
+
+    // Add an escalation comment
+    await region.getByPlaceholder("Add a comment to continue the").click();
+    await region.getByPlaceholder("Add a comment to continue the").fill(STUDENT_ESCALATION_COMMENT);
+    await region.getByLabel("Add Comment", { exact: true }).click();
+    await expect(region.getByText(STUDENT_ESCALATION_COMMENT)).toBeVisible();
+
+    // Escalate to instructor
+    await region.getByRole("button", { name: "Escalate to Instructor" }).click();
+    await page.getByRole("button", { name: "Escalate Request" }).click();
+
+    await argosScreenshot(page, "Pseudonymous grading - Student escalates regrade");
+  });
+
+  test("Instructor closes escalated regrade with their REAL identity (not pseudonym)", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+
+    const region = page.getByRole("region", { name: "Grading checks on line 4" });
+
+    // Add final decision comment
+    await region.getByPlaceholder("Add a comment to continue the").click();
+    await region.getByPlaceholder("Add a comment to continue the").fill(INSTRUCTOR_FINAL_DECISION);
+    await region.getByLabel("Add Comment", { exact: true }).click();
+    await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
+
+    // Close the escalated regrade request
+    await region.getByRole("button", { name: "Decide Escalation" }).click();
+    await page.getByRole("button", { name: "Uphold Grader's Decision" }).click();
+
+    // Verify the regrade is closed
+    await expect(region.getByText("Regrade Closed")).toBeVisible();
+
+    await argosScreenshot(page, "Pseudonymous grading - Instructor closes escalation with real name");
+  });
+
+  test("Student sees instructor's REAL name (not pseudonym) for final escalation decision", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+
+    const region = page.getByRole("region", { name: "Grading checks on line 4" });
+
+    // Verify the regrade is closed
+    await expect(region.getByText("Regrade Closed")).toBeVisible();
+
+    // The final decision (closed_by) should show the instructor's REAL name
+    // This is because instructors sign final decisions with their real identity
+    await expect(region).toContainText(`Closed`);
+    await expect(region).toContainText(instructor!.private_profile_name);
+
+    // The earlier grader comments should still show pseudonym (not real name in parentheses)
+    // But the instructor's comment should also be there (with pseudonym for the comment author)
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
+    await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
+
+    await argosScreenshot(page, "Pseudonymous grading - Student sees instructor real name for final decision");
   });
 });
