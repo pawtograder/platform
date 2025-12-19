@@ -101,6 +101,148 @@ export async function createClassSection({
   }
   return sectionData;
 }
+
+export async function createClassWithSISSections({
+  class_id,
+  class_section_crns,
+  lab_section_crns
+}: {
+  class_id: number;
+  class_section_crns: number[];
+  lab_section_crns: number[];
+}): Promise<{
+  classSections: Array<{ id: number; sis_crn: number; name: string }>;
+  labSections: Array<{ id: number; sis_crn: number; name: string }>;
+}> {
+  const classSections: Array<{ id: number; sis_crn: number; name: string }> = [];
+  const labSections: Array<{ id: number; sis_crn: number; name: string }> = [];
+
+  for (const crn of class_section_crns) {
+    const { data, error } = await supabase
+      .from("class_sections")
+      .insert({
+        class_id,
+        name: `SIS Class Section ${crn}`,
+        sis_crn: crn
+      })
+      .select("id, sis_crn, name")
+      .single();
+    if (error) throw new Error(`Failed to create SIS class section ${crn}: ${error.message}`);
+    classSections.push({ id: data.id, sis_crn: data.sis_crn!, name: data.name });
+  }
+
+  for (const crn of lab_section_crns) {
+    const { data, error } = await supabase
+      .from("lab_sections")
+      .insert({
+        class_id,
+        name: `SIS Lab Section ${crn}`,
+        sis_crn: crn
+      })
+      .select("id, sis_crn, name")
+      .single();
+    if (error) throw new Error(`Failed to create SIS lab section ${crn}: ${error.message}`);
+    labSections.push({ id: data.id, sis_crn: data.sis_crn!, name: data.name });
+  }
+
+  return { classSections, labSections };
+}
+
+export type SimulatedSISRosterEntry = {
+  sis_user_id: number;
+  name?: string;
+  role: "student" | "grader" | "instructor";
+  class_section_crn?: number | null;
+  lab_section_crn?: number | null;
+};
+
+export async function simulateSISSync({
+  class_id,
+  roster,
+  expire_missing = true,
+  section_updates
+}: {
+  class_id: number;
+  roster: SimulatedSISRosterEntry[];
+  expire_missing?: boolean;
+  section_updates?: Array<{
+    section_type: "class" | "lab";
+    sis_crn: number;
+    meeting_location?: string | null;
+    meeting_times?: string | null;
+    campus?: string | null;
+    day_of_week?: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | null;
+    start_time?: string | null;
+    end_time?: string | null;
+  }>;
+}) {
+  const { data, error } = await supabase.rpc("sis_sync_enrollment", {
+    p_class_id: class_id,
+    p_roster_data: roster,
+    p_sync_options: {
+      expire_missing,
+      section_updates: section_updates ?? []
+    }
+  });
+
+  if (error) throw new Error(`sis_sync_enrollment failed: ${error.message}`);
+  return data;
+}
+
+export async function getEnrollmentState(
+  class_id: number,
+  sis_user_id: number
+): Promise<{
+  user?: { user_id: string; sis_user_id: number | null };
+  user_role?: {
+    id: number;
+    role: "student" | "grader" | "instructor" | "admin";
+    disabled: boolean;
+    canvas_id: number | null;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+    sis_sync_opt_out?: boolean;
+  } | null;
+  invitation?: {
+    id: number;
+    status: string;
+    role: string;
+    sis_managed: boolean;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  } | null;
+}> {
+  const { data: user } = await supabase
+    .from("users")
+    .select("user_id, sis_user_id")
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+
+  const { data: invitation } = await supabase
+    .from("invitations")
+    .select("id, status, role, sis_managed, class_section_id, lab_section_id")
+    .eq("class_id", class_id)
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+
+  let user_role = null;
+  if (user?.user_id) {
+    const { data: ur } = await supabase
+      .from("user_roles")
+      .select("id, role, disabled, canvas_id, class_section_id, lab_section_id, sis_sync_opt_out")
+      .eq("class_id", class_id)
+      .eq("user_id", user.user_id)
+      .maybeSingle();
+    user_role = ur ?? null;
+  }
+
+  return { user: user ?? undefined, user_role, invitation: invitation ?? null };
+}
+
+export async function setUserSisId(user_id: string, sis_user_id: number) {
+  const { error } = await supabase.from("users").update({ sis_user_id }).eq("user_id", user_id);
+  if (error) throw new Error(`Failed to set users.sis_user_id=${sis_user_id} for user_id=${user_id}: ${error.message}`);
+}
 export async function updateClassSettings({
   class_id,
   start_date,

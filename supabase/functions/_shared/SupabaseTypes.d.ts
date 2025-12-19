@@ -7999,6 +7999,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out: boolean;
           updated_at: string;
           user_id: string;
         };
@@ -8015,6 +8016,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id: string;
         };
@@ -8031,6 +8033,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id?: string;
         };
@@ -10490,6 +10493,10 @@ export type Database = {
         Args: { p_user_id: string };
         Returns: boolean;
       };
+      sis_sync_enrollment: {
+        Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
+        Returns: Json;
+      };
       soft_delete_survey: {
         Args: { p_survey_id: string; p_survey_logical_id: string };
         Returns: undefined;
@@ -10589,27 +10596,16 @@ export type Database = {
         };
         Returns: boolean;
       };
-      update_regrade_request_status:
-        | {
-            Args: {
-              closed_points?: number;
-              new_status: Database["public"]["Enums"]["regrade_status"];
-              profile_id: string;
-              regrade_request_id: number;
-              resolved_points?: number;
-            };
-            Returns: boolean;
-          }
-        | {
-            Args: {
-              closed_points?: number;
-              new_status: Database["public"]["Enums"]["regrade_status"];
-              profile_id: string;
-              regrade_request_id: number;
-              resolved_points?: number;
-            };
-            Returns: boolean;
-          };
+      update_regrade_request_status: {
+        Args: {
+          closed_points?: number;
+          new_status: Database["public"]["Enums"]["regrade_status"];
+          profile_id: string;
+          regrade_request_id: number;
+          resolved_points?: number;
+        };
+        Returns: boolean;
+      };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;
