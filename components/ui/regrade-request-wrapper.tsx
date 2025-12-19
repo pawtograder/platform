@@ -9,7 +9,13 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-import { useAssignmentController, useRegradeRequest, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useGraderPseudonymousMode,
+  useRegradeRequest,
+  useRubricCheck,
+  useRubricCriteria
+} from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useProfileRole } from "@/hooks/useCourseController";
 import {
@@ -920,9 +926,12 @@ export default function RegradeRequestWrapper({
   children: React.ReactNode;
 }) {
   const regradeRequest = useRegradeRequest(regradeRequestId);
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile for staff when pseudonymous grading is enabled
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
@@ -983,7 +992,7 @@ export default function RegradeRequestWrapper({
         assignment_id: regradeRequest.assignment_id,
         submission_regrade_request_id: regradeRequest.id,
         class_id: regradeRequest.class_id,
-        author: private_profile_id
+        author: authorProfileId
       };
       await submission_regrade_request_comments.create(values);
     } catch (error) {
@@ -1091,7 +1100,7 @@ export default function RegradeRequestWrapper({
                         points={regradeRequest.resolved_points}
                         regradeRequestId={regradeRequest.id}
                         type="resolved"
-                        privateProfileId={private_profile_id}
+                        privateProfileId={authorProfileId}
                         isAdditive={rubricCriteria?.is_additive ?? true}
                       />
                     ) : (
@@ -1127,7 +1136,7 @@ export default function RegradeRequestWrapper({
                         isAdditive={rubricCriteria?.is_additive ?? true}
                         regradeRequestId={regradeRequest.id}
                         type="closed"
-                        privateProfileId={private_profile_id}
+                        privateProfileId={authorProfileId}
                       />
                     ) : (
                       regradeRequest.closed_points || 0
@@ -1197,7 +1206,7 @@ export default function RegradeRequestWrapper({
                 <ResolveRequestPopover
                   initialPoints={regradeRequest.initial_points}
                   regradeRequestId={regradeRequest.id}
-                  privateProfileId={private_profile_id}
+                  privateProfileId={authorProfileId}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
                 />
@@ -1219,7 +1228,7 @@ export default function RegradeRequestWrapper({
                   initialPoints={regradeRequest.initial_points}
                   resolvedPoints={regradeRequest.resolved_points}
                   regradeRequestId={regradeRequest.id}
-                  privateProfileId={private_profile_id}
+                  privateProfileId={authorProfileId}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
                 />
