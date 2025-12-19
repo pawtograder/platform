@@ -797,7 +797,6 @@ export async function syncSISClasses(_supabase: SupabaseClient<Database>, classI
       const reenabledUsersCount = syncResult.counts.enrollments_reenabled;
       const updatedMetadataCount = sectionUpdates.length;
 
-
       // Update sync status for all processed sections
       const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Expired: ${expiredInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;
 
