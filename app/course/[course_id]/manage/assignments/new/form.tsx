@@ -801,6 +801,26 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
+            <Field helperText="When enabled, graders' names will appear as pseudonyms to students. Staff members will still see the real name of the grader.">
+              <Controller
+                name="grader_pseudonymous_mode"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value || false}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Anonymous grading (show grader pseudonyms to students)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
             </Button>
