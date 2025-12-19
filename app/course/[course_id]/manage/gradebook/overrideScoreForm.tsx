@@ -8,6 +8,19 @@ import { Box, Button, HStack, Heading, Input, Link, Separator, Text, VStack } fr
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 
+/**
+ * Render a form for viewing and updating a student's gradebook score, override, and related flags.
+ *
+ * The form supports editing either the automatic score or an overridden score (including an optional note),
+ * toggling droppable/excused/missing flags, previewing the computed "New Score" when a renderer is available,
+ * and submitting a minimal payload to update the gradebook record.
+ *
+ * @param studentGradebookColumn - The student's gradebook column record to edit; used for default values and context.
+ * @param onSuccess - Optional callback invoked after a successful update.
+ * @param isAutoCalculated - When true, show the override UI (score_override) and focus its input; otherwise show the regular score input.
+ * @param showWarning - When true, display warning styling and explanatory text and expose the "Reset" action to clear an override.
+ * @returns A form element that lets a user edit score or score_override, set flags (droppable, excused, missing), and submit updates to the gradebook controller.
+ */
 export function OverrideScoreForm({
   studentGradebookColumn,
   onSuccess,
@@ -141,6 +154,7 @@ export function OverrideScoreForm({
               <Field label="Score" errorText={errors.score_override?.message?.toString()} flex={1} minW="5em">
                 <Input
                   type="number"
+                  step="any"
                   {...register("score_override", { valueAsNumber: true })}
                   placeholder={studentGradebookColumn.score?.toString()}
                 />
