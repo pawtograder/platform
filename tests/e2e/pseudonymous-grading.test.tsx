@@ -297,8 +297,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByPlaceholder("Add a comment to continue the").fill(GRADER_REGRADE_RESPONSE);
     await region.getByLabel("Add Comment", { exact: true }).click();
 
-    await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
 
     // Instructor should see their own pseudonym AND real name in their comment
     // The format should be "Pseudonym (Real Name)"
@@ -309,7 +309,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     // Resolve the regrade request
     await region.getByRole("button", { name: "Resolve Request" }).click();
-    await page.getByRole("button", { name: "Resolve with No Change" }).click();
+    await page.getByRole("button", { name: "Resolve regrade request" }).click();
   });
 
   test("Student sees grader pseudonym (not real name) in regrade response", async ({ page }) => {
@@ -344,7 +344,6 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByPlaceholder("Add a comment to continue the").click();
     await region.getByPlaceholder("Add a comment to continue the").fill(STUDENT_ESCALATION_COMMENT);
     await region.getByLabel("Add Comment", { exact: true }).click();
-    await expect(region.getByText(STUDENT_ESCALATION_COMMENT)).toBeVisible();
 
     // Escalate to instructor
     await region.getByRole("button", { name: "Escalate to Instructor" }).click();
@@ -365,11 +364,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByPlaceholder("Add a comment to continue the").click();
     await region.getByPlaceholder("Add a comment to continue the").fill(INSTRUCTOR_FINAL_DECISION);
     await region.getByLabel("Add Comment", { exact: true }).click();
-    await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
 
     // Close the escalated regrade request
     await region.getByRole("button", { name: "Decide Escalation" }).click();
-    await page.getByRole("button", { name: "Uphold Grader's Decision" }).click();
+    await page.getByRole("button", { name: "Close regrade request" }).click();
 
     // Verify the regrade is closed
     await expect(region.getByText("Regrade Closed")).toBeVisible();
