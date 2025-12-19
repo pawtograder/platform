@@ -482,6 +482,12 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                   <HStack gap={0} flexWrap="wrap">
                     <Text fontSize="sm" fontStyle="italic" color="fg.muted">
                       {commentAuthor?.name}
+                      {isGraderOrInstructor && commentAuthor?.real_name && (
+                        <Text as="span" fontSize="xs">
+                          {" "}
+                          ({commentAuthor.real_name})
+                        </Text>
+                      )}
                     </Text>
                     {comment.submission_review_id && (
                       <ReviewRoundTag submission_review_id={comment.submission_review_id} />
@@ -533,6 +539,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
+  const isStaff = useIsGraderOrInstructor();
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -542,6 +549,9 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
   if (!authorProfile || !comment) {
     return <Skeleton height="100px" width="100%" />;
   }
+
+  // Show real name in parentheses for staff when viewing pseudonymous profiles
+  const realNameSuffix = isStaff && authorProfile?.real_name ? ` (${authorProfile.real_name})` : "";
 
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
@@ -566,7 +576,14 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
             borderColor="border.emphasized"
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
-              <Text fontWeight="bold">{authorProfile?.name}</Text>
+              <Text fontWeight="bold">
+                {authorProfile?.name}
+                {realNameSuffix && (
+                  <Text as="span" fontWeight="normal" color="fg.muted" fontSize="xs">
+                    {realNameSuffix}
+                  </Text>
+                )}
+              </Text>
               <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>

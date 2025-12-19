@@ -554,7 +554,14 @@ export function RubricCheckComment({
             <HStack justify="space-between">
               {comment.__db_pending && <Spinner size="sm" />}
               <Text fontSize="sm" color="fg.muted">
-                {author?.name} {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
+                {author?.name}
+                {isGraderOrInstructor && author?.real_name && (
+                  <Text as="span" fontSize="xs">
+                    {" "}
+                    ({author.real_name})
+                  </Text>
+                )}{" "}
+                {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
               </Text>
               <CommentActions comment={comment} setIsEditing={setIsEditing} />
             </HStack>

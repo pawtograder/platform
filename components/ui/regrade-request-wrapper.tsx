@@ -103,6 +103,7 @@ const statusConfig: Record<
 function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType }) {
   const authorProfile = useUserProfile(comment.author);
   const authorRole = useProfileRole(comment.author);
+  const isStaff = useIsGraderOrInstructor();
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -112,6 +113,9 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
   if (!authorProfile) {
     return <Skeleton height="60px" width="100%" />;
   }
+
+  // Show real name in parentheses for staff when viewing pseudonymous profiles
+  const realNameSuffix = isStaff && authorProfile?.real_name ? ` (${authorProfile.real_name})` : "";
 
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
@@ -139,7 +143,14 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
             borderColor="border.muted"
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
-              <Text fontWeight="bold">{authorProfile?.name}</Text>
+              <Text fontWeight="bold">
+                {authorProfile?.name}
+                {realNameSuffix && (
+                  <Text as="span" fontWeight="normal" color="fg.muted" fontSize="xs">
+                    {realNameSuffix}
+                  </Text>
+                )}
+              </Text>
               <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
