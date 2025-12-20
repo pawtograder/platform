@@ -1,3 +1,4 @@
+import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmissionController, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
 import {
@@ -36,8 +37,11 @@ export default function LineCommentForm({
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const submissionController = useSubmissionController();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
   const [eventuallyVisible, setEventuallyVisible] = useState(defaultEventuallyVisible ?? true);
 
   const fetchedSubmissionReview = useSubmissionReviewOrGradingReview(submissionReviewId);
@@ -61,7 +65,7 @@ export default function LineCommentForm({
         submission_id: submission.id,
         submission_file_id: file.id,
         class_id: file.class_id!,
-        author: private_profile_id!,
+        author: authorProfileId!,
         line: lineNumber,
         comment: message,
         submission_review_id: submissionReviewId,
@@ -92,7 +96,7 @@ export default function LineCommentForm({
       file,
       lineNumber,
       submissionController,
-      private_profile_id,
+      authorProfileId,
       submissionReviewId,
       fetchedSubmissionReview,
       isLoadingReviewDetails,
