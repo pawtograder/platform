@@ -31,6 +31,16 @@ export function DiscussionSearch({ onChangeAction }: DiscussionSearchProps) {
   const teasers = useDiscussionThreadTeasers();
   const topics = useDiscussionTopics();
 
+  // Cleanup blur timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+        blurTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   // Debounce the search query for filtering results (local only, doesn't update URL)
   useEffect(() => {
     if (inputValue.trim() === "") {

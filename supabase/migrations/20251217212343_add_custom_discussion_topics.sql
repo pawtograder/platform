@@ -22,16 +22,6 @@ with check (public.authorizeforclassinstructor(class_id));
 using (public.authorizeforclassinstructor(class_id));
 
 
-
-  create policy "Instructors can update topics in their class"
-  on "public"."discussion_topics"
-  as permissive
-  for update
-  to authenticated
-using (public.authorizeforclassinstructor(class_id))
-with check (public.authorizeforclassinstructor(class_id));
-
-
 -- Add topic icons and default-follow support
 
 ALTER TABLE public.discussion_topics
@@ -42,7 +32,6 @@ ALTER TABLE public.discussion_topics
 
 -- Allow instructors to update icon/default_follow even on default topics.
 -- (UI can still restrict editing topic name/description/color for default topics.)
-DROP POLICY IF EXISTS "Instructors can update topics in their class" ON public.discussion_topics;
 
 CREATE POLICY "Instructors can update topics in their class"
 ON public.discussion_topics

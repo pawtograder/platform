@@ -103,7 +103,16 @@ export function PostRow({
   const toggleFollow = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    await setThreadFollowStatus(!isFollowing);
+    try {
+      await setThreadFollowStatus(!isFollowing);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to toggle follow status:", error);
+      toaster.error({
+        title: "Error",
+        description: "Could not update follow status. Please try again."
+      });
+    }
   };
 
   if (!thread) {
