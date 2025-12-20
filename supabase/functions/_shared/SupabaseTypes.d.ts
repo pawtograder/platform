@@ -2073,15 +2073,68 @@ export type Database = {
           }
         ];
       };
+      discussion_topic_followers: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          following: boolean;
+          id: number;
+          topic_id: number;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          following?: boolean;
+          id?: number;
+          topic_id: number;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          following?: boolean;
+          id?: number;
+          topic_id?: number;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_topic_followers_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topic_followers_topic_id_fkey";
+            columns: ["topic_id"];
+            isOneToOne: false;
+            referencedRelation: "discussion_topics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topic_followers_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discussion_topics: {
         Row: {
           assignment_id: number | null;
           class_id: number;
           color: string;
           created_at: string;
+          default_follow: boolean;
           description: string;
+          icon: string | null;
           id: number;
-          instructor_created: boolean;
           ordinal: number;
           topic: string;
           updated_at: string;
@@ -2091,9 +2144,10 @@ export type Database = {
           class_id: number;
           color: string;
           created_at?: string;
+          default_follow?: boolean;
           description: string;
+          icon?: string | null;
           id?: number;
-          instructor_created?: boolean;
           ordinal?: number;
           topic: string;
           updated_at?: string;
@@ -2103,9 +2157,10 @@ export type Database = {
           class_id?: number;
           color?: string;
           created_at?: string;
+          default_follow?: boolean;
           description?: string;
+          icon?: string | null;
           id?: number;
-          instructor_created?: boolean;
           ordinal?: number;
           topic?: string;
           updated_at?: string;

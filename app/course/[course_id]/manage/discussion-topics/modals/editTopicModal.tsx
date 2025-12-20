@@ -1,8 +1,10 @@
 "use client";
 
-import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Textarea } from "@chakra-ui/react";
+import { TopicIconPicker } from "@/components/discussion/TopicIconPicker";
 import { Button } from "@/components/ui/button";
-import { useForm } from "react-hook-form";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
+import { Controller, useForm } from "react-hook-form";
 import { useEffect } from "react";
 import { BsX } from "react-icons/bs";
 import { useCourseController, useAssignments } from "@/hooks/useCourseController";
@@ -38,6 +40,10 @@ type TopicFormData = {
   color: string;
   /** Optional assignment ID to link the topic to a specific assignment */
   assignment_id: string;
+  /** Optional icon name */
+  icon: string;
+  /** Whether students should follow by default */
+  default_follow: boolean;
 };
 
 /**
@@ -73,6 +79,7 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
   const {
     register,
     handleSubmit,
+    control,
     reset,
     formState: { errors, isSubmitting }
   } = useForm<TopicFormData>();
@@ -86,7 +93,9 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
         topic: topic.topic,
         description: topic.description || "",
         color: topic.color,
-        assignment_id: topic.assignment_id?.toString() || ""
+        assignment_id: topic.assignment_id?.toString() || "",
+        icon: topic.icon ?? "",
+        default_follow: topic.default_follow ?? false
       });
     }
   }, [isOpen, topic, reset]);
@@ -111,7 +120,9 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
         topic: data.topic,
         description: data.description,
         color: data.color,
-        assignment_id: data.assignment_id ? Number(data.assignment_id) : null
+        assignment_id: data.assignment_id ? Number(data.assignment_id) : null,
+        icon: data.icon ? data.icon : null,
+        default_follow: data.default_follow
       });
 
       toaster.success({
@@ -150,6 +161,7 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                 <Field.Root invalid={!!errors.topic}>
                   <Field.Label>Topic Name</Field.Label>
                   <Input
+                    disabled={!isCustomTopic}
                     {...register("topic", {
                       required: "Topic name is required",
                       minLength: { value: 2, message: "Name must be at least 2 characters" }
@@ -157,11 +169,19 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                     placeholder="e.g., Homework 1, Lab 3, Exam Review"
                   />
                   <Field.ErrorText>{errors.topic?.message}</Field.ErrorText>
+                  {!isCustomTopic && (
+                    <Field.HelperText>
+                      <Text color="fg.muted" fontSize="sm">
+                        Built-in topics can’t be renamed, but you can set an icon and default-follow behavior.
+                      </Text>
+                    </Field.HelperText>
+                  )}
                 </Field.Root>
 
                 <Field.Root invalid={!!errors.description}>
                   <Field.Label>Description</Field.Label>
                   <Textarea
+                    disabled={!isCustomTopic}
                     {...register("description", {
                       required: "Description is required"
                     })}
@@ -177,7 +197,10 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                 <Field.Root invalid={!!errors.color}>
                   <Field.Label>Color</Field.Label>
                   <NativeSelect.Root>
-                    <NativeSelect.Field {...register("color", { required: "Color is required" })}>
+                    <NativeSelect.Field
+                      disabled={!isCustomTopic}
+                      {...register("color", { required: "Color is required" })}
+                    >
                       {TOPIC_COLORS.map((color) => (
                         <option key={color.value} value={color.value}>
                           {color.label}
@@ -188,6 +211,29 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                   <Field.ErrorText>{errors.color?.message}</Field.ErrorText>
                   <Field.HelperText>The color used to visually distinguish this topic</Field.HelperText>
                 </Field.Root>
+
+                <Controller
+                  control={control}
+                  name="icon"
+                  render={({ field }) => <TopicIconPicker value={field.value ?? ""} onChange={field.onChange} />}
+                />
+
+                <Controller
+                  control={control}
+                  name="default_follow"
+                  render={({ field }) => (
+                    <Field.Root>
+                      <Switch checked={!!field.value} onCheckedChange={(e) => field.onChange(e.checked)}>
+                        Default follow
+                      </Switch>
+                      <Field.HelperText>
+                        <Text color="fg.muted" fontSize="sm">
+                          If enabled, students will automatically follow this topic (they can unfollow later).
+                        </Text>
+                      </Field.HelperText>
+                    </Field.Root>
+                  )}
+                />
 
                 <Field.Root>
                   <Field.Label>Link to Assignment (Optional)</Field.Label>

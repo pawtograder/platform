@@ -1,8 +1,10 @@
 "use client";
 
-import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Textarea } from "@chakra-ui/react";
+import { TopicIconPicker } from "@/components/discussion/TopicIconPicker";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import { useCourseController, useAssignments, useDiscussionTopics } from "@/hooks/useCourseController";
@@ -38,6 +40,10 @@ type TopicFormData = {
   color: string;
   /** Optional assignment ID to link the topic to a specific assignment */
   assignment_id: string;
+  /** Optional icon name */
+  icon: string;
+  /** Whether students should follow by default */
+  default_follow: boolean;
 };
 
 /**
@@ -72,6 +78,7 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
   const {
     register,
     handleSubmit,
+    control,
     reset,
     formState: { errors, isSubmitting }
   } = useForm<TopicFormData>({
@@ -79,7 +86,9 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
       topic: "",
       description: "",
       color: "blue",
-      assignment_id: ""
+      assignment_id: "",
+      icon: "",
+      default_follow: false
     }
   });
 
@@ -113,7 +122,8 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
         description: data.description,
         color: data.color,
         assignment_id: data.assignment_id ? Number(data.assignment_id) : null,
-        instructor_created: true,
+        icon: data.icon ? data.icon : null,
+        default_follow: data.default_follow,
         ordinal: nextOrdinal
       });
 
@@ -189,6 +199,29 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
                   <Field.ErrorText>{errors.color?.message}</Field.ErrorText>
                   <Field.HelperText>The color used to visually distinguish this topic</Field.HelperText>
                 </Field.Root>
+
+                <Controller
+                  control={control}
+                  name="icon"
+                  render={({ field }) => <TopicIconPicker value={field.value ?? ""} onChange={field.onChange} />}
+                />
+
+                <Controller
+                  control={control}
+                  name="default_follow"
+                  render={({ field }) => (
+                    <Field.Root>
+                      <Switch checked={!!field.value} onCheckedChange={(e) => field.onChange(e.checked)}>
+                        Default follow
+                      </Switch>
+                      <Field.HelperText>
+                        <Text color="fg.muted" fontSize="sm">
+                          If enabled, students will automatically follow this topic (they can unfollow later).
+                        </Text>
+                      </Field.HelperText>
+                    </Field.Root>
+                  )}
+                />
 
                 <Field.Root>
                   <Field.Label>Link to Assignment (Optional)</Field.Label>

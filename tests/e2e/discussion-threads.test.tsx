@@ -43,11 +43,15 @@ test.describe("Discussion Thread Page", () => {
     await loginAsUser(page, student1!, course);
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
-    await expect(page.getByRole("heading", { name: "Discussion Feed" })).toBeVisible();
-    await expect(page.getByRole("link").filter({ hasText: "New Thread" })).toBeVisible();
-    await expect(page.getByText("No threads match your criteria.")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Unanswered Questions" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Answered Questions", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Discussion" })).toBeVisible();
+    await expect(page.getByText("My Feed")).toBeVisible();
+    await expect(page.getByText("Browse Topics")).toBeVisible();
+    await expect(page.getByPlaceholder("Search posts")).toBeVisible();
+    await expect(page.getByText("New Post")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My Feed" })).toBeVisible();
+    await expect(
+      page.getByText("Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here.")
+    ).toBeVisible();
     await argosScreenshot(page, "Discussion Thread Page");
   });
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
@@ -55,7 +59,7 @@ test.describe("Discussion Thread Page", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
-    await page.getByRole("link").filter({ hasText: "New Thread" }).click();
+    await page.getByText("New Post").click();
     await argosScreenshot(page, "Create New Thread Form");
     await expect(page.getByRole("heading", { name: "New Discussion Thread" })).toBeVisible();
     await expect(page.getByText("Topic")).toBeVisible();
@@ -103,10 +107,9 @@ test.describe("Discussion Thread Page", () => {
       .locator('textarea.w-md-editor-text-input[spellcheck="false"]')
       .fill("01001000 01100101 01101100 01101100 01101111 00100000 01010111 01101111 01110010 01101100 01100100");
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
-    await expect(page.getByText("0 replies")).toBeVisible();
-    await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1 correct?" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Is my answer for HW1 Q1 correct?" })).toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).toBeVisible();
   });
 
@@ -115,9 +118,9 @@ test.describe("Discussion Thread Page", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
-    await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1 correct?" })).not.toBeVisible();
+    await expect(page.getByText("Is my answer for HW1 Q1 correct?")).not.toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).not.toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).not.toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).not.toBeVisible();
   });
 
@@ -126,7 +129,7 @@ test.describe("Discussion Thread Page", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
-    await page.getByRole("link").filter({ hasText: "New Thread" }).click();
+    await page.getByText("New Post").click();
     // Test the form with a public thread
     await page.getByText("Anything else about the class").click();
     await page.getByText("Note", { exact: true }).click();
@@ -140,9 +143,8 @@ test.describe("Discussion Thread Page", () => {
         "IT'S PREHISTORIC TRASH. KOTLIN IS LITERALLY SO MUCH BETTER SMH. NULL SAFETY, TYPE INFERENCE, AND FIRST-CLASS FUNCTIONS. THE SYLLABUS IS A JOKE AND I REGRET TAKING THIS CLASS. I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE."
       );
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
-    await expect(page.getByText("0 replies")).toBeVisible();
-    await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student2?.public_profile_name })).toBeVisible();
   });
 
@@ -152,11 +154,11 @@ test.describe("Discussion Thread Page", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
     await page.waitForURL("**/discussion");
-    await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1" }).nth(1)).toBeVisible();
-    await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
+    await expect(page.getByText("Is my answer for HW1 Q1 correct?")).toBeVisible();
+    await expect(page.getByText("JAVA SUCKS")).toBeVisible();
     // Check that the instructor can reply to the private thread
-    await page.getByRole("link", { name: "#1 Is my answer for HW1 Q1" }).nth(1).click();
-    await expect(page.getByRole("button").filter({ hasText: "Watch" })).toBeVisible();
+    await page.getByText("Is my answer for HW1 Q1 correct?").click();
+    await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page.getByPlaceholder("Reply...").fill("Yes.");
     await page.getByRole("button").filter({ hasText: "Send" }).click();
@@ -166,11 +168,11 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Yes.")).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     // Check that the instructor can reply to the public thread
     await page.getByRole("link", { name: "JAVA SUCKS" }).click();
     await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible(); //Wait for the page to change
-    await expect(page.getByRole("button").filter({ hasText: "Watch" })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page
       .getByPlaceholder("Reply...")
@@ -188,7 +190,7 @@ test.describe("Discussion Thread Page", () => {
     ).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await argosScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });
@@ -238,9 +240,9 @@ test.describe("Custom Discussion Topics", () => {
     const defaultBadges = page.getByText("Default", { exact: true });
     await expect(defaultBadges).toHaveCount(4);
 
-    // Verify all default topics show the "cannot be modified" message
-    const cannotBeModifiedMessages = page.getByText("Default topics cannot be modified");
-    await expect(cannotBeModifiedMessages).toHaveCount(4);
+    // Default topics can be edited for icon/default-follow settings
+    const editButtons = page.getByRole("button", { name: "Edit" });
+    await expect(editButtons).toHaveCount(4);
 
     await argosScreenshot(page, "Discussion Topics Management Page");
   });
@@ -301,7 +303,7 @@ test.describe("Custom Discussion Topics", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
-    await page.getByRole("link").filter({ hasText: "New Thread" }).click();
+    await page.getByText("New Post").click();
 
     // Verify the custom topic appears in the topic selector
     await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
@@ -309,18 +311,11 @@ test.describe("Custom Discussion Topics", () => {
 
     await argosScreenshot(page, "New Thread Form With Custom Topic");
 
-    // ===== STEP 4: Verify custom topic appears in thread list filter =====
+    // ===== STEP 4: Verify custom topic appears in Browse Topics =====
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
-
-    // Open the filter menu
-    await page.getByTestId("filter-threads-button").click();
-
-    // Open the filter dropdown
-    await page.getByTestId("filter-dropdown").click();
-
-    // Verify the custom topic appears in the filter options
-    await expect(page.getByRole("option", { name: "HW1 Discussion", exact: true })).toBeVisible();
+    await page.getByText("Browse Topics").click();
+    await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
 
     // ===== STEP 5: Delete the custom discussion topic (as instructor) =====
     await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
@@ -342,7 +337,7 @@ test.describe("Custom Discussion Topics", () => {
     await argosScreenshot(page, "After Deleting Custom Topic");
   });
 
-  test("Default topics cannot be edited or deleted", async ({ page }) => {
+  test("Default topics can be edited but not deleted", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/manage/discussion-topics`);
     await page.waitForURL("**/manage/discussion-topics");
@@ -354,14 +349,10 @@ test.describe("Custom Discussion Topics", () => {
       // Find each default topic row
       const defaultTopicRow = page.locator("div").filter({ hasText: topicName }).first();
 
-      // Verify Edit and Delete buttons are not present for default topics
-      await expect(defaultTopicRow.getByRole("button", { name: "Edit" })).not.toBeVisible();
+      // Default topics can be edited (icon/default-follow settings), but not deleted
+      await expect(defaultTopicRow.getByRole("button", { name: "Edit" })).toBeVisible();
       await expect(defaultTopicRow.getByRole("button", { name: "Delete" })).not.toBeVisible();
     }
-
-    // Verify all 4 "cannot be modified" messages are shown (one per default topic)
-    const cannotBeModifiedMessages = page.getByText("Default topics cannot be modified");
-    await expect(cannotBeModifiedMessages).toHaveCount(4);
 
     // Verify all 4 "Default" badges with lock icons are present
     const defaultBadges = page.getByText("Default", { exact: true });

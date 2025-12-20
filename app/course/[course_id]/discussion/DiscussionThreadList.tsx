@@ -36,7 +36,7 @@ import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
 import { Fragment, useMemo, useState } from "react";
-import { FaFilter, FaPlus, FaThumbsUp, FaThumbtack } from "react-icons/fa";
+import { FaFilter, FaHeart, FaPlus, FaThumbtack } from "react-icons/fa";
 
 interface Props {
   thread_id: number;
@@ -46,6 +46,8 @@ interface Props {
 
 export const DiscussionThreadTeaser = (props: Props) => {
   const thread = useDiscussionThreadTeaser(props.thread_id);
+  const topics = useDiscussionTopics();
+  const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
   const { root_id } = useParams();
   const selected = root_id ? props.thread_id === Number.parseInt(root_id as string) : false;
   const is_answered = thread?.answer != undefined;
@@ -75,6 +77,11 @@ export const DiscussionThreadTeaser = (props: Props) => {
           <Stack spaceY="0" fontSize="sm" flex="1" truncate>
             <HStack>
               {thread?.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="3" />}
+              {topic && (
+                <Badge colorPalette={topic.color} variant="subtle" flexShrink={0}>
+                  {topic.topic}
+                </Badge>
+              )}
               <Text
                 fontWeight="medium"
                 flex="1"
@@ -119,7 +126,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
                 </Text>
                 {thread?.likes_count != null && thread.likes_count > 0 && (
                   <HStack alignItems="center">
-                    <Icon as={FaThumbsUp} color="fg.subtle" boxSize="3" />
+                    <Icon as={FaHeart} color="fg.subtle" boxSize="3" />
                     <Text fontSize="xs" color="text.muted">
                       {thread.likes_count}
                     </Text>

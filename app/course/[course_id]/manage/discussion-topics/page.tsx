@@ -10,13 +10,168 @@ import {
   useDiscussionThreadTeasers
 } from "@/hooks/useCourseController";
 import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import { TopicIcon } from "@/components/discussion/TopicIcon";
 import { Badge, Box, Container, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
-import { BsPencil, BsPlus, BsTrash, BsLink45Deg, BsLock, BsChatDots } from "react-icons/bs";
+import { BsPencil, BsPlus, BsTrash, BsLink45Deg, BsLock, BsChatDots, BsGripVertical } from "react-icons/bs";
 import CreateTopicModal from "./modals/createTopicModal";
 import EditTopicModal from "./modals/editTopicModal";
 import { toaster } from "@/components/ui/toaster";
 import { useMemo } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  useDraggable,
+  useDroppable
+} from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
+
+/**
+ * Draggable and droppable topic item component.
+ * Wraps a topic in drag-and-drop functionality for reordering.
+ */
+function DraggableTopicItem({
+  topic,
+  isCustomTopic,
+  linkedAssignment,
+  threadCount,
+  hasThreads,
+  onEdit,
+  onDelete
+}: {
+  topic: DiscussionTopic;
+  isCustomTopic: boolean;
+  linkedAssignment: string | null | undefined;
+  threadCount: number;
+  hasThreads: boolean;
+  onEdit: (topic: DiscussionTopic) => void;
+  onDelete: (topicId: number) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDraggableRef,
+    transform,
+    isDragging
+  } = useDraggable({
+    id: topic.id
+  });
+
+  const { setNodeRef: setDroppableRef, isOver } = useDroppable({
+    id: topic.id
+  });
+
+  // Combine refs for both draggable and droppable
+  const setNodeRef = (node: HTMLElement | null) => {
+    setDraggableRef(node);
+    setDroppableRef(node);
+  };
+
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    opacity: isDragging ? 0.5 : 1
+  };
+
+  return (
+    <Box
+      ref={setNodeRef}
+      style={style}
+      p={4}
+      borderWidth="1px"
+      borderRadius="md"
+      bg={isDragging ? "bg.emphasized" : isOver && !isDragging ? "bg.subtle" : "bg.panel"}
+      borderColor={isDragging ? "blue.solid" : isOver && !isDragging ? "blue.solid" : "border.emphasized"}
+      borderStyle={isDragging ? "dashed" : "solid"}
+      cursor={isDragging ? "grabbing" : "grab"}
+      transition="all 0.2s"
+    >
+      <Flex justify="space-between" align="flex-start">
+        <Box flex="1">
+          <Flex align="center" gap={3} mb={2}>
+            <Box
+              {...listeners}
+              {...attributes}
+              cursor="grab"
+              _active={{ cursor: "grabbing" }}
+              color="fg.muted"
+              _hover={{ color: "fg.default" }}
+              display="inline-flex"
+              alignItems="center"
+              mr={1}
+            >
+              <Icon as={BsGripVertical} />
+            </Box>
+            <Badge colorPalette={topic.color} variant="solid" px={3} py={1}>
+              {topic.topic}
+              <TopicIcon name={topic.icon} />
+            </Badge>
+            {topic.default_follow && (
+              <Badge variant="subtle" colorPalette="blue">
+                Default follow
+              </Badge>
+            )}
+            {linkedAssignment && (
+              <Badge variant="subtle" colorPalette="blue">
+                <Icon as={BsLink45Deg} mr={1} />
+                {linkedAssignment}
+              </Badge>
+            )}
+            {threadCount > 0 && (
+              <Badge variant="subtle" colorPalette="gray">
+                <Icon as={BsChatDots} mr={1} />
+                {threadCount} thread{threadCount === 1 ? "" : "s"}
+              </Badge>
+            )}
+          </Flex>
+
+          <Text color="fg.muted" fontSize="sm">
+            {topic.description}
+          </Text>
+
+          <HStack spaceX={4} fontSize="xs" color="fg.subtle" mt={2}>
+            <Text>Ordinal: {topic.ordinal}</Text>
+          </HStack>
+        </Box>
+
+        <HStack spaceX={2}>
+          <Button size="sm" variant="outline" onClick={() => onEdit(topic)}>
+            <Icon as={BsPencil} />
+            Edit
+          </Button>
+          {isCustomTopic &&
+            (hasThreads ? (
+              <Tooltip
+                content={`Cannot delete: ${threadCount} thread${threadCount === 1 ? "" : "s"} use${threadCount === 1 ? "s" : ""} this topic. Remove or reassign threads first.`}
+              >
+                <Button size="sm" variant="outline" colorPalette="red" disabled>
+                  <Icon as={BsTrash} />
+                  Delete
+                </Button>
+              </Tooltip>
+            ) : (
+              <PopConfirm
+                triggerLabel="Delete topic"
+                trigger={
+                  <Button size="sm" variant="outline" colorPalette="red">
+                    <Icon as={BsTrash} />
+                    Delete
+                  </Button>
+                }
+                confirmHeader="Delete Topic"
+                confirmText={`Are you sure you want to delete the topic "${topic.topic}"? This action cannot be undone.`}
+                onConfirm={async () => await onDelete(topic.id)}
+              />
+            ))}
+        </HStack>
+      </Flex>
+    </Box>
+  );
+}
 
 /**
  * Page component for managing discussion topics in a course.
@@ -69,6 +224,16 @@ export default function DiscussionTopicsPage() {
     if (!topics) return [];
     return [...topics].sort((a, b) => a.ordinal - b.ordinal);
   }, [topics]);
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8 // Require 8px of movement before starting drag
+      }
+    }),
+    useSensor(KeyboardSensor)
+  );
 
   /**
    * Handles deleting a custom discussion topic.
@@ -138,6 +303,67 @@ export default function DiscussionTopicsPage() {
     // Real-time updates handle data synchronization automatically
   };
 
+  /**
+   * Handles drag end event and updates topic ordinals.
+   * Reorders topics and updates all affected ordinals in the database.
+   */
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const activeIndex = sortedTopics.findIndex((topic) => topic.id === active.id);
+    const overIndex = sortedTopics.findIndex((topic) => topic.id === over.id);
+
+    if (activeIndex === -1 || overIndex === -1) {
+      return;
+    }
+
+    // Create new array with reordered topics
+    const newOrder = [...sortedTopics];
+    const [movedTopic] = newOrder.splice(activeIndex, 1);
+    newOrder.splice(overIndex, 0, movedTopic);
+
+    // Calculate new ordinals (starting from 1)
+    const updates = newOrder.map((topic, index) => ({
+      id: topic.id,
+      newOrdinal: index + 1
+    }));
+
+    // Only update topics that actually changed ordinal
+    const topicsToUpdate = updates.filter((update) => {
+      const originalTopic = sortedTopics.find((t) => t.id === update.id);
+      return originalTopic && originalTopic.ordinal !== update.newOrdinal;
+    });
+
+    if (topicsToUpdate.length === 0) {
+      return;
+    }
+
+    // Update all affected topics
+    try {
+      await Promise.all(
+        topicsToUpdate.map((update) =>
+          controller.discussionTopics.update(update.id, {
+            ordinal: update.newOrdinal
+          })
+        )
+      );
+
+      toaster.success({
+        title: "Success",
+        description: "Topic order updated successfully"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: `Failed to update topic order: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  };
+
   return (
     <Container maxW="container.lg" py={6}>
       <Flex justify="space-between" align="center" mb={6}>
@@ -164,92 +390,28 @@ export default function DiscussionTopicsPage() {
           </Button>
         </Box>
       ) : (
-        <Stack spaceY={4}>
-          {sortedTopics.map((topic) => {
-            const isCustomTopic = topic.instructor_created;
-            const linkedAssignment = topic.assignment_id ? assignmentMap.get(topic.assignment_id) : null;
-            const threadCount = topicThreadCountMap.get(topic.id) ?? 0;
-            const hasThreads = threadCount > 0;
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <Stack spaceY={4}>
+            {sortedTopics.map((topic) => {
+              const linkedAssignment = topic.assignment_id ? assignmentMap.get(topic.assignment_id) : null;
+              const threadCount = topicThreadCountMap.get(topic.id) ?? 0;
+              const hasThreads = threadCount > 0;
 
-            return (
-              <Box key={topic.id} p={4} borderWidth="1px" borderRadius="md" bg="bg.panel">
-                <Flex justify="space-between" align="flex-start">
-                  <Box flex="1">
-                    <Flex align="center" gap={3} mb={2}>
-                      <Badge colorPalette={topic.color} variant="solid" px={3} py={1}>
-                        {topic.topic}
-                      </Badge>
-                      {!isCustomTopic && (
-                        <Badge variant="outline" colorPalette="gray">
-                          <Icon as={BsLock} mr={1} />
-                          Default
-                        </Badge>
-                      )}
-                      {linkedAssignment && (
-                        <Badge variant="subtle" colorPalette="blue">
-                          <Icon as={BsLink45Deg} mr={1} />
-                          {linkedAssignment}
-                        </Badge>
-                      )}
-                      {threadCount > 0 && (
-                        <Badge variant="subtle" colorPalette="gray">
-                          <Icon as={BsChatDots} mr={1} />
-                          {threadCount} thread{threadCount === 1 ? "" : "s"}
-                        </Badge>
-                      )}
-                    </Flex>
-
-                    <Text color="fg.muted" fontSize="sm">
-                      {topic.description}
-                    </Text>
-
-                    <HStack spaceX={4} fontSize="xs" color="fg.subtle" mt={2}>
-                      <Text>Ordinal: {topic.ordinal}</Text>
-                    </HStack>
-                  </Box>
-
-                  <HStack spaceX={2}>
-                    {isCustomTopic ? (
-                      <>
-                        <Button size="sm" variant="outline" onClick={() => editModal.openModal(topic)}>
-                          <Icon as={BsPencil} />
-                          Edit
-                        </Button>
-                        {hasThreads ? (
-                          <Tooltip
-                            content={`Cannot delete: ${threadCount} thread${threadCount === 1 ? "" : "s"} use${threadCount === 1 ? "s" : ""} this topic. Remove or reassign threads first.`}
-                          >
-                            <Button size="sm" variant="outline" colorPalette="red" disabled>
-                              <Icon as={BsTrash} />
-                              Delete
-                            </Button>
-                          </Tooltip>
-                        ) : (
-                          <PopConfirm
-                            triggerLabel="Delete topic"
-                            trigger={
-                              <Button size="sm" variant="outline" colorPalette="red">
-                                <Icon as={BsTrash} />
-                                Delete
-                              </Button>
-                            }
-                            confirmHeader="Delete Topic"
-                            confirmText={`Are you sure you want to delete the topic "${topic.topic}"? This action cannot be undone.`}
-                            onConfirm={async () => await handleDeleteTopic(topic.id)}
-                          />
-                        )}
-                      </>
-                    ) : (
-                      <Text fontSize="sm" color="fg.subtle" fontStyle="italic">
-                        Default topics cannot be modified
-                      </Text>
-                    )}
-                  </HStack>
-                </Flex>
-              </Box>
-            );
-          })}
-        </Stack>
+              return (
+                <DraggableTopicItem
+                  key={topic.id}
+                  topic={topic}
+                  isCustomTopic={true}
+                  linkedAssignment={linkedAssignment ?? null}
+                  threadCount={threadCount}
+                  hasThreads={hasThreads}
+                  onEdit={(topic) => editModal.openModal(topic)}
+                  onDelete={handleDeleteTopic}
+                />
+              );
+            })}
+          </Stack>
+        </DndContext>
       )}
 
       {/* Modals */}

@@ -374,6 +374,7 @@ export class CourseController {
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
   private _discussionThreadWatchers?: TableController<"discussion_thread_watchers">;
+  private _discussionTopicFollowers?: TableController<"discussion_topic_followers">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
@@ -489,6 +490,23 @@ export class CourseController {
       });
     }
     return this._discussionThreadWatchers;
+  }
+
+  get discussionTopicFollowers(): TableController<"discussion_topic_followers"> {
+    if (!this._discussionTopicFollowers) {
+      this._discussionTopicFollowers = new TableController({
+        client: this.client,
+        table: "discussion_topic_followers",
+        query: this.client
+          .from("discussion_topic_followers")
+          .select("*")
+          .eq("user_id", this._userId)
+          .eq("class_id", this.courseId),
+        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionTopicFollowers;
   }
 
   get notifications(): TableController<"notifications"> {
@@ -1309,6 +1327,7 @@ export class CourseController {
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
     this._discussionThreadWatchers?.close();
+    this._discussionTopicFollowers?.close();
     this._discussionThreadLikes?.close();
     this._discussionTopics?.close();
     this._tags?.close();
