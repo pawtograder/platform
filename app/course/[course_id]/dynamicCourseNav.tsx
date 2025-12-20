@@ -40,6 +40,7 @@ import {
 import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "./UserMenu";
+import { NavigationProgressBar } from "@/components/ui/navigation-progress";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -282,7 +283,9 @@ export default function DynamicCourseNav() {
       bg="bg.subtle"
       borderBottomWidth="1px"
       borderBottomColor="border.emphasized"
+      position="relative"
     >
+      <NavigationProgressBar />
       {/* Mobile Layout */}
       <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">

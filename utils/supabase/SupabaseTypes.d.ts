@@ -1749,6 +1749,102 @@ export type Database = {
           }
         ];
       };
+      discussion_digest_items: {
+        Row: {
+          action: string | null;
+          author_name: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          msg_id: number | null;
+          notification_reason: string | null;
+          teaser: string | null;
+          thread_id: number;
+          thread_name: string;
+          thread_url: string | null;
+          topic_id: number | null;
+          user_id: string;
+        };
+        Insert: {
+          action?: string | null;
+          author_name: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          msg_id?: number | null;
+          notification_reason?: string | null;
+          teaser?: string | null;
+          thread_id: number;
+          thread_name: string;
+          thread_url?: string | null;
+          topic_id?: number | null;
+          user_id: string;
+        };
+        Update: {
+          action?: string | null;
+          author_name?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          msg_id?: number | null;
+          notification_reason?: string | null;
+          teaser?: string | null;
+          thread_id?: number;
+          thread_name?: string;
+          thread_url?: string | null;
+          topic_id?: number | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_digest_items_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_digest_items_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      discussion_digest_send_times: {
+        Row: {
+          class_id: number;
+          last_sent_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          last_sent_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          last_sent_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_digest_send_times_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_digest_send_times_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discussion_thread_likes: {
         Row: {
           created_at: string;
@@ -4780,6 +4876,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          discussion_notification: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id: number;
           regrade_request_notification: Database["public"]["Enums"]["help_request_creation_notification"];
@@ -4789,6 +4886,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
           regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
@@ -4798,6 +4896,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
           regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
@@ -10725,6 +10824,7 @@ export type Database = {
         | "scheduling"
         | "operations";
       discord_resource_type: "help_request" | "regrade_request";
+      discussion_notification_type: "immediate" | "digest" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -10890,6 +10990,7 @@ export const Constants = {
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades", "scheduling", "operations"],
       discord_resource_type: ["help_request", "regrade_request"],
+      discussion_notification_type: ["immediate", "digest", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",

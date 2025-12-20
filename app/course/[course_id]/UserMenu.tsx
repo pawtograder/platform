@@ -31,7 +31,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useInvalidate, useOne } from "@refinedev/core";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaGithub } from "react-icons/fa";
 import { FaCircleUser } from "react-icons/fa6";
@@ -549,10 +549,36 @@ const ProfileChangesMenu = () => {
 
 /**
  * Dialog component to allow users to manage their notification preferences.
+ * Supports deep-linking via URL parameters:
+ * - ?openNotificationSettings=true - Opens the modal
+ * - ?setDiscussionNotification=disabled - Sets discussion notification preference and opens modal
  */
 const NotificationPreferencesMenu = () => {
+  const searchParams = useSearchParams();
+  const [open, setOpen] = useState(false);
+  const initialDiscussionNotification = searchParams.get("setDiscussionNotification") as
+    | "immediate"
+    | "digest"
+    | "disabled"
+    | null;
+
+  // Open modal if URL parameter is present
+  useEffect(() => {
+    if (searchParams.get("openNotificationSettings") === "true" || initialDiscussionNotification) {
+      setOpen(true);
+      // Clean up URL params after opening
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("openNotificationSettings");
+      if (initialDiscussionNotification) {
+        params.delete("setDiscussionNotification");
+      }
+      const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [searchParams, initialDiscussionNotification]);
+
   return (
-    <Dialog.Root size={"md"} placement={"center"}>
+    <Dialog.Root size={"md"} placement={"center"} open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Dialog.Trigger asChild>
         <Button
           variant="ghost"
@@ -575,7 +601,7 @@ const NotificationPreferencesMenu = () => {
               <Dialog.Title>Notification Settings</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <NotificationPreferences />
+              <NotificationPreferences initialDiscussionNotification={initialDiscussionNotification} />
             </Dialog.Body>
             <Dialog.Footer>
               <Dialog.ActionTrigger asChild>
@@ -591,6 +617,7 @@ const NotificationPreferencesMenu = () => {
 
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
+  const searchParams = useSearchParams();
   const { role: enrollment } = useClassProfiles();
   const gitHubUsername = enrollment.users.github_username;
   const { private_profile_id } = useClassProfiles();
@@ -598,6 +625,13 @@ function UserSettingsMenu() {
     resource: "profiles",
     id: private_profile_id
   });
+
+  // Open drawer if URL parameters indicate notification settings should be opened
+  useEffect(() => {
+    if (searchParams.get("openNotificationSettings") === "true" || searchParams.get("setDiscussionNotification")) {
+      setOpen(true);
+    }
+  }, [searchParams]);
 
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>

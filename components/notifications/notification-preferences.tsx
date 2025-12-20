@@ -1,23 +1,26 @@
 "use client";
 
-import { Box, Fieldset, Stack, Heading, Text } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { NativeSelect } from "@chakra-ui/react";
-import { useState, useEffect } from "react";
-import { useList, useCreate, useUpdate } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import useAuthState from "@/hooks/useAuthState";
 import { toaster } from "@/components/ui/toaster";
-import type { NotificationPreferences } from "@/utils/supabase/DatabaseTypes";
+import useAuthState from "@/hooks/useAuthState";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
+import type { NotificationPreferences } from "@/utils/supabase/DatabaseTypes";
+import { Box, Fieldset, Heading, NativeSelect, Stack } from "@chakra-ui/react";
+import { useCreate, useList, useUpdate } from "@refinedev/core";
+import { useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 /**
- * Component for managing user notification preferences for help requests.
- * Allows users to choose between immediate, digest, or disabled notifications.
+ * Component for managing user notification preferences.
+ * Allows users to choose between immediate, digest, or disabled notifications for various features.
  */
-export default function NotificationPreferencesPanel() {
+export default function NotificationPreferencesPanel({
+  initialDiscussionNotification
+}: {
+  initialDiscussionNotification?: "immediate" | "digest" | "disabled" | null;
+}) {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const { identities } = useIdentity();
@@ -25,7 +28,9 @@ export default function NotificationPreferencesPanel() {
   const discordIdentity = identities?.find((identity) => identity.provider === "discord");
   const hasDiscordLinked = !!discordIdentity;
 
-  const [preferences, setPreferences] = useState<NotificationPreferences>({
+  const [preferences, setPreferences] = useState<
+    NotificationPreferences & { discussion_notification?: "immediate" | "digest" | "disabled" }
+  >({
     /*
      * The table definition requires these fields, so we provide harmless defaults
      * that will be overwritten as soon as real data is loaded.
@@ -36,10 +41,12 @@ export default function NotificationPreferencesPanel() {
     class_id: classId,
     help_request_creation_notification: "all",
     regrade_request_notification: "all",
+    discussion_notification: "immediate",
     updated_at: new Date().toISOString()
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const hasAutoSaved = useRef(false);
 
   // Fetch existing preferences
   const { data: existingPreferences } = useList<NotificationPreferences>({
@@ -60,13 +67,45 @@ export default function NotificationPreferencesPanel() {
   // Load existing preferences when data is available
   useEffect(() => {
     if (existingPreferences?.data?.[0]) {
+      const data = existingPreferences.data[0] as NotificationPreferences & {
+        discussion_notification?: "immediate" | "digest" | "disabled";
+      };
       setPreferences({
-        ...existingPreferences.data[0],
+        ...data,
         // Ensure regrade_request_notification has a default if not present
-        regrade_request_notification: existingPreferences.data[0].regrade_request_notification || "all"
+        regrade_request_notification: data.regrade_request_notification || "all",
+        // Use initialDiscussionNotification if provided, otherwise use existing or default
+        discussion_notification: initialDiscussionNotification || data.discussion_notification || "immediate"
       });
+    } else if (initialDiscussionNotification) {
+      // If no existing preferences but we have an initial value, set it
+      setPreferences((prev) => ({
+        ...prev,
+        discussion_notification: initialDiscussionNotification
+      }));
     }
-  }, [existingPreferences]);
+  }, [existingPreferences, initialDiscussionNotification]);
+
+  // Auto-save if initialDiscussionNotification is provided via deep link
+  useEffect(() => {
+    if (
+      initialDiscussionNotification &&
+      user?.id &&
+      !hasAutoSaved.current &&
+      existingPreferences?.data !== undefined &&
+      preferences.discussion_notification === initialDiscussionNotification
+    ) {
+      const existingPref = existingPreferences?.data?.[0] as NotificationPreferences & {
+        discussion_notification?: string;
+      };
+      // Only auto-save if the value is different from existing or if no preferences exist
+      if (!existingPref || existingPref.discussion_notification !== initialDiscussionNotification) {
+        hasAutoSaved.current = true;
+        handleSave();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDiscussionNotification, user?.id, existingPreferences?.data, preferences.discussion_notification]);
 
   const handleSave = async () => {
     if (!user?.id) {
@@ -88,6 +127,7 @@ export default function NotificationPreferencesPanel() {
           values: {
             help_request_creation_notification: preferences.help_request_creation_notification,
             regrade_request_notification: preferences.regrade_request_notification,
+            discussion_notification: preferences.discussion_notification || "immediate",
             updated_at: new Date().toISOString()
           }
         });
@@ -99,7 +139,8 @@ export default function NotificationPreferencesPanel() {
             user_id: user.id,
             class_id: classId,
             help_request_creation_notification: preferences.help_request_creation_notification,
-            regrade_request_notification: preferences.regrade_request_notification
+            regrade_request_notification: preferences.regrade_request_notification,
+            discussion_notification: preferences.discussion_notification || "immediate"
           }
         });
       }
@@ -120,15 +161,6 @@ export default function NotificationPreferencesPanel() {
 
   const isInstructorOrGrader = useIsGraderOrInstructor();
 
-  // This will probably be refactored in the future.
-  if (!isInstructorOrGrader) {
-    return (
-      <Box>
-        <Text>No specific notification preferences have been implemented for students yet.</Text>
-      </Box>
-    );
-  }
-
   const discordHelperText = hasDiscordLinked
     ? "You have Discord linked. Default is NO email notifications (you'll receive Discord notifications instead)."
     : "If you link Discord, the default will be NO email notifications.";
@@ -142,48 +174,72 @@ export default function NotificationPreferencesPanel() {
         <Fieldset.Content>
           <Stack spaceY={6}>
             <Field
-              label="Help Request Creation Notifications"
-              helperText={`Choose how you want to be notified when new help requests are created in your class. ${discordHelperText}`}
+              label="Discussion Board Notifications"
+              helperText="Choose how you want to receive email notifications for discussion board activity. Following a topic notifies you of new posts only. Following a post notifies you of all replies to that post."
             >
               <NativeSelect.Root>
                 <NativeSelect.Field
-                  value={preferences.help_request_creation_notification}
+                  value={preferences.discussion_notification || "immediate"}
                   onChange={(e) =>
                     setPreferences((prev) => ({
                       ...prev,
-                      help_request_creation_notification: e.target.value as "all" | "only_active_queue" | "none"
+                      discussion_notification: e.target.value as "immediate" | "digest" | "disabled"
                     }))
                   }
                 >
-                  <option value="all">All: Get notified for all help request creations.</option>
-                  <option value="only_active_queue">
-                    Only active queue: Get notified for help requests in your active queue.
-                  </option>
-                  <option value="none">None: No notifications for help request creations.</option>
+                  <option value="immediate">Immediate: Receive emails as soon as new posts or replies are made.</option>
+                  <option value="digest">Digest: Receive a summary of discussion activity .</option>
+                  <option value="disabled">Disabled: No email notifications for discussion board activity.</option>
                 </NativeSelect.Field>
               </NativeSelect.Root>
             </Field>
-            <Field
-              label="Regrade Request Notifications"
-              helperText={`Choose how you want to be notified about regrade requests. ${discordHelperText}`}
-            >
-              <NativeSelect.Root>
-                <NativeSelect.Field
-                  value={preferences.regrade_request_notification || "all"}
-                  onChange={(e) =>
-                    setPreferences((prev) => ({
-                      ...prev,
-                      regrade_request_notification: e.target.value as "all" | "none"
-                    }))
-                  }
+            {isInstructorOrGrader && (
+              <>
+                <Field
+                  label="Help Request Creation Notifications"
+                  helperText={`Choose how you want to be notified when new help requests are created in your class. ${discordHelperText}`}
                 >
-                  <option value="all">All: Get notified for all regrade request activity.</option>
-                  <option value="none">None: No email notifications for regrade requests.</option>
-                </NativeSelect.Field>
-              </NativeSelect.Root>
-            </Field>
+                  <NativeSelect.Root>
+                    <NativeSelect.Field
+                      value={preferences.help_request_creation_notification}
+                      onChange={(e) =>
+                        setPreferences((prev) => ({
+                          ...prev,
+                          help_request_creation_notification: e.target.value as "all" | "only_active_queue" | "none"
+                        }))
+                      }
+                    >
+                      <option value="all">All: Get notified for all help request creations.</option>
+                      <option value="only_active_queue">
+                        Only active queue: Get notified for help requests in your active queue.
+                      </option>
+                      <option value="none">None: No notifications for help request creations.</option>
+                    </NativeSelect.Field>
+                  </NativeSelect.Root>
+                </Field>
+                <Field
+                  label="Regrade Request Notifications"
+                  helperText={`Choose how you want to be notified about regrade requests. ${discordHelperText}`}
+                >
+                  <NativeSelect.Root>
+                    <NativeSelect.Field
+                      value={preferences.regrade_request_notification || "all"}
+                      onChange={(e) =>
+                        setPreferences((prev) => ({
+                          ...prev,
+                          regrade_request_notification: e.target.value as "all" | "none"
+                        }))
+                      }
+                    >
+                      <option value="all">All: Get notified for all regrade request activity.</option>
+                      <option value="none">None: No email notifications for regrade requests.</option>
+                    </NativeSelect.Field>
+                  </NativeSelect.Root>
+                </Field>
+              </>
+            )}
           </Stack>
-          <Button onClick={handleSave} loading={isLoading}>
+          <Button onClick={handleSave} loading={isLoading} colorPalette="green">
             Save Preferences
           </Button>
         </Fieldset.Content>

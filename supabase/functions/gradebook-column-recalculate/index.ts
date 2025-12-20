@@ -642,7 +642,6 @@ export async function processBatch(
     sleep_seconds: 60, // Short sleep since we're polling frequently
     n: maxMessages
   });
-  console.log(`${workerId} Read ${result.data?.length} messages from gradebook_row_recalculate queue`);
   if (result.error) {
     Sentry.captureException(result.error, scope);
     console.error("Queue read error:", result.error);

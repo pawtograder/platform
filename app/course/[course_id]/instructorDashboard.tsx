@@ -1,4 +1,3 @@
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { createClient } from "@/utils/supabase/server";
 import * as Sentry from "@sentry/nextjs";
 import {
@@ -11,7 +10,6 @@ import {
   DataListItemValue,
   DataListRoot,
   Heading,
-  Skeleton,
   Stack,
   VStack,
   Badge,
@@ -29,6 +27,7 @@ import LinkAccount from "@/components/github/link-account";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -114,26 +113,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const metrics = (Array.isArray(metricsRaw) ? metricsRaw : []) as unknown as InstructorDashboardMetricRow[];
   const recentMetrics = metrics.filter((m) => m.section === "recently_due");
   const upcomingMetrics = metrics.filter((m) => m.section === "upcoming");
-
-  const { data: topics, error: topicsError } = await supabase
-    .from("discussion_topics")
-    .select("*")
-    .eq("class_id", course_id);
-
-  if (topicsError) {
-    Sentry.captureException(topicsError);
-  }
-
-  const { data: discussions, error: discussionsError } = await supabase
-    .from("discussion_threads")
-    .select("*, profiles(*), discussion_topics(*)")
-    .eq("root_class_id", course_id)
-    .order("created_at", { ascending: false })
-    .limit(5);
-
-  if (discussionsError) {
-    Sentry.captureException(discussionsError);
-  }
 
   const { data: helpRequests, error: helpRequestsError } = await supabase
     .from("help_requests")
@@ -494,24 +473,8 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
         </Stack>
       </Box>
 
-      <Box>
-        <Heading size="lg" mb={4}>
-          Recent Discussions
-        </Heading>
-        <Stack spaceY={4}>
-          {discussions?.map((thread) => {
-            const topic = topics?.find((t) => t.id === thread.topic_id);
-            if (!topic) {
-              return <Skeleton key={thread.id} height="100px" />;
-            }
-            return (
-              <Link href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
-                <DiscussionPostSummary thread={thread} topic={topic} />
-              </Link>
-            );
-          })}
-        </Stack>
-      </Box>
+      {/* Discussion Activity Summary */}
+      {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
 
       <Box>
         <Heading size="lg" mb={4}>

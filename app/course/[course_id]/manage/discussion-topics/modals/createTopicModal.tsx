@@ -203,7 +203,9 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
                 <Controller
                   control={control}
                   name="icon"
-                  render={({ field }) => <TopicIconPicker value={field.value as TopicIconPickerValue} onChange={field.onChange} />}
+                  render={({ field }) => (
+                    <TopicIconPicker value={field.value as TopicIconPickerValue} onChange={field.onChange} />
+                  )}
                 />
 
                 <Controller

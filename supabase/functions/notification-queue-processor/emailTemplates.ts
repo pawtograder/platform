@@ -55,11 +55,16 @@ export const emailTemplates = {
    * {thread_name} - The name of the thread
    * {reply_author_name} - The name of the reply author
    * {thread_url} - The URL of the thread
+   * {notification_footer} - Footer explaining why email was sent and unsubscribe links (added by processor)
    */
   discussion_thread: {
+    new_post: {
+      subject: "{course_name} - New post in {thread_name} from {reply_author_name}",
+      body: "{reply_author_name} posted a new message in {thread_name}. Read more details in Pawtograder at {thread_url}\n\n{notification_footer}"
+    },
     reply: {
       subject: "{course_name} - {thread_name} has a new reply from {reply_author_name}",
-      body: "{reply_author_name} has replied to your post in {thread_name}. Read more details in Pawtograder at {thread_url}"
+      body: "{reply_author_name} has replied to your post in {thread_name}. Read more details in Pawtograder at {thread_url}\n\n{notification_footer}"
     }
   },
   email: {

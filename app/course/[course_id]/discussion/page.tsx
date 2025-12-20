@@ -3,15 +3,13 @@ import { PinnedPostsSidebar } from "@/components/discussion/PinnedPostsSidebar";
 import { PostRow } from "@/components/discussion/PostRow";
 import { TopPostsSidebar } from "@/components/discussion/TopPostsSidebar";
 import { TopicCard } from "@/components/discussion/TopicCard";
-import { Button } from "@/components/ui/button";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useDiscussionTopicFollowStatus, useFollowedDiscussionTopicIds } from "@/hooks/useDiscussionTopicFollow";
+import { TopicFollowMultiSelect } from "@/components/discussion/TopicFollowMultiSelect";
+import { useFollowedDiscussionTopicIds, useTopicFollowActions } from "@/hooks/useDiscussionTopicFollow";
 import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { Box, Flex, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { FaRegStar, FaStar } from "react-icons/fa";
 
 export default function DiscussionPage() {
   const { course_id } = useParams();
@@ -26,9 +24,9 @@ export default function DiscussionPage() {
   const controller = useCourseController();
   const topics = useDiscussionTopics();
   const threads = useDiscussionThreadTeasers();
-  const { role } = useClassProfiles();
 
   const followedTopicIds = useFollowedDiscussionTopicIds();
+  const { setTopicFollowStatusForId } = useTopicFollowActions();
   const watches = useTableControllerTableValues(controller.discussionThreadWatchers);
   const followedThreadIds = useMemo(() => {
     const ws = watches ?? [];
@@ -85,21 +83,19 @@ export default function DiscussionPage() {
   }, [readAtByThreadId, threads]);
 
   const feedThreads = useMemo(() => {
-    const staff = role.role === "instructor" || role.role === "grader";
     return threads
-      .filter((t) => staff || followedThreadIds.has(t.id) || followedTopicIds.has(t.topic_id))
+      .filter((t) => followedThreadIds.has(t.id) || followedTopicIds.has(t.topic_id))
       .filter((t) => {
         if (!q) return true;
         return (t.subject ?? "").toLowerCase().includes(q) || (t.body ?? "").toLowerCase().includes(q);
       })
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [followedThreadIds, followedTopicIds, q, role.role, threads]);
+  }, [followedThreadIds, followedTopicIds, q, threads]);
 
   const selectedTopic = useMemo(
     () => (selectedTopicId != null ? sortedTopics.find((t) => t.id === selectedTopicId) : undefined),
     [selectedTopicId, sortedTopics]
   );
-  const { status: selectedTopicFollowed, setTopicFollowStatus } = useDiscussionTopicFollowStatus(selectedTopicId ?? -1);
 
   const browseThreads = useMemo(() => {
     if (!selectedTopicId) return [];
@@ -135,6 +131,9 @@ export default function DiscussionPage() {
                   postCount={topicCounts.get(t.id) ?? 0}
                   unreadCount={topicUnreadCounts.get(t.id) ?? 0}
                   selected={t.id === selectedTopicId}
+                  showFollowStar
+                  isFollowed={followedTopicIds.has(t.id)}
+                  onToggleFollowAction={() => setTopicFollowStatusForId(t.id, !followedTopicIds.has(t.id))}
                   onClickAction={() => {
                     setSelectedTopicId(t.id);
                     const next = new URLSearchParams(searchParams.toString());
@@ -150,17 +149,6 @@ export default function DiscussionPage() {
           <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
             <HStack justify="space-between" align="center" mb="4" flexShrink={0}>
               <Heading size="md">{selectedTopic?.topic ?? "Select a topic"}</Heading>
-              {selectedTopic && role.role === "student" && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setTopicFollowStatus(!selectedTopicFollowed)}
-                  aria-label={selectedTopicFollowed ? "Unfollow topic" : "Follow topic"}
-                >
-                  {selectedTopicFollowed ? <FaStar /> : <FaRegStar />}
-                  {selectedTopicFollowed ? "Following" : "Follow"}
-                </Button>
-              )}
             </HStack>
 
             <Box
@@ -196,12 +184,20 @@ export default function DiscussionPage() {
     <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch">
       <Box flex={{ lg: 8 }} minW={0}>
         <Stack spaceY={4}>
-          <Heading size="md">My Feed</Heading>
+          <HStack justify="space-between" align="center">
+            <Heading size="md">My Feed</Heading>
+            <TopicFollowMultiSelect
+              topics={sortedTopics}
+              followedTopicIds={followedTopicIds}
+              onSetTopicFollowStatusAction={setTopicFollowStatusForId}
+            />
+          </HStack>
 
           <Box borderWidth="1px" borderColor="border.emphasized" bg="bg.panel" rounded="md" overflow="hidden">
             {feedThreads.length === 0 ? (
               <Text px="4" py="3" color="fg.muted" fontSize="sm">
-                Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here.
+                Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here. Followed posts and
+                topics will appear in My Feed.
               </Text>
             ) : (
               feedThreads.map((t) => (
@@ -214,8 +210,8 @@ export default function DiscussionPage() {
 
       <Box flex={{ lg: 4 }} minW={0}>
         <Stack spaceY={4}>
-          <TopPostsSidebar threads={threads} courseId={Number(course_id)} />
           <PinnedPostsSidebar threads={threads} courseId={Number(course_id)} />
+          <TopPostsSidebar threads={threads} courseId={Number(course_id)} />
         </Stack>
       </Box>
     </Flex>

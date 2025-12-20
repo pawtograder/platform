@@ -9,12 +9,12 @@ import {
   useCourseController
 } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useProfileRole } from "@/hooks/useCourseController";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { TopicIcon } from "@/components/discussion/TopicIcon";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Badge, Box, HStack, Icon, Spacer, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import Link from "next/link";
@@ -49,8 +49,6 @@ export function PostRow({
   const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
   const userProfile = useUserProfile(thread?.author);
   const { private_profile_id } = useClassProfiles();
-  const authorRole = useProfileRole(thread?.author);
-  const authorIsStaff = authorRole === "instructor" || authorRole === "grader";
 
   const { readStatus } = useDiscussionThreadReadStatus(threadId);
   const childrenReadStatuses = useRootDiscussionThreadReadStatuses(threadId);
@@ -150,7 +148,9 @@ export function PostRow({
                     )}
                   </HStack>
                   <HStack gap="2" fontSize="xs" color="fg.muted" wrap="wrap">
-                    <Text color={authorIsStaff ? "purple.500" : "fg.muted"}>{userProfile?.name ?? ""}</Text>
+                    <Text color="fg.muted" fontWeight="medium">
+                      {userProfile?.name ?? ""}
+                    </Text>
                     <Text>•</Text>
                     <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
                     <Text>•</Text>
@@ -211,7 +211,9 @@ export function PostRow({
             </HStack>
 
             <HStack gap="3" fontSize="xs" color="fg.muted" wrap="wrap">
-              <Text color={authorIsStaff ? "purple.500" : "fg.muted"}>{userProfile?.name ?? ""}</Text>
+              <Text color="fg.muted" fontWeight="medium">
+                {userProfile?.name ?? ""}
+              </Text>
               <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
               <Text>{thread.children_count ?? 0} replies</Text>
               <Text>{thread.likes_count ?? 0} likes</Text>
@@ -228,9 +230,18 @@ export function PostRow({
             >
               <Icon as={likeStatus ? FaHeart : FaRegHeart} />
             </Button>
-            <Button aria-label={isFollowing ? "Unfollow" : "Follow"} variant="ghost" size="sm" onClick={toggleFollow}>
-              <Icon as={isFollowing ? FaStar : FaRegStar} />
-            </Button>
+            <Tooltip
+              content={
+                isFollowing
+                  ? "Unfollow post - You'll stop receiving notifications for replies to this post and it will be removed from My Feed"
+                  : "Follow post - You'll receive email notifications for all replies to this post and it will appear in My Feed"
+              }
+              showArrow
+            >
+              <Button aria-label={isFollowing ? "Unfollow" : "Follow"} variant="ghost" size="sm" onClick={toggleFollow}>
+                <Icon as={isFollowing ? FaStar : FaRegStar} />
+              </Button>
+            </Tooltip>
           </HStack>
         </HStack>
       </Link>
