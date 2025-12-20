@@ -1,6 +1,6 @@
 "use client";
 
-import { TopicIconPicker } from "@/components/discussion/TopicIconPicker";
+import { TopicIconPicker, TopicIconPickerValue } from "@/components/discussion/TopicIconPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
@@ -161,7 +161,6 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                 <Field.Root invalid={!!errors.topic}>
                   <Field.Label>Topic Name</Field.Label>
                   <Input
-                    disabled={!isCustomTopic}
                     {...register("topic", {
                       required: "Topic name is required",
                       minLength: { value: 2, message: "Name must be at least 2 characters" }
@@ -169,19 +168,11 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                     placeholder="e.g., Homework 1, Lab 3, Exam Review"
                   />
                   <Field.ErrorText>{errors.topic?.message}</Field.ErrorText>
-                  {!isCustomTopic && (
-                    <Field.HelperText>
-                      <Text color="fg.muted" fontSize="sm">
-                        Built-in topics can’t be renamed, but you can set an icon and default-follow behavior.
-                      </Text>
-                    </Field.HelperText>
-                  )}
                 </Field.Root>
 
                 <Field.Root invalid={!!errors.description}>
                   <Field.Label>Description</Field.Label>
                   <Textarea
-                    disabled={!isCustomTopic}
                     {...register("description", {
                       required: "Description is required"
                     })}
@@ -197,10 +188,7 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                 <Field.Root invalid={!!errors.color}>
                   <Field.Label>Color</Field.Label>
                   <NativeSelect.Root>
-                    <NativeSelect.Field
-                      disabled={!isCustomTopic}
-                      {...register("color", { required: "Color is required" })}
-                    >
+                    <NativeSelect.Field {...register("color", { required: "Color is required" })}>
                       {TOPIC_COLORS.map((color) => (
                         <option key={color.value} value={color.value}>
                           {color.label}
@@ -215,7 +203,7 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                 <Controller
                   control={control}
                   name="icon"
-                  render={({ field }) => <TopicIconPicker value={field.value ?? ""} onChange={field.onChange} />}
+                  render={({ field }) => <TopicIconPicker value={field.value as TopicIconPickerValue} onChange={field.onChange} />}
                 />
 
                 <Controller

@@ -1,35 +1,35 @@
 "use client";
 
+import { TopicIcon } from "@/components/discussion/TopicIcon";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import useModalManager from "@/hooks/useModalManager";
-import {
-  useCourseController,
-  useDiscussionTopics,
-  useAssignments,
-  useDiscussionThreadTeasers
-} from "@/hooks/useCourseController";
-import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
-import { TopicIcon } from "@/components/discussion/TopicIcon";
-import { Badge, Box, Container, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
-import { BsPencil, BsPlus, BsTrash, BsLink45Deg, BsLock, BsChatDots, BsGripVertical } from "react-icons/bs";
-import CreateTopicModal from "./modals/createTopicModal";
-import EditTopicModal from "./modals/editTopicModal";
 import { toaster } from "@/components/ui/toaster";
-import { useMemo } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
-  DndContext,
+  useAssignments,
+  useCourseController,
+  useDiscussionThreadTeasers,
+  useDiscussionTopics
+} from "@/hooks/useCourseController";
+import useModalManager from "@/hooks/useModalManager";
+import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import { Badge, Box, Container, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
+import {
   closestCenter,
+  DndContext,
+  DragEndEvent,
   KeyboardSensor,
   PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
   useDraggable,
-  useDroppable
+  useDroppable,
+  useSensor,
+  useSensors
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
+import { useMemo } from "react";
+import { BsChatDots, BsGripVertical, BsLink45Deg, BsPencil, BsPlus, BsTrash } from "react-icons/bs";
+import CreateTopicModal from "./modals/createTopicModal";
+import EditTopicModal from "./modals/editTopicModal";
 
 /**
  * Draggable and droppable topic item component.
@@ -37,7 +37,6 @@ import { CSS } from "@dnd-kit/utilities";
  */
 function DraggableTopicItem({
   topic,
-  isCustomTopic,
   linkedAssignment,
   threadCount,
   hasThreads,
@@ -45,7 +44,6 @@ function DraggableTopicItem({
   onDelete
 }: {
   topic: DiscussionTopic;
-  isCustomTopic: boolean;
   linkedAssignment: string | null | undefined;
   threadCount: number;
   hasThreads: boolean;
@@ -143,30 +141,29 @@ function DraggableTopicItem({
             <Icon as={BsPencil} />
             Edit
           </Button>
-          {isCustomTopic &&
-            (hasThreads ? (
-              <Tooltip
-                content={`Cannot delete: ${threadCount} thread${threadCount === 1 ? "" : "s"} use${threadCount === 1 ? "s" : ""} this topic. Remove or reassign threads first.`}
-              >
-                <Button size="sm" variant="outline" colorPalette="red" disabled>
+          {hasThreads ? (
+            <Tooltip
+              content={`Cannot delete: ${threadCount} thread${threadCount === 1 ? "" : "s"} use${threadCount === 1 ? "s" : ""} this topic. Remove or reassign threads first.`}
+            >
+              <Button size="sm" variant="outline" colorPalette="red" disabled>
+                <Icon as={BsTrash} />
+                Delete
+              </Button>
+            </Tooltip>
+          ) : (
+            <PopConfirm
+              triggerLabel="Delete topic"
+              trigger={
+                <Button size="sm" variant="outline" colorPalette="red">
                   <Icon as={BsTrash} />
                   Delete
                 </Button>
-              </Tooltip>
-            ) : (
-              <PopConfirm
-                triggerLabel="Delete topic"
-                trigger={
-                  <Button size="sm" variant="outline" colorPalette="red">
-                    <Icon as={BsTrash} />
-                    Delete
-                  </Button>
-                }
-                confirmHeader="Delete Topic"
-                confirmText={`Are you sure you want to delete the topic "${topic.topic}"? This action cannot be undone.`}
-                onConfirm={async () => await onDelete(topic.id)}
-              />
-            ))}
+              }
+              confirmHeader="Delete Topic"
+              confirmText={`Are you sure you want to delete the topic "${topic.topic}"? This action cannot be undone.`}
+              onConfirm={async () => await onDelete(topic.id)}
+            />
+          )}
         </HStack>
       </Flex>
     </Box>
@@ -401,7 +398,6 @@ export default function DiscussionTopicsPage() {
                 <DraggableTopicItem
                   key={topic.id}
                   topic={topic}
-                  isCustomTopic={true}
                   linkedAssignment={linkedAssignment ?? null}
                   threadCount={threadCount}
                   hasThreads={hasThreads}

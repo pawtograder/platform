@@ -1,6 +1,6 @@
 "use client";
 
-import { TopicIconPicker } from "@/components/discussion/TopicIconPicker";
+import { TopicIconPicker, TopicIconPickerValue } from "@/components/discussion/TopicIconPicker";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
@@ -203,7 +203,7 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
                 <Controller
                   control={control}
                   name="icon"
-                  render={({ field }) => <TopicIconPicker value={field.value ?? ""} onChange={field.onChange} />}
+                  render={({ field }) => <TopicIconPicker value={field.value as TopicIconPickerValue} onChange={field.onChange} />}
                 />
 
                 <Controller

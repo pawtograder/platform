@@ -19,7 +19,17 @@ import { Badge, Box, HStack, Icon, Spacer, Stack, Text } from "@chakra-ui/react"
 import { formatRelative } from "date-fns";
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { FaCheck, FaCheckCircle, FaCircle, FaHeart, FaQuestionCircle, FaRegHeart, FaRegStar, FaStar, FaThumbtack } from "react-icons/fa";
+import {
+  FaCheck,
+  FaCheckCircle,
+  FaCircle,
+  FaHeart,
+  FaQuestionCircle,
+  FaRegHeart,
+  FaRegStar,
+  FaStar,
+  FaThumbtack
+} from "react-icons/fa";
 
 export function PostRow({
   threadId,
@@ -129,14 +139,14 @@ export function PostRow({
                 <Stack spaceY="0.5" flex="1" minW={0}>
                   <HStack gap="1.5" minW={0} wrap="wrap">
                     {thread.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="2.5" />}
-                    <Text fontWeight="semibold" fontSize="sm" noOfLines={2}>
+                    <Text fontWeight="semibold" fontSize="sm" truncate>
                       {thread.subject}
                     </Text>
                     {thread.is_question && !thread.answer && (
-                      <Icon as={FaQuestionCircle} color="red.500" boxSize="3" title="Unanswered" />
+                      <Icon as={FaQuestionCircle} color="red.500" boxSize="3" aria-label="Unanswered" />
                     )}
                     {thread.is_question && thread.answer && (
-                      <Icon as={FaCheckCircle} color="green.500" boxSize="3" title="Answered" />
+                      <Icon as={FaCheckCircle} color="green.500" boxSize="3" aria-label="Answered" />
                     )}
                   </HStack>
                   <HStack gap="2" fontSize="xs" color="fg.muted" wrap="wrap">
