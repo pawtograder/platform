@@ -1017,3 +1017,17 @@ export type StudentDeadlineExtension = GetResult<
   Database["public"]["Tables"]["student_deadline_extensions"]["Relationships"],
   "*"
 >;
+
+// Assignment Leaderboard Types
+export type AssignmentLeaderboardEntry = {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  assignment_id: number;
+  class_id: number;
+  public_profile_id: string;
+  private_profile_id: string;
+  autograder_score: number;
+  max_score: number;
+  submission_id: number | null;
+};

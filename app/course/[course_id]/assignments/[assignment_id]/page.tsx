@@ -3,6 +3,7 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
+import AssignmentLeaderboard from "@/components/ui/assignment-leaderboard";
 import Markdown from "@/components/ui/markdown";
 import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
@@ -118,6 +119,11 @@ export default function AssignmentPage() {
       </Flex>
 
       <Markdown>{assignment.description}</Markdown>
+
+      <Box my={4}>
+        <AssignmentLeaderboard assignmentId={Number(assignment_id)} maxEntries={10} />
+      </Box>
+
       {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
         <Alert.Root status="error" flexDirection="column">
           <Alert.Title>No repositories configured for this assignment</Alert.Title>
