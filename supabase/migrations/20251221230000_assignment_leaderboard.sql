@@ -272,3 +272,10 @@ CREATE TRIGGER trigger_update_leaderboard_on_submission_active
 
 -- Add comment
 COMMENT ON TABLE public.assignment_leaderboard IS 'Stores autograder scores per student per assignment for leaderboard display. Uses public_profile_id for pseudonymity.';
+
+-- Create broadcast trigger for realtime updates
+-- Uses the unified course table change broadcaster which sends to staff and students channels
+CREATE TRIGGER broadcast_assignment_leaderboard_realtime
+    AFTER INSERT OR DELETE OR UPDATE ON public.assignment_leaderboard
+    FOR EACH ROW
+    EXECUTE FUNCTION broadcast_course_table_change_unified();
