@@ -1,47 +1,46 @@
 "use client";
 import PersonName from "@/components/ui/person-name";
+import { useLeaderboard } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { AssignmentLeaderboardEntry } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Heading, HStack, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { useMemo } from "react";
 
 interface AssignmentLeaderboardProps {
-  assignmentId: number;
   maxEntries?: number;
 }
 
-export default function AssignmentLeaderboard({ assignmentId, maxEntries = 10 }: AssignmentLeaderboardProps) {
+export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLeaderboardProps) {
   const { private_profile_id } = useClassProfiles();
 
-  const { data: leaderboardData, isLoading } = useList<AssignmentLeaderboardEntry>({
-    resource: "assignment_leaderboard",
-    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
-    sorters: [{ field: "autograder_score", order: "desc" }],
-    pagination: { pageSize: maxEntries }
-  });
+  // Use the TableController-based hook for real-time leaderboard data
+  const leaderboardData = useLeaderboard();
 
+  // Sort by autograder_score descending and limit to maxEntries
   const leaderboardEntries = useMemo(() => {
-    return leaderboardData?.data || [];
-  }, [leaderboardData]);
+    const sorted = [...leaderboardData].sort((a, b) => b.autograder_score - a.autograder_score);
+    return sorted.slice(0, maxEntries);
+  }, [leaderboardData, maxEntries]);
 
   // Find if the current user is in the leaderboard
   const currentUserEntry = useMemo(() => {
-    return leaderboardEntries.find((entry) => entry.private_profile_id === private_profile_id);
-  }, [leaderboardEntries, private_profile_id]);
+    return leaderboardData.find(
+      (entry: AssignmentLeaderboardEntry) => entry.private_profile_id === private_profile_id
+    );
+  }, [leaderboardData, private_profile_id]);
 
+  // Calculate current user's rank (across all entries, not just displayed ones)
   const currentUserRank = useMemo(() => {
     if (!currentUserEntry) return null;
-    return leaderboardEntries.findIndex((entry) => entry.private_profile_id === private_profile_id) + 1;
-  }, [leaderboardEntries, currentUserEntry, private_profile_id]);
-
-  if (isLoading) {
-    return (
-      <Box borderWidth={1} borderRadius="md" p={4} bg="bg.subtle">
-        <Skeleton height="200px" />
-      </Box>
+    const sorted = [...leaderboardData].sort(
+      (a: AssignmentLeaderboardEntry, b: AssignmentLeaderboardEntry) => b.autograder_score - a.autograder_score
     );
-  }
+    return (
+      sorted.findIndex(
+        (entry: AssignmentLeaderboardEntry) => entry.private_profile_id === private_profile_id
+      ) + 1
+    );
+  }, [leaderboardData, currentUserEntry, private_profile_id]);
 
   if (leaderboardEntries.length === 0) {
     return null;
@@ -68,7 +67,7 @@ export default function AssignmentLeaderboard({ assignmentId, maxEntries = 10 }:
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {leaderboardEntries.map((entry, index) => {
+            {leaderboardEntries.map((entry: AssignmentLeaderboardEntry, index: number) => {
               const rank = index + 1;
               const isCurrentUser = entry.private_profile_id === private_profile_id;
 

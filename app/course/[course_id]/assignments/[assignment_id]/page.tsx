@@ -121,7 +121,7 @@ export default function AssignmentPage() {
       <Markdown>{assignment.description}</Markdown>
 
       <Box my={4}>
-        <AssignmentLeaderboard assignmentId={Number(assignment_id)} maxEntries={10} />
+        <AssignmentLeaderboard maxEntries={10} />
       </Box>
 
       {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
