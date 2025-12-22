@@ -23,14 +23,14 @@ let assignment: (Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricC
 
 // Function to insert a submission with a specific score
 async function insertSubmissionWithScore(
-  studentProfileId: string,
+  studentPrivateProfileId: string,
   assignmentId: number,
   classId: number,
   score: number,
   maxScore: number = 100
 ) {
   const submission = await insertPreBakedSubmission({
-    student_profile_id: studentProfileId,
+    student_profile_id: studentPrivateProfileId,
     assignment_id: assignmentId,
     class_id: classId
   });
