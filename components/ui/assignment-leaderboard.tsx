@@ -3,7 +3,7 @@ import PersonName from "@/components/ui/person-name";
 import { useLeaderboard } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { AssignmentLeaderboardEntry } from "@/utils/supabase/DatabaseTypes";
-import { Badge, Box, Heading, HStack, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, Heading, HStack, Table, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 
 interface AssignmentLeaderboardProps {
@@ -11,7 +11,7 @@ interface AssignmentLeaderboardProps {
 }
 
 export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLeaderboardProps) {
-  const { private_profile_id } = useClassProfiles();
+  const { public_profile_id } = useClassProfiles();
 
   // Use the TableController-based hook for real-time leaderboard data
   const leaderboardData = useLeaderboard();
@@ -24,10 +24,8 @@ export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLea
 
   // Find if the current user is in the leaderboard
   const currentUserEntry = useMemo(() => {
-    return leaderboardData.find(
-      (entry: AssignmentLeaderboardEntry) => entry.private_profile_id === private_profile_id
-    );
-  }, [leaderboardData, private_profile_id]);
+    return leaderboardData.find((entry: AssignmentLeaderboardEntry) => entry.public_profile_id === public_profile_id);
+  }, [leaderboardData, public_profile_id]);
 
   // Calculate current user's rank (across all entries, not just displayed ones)
   const currentUserRank = useMemo(() => {
@@ -35,12 +33,8 @@ export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLea
     const sorted = [...leaderboardData].sort(
       (a: AssignmentLeaderboardEntry, b: AssignmentLeaderboardEntry) => b.autograder_score - a.autograder_score
     );
-    return (
-      sorted.findIndex(
-        (entry: AssignmentLeaderboardEntry) => entry.private_profile_id === private_profile_id
-      ) + 1
-    );
-  }, [leaderboardData, currentUserEntry, private_profile_id]);
+    return sorted.findIndex((entry: AssignmentLeaderboardEntry) => entry.public_profile_id === public_profile_id) + 1;
+  }, [leaderboardData, currentUserEntry, public_profile_id]);
 
   if (leaderboardEntries.length === 0) {
     return null;
@@ -69,7 +63,7 @@ export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLea
           <Table.Body>
             {leaderboardEntries.map((entry: AssignmentLeaderboardEntry, index: number) => {
               const rank = index + 1;
-              const isCurrentUser = entry.private_profile_id === private_profile_id;
+              const isCurrentUser = entry.public_profile_id === public_profile_id;
 
               return (
                 <Table.Row

@@ -10,22 +10,19 @@ CREATE TABLE IF NOT EXISTS public.assignment_leaderboard (
     class_id BIGINT NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
     -- Use public_profile_id for pseudonymity on the leaderboard
     public_profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    -- Keep private_profile_id for internal lookups but don't expose via RLS
-    private_profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     -- Autograder score from the active submission
     autograder_score INTEGER NOT NULL DEFAULT 0,
     max_score INTEGER NOT NULL DEFAULT 100,
     -- Submission metadata
     submission_id BIGINT REFERENCES public.submissions(id) ON DELETE SET NULL,
-    -- Unique constraint: one entry per student per assignment
-    CONSTRAINT unique_student_assignment UNIQUE (assignment_id, private_profile_id)
+    -- Unique constraint: one entry per student per assignment (using public_profile_id)
+    CONSTRAINT unique_student_assignment UNIQUE (assignment_id, public_profile_id)
 );
 
 -- Create indexes for efficient queries
 CREATE INDEX idx_leaderboard_assignment_score ON public.assignment_leaderboard (assignment_id, autograder_score DESC);
 CREATE INDEX idx_leaderboard_class_id ON public.assignment_leaderboard (class_id);
 CREATE INDEX idx_leaderboard_public_profile ON public.assignment_leaderboard (public_profile_id);
-CREATE INDEX idx_leaderboard_private_profile ON public.assignment_leaderboard (private_profile_id);
 
 -- Enable RLS
 ALTER TABLE public.assignment_leaderboard ENABLE ROW LEVEL SECURITY;
@@ -79,7 +76,7 @@ BEGIN
     -- Handle both individual and group submissions
     IF v_submission.profile_id IS NOT NULL THEN
         -- Individual submission
-        SELECT ur.public_profile_id, ur.private_profile_id
+        SELECT ur.public_profile_id
         INTO v_user_role
         FROM public.user_roles ur
         WHERE ur.private_profile_id = v_submission.profile_id
@@ -92,7 +89,6 @@ BEGIN
                 assignment_id,
                 class_id,
                 public_profile_id,
-                private_profile_id,
                 autograder_score,
                 max_score,
                 submission_id,
@@ -101,13 +97,12 @@ BEGIN
                 v_submission.assignment_id,
                 v_submission.class_id,
                 v_user_role.public_profile_id,
-                v_user_role.private_profile_id,
                 NEW.score,
                 COALESCE(NEW.max_score, v_submission.autograder_points, 100),
                 NEW.submission_id,
                 NOW()
             )
-            ON CONFLICT (assignment_id, private_profile_id)
+            ON CONFLICT (assignment_id, public_profile_id)
             DO UPDATE SET
                 autograder_score = EXCLUDED.autograder_score,
                 max_score = EXCLUDED.max_score,
@@ -117,7 +112,7 @@ BEGIN
     ELSIF v_submission.assignment_group_id IS NOT NULL THEN
         -- Group submission - update leaderboard for all group members
         FOR v_user_role IN
-            SELECT ur.public_profile_id, ur.private_profile_id
+            SELECT ur.public_profile_id
             FROM public.assignment_groups_members agm
             INNER JOIN public.user_roles ur ON ur.private_profile_id = agm.profile_id
             WHERE agm.assignment_group_id = v_submission.assignment_group_id
@@ -127,7 +122,6 @@ BEGIN
                 assignment_id,
                 class_id,
                 public_profile_id,
-                private_profile_id,
                 autograder_score,
                 max_score,
                 submission_id,
@@ -136,13 +130,12 @@ BEGIN
                 v_submission.assignment_id,
                 v_submission.class_id,
                 v_user_role.public_profile_id,
-                v_user_role.private_profile_id,
                 NEW.score,
                 COALESCE(NEW.max_score, v_submission.autograder_points, 100),
                 NEW.submission_id,
                 NOW()
             )
-            ON CONFLICT (assignment_id, private_profile_id)
+            ON CONFLICT (assignment_id, public_profile_id)
             DO UPDATE SET
                 autograder_score = EXCLUDED.autograder_score,
                 max_score = EXCLUDED.max_score,
@@ -184,7 +177,7 @@ BEGIN
             IF FOUND THEN
                 -- Handle individual submissions
                 IF NEW.profile_id IS NOT NULL THEN
-                    SELECT ur.public_profile_id, ur.private_profile_id
+                    SELECT ur.public_profile_id
                     INTO v_user_role
                     FROM public.user_roles ur
                     WHERE ur.private_profile_id = NEW.profile_id
@@ -196,7 +189,6 @@ BEGIN
                             assignment_id,
                             class_id,
                             public_profile_id,
-                            private_profile_id,
                             autograder_score,
                             max_score,
                             submission_id,
@@ -205,13 +197,12 @@ BEGIN
                             NEW.assignment_id,
                             NEW.class_id,
                             v_user_role.public_profile_id,
-                            v_user_role.private_profile_id,
                             v_grader_result.score,
                             COALESCE(v_grader_result.max_score, 100),
                             NEW.id,
                             NOW()
                         )
-                        ON CONFLICT (assignment_id, private_profile_id)
+                        ON CONFLICT (assignment_id, public_profile_id)
                         DO UPDATE SET
                             autograder_score = EXCLUDED.autograder_score,
                             max_score = EXCLUDED.max_score,
@@ -221,7 +212,7 @@ BEGIN
                 ELSIF NEW.assignment_group_id IS NOT NULL THEN
                     -- Group submission
                     FOR v_user_role IN
-                        SELECT ur.public_profile_id, ur.private_profile_id
+                        SELECT ur.public_profile_id
                         FROM public.assignment_groups_members agm
                         INNER JOIN public.user_roles ur ON ur.private_profile_id = agm.profile_id
                         WHERE agm.assignment_group_id = NEW.assignment_group_id
@@ -231,7 +222,6 @@ BEGIN
                             assignment_id,
                             class_id,
                             public_profile_id,
-                            private_profile_id,
                             autograder_score,
                             max_score,
                             submission_id,
@@ -240,13 +230,12 @@ BEGIN
                             NEW.assignment_id,
                             NEW.class_id,
                             v_user_role.public_profile_id,
-                            v_user_role.private_profile_id,
                             v_grader_result.score,
                             COALESCE(v_grader_result.max_score, 100),
                             NEW.id,
                             NOW()
                         )
-                        ON CONFLICT (assignment_id, private_profile_id)
+                        ON CONFLICT (assignment_id, public_profile_id)
                         DO UPDATE SET
                             autograder_score = EXCLUDED.autograder_score,
                             max_score = EXCLUDED.max_score,

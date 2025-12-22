@@ -1,6 +1,5 @@
 "use client";
 import {
-  AssignmentLeaderboardEntry,
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
   ReviewAssignmentParts,

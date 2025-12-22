@@ -1026,7 +1026,6 @@ export type AssignmentLeaderboardEntry = {
   assignment_id: number;
   class_id: number;
   public_profile_id: string;
-  private_profile_id: string;
   autograder_score: number;
   max_score: number;
   submission_id: number | null;
