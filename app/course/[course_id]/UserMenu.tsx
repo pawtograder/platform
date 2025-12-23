@@ -556,11 +556,20 @@ const ProfileChangesMenu = () => {
 const NotificationPreferencesMenu = () => {
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
-  const initialDiscussionNotification = searchParams.get("setDiscussionNotification") as
-    | "immediate"
-    | "digest"
-    | "disabled"
-    | null;
+  
+  // Validate URL parameter against allowed values
+  const rawNotificationParam = searchParams.get("setDiscussionNotification");
+  const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
+  let initialDiscussionNotification: "immediate" | "digest" | "disabled" | null = null;
+  
+  if (rawNotificationParam) {
+    if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
+      initialDiscussionNotification = rawNotificationParam as "immediate" | "digest" | "disabled";
+    } else {
+      // Fall back to "immediate" if param exists but is invalid
+      initialDiscussionNotification = "immediate";
+    }
+  }
 
   // Open modal if URL parameter is present
   useEffect(() => {

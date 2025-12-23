@@ -10,7 +10,7 @@ import type { NotificationPreferences } from "@/utils/supabase/DatabaseTypes";
 import { Box, Fieldset, Heading, NativeSelect, Stack } from "@chakra-ui/react";
 import { useCreate, useList, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Component for managing user notification preferences.
@@ -47,6 +47,8 @@ export default function NotificationPreferencesPanel({
 
   const [isLoading, setIsLoading] = useState(false);
   const hasAutoSaved = useRef(false);
+  const initialAppliedRef = useRef(false);
+  const isDirtyRef = useRef(false);
 
   // Fetch existing preferences
   const { data: existingPreferences } = useList<NotificationPreferences>({
@@ -64,50 +66,7 @@ export default function NotificationPreferencesPanel({
   const { mutateAsync: createPreferences } = useCreate();
   const { mutateAsync: updatePreferences } = useUpdate();
 
-  // Load existing preferences when data is available
-  useEffect(() => {
-    if (existingPreferences?.data?.[0]) {
-      const data = existingPreferences.data[0] as NotificationPreferences & {
-        discussion_notification?: "immediate" | "digest" | "disabled";
-      };
-      setPreferences({
-        ...data,
-        // Ensure regrade_request_notification has a default if not present
-        regrade_request_notification: data.regrade_request_notification || "all",
-        // Use initialDiscussionNotification if provided, otherwise use existing or default
-        discussion_notification: initialDiscussionNotification || data.discussion_notification || "immediate"
-      });
-    } else if (initialDiscussionNotification) {
-      // If no existing preferences but we have an initial value, set it
-      setPreferences((prev) => ({
-        ...prev,
-        discussion_notification: initialDiscussionNotification
-      }));
-    }
-  }, [existingPreferences, initialDiscussionNotification]);
-
-  // Auto-save if initialDiscussionNotification is provided via deep link
-  useEffect(() => {
-    if (
-      initialDiscussionNotification &&
-      user?.id &&
-      !hasAutoSaved.current &&
-      existingPreferences?.data !== undefined &&
-      preferences.discussion_notification === initialDiscussionNotification
-    ) {
-      const existingPref = existingPreferences?.data?.[0] as NotificationPreferences & {
-        discussion_notification?: string;
-      };
-      // Only auto-save if the value is different from existing or if no preferences exist
-      if (!existingPref || existingPref.discussion_notification !== initialDiscussionNotification) {
-        hasAutoSaved.current = true;
-        handleSave();
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialDiscussionNotification, user?.id, existingPreferences?.data, preferences.discussion_notification]);
-
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!user?.id) {
       toaster.error({
         title: "Error",
@@ -157,7 +116,62 @@ export default function NotificationPreferencesPanel({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.id, preferences, classId, updatePreferences, createPreferences]);
+
+  // Load existing preferences when data is available
+  useEffect(() => {
+    // Skip applying initial values if user has made edits
+    if (isDirtyRef.current) {
+      return;
+    }
+
+    if (existingPreferences?.data?.[0]) {
+      const data = existingPreferences.data[0] as NotificationPreferences & {
+        discussion_notification?: "immediate" | "digest" | "disabled";
+      };
+      setPreferences({
+        ...data,
+        // Ensure regrade_request_notification has a default if not present
+        regrade_request_notification: data.regrade_request_notification || "all",
+        // Use initialDiscussionNotification if provided and not yet applied, otherwise use existing or default
+        discussion_notification:
+          !initialAppliedRef.current && initialDiscussionNotification
+            ? initialDiscussionNotification
+            : data.discussion_notification || "immediate"
+      });
+      // Mark initial values as applied after first load
+      if (!initialAppliedRef.current && initialDiscussionNotification) {
+        initialAppliedRef.current = true;
+      }
+    } else if (initialDiscussionNotification && !initialAppliedRef.current) {
+      // If no existing preferences but we have an initial value, set it
+      setPreferences((prev) => ({
+        ...prev,
+        discussion_notification: initialDiscussionNotification
+      }));
+      initialAppliedRef.current = true;
+    }
+  }, [existingPreferences, initialDiscussionNotification]);
+
+  // Auto-save if initialDiscussionNotification is provided via deep link
+  useEffect(() => {
+    if (
+      initialDiscussionNotification &&
+      user?.id &&
+      !hasAutoSaved.current &&
+      existingPreferences?.data !== undefined &&
+      preferences.discussion_notification === initialDiscussionNotification
+    ) {
+      const existingPref = existingPreferences?.data?.[0] as NotificationPreferences & {
+        discussion_notification?: string;
+      };
+      // Only auto-save if the value is different from existing or if no preferences exist
+      if (!existingPref || existingPref.discussion_notification !== initialDiscussionNotification) {
+        hasAutoSaved.current = true;
+        handleSave();
+      }
+    }
+  }, [initialDiscussionNotification, user?.id, existingPreferences?.data, preferences.discussion_notification, handleSave]);
 
   const isInstructorOrGrader = useIsGraderOrInstructor();
 
@@ -180,12 +194,13 @@ export default function NotificationPreferencesPanel({
               <NativeSelect.Root>
                 <NativeSelect.Field
                   value={preferences.discussion_notification || "immediate"}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    isDirtyRef.current = true;
                     setPreferences((prev) => ({
                       ...prev,
                       discussion_notification: e.target.value as "immediate" | "digest" | "disabled"
-                    }))
-                  }
+                    }));
+                  }}
                 >
                   <option value="immediate">Immediate: Receive emails as soon as new posts or replies are made.</option>
                   <option value="digest">Digest: Receive a summary of discussion activity .</option>
@@ -202,12 +217,13 @@ export default function NotificationPreferencesPanel({
                   <NativeSelect.Root>
                     <NativeSelect.Field
                       value={preferences.help_request_creation_notification}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        isDirtyRef.current = true;
                         setPreferences((prev) => ({
                           ...prev,
                           help_request_creation_notification: e.target.value as "all" | "only_active_queue" | "none"
-                        }))
-                      }
+                        }));
+                      }}
                     >
                       <option value="all">All: Get notified for all help request creations.</option>
                       <option value="only_active_queue">
@@ -224,12 +240,13 @@ export default function NotificationPreferencesPanel({
                   <NativeSelect.Root>
                     <NativeSelect.Field
                       value={preferences.regrade_request_notification || "all"}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        isDirtyRef.current = true;
                         setPreferences((prev) => ({
                           ...prev,
                           regrade_request_notification: e.target.value as "all" | "none"
-                        }))
-                      }
+                        }));
+                      }}
                     >
                       <option value="all">All: Get notified for all regrade request activity.</option>
                       <option value="none">None: No email notifications for regrade requests.</option>

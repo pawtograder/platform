@@ -3,113 +3,88 @@
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Heading, Stack, Text } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import * as Sentry from "@sentry/nextjs";
 import Link from "next/link";
+import { useUnsubscribe } from "@/hooks/useUnsubscribe";
 
 export default function UnsubscribeTopicPage() {
   const params = useParams();
   const courseId = Number(params.course_id);
   const topicId = Number(params.topic_id);
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
-  const [errorMessage, setErrorMessage] = useState<string>("");
-  const [topicName, setTopicName] = useState<string>("this topic");
 
-  useEffect(() => {
-    async function unsubscribe() {
-      if (!Number.isFinite(topicId) || topicId <= 0) {
-        setErrorMessage("Invalid topic ID");
-        setStatus("error");
-        return;
+  const fetchTopicName = async (
+    supabase: ReturnType<typeof createClient>,
+    entityId: number,
+    courseId: number
+  ): Promise<string | null> => {
+    const { data: topic } = await supabase
+      .from("discussion_topics")
+      .select("topic")
+      .eq("id", entityId)
+      .eq("class_id", courseId)
+      .single();
+
+    return topic?.topic || null;
+  };
+
+  const performTopicUnsubscribe = async (
+    supabase: ReturnType<typeof createClient>,
+    userId: string,
+    entityId: number,
+    courseId: number
+  ): Promise<void> => {
+    // Unfollow the topic by setting following to false
+    // First check if a record exists
+    const { data: existing, error: queryError } = await supabase
+      .from("discussion_topic_followers")
+      .select("id, following")
+      .eq("user_id", userId)
+      .eq("topic_id", entityId)
+      .eq("class_id", courseId)
+      .maybeSingle();
+
+    // Handle query errors (excluding benign "not found" case)
+    if (queryError) {
+      // PGRST116 is the "not found" error code, which is benign
+      if (queryError.code !== "PGRST116") {
+        // This is a real error, throw it so the hook can capture it with Sentry
+        throw queryError;
       }
-
-      if (!Number.isFinite(courseId) || courseId <= 0) {
-        setErrorMessage("Invalid course ID");
-        setStatus("error");
-        return;
-      }
-
-      const supabase = createClient();
-      const {
-        data: { user }
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        setErrorMessage("You must be logged in to unsubscribe. Please log in and try again.");
-        setStatus("error");
-        return;
-      }
-
-      Sentry.setUser({ id: user.id });
-      Sentry.setTag("operation", "unsubscribe_topic");
-      Sentry.setTag("topic_id", topicId.toString());
-      Sentry.setTag("class_id", courseId.toString());
-
-      try {
-        // Get topic name first
-        const { data: topic } = await supabase
-          .from("discussion_topics")
-          .select("topic")
-          .eq("id", topicId)
-          .eq("class_id", courseId)
-          .single();
-
-        if (topic) {
-          setTopicName(topic.topic || "this topic");
-        }
-
-        // Unfollow the topic by setting following to false
-        // First check if a record exists
-        const { data: existing } = await supabase
-          .from("discussion_topic_followers")
-          .select("id, following")
-          .eq("user_id", user.id)
-          .eq("topic_id", topicId)
-          .eq("class_id", courseId)
-          .single();
-
-        if (existing) {
-          // Update existing record
-          const { error } = await supabase
-            .from("discussion_topic_followers")
-            .update({ following: false })
-            .eq("id", existing.id);
-
-          if (error) {
-            Sentry.captureException(error);
-            setErrorMessage("Failed to update follow status. Please try again.");
-            setStatus("error");
-            return;
-          }
-        } else {
-          // Create a record with following=false to override default
-          const { error } = await supabase.from("discussion_topic_followers").insert({
-            user_id: user.id,
-            topic_id: topicId,
-            class_id: courseId,
-            following: false
-          });
-
-          if (error) {
-            Sentry.captureException(error);
-            setErrorMessage("Failed to create follow override. Please try again.");
-            setStatus("error");
-            return;
-          }
-        }
-
-        setStatus("success");
-      } catch (error) {
-        Sentry.captureException(error, {
-          tags: { operation: "unsubscribe_topic" }
-        });
-        setErrorMessage("An unexpected error occurred. Please try again later.");
-        setStatus("error");
-      }
+      // If it's PGRST116, treat as null and proceed to insert branch
     }
 
-    unsubscribe();
-  }, [courseId, topicId]);
+    if (existing) {
+      // Update existing record
+      const { error } = await supabase
+        .from("discussion_topic_followers")
+        .update({ following: false })
+        .eq("id", existing.id);
+
+      if (error) {
+        throw error;
+      }
+    } else {
+      // Create a record with following=false to override default
+      const { error } = await supabase.from("discussion_topic_followers").insert({
+        user_id: userId,
+        topic_id: entityId,
+        class_id: courseId,
+        following: false
+      });
+
+      if (error) {
+        throw error;
+      }
+    }
+  };
+
+  const { status, errorMessage, entityName: topicName } = useUnsubscribe({
+    entityType: "topic",
+    entityId: topicId,
+    courseId,
+    fetchName: fetchTopicName,
+    performUnsubscribe: performTopicUnsubscribe,
+    defaultEntityName: "this topic"
+  });
 
   if (status === "loading") {
     return (

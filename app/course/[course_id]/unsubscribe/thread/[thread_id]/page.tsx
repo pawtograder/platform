@@ -3,88 +3,67 @@
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Heading, Stack, Text } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import * as Sentry from "@sentry/nextjs";
 import Link from "next/link";
+import { useUnsubscribe } from "@/hooks/useUnsubscribe";
 
 export default function UnsubscribeThreadPage() {
   const params = useParams();
   const courseId = Number(params.course_id);
   const threadId = Number(params.thread_id);
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
-  const [errorMessage, setErrorMessage] = useState<string>("");
-  const [threadName, setThreadName] = useState<string>("this post");
 
-  useEffect(() => {
-    async function unsubscribe() {
-      if (!Number.isFinite(threadId) || threadId <= 0) {
-        setErrorMessage("Invalid thread ID");
-        setStatus("error");
-        return;
-      }
+  const fetchThreadName = async (
+    supabase: ReturnType<typeof createClient>,
+    entityId: number,
+    courseId: number
+  ): Promise<string | null> => {
+    const { data: thread } = await supabase
+      .from("discussion_threads")
+      .select("subject")
+      .eq("id", entityId)
+      .eq("class_id", courseId)
+      .single();
 
-      if (!Number.isFinite(courseId) || courseId <= 0) {
-        setErrorMessage("Invalid course ID");
-        setStatus("error");
-        return;
-      }
+    return thread?.subject || null;
+  };
 
-      const supabase = createClient();
-      const {
-        data: { user }
-      } = await supabase.auth.getUser();
+  const performThreadUnsubscribe = async (
+    supabase: ReturnType<typeof createClient>,
+    userId: string,
+    entityId: number,
+    courseId: number
+  ): Promise<void> => {
+    const { data, error } = await supabase
+      .from("discussion_thread_watchers")
+      .update({ enabled: false })
+      .eq("user_id", userId)
+      .eq("discussion_thread_root_id", entityId)
+      .eq("class_id", courseId)
+      .select();
 
-      if (!user) {
-        setErrorMessage("You must be logged in to unsubscribe. Please log in and try again.");
-        setStatus("error");
-        return;
-      }
-
-      Sentry.setUser({ id: user.id });
-      Sentry.setTag("operation", "unsubscribe_thread");
-      Sentry.setTag("thread_id", threadId.toString());
-      Sentry.setTag("class_id", courseId.toString());
-
-      try {
-        // Get thread subject first
-        const { data: thread } = await supabase
-          .from("discussion_threads")
-          .select("subject")
-          .eq("id", threadId)
-          .eq("class_id", courseId)
-          .single();
-
-        if (thread) {
-          setThreadName(thread.subject || "this post");
-        }
-
-        // Disable the thread watch
-        const { error } = await supabase
-          .from("discussion_thread_watchers")
-          .update({ enabled: false })
-          .eq("user_id", user.id)
-          .eq("discussion_thread_root_id", threadId)
-          .eq("class_id", courseId);
-
-        if (error) {
-          Sentry.captureException(error);
-          setErrorMessage("Failed to update watch status. Please try again.");
-          setStatus("error");
-          return;
-        }
-
-        setStatus("success");
-      } catch (error) {
-        Sentry.captureException(error, {
-          tags: { operation: "unsubscribe_thread" }
-        });
-        setErrorMessage("An unexpected error occurred. Please try again later.");
-        setStatus("error");
-      }
+    if (error) {
+      throw error;
     }
 
-    unsubscribe();
-  }, [courseId, threadId]);
+    if (!data || data.length === 0) {
+      const noRowsError = new Error("No matching watch found to unsubscribe");
+      (noRowsError as any).code = "NO_ROWS_UPDATED";
+      (noRowsError as any).details = {
+        user_id: userId,
+        discussion_thread_root_id: entityId,
+        class_id: courseId
+      };
+      throw noRowsError;
+    }
+  };
+
+  const { status, errorMessage, entityName: threadName } = useUnsubscribe({
+    entityType: "thread",
+    entityId: threadId,
+    courseId,
+    fetchName: fetchThreadName,
+    performUnsubscribe: performThreadUnsubscribe,
+    defaultEntityName: "this post"
+  });
 
   if (status === "loading") {
     return (
