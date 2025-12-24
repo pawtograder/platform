@@ -209,7 +209,7 @@ export default function NotificationPreferencesPanel({
                   }}
                 >
                   <option value="immediate">Immediate: Receive emails as soon as new posts or replies are made.</option>
-                  <option value="digest">Digest: Receive a summary of discussion activity .</option>
+                  <option value="digest">Digest: Receive a summary of discussion activity.</option>
                   <option value="disabled">Disabled: No email notifications for discussion board activity.</option>
                 </NativeSelect.Field>
               </NativeSelect.Root>

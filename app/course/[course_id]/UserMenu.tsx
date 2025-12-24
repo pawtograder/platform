@@ -558,33 +558,50 @@ const NotificationPreferencesMenu = () => {
   const [open, setOpen] = useState(false);
 
   // Validate URL parameter against allowed values
-  const rawNotificationParam = searchParams.get("setDiscussionNotification");
-  const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
-  let initialDiscussionNotification: "immediate" | "digest" | "disabled" | null = null;
+  const initialDiscussionNotification = useMemo<"immediate" | "digest" | "disabled" | null>(() => {
+    const rawNotificationParam = searchParams.get("setDiscussionNotification");
+    const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
 
-  if (rawNotificationParam) {
-    if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
-      initialDiscussionNotification = rawNotificationParam as "immediate" | "digest" | "disabled";
-    } else {
-      // Fall back to "immediate" if param exists but is invalid
-      initialDiscussionNotification = "immediate";
+    if (rawNotificationParam) {
+      if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
+        return rawNotificationParam as "immediate" | "digest" | "disabled";
+      } else {
+        // Fall back to "immediate" if param exists but is invalid
+        return "immediate";
+      }
     }
-  }
+
+    return null;
+  }, [searchParams]);
 
   // Open modal if URL parameter is present
   useEffect(() => {
-    if (searchParams.get("openNotificationSettings") === "true" || initialDiscussionNotification) {
+    // Derive notification value from searchParams inside effect to avoid double execution
+    const rawNotificationParam = searchParams.get("setDiscussionNotification");
+    const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
+    let notificationValue: "immediate" | "digest" | "disabled" | null = null;
+
+    if (rawNotificationParam) {
+      if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
+        notificationValue = rawNotificationParam as "immediate" | "digest" | "disabled";
+      } else {
+        // Fall back to "immediate" if param exists but is invalid
+        notificationValue = "immediate";
+      }
+    }
+
+    if (searchParams.get("openNotificationSettings") === "true" || notificationValue) {
       setOpen(true);
       // Clean up URL params after opening
       const params = new URLSearchParams(searchParams.toString());
       params.delete("openNotificationSettings");
-      if (initialDiscussionNotification) {
+      if (notificationValue) {
         params.delete("setDiscussionNotification");
       }
       const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
       window.history.replaceState({}, "", newUrl);
     }
-  }, [searchParams, initialDiscussionNotification]);
+  }, [searchParams]);
 
   return (
     <Dialog.Root size={"md"} placement={"center"} open={open} onOpenChange={(e) => setOpen(e.open)}>
