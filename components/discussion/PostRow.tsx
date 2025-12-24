@@ -128,7 +128,7 @@ export function PostRow({
   if (variant === "compact") {
     return (
       <Box asChild>
-        <Link href={href}>
+        <Link href={href} aria-label={thread.subject + " (#" + thread.id + ")"}>
           <Box
             px="4"
             py="2"
@@ -178,7 +178,7 @@ export function PostRow({
 
   return (
     <Box asChild>
-      <Link href={href}>
+      <Link href={href} aria-label={thread.subject + " (#" + thread.id + ")"}>
         <HStack
           gap="3"
           px="4"

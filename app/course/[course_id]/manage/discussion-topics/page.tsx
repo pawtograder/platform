@@ -87,6 +87,8 @@ function DraggableTopicItem({
       borderStyle={isDragging ? "dashed" : "solid"}
       cursor={isDragging ? "grabbing" : "grab"}
       transition="all 0.2s"
+      role="region"
+      aria-label={`Discussion topic: ${topic.topic}`}
     >
       <Flex justify="space-between" align="flex-start">
         <Box flex="1">
