@@ -171,7 +171,13 @@ export default function NotificationPreferencesPanel({
         handleSave();
       }
     }
-  }, [initialDiscussionNotification, user?.id, existingPreferences?.data, preferences.discussion_notification, handleSave]);
+  }, [
+    initialDiscussionNotification,
+    user?.id,
+    existingPreferences?.data,
+    preferences.discussion_notification,
+    handleSave
+  ]);
 
   const isInstructorOrGrader = useIsGraderOrInstructor();
 

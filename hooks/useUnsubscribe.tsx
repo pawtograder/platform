@@ -9,7 +9,12 @@ interface UseUnsubscribeOptions {
   entityId: number;
   courseId: number;
   fetchName: (supabase: ReturnType<typeof createClient>, entityId: number, courseId: number) => Promise<string | null>;
-  performUnsubscribe: (supabase: ReturnType<typeof createClient>, userId: string, entityId: number, courseId: number) => Promise<void>;
+  performUnsubscribe: (
+    supabase: ReturnType<typeof createClient>,
+    userId: string,
+    entityId: number,
+    courseId: number
+  ) => Promise<void>;
   defaultEntityName: string;
 }
 

@@ -77,7 +77,11 @@ export default function UnsubscribeTopicPage() {
     }
   };
 
-  const { status, errorMessage, entityName: topicName } = useUnsubscribe({
+  const {
+    status,
+    errorMessage,
+    entityName: topicName
+  } = useUnsubscribe({
     entityType: "topic",
     entityId: topicId,
     courseId,

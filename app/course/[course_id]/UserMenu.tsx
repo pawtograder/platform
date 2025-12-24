@@ -556,12 +556,12 @@ const ProfileChangesMenu = () => {
 const NotificationPreferencesMenu = () => {
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
-  
+
   // Validate URL parameter against allowed values
   const rawNotificationParam = searchParams.get("setDiscussionNotification");
   const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
   let initialDiscussionNotification: "immediate" | "digest" | "disabled" | null = null;
-  
+
   if (rawNotificationParam) {
     if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
       initialDiscussionNotification = rawNotificationParam as "immediate" | "digest" | "disabled";

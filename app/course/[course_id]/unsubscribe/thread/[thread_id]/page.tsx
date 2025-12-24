@@ -6,6 +6,22 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useUnsubscribe } from "@/hooks/useUnsubscribe";
 
+class NoRowsUpdatedError extends Error {
+  code: string;
+  details: {
+    user_id: string;
+    discussion_thread_root_id: number;
+    class_id: number;
+  };
+
+  constructor(message: string, details: { user_id: string; discussion_thread_root_id: number; class_id: number }) {
+    super(message);
+    this.name = "NoRowsUpdatedError";
+    this.code = "NO_ROWS_UPDATED";
+    this.details = details;
+  }
+}
+
 export default function UnsubscribeThreadPage() {
   const params = useParams();
   const courseId = Number(params.course_id);
@@ -45,18 +61,19 @@ export default function UnsubscribeThreadPage() {
     }
 
     if (!data || data.length === 0) {
-      const noRowsError = new Error("No matching watch found to unsubscribe");
-      (noRowsError as any).code = "NO_ROWS_UPDATED";
-      (noRowsError as any).details = {
+      throw new NoRowsUpdatedError("No matching watch found to unsubscribe", {
         user_id: userId,
         discussion_thread_root_id: entityId,
         class_id: courseId
-      };
-      throw noRowsError;
+      });
     }
   };
 
-  const { status, errorMessage, entityName: threadName } = useUnsubscribe({
+  const {
+    status,
+    errorMessage,
+    entityName: threadName
+  } = useUnsubscribe({
     entityType: "thread",
     entityId: threadId,
     courseId,
