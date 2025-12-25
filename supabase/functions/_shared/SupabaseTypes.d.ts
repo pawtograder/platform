@@ -1749,6 +1749,102 @@ export type Database = {
           }
         ];
       };
+      discussion_digest_items: {
+        Row: {
+          action: string | null;
+          author_name: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          msg_id: number | null;
+          notification_reason: string | null;
+          teaser: string | null;
+          thread_id: number;
+          thread_name: string;
+          thread_url: string | null;
+          topic_id: number | null;
+          user_id: string;
+        };
+        Insert: {
+          action?: string | null;
+          author_name: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          msg_id?: number | null;
+          notification_reason?: string | null;
+          teaser?: string | null;
+          thread_id: number;
+          thread_name: string;
+          thread_url?: string | null;
+          topic_id?: number | null;
+          user_id: string;
+        };
+        Update: {
+          action?: string | null;
+          author_name?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          msg_id?: number | null;
+          notification_reason?: string | null;
+          teaser?: string | null;
+          thread_id?: number;
+          thread_name?: string;
+          thread_url?: string | null;
+          topic_id?: number | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_digest_items_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_digest_items_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      discussion_digest_send_times: {
+        Row: {
+          class_id: number;
+          last_sent_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          last_sent_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          last_sent_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_digest_send_times_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_digest_send_times_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discussion_thread_likes: {
         Row: {
           created_at: string;
@@ -2076,38 +2172,134 @@ export type Database = {
           }
         ];
       };
+      discussion_topic_followers: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          following: boolean;
+          id: number;
+          topic_id: number;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          following?: boolean;
+          id?: number;
+          topic_id: number;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          following?: boolean;
+          id?: number;
+          topic_id?: number;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_topic_followers_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topic_followers_topic_id_fkey";
+            columns: ["topic_id"];
+            isOneToOne: false;
+            referencedRelation: "discussion_topics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topic_followers_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discussion_topics: {
         Row: {
+          assignment_id: number | null;
           class_id: number;
           color: string;
           created_at: string;
+          default_follow: boolean;
           description: string;
+          icon: string | null;
           id: number;
           ordinal: number;
           topic: string;
           updated_at: string;
         };
         Insert: {
+          assignment_id?: number | null;
           class_id: number;
           color: string;
           created_at?: string;
+          default_follow?: boolean;
           description: string;
+          icon?: string | null;
           id?: number;
           ordinal?: number;
           topic: string;
           updated_at?: string;
         };
         Update: {
+          assignment_id?: number | null;
           class_id?: number;
           color?: string;
           created_at?: string;
+          default_follow?: boolean;
           description?: string;
+          icon?: string | null;
           id?: number;
           ordinal?: number;
           topic?: string;
           updated_at?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "discussion_topics_class_id_fkey";
             columns: ["class_id"];
@@ -4684,6 +4876,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          discussion_notification: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id: number;
           regrade_request_notification: Database["public"]["Enums"]["help_request_creation_notification"];
@@ -4693,6 +4886,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
           regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
@@ -4702,6 +4896,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
           regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
@@ -7999,6 +8194,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out: boolean;
           updated_at: string;
           user_id: string;
         };
@@ -8015,6 +8211,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id: string;
         };
@@ -8031,6 +8228,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id?: string;
         };
@@ -10490,6 +10688,10 @@ export type Database = {
         Args: { p_user_id: string };
         Returns: boolean;
       };
+      sis_sync_enrollment: {
+        Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
+        Returns: Json;
+      };
       soft_delete_survey: {
         Args: { p_survey_id: string; p_survey_logical_id: string };
         Returns: undefined;
@@ -10589,27 +10791,16 @@ export type Database = {
         };
         Returns: boolean;
       };
-      update_regrade_request_status:
-        | {
-            Args: {
-              closed_points?: number;
-              new_status: Database["public"]["Enums"]["regrade_status"];
-              profile_id: string;
-              regrade_request_id: number;
-              resolved_points?: number;
-            };
-            Returns: boolean;
-          }
-        | {
-            Args: {
-              closed_points?: number;
-              new_status: Database["public"]["Enums"]["regrade_status"];
-              profile_id: string;
-              regrade_request_id: number;
-              resolved_points?: number;
-            };
-            Returns: boolean;
-          };
+      update_regrade_request_status: {
+        Args: {
+          closed_points?: number;
+          new_status: Database["public"]["Enums"]["regrade_status"];
+          profile_id: string;
+          regrade_request_id: number;
+          resolved_points?: number;
+        };
+        Returns: boolean;
+      };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;
@@ -10640,6 +10831,7 @@ export type Database = {
         | "scheduling"
         | "operations";
       discord_resource_type: "help_request" | "regrade_request";
+      discussion_notification_type: "immediate" | "digest" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -10805,6 +10997,7 @@ export const Constants = {
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades", "scheduling", "operations"],
       discord_resource_type: ["help_request", "regrade_request"],
+      discussion_notification_type: ["immediate", "digest", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",

@@ -287,6 +287,13 @@ export type DiscussionThreadWatcher = GetResult<
   Database["public"]["Tables"]["discussion_thread_watchers"]["Relationships"],
   "*"
 >;
+export type DiscussionTopicFollower = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["discussion_topic_followers"]["Row"],
+  "discussion_topic_followers",
+  Database["public"]["Tables"]["discussion_topic_followers"]["Relationships"],
+  "*"
+>;
 export type DiscussionThreadReadStatus = GetResult<
   Database["public"],
   Database["public"]["Tables"]["discussion_thread_read_status"]["Row"],

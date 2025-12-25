@@ -36,14 +36,16 @@ export type NotificationEnvelope = {
 };
 export type DiscussionThreadNotification = NotificationEnvelope & {
   type: "discussion_thread";
+  action: "new_post" | "reply";
   new_comment_number: number;
   new_comment_id: number;
   root_thread_id: number;
   reply_author_profile_id: string;
   teaser: string;
-
   thread_name: string;
   reply_author_name: string;
+  topic_id?: number;
+  notification_reason?: "topic_follow" | "thread_watch";
 };
 
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
@@ -185,8 +187,11 @@ function getEmailTemplate(body: NotificationEnvelope, scope: Sentry.Scope): { su
     return null;
   }
 
-  if ("action" in body) {
+  if ("action" in body && body.action) {
     emailTemplate = emailTemplate[body.action as keyof typeof emailTemplate];
+  } else if (body.type === "discussion_thread") {
+    // Default to "reply" for backward compatibility with old notifications
+    emailTemplate = emailTemplate["reply" as keyof typeof emailTemplate];
   }
 
   if (!("subject" in emailTemplate)) {
@@ -257,6 +262,45 @@ function buildEmailUrls(
   return urls;
 }
 
+// Helper function to build discussion notification footer with unsubscribe links
+function buildDiscussionFooter(body: DiscussionThreadNotification, classId: number, recipientUserId: string): string {
+  const appUrl = Deno.env.get("APP_URL");
+  const courseUrl = `https://${appUrl}/course/${classId}`;
+  const threadUrl = `https://${appUrl}/course/${classId}/discussion/${body.root_thread_id}`;
+  const settingsUrl = `https://${appUrl}/course/${classId}`; // UserMenu opens notification settings
+
+  const reason = body.notification_reason || (body.action === "new_post" ? "topic_follow" : "thread_watch");
+
+  let explanation = "";
+  const unsubscribeLinks: string[] = [];
+
+  if (reason === "topic_follow") {
+    explanation =
+      "You received this email because you're following this discussion topic. You'll be notified of new posts in this topic, but not replies to existing posts.";
+    if (body.topic_id) {
+      unsubscribeLinks.push(`Unfollow topic: https://${appUrl}/course/${classId}/unsubscribe/topic/${body.topic_id}`);
+    } else {
+      // Fallback if topic_id is missing
+      unsubscribeLinks.push(`Manage topic follows: ${courseUrl}/discussion`);
+    }
+  } else {
+    explanation =
+      "You received this email because you're following this discussion post. You'll be notified of all replies to this post.";
+    unsubscribeLinks.push(
+      `Unfollow post: https://${appUrl}/course/${classId}/unsubscribe/thread/${body.root_thread_id}`
+    );
+  }
+
+  unsubscribeLinks.push(
+    `Change notification settings: https://${appUrl}/course/${classId}?openNotificationSettings=true`
+  );
+  unsubscribeLinks.push(
+    `Disable all discussion notifications: https://${appUrl}/course/${classId}?setDiscussionNotification=disabled`
+  );
+
+  return `\n\n---\n${explanation}\n\n${unsubscribeLinks.join("\n")}\n\nView post: ${threadUrl}`;
+}
+
 // Helper function to build final email content by replacing template variables
 function buildEmailContent(
   template: { subject: string; body: string },
@@ -321,6 +365,16 @@ function buildEmailContent(
     }
   }
 
+  // Build and add discussion footer for discussion_thread notifications
+  if (body.type === "discussion_thread") {
+    const discussionBody = body as DiscussionThreadNotification;
+    const footer = buildDiscussionFooter(discussionBody, classId, recipientUserId);
+    emailBody = emailBody.replaceAll("{notification_footer}", footer);
+  } else {
+    // Remove footer placeholder if not a discussion notification
+    emailBody = emailBody.replaceAll("{notification_footer}", "");
+  }
+
   return { subject: emailSubject, body: emailBody };
 }
 
@@ -350,8 +404,13 @@ function isInternalTestEmail(email: string): boolean {
   return email.toLowerCase().endsWith("@pawtograder.net");
 }
 
-// Classify notifications to handle help request digests
-function classifyNotification(body: NotificationEnvelope): "help_request_created" | "skip" | "standard" {
+// Classify notifications to handle help request digests and discussion digests
+function classifyNotification(
+  body: NotificationEnvelope,
+  userId: string,
+  classId: number,
+  notificationPreferences?: Map<string, { discussion_notification?: string }>
+): "help_request_created" | "discussion_digest" | "skip" | "standard" {
   // Skip system notifications - they should not generate emails
   if (body.type === "system") {
     return "skip";
@@ -362,6 +421,20 @@ function classifyNotification(body: NotificationEnvelope): "help_request_created
     if (action === "created") return "help_request_created";
     return "skip";
   }
+
+  if (body.type === "discussion_thread") {
+    const prefs = notificationPreferences?.get(`${userId}|${classId}`);
+    const discussionPref = prefs?.discussion_notification || "immediate";
+    if (discussionPref === "digest") {
+      return "discussion_digest";
+    }
+    if (discussionPref === "disabled") {
+      return "skip";
+    }
+    // immediate - process as standard
+    return "standard";
+  }
+
   if ("help_queue_id" in body || "help_request_id" in body) {
     return "skip";
   }
@@ -640,6 +713,38 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         lab_section_name: role.lab_sections?.name || null
       })) || [];
 
+    // Fetch notification preferences for discussion digest mode
+    const { data: notificationPrefs, error: notificationPrefsError } = await adminSupabase
+      .schema("public")
+      .from("notification_preferences")
+      .select("user_id, class_id, discussion_notification")
+      .in(
+        "user_id",
+        Array.from(uniqueEmails).filter((email) => email)
+      )
+      .in(
+        "class_id",
+        Array.from(uniqueCourseIds).filter((id) => id)
+      );
+
+    if (notificationPrefsError) {
+      scope.setContext("context_fetch_error", {
+        type: "notification_preferences",
+        unique_emails_count: uniqueEmails.size,
+        unique_courses_count: uniqueCourseIds.size
+      });
+      Sentry.captureException(notificationPrefsError, scope);
+      console.error(`Error fetching notification preferences: ${notificationPrefsError?.message}`);
+      // Continue processing without preferences (will default to immediate)
+    }
+
+    // Build map of notification preferences for quick lookup
+    const notificationPrefsMap = new Map<string, { discussion_notification?: string }>();
+    for (const pref of notificationPrefs || []) {
+      const key = `${pref.user_id}|${pref.class_id}`;
+      notificationPrefsMap.set(key, { discussion_notification: pref.discussion_notification });
+    }
+
     if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
       // eslint-disable-next-line no-console
       console.log("No SMTP host found, deferring email processing");
@@ -659,8 +764,9 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       }
     });
 
-    // Partition notifications for special handling of help request creation
+    // Partition notifications for special handling of help request creation and discussion digests
     const helpCreated: QueueMessage<Notification>[] = [];
+    const discussionDigest: QueueMessage<Notification>[] = [];
     const standard: QueueMessage<Notification>[] = [];
     for (const n of notifications) {
       const body = n.message.body as NotificationEnvelope | null;
@@ -668,11 +774,12 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         standard.push(n);
         continue;
       }
-      const kind = classifyNotification(body);
+      const kind = classifyNotification(body, n.message.user_id as string, n.message.class_id, notificationPrefsMap);
       if (kind === "help_request_created") helpCreated.push(n);
+      else if (kind === "discussion_digest") discussionDigest.push(n);
       else if (kind === "standard") standard.push(n);
       else {
-        // Archive skipped help notifications to prevent reprocessing
+        // Archive skipped notifications to prevent reprocessing
         await archiveMessage(adminSupabase, n.msg_id, scope);
       }
     }
@@ -771,6 +878,227 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       }
 
       await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+    }
+
+    // Store discussion digest items in database for hourly batching
+    // Archive queue messages immediately, but store items for later sending
+    for (const n of discussionDigest) {
+      const body = n.message.body as DiscussionThreadNotification;
+      const urls = buildEmailUrls(body, n.message.class_id);
+
+      // Store digest item in database
+      const { error: insertError } = await adminSupabase
+        .schema("public")
+        .from("discussion_digest_items")
+        .insert({
+          user_id: n.message.user_id as string,
+          class_id: n.message.class_id as number,
+          thread_id: body.root_thread_id,
+          thread_name: body.thread_name || "Untitled",
+          author_name: body.reply_author_name || "Unknown",
+          teaser: body.teaser,
+          thread_url: urls.thread_url,
+          topic_id: body.topic_id,
+          notification_reason: body.notification_reason,
+          action: body.action,
+          msg_id: n.msg_id
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        // If duplicate (same thread_id within same second), that's okay - skip
+        if (insertError.code !== "23505") {
+          // Not a unique constraint violation - log the error
+          scope.setContext("digest_item_insert_error", {
+            msg_id: n.msg_id,
+            user_id: n.message.user_id,
+            class_id: n.message.class_id,
+            error: insertError.message
+          });
+          Sentry.captureException(insertError, scope);
+        }
+      }
+
+      // Archive the queue message immediately (item is stored in DB)
+      type MaybeClonableScope = { clone?: () => Sentry.Scope };
+      const baseScope = scope as unknown as MaybeClonableScope;
+      const emailScope: Sentry.Scope = typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
+      await archiveMessage(adminSupabase, n.msg_id, emailScope);
+    }
+
+    // Check for digest items ready to send (hourly)
+    // Find user/class combinations where:
+    // 1. There are digest items, AND
+    // 2. Either no previous send time exists, OR last send was more than 1 hour ago
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+    // Get distinct user/class combinations that have digest items
+    const { data: allDigestItems, error: digestQueryError } = await adminSupabase
+      .schema("public")
+      .from("discussion_digest_items")
+      .select("user_id, class_id");
+
+    // Get unique user/class combinations
+    const uniqueCombos = new Map<string, { user_id: string; class_id: number }>();
+    if (allDigestItems) {
+      for (const item of allDigestItems) {
+        const key = `${item.user_id}|${item.class_id}`;
+        if (!uniqueCombos.has(key)) {
+          uniqueCombos.set(key, { user_id: item.user_id, class_id: item.class_id });
+        }
+      }
+    }
+    const readyDigests = Array.from(uniqueCombos.values());
+
+    if (digestQueryError) {
+      scope.setContext("digest_query_error", { error: digestQueryError.message });
+      Sentry.captureException(digestQueryError, scope);
+      console.error(`Error querying digest items: ${digestQueryError.message}`);
+    } else if (readyDigests && readyDigests.length > 0) {
+      // Check each user/class combination to see if it's time to send
+      for (const { user_id, class_id } of readyDigests) {
+        // Get last send time for this user/class
+        const { data: lastSend } = await adminSupabase
+          .schema("public")
+          .from("discussion_digest_send_times")
+          .select("last_sent_at")
+          .eq("user_id", user_id)
+          .eq("class_id", class_id)
+          .single();
+
+        const shouldSend = !lastSend || new Date(lastSend.last_sent_at) < new Date(oneHourAgo);
+
+        if (shouldSend) {
+          // Fetch all digest items for this user/class
+          const { data: digestItems, error: itemsError } = await adminSupabase
+            .schema("public")
+            .from("discussion_digest_items")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("class_id", class_id)
+            .order("created_at", { ascending: true });
+
+          if (itemsError || !digestItems || digestItems.length === 0) {
+            if (itemsError) {
+              scope.setContext("digest_items_fetch_error", {
+                user_id,
+                class_id,
+                error: itemsError.message
+              });
+              Sentry.captureException(itemsError, scope);
+            }
+            continue;
+          }
+
+          // Send the digest
+          const recipient = recipientByUserId(user_id);
+          const course = courses?.find((c) => c.id === class_id);
+          type MaybeClonableScope = { clone?: () => Sentry.Scope };
+          const baseScope = scope as unknown as MaybeClonableScope;
+          const emailScope: Sentry.Scope =
+            typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
+          emailScope.setTag("digest", "discussion_thread");
+          emailScope.setContext("digest_meta", { user_id, class_id, count: digestItems.length });
+
+          if (!recipient || !recipient.email) {
+            // No email - delete items anyway
+            await adminSupabase
+              .schema("public")
+              .from("discussion_digest_items")
+              .delete()
+              .eq("user_id", user_id)
+              .eq("class_id", class_id);
+            continue;
+          }
+
+          if (isInternalTestEmail(recipient.email) && !isInbucketEmail) {
+            // Skip internal test emails - delete items
+            await adminSupabase
+              .schema("public")
+              .from("discussion_digest_items")
+              .delete()
+              .eq("user_id", user_id)
+              .eq("class_id", class_id);
+            continue;
+          }
+
+          const subject = `${course?.name || "Course"} - Discussion digest (${digestItems.length})`;
+          const lines: string[] = [];
+          lines.push(`You have ${digestItems.length} new discussion notification(s) from the past hour.`);
+          lines.push("");
+
+          // Group by notification reason
+          const topicFollows = digestItems.filter((it) => it.notification_reason === "topic_follow");
+          const threadWatches = digestItems.filter((it) => it.notification_reason === "thread_watch");
+
+          if (topicFollows.length > 0) {
+            lines.push(`New posts in topics you follow (${topicFollows.length}):`);
+            for (const it of topicFollows) {
+              const teaser = it.teaser ? ` - ${it.teaser}` : "";
+              const urlLine = it.thread_url ? `\n  ${it.thread_url}` : "";
+              lines.push(`- ${it.thread_name} by ${it.author_name}${teaser}${urlLine}`);
+            }
+            lines.push("");
+          }
+
+          if (threadWatches.length > 0) {
+            lines.push(`Replies to posts you follow (${threadWatches.length}):`);
+            for (const it of threadWatches) {
+              const teaser = it.teaser ? ` - ${it.teaser}` : "";
+              const urlLine = it.thread_url ? `\n  ${it.thread_url}` : "";
+              lines.push(`- ${it.thread_name} by ${it.author_name}${teaser}${urlLine}`);
+            }
+            lines.push("");
+          }
+
+          // Add footer with unsubscribe links
+          const appUrl = Deno.env.get("APP_URL");
+          const courseUrl = `https://${appUrl}/course/${class_id}`;
+          lines.push("---");
+          lines.push("You received this hourly digest because you have discussion notifications set to 'digest' mode.");
+          lines.push(`Change notification settings: ${courseUrl}`);
+          lines.push(`View all discussions: ${courseUrl}/discussion`);
+
+          const bodyText = lines.join("\n");
+
+          const sent = await sendEmailViaTransporter(
+            transporter,
+            recipient.email,
+            subject,
+            bodyText,
+            [],
+            undefined,
+            emailScope
+          );
+
+          if (sent) {
+            // Update last send time
+            await adminSupabase.schema("public").from("discussion_digest_send_times").upsert({
+              user_id,
+              class_id,
+              last_sent_at: new Date().toISOString()
+            });
+
+            // Delete sent items
+            await adminSupabase
+              .schema("public")
+              .from("discussion_digest_items")
+              .delete()
+              .eq("user_id", user_id)
+              .eq("class_id", class_id);
+          } else {
+            emailScope.setContext("email_not_sent", {
+              reason: "smtp_send_failed",
+              user_id,
+              class_id,
+              count: digestItems.length
+            });
+            Sentry.captureMessage("Discussion digest email not sent", emailScope);
+            // Don't delete items on failure - will retry next batch
+          }
+        }
+      }
     }
 
     // Process standard notifications in parallel

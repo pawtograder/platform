@@ -31,7 +31,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useInvalidate, useOne } from "@refinedev/core";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaGithub } from "react-icons/fa";
 import { FaCircleUser } from "react-icons/fa6";
@@ -549,10 +549,62 @@ const ProfileChangesMenu = () => {
 
 /**
  * Dialog component to allow users to manage their notification preferences.
+ * Supports deep-linking via URL parameters:
+ * - ?openNotificationSettings=true - Opens the modal
+ * - ?setDiscussionNotification=disabled - Sets discussion notification preference and opens modal
  */
 const NotificationPreferencesMenu = () => {
+  const searchParams = useSearchParams();
+  const [open, setOpen] = useState(false);
+
+  // Validate URL parameter against allowed values
+  const initialDiscussionNotification = useMemo<"immediate" | "digest" | "disabled" | null>(() => {
+    const rawNotificationParam = searchParams.get("setDiscussionNotification");
+    const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
+
+    if (rawNotificationParam) {
+      if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
+        return rawNotificationParam as "immediate" | "digest" | "disabled";
+      } else {
+        // Fall back to "immediate" if param exists but is invalid
+        return "immediate";
+      }
+    }
+
+    return null;
+  }, [searchParams]);
+
+  // Open modal if URL parameter is present
+  useEffect(() => {
+    // Derive notification value from searchParams inside effect to avoid double execution
+    const rawNotificationParam = searchParams.get("setDiscussionNotification");
+    const allowedValues: readonly ("immediate" | "digest" | "disabled")[] = ["immediate", "digest", "disabled"];
+    let notificationValue: "immediate" | "digest" | "disabled" | null = null;
+
+    if (rawNotificationParam) {
+      if (allowedValues.includes(rawNotificationParam as "immediate" | "digest" | "disabled")) {
+        notificationValue = rawNotificationParam as "immediate" | "digest" | "disabled";
+      } else {
+        // Fall back to "immediate" if param exists but is invalid
+        notificationValue = "immediate";
+      }
+    }
+
+    if (searchParams.get("openNotificationSettings") === "true" || notificationValue) {
+      setOpen(true);
+      // Clean up URL params after opening
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("openNotificationSettings");
+      if (notificationValue) {
+        params.delete("setDiscussionNotification");
+      }
+      const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [searchParams]);
+
   return (
-    <Dialog.Root size={"md"} placement={"center"}>
+    <Dialog.Root size={"md"} placement={"center"} open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Dialog.Trigger asChild>
         <Button
           variant="ghost"
@@ -575,7 +627,7 @@ const NotificationPreferencesMenu = () => {
               <Dialog.Title>Notification Settings</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <NotificationPreferences />
+              <NotificationPreferences initialDiscussionNotification={initialDiscussionNotification} />
             </Dialog.Body>
             <Dialog.Footer>
               <Dialog.ActionTrigger asChild>
@@ -591,6 +643,7 @@ const NotificationPreferencesMenu = () => {
 
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
+  const searchParams = useSearchParams();
   const { role: enrollment } = useClassProfiles();
   const gitHubUsername = enrollment.users.github_username;
   const { private_profile_id } = useClassProfiles();
@@ -598,6 +651,13 @@ function UserSettingsMenu() {
     resource: "profiles",
     id: private_profile_id
   });
+
+  // Open drawer if URL parameters indicate notification settings should be opened
+  useEffect(() => {
+    if (searchParams.get("openNotificationSettings") === "true" || searchParams.get("setDiscussionNotification")) {
+      setOpen(true);
+    }
+  }, [searchParams]);
 
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
