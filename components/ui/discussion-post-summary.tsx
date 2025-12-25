@@ -16,7 +16,7 @@ import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative } from "date-fns";
 import { useCallback, useState } from "react";
 import { BsChat } from "react-icons/bs";
-import { FaCheckCircle, FaRegStickyNote, FaRegThumbsUp, FaThumbsUp } from "react-icons/fa";
+import { FaCheckCircle, FaHeart, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { Skeleton } from "./skeleton";
 export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThreadType | ThreadWithChildren }) {
@@ -56,7 +56,7 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
 
   return (
     <Button variant="ghost" size="sm" onClick={toggleLike} loading={loading}>
-      {thread.likes_count} {likeStatus ? <Icon as={FaThumbsUp} /> : <Icon as={FaRegThumbsUp} />}
+      {thread.likes_count} {likeStatus ? <Icon as={FaHeart} /> : <Icon as={FaRegHeart} />}
     </Button>
   );
 }
@@ -142,7 +142,7 @@ export function DiscussionPostSummary({
         </Stack>
         <VStack px="4" justify="center" flexShrink="0">
           {/* <Button variant="ghost" size="sm" ><BsChevronUp /></Button> */}
-          {thread.likes_count} <Icon as={thread.likes_count > 0 ? FaThumbsUp : FaRegThumbsUp} />
+          {thread.likes_count} <Icon as={thread.likes_count > 0 ? FaHeart : FaRegHeart} />
         </VStack>
       </Flex>
     </Box>

@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
 import { getCourse, getUserRolesForCourse, fetchCourseControllerData } from "@/lib/ssrUtils";
 import { headers } from "next/headers";
+import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -40,25 +41,27 @@ const ProtectedLayout = async ({
 
   return (
     <Box minH="100vh">
-      <CourseControllerProvider
-        course_id={Number.parseInt(course_id)}
-        profile_id={user_role.private_profile_id}
-        role={user_role.role}
-        initialData={initialData}
-      >
-        <OfficeHoursControllerProvider
-          classId={Number.parseInt(course_id)}
-          profileId={user_role.private_profile_id}
+      <NavigationProgressProvider>
+        <CourseControllerProvider
+          course_id={Number.parseInt(course_id)}
+          profile_id={user_role.private_profile_id}
           role={user_role.role}
+          initialData={initialData}
         >
-          <DynamicCourseNav />
-          {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-          {/* mobilenav */}
-          <Box pt="0" ml="0" mr="0">
-            {children}
-          </Box>
-        </OfficeHoursControllerProvider>
-      </CourseControllerProvider>
+          <OfficeHoursControllerProvider
+            classId={Number.parseInt(course_id)}
+            profileId={user_role.private_profile_id}
+            role={user_role.role}
+          >
+            <DynamicCourseNav />
+            {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
+            {/* mobilenav */}
+            <Box pt="0" ml="0" mr="0">
+              {children}
+            </Box>
+          </OfficeHoursControllerProvider>
+        </CourseControllerProvider>
+      </NavigationProgressProvider>
     </Box>
   );
 };

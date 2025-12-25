@@ -130,7 +130,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
     },
     discussions: {
       postsPerTopic: faker.number.int({ min: 5, max: 16 }),
-      maxRepliesPerPost: 16
+      maxRepliesPerPost: 16,
+      numAdditionalTopics: 10
     },
     gradingScheme: "specification",
     surveyConfig: {
@@ -236,7 +237,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
     },
     discussions: {
       postsPerTopic: faker.number.int({ min: 8, max: 12 }),
-      maxRepliesPerPost: 10
+      maxRepliesPerPost: 10,
+      numAdditionalTopics: 12
     },
     gradingScheme: "current",
     surveyConfig: {

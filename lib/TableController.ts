@@ -47,6 +47,7 @@ type ChannelType =
 const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
   "notifications",
   "discussion_topics",
+  "discussion_topic_followers",
   "discussion_thread_likes",
   "assignments",
   "assignment_due_date_exceptions",
@@ -138,6 +139,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   discussion_thread_read_status: ["user"],
   discussion_thread_watchers: ["user"],
   discussion_thread_likes: ["user"],
+  discussion_topic_followers: ["user"],
 
   // Tables broadcast via submission-specific channels
   submission_artifact_comments: ["submission_graders", "submission_user"],

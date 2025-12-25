@@ -77,6 +77,7 @@ export interface HelpRequestConfig {
 export interface DiscussionConfig {
   postsPerTopic: number;
   maxRepliesPerPost: number;
+  numAdditionalTopics?: number; // Number of additional general discussion topics to create (beyond assignment-specific ones)
 }
 
 export interface SurveyConfig {
@@ -170,6 +171,34 @@ const HELP_REQUEST_REPLIES = [
   "You might want to use a more appropriate design pattern here",
   "Try caching expensive computations to avoid redundant work",
   "Make sure your algorithm has the correct time complexity"
+];
+
+// List of 24 general discussion topic names for classes (non-assignment related)
+const GENERAL_DISCUSSION_TOPICS = [
+  "Assignments",
+  "Logistics",
+  "Readings",
+  "Memes",
+  "Study Groups",
+  "Office Hours",
+  "Exam Prep",
+  "Course Materials",
+  "Career Advice",
+  "Tech Stack",
+  "Best Practices",
+  "Debugging Tips",
+  "Resource Sharing",
+  "Project Ideas",
+  "Code Reviews",
+  "Algorithms & Data Structures",
+  "Industry Trends",
+  "Interview Prep",
+  "Open Source",
+  "Side Projects",
+  "Learning Resources",
+  "Q&A",
+  "Announcements",
+  "General Discussion"
 ];
 
 // SurveyJS survey templates for realistic data
@@ -1063,7 +1092,13 @@ export class DatabaseSeeder {
       }
 
       // // Create assignments and submissions
-      const assignments = await this.createAssignments(config, class_id, students);
+      const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students);
+
+      // Create additional discussion topics if configured
+      if (config.discussionConfig?.numAdditionalTopics) {
+        await this.createAdditionalDiscussionTopics(config.discussionConfig.numAdditionalTopics, class_id, nextOrdinal);
+      }
+
       const submissionData = await this.createSubmissions(assignments, students, class_id);
 
       // Create workflow events and errors for ALL submissions
@@ -2024,20 +2059,94 @@ export class DatabaseSeeder {
     console.log(`✓ Discussion threads seeding completed`);
   }
 
+  protected async createAdditionalDiscussionTopics(
+    numTopics: number,
+    class_id: number,
+    startingOrdinal: number
+  ): Promise<void> {
+    if (numTopics <= 0) {
+      return;
+    }
+
+    console.log(`\n💬 Creating ${numTopics} additional discussion topics...`);
+
+    const topicColors = ["red", "orange", "yellow", "green", "teal", "blue", "cyan", "purple", "pink", "gray"];
+    const topicDescriptions: Record<string, string> = {
+      Assignments: "Questions and notes about assignments.",
+      Logistics: "Anything else about the class",
+      Readings: "Follow-ups and discussion of assigned and optional readings",
+      Memes: "#random",
+      "Study Groups": "Find study partners and organize study sessions",
+      "Office Hours": "Questions and discussions about office hours",
+      "Exam Prep": "Share study strategies and exam preparation tips",
+      "Course Materials": "Discussion about textbooks, slides, and other course materials",
+      "Career Advice": "Career guidance and professional development discussions",
+      "Tech Stack": "Discussions about technologies and tools used in the course",
+      "Best Practices": "Share and discuss coding best practices",
+      "Debugging Tips": "Tips and tricks for debugging code",
+      "Resource Sharing": "Share useful resources, tutorials, and learning materials",
+      "Project Ideas": "Brainstorm and discuss project ideas",
+      "Code Reviews": "Request and provide code review feedback",
+      "Algorithms & Data Structures": "Deep dive into algorithms and data structures",
+      "Industry Trends": "Discuss current trends and developments in the industry",
+      "Interview Prep": "Share interview experiences and preparation strategies",
+      "Open Source": "Discuss open source contributions and projects",
+      "Side Projects": "Share and discuss personal side projects",
+      "Learning Resources": "Recommend and discuss learning resources",
+      "Q&A": "General questions and answers",
+      Announcements: "Important announcements and updates",
+      "General Discussion": "General class-related discussions"
+    };
+
+    let currentOrdinal = startingOrdinal;
+    let createdCount = 0;
+
+    for (let i = 0; i < numTopics; i++) {
+      const topicIndex = i % GENERAL_DISCUSSION_TOPICS.length;
+      const topicName = GENERAL_DISCUSSION_TOPICS[topicIndex];
+      const topicDescription = topicDescriptions[topicName] || `Discussion about ${topicName}`;
+      const topicColor = topicColors[currentOrdinal % topicColors.length];
+
+      // If we're looping, add a number suffix to make topics unique
+      const displayName =
+        i >= GENERAL_DISCUSSION_TOPICS.length
+          ? `${topicName} ${Math.floor(i / GENERAL_DISCUSSION_TOPICS.length) + 1}`
+          : topicName;
+
+      const { error: topicError } = await supabase.from("discussion_topics").insert({
+        class_id: class_id,
+        topic: displayName,
+        description: topicDescription,
+        color: topicColor,
+        assignment_id: null, // These are general topics, not assignment-specific
+        ordinal: currentOrdinal,
+        default_follow: false
+      });
+
+      if (topicError) {
+        console.warn(`⚠ Failed to create discussion topic "${displayName}": ${topicError.message}`);
+      } else {
+        createdCount++;
+        currentOrdinal++;
+      }
+    }
+
+    console.log(`✓ Created ${createdCount} additional discussion topics`);
+  }
+
   private async createAssignments(
     config: SeedingConfiguration,
     class_id: number,
     students: TestingUser[]
-  ): Promise<
-    Array<{
+  ): Promise<{
+    assignments: Array<{
       id: number;
       title: string;
       due_date: string;
       groups?: Array<{ id: number; name: string; memberCount: number; members: string[] }>;
-    }>
-  > {
-    console.log("\n📚 Creating assignments...");
-
+    }>;
+    nextOrdinal: number;
+  }> {
     const assignments: Array<{
       id: number;
       title: string;
@@ -2051,6 +2160,19 @@ export class DatabaseSeeder {
 
     // Calculate group size for group assignments
     const groupSize = calculateGroupSize(students.length);
+
+    // Get the maximum ordinal from existing discussion topics to determine starting ordinal
+    const { data: existingTopics, error: topicsError } = await supabase
+      .from("discussion_topics")
+      .select("ordinal")
+      .eq("class_id", class_id)
+      .order("ordinal", { ascending: false })
+      .limit(1);
+
+    let nextOrdinal = 1;
+    if (!topicsError && existingTopics && existingTopics.length > 0) {
+      nextOrdinal = existingTopics[0].ordinal + 1;
+    }
 
     // Track assignment indices
     let labAssignmentIdx = 1;
@@ -2197,11 +2319,33 @@ export class DatabaseSeeder {
 
       assignments.push(assignmentResult);
 
+      // Create a discussion topic for this assignment
+      const topicName = `${title} Discussion`;
+      const topicDescription = `Questions and discussions about ${title}`;
+      const topicColors = ["red", "orange", "yellow", "green", "teal", "blue", "cyan", "purple", "pink", "gray"];
+      const topicColor = topicColors[(nextOrdinal - 1) % topicColors.length];
+
+      const { error: topicError } = await supabase.from("discussion_topics").insert({
+        class_id: class_id,
+        topic: topicName,
+        description: topicDescription,
+        color: topicColor,
+        assignment_id: assignmentData.id,
+        ordinal: nextOrdinal,
+        default_follow: false
+      });
+
+      if (topicError) {
+        console.warn(`⚠ Failed to create discussion topic for ${title}: ${topicError.message}`);
+      } else {
+        nextOrdinal++;
+      }
+
       console.log(`✓ Created ${title}${groups.length > 0 ? ` with ${groups.length} groups` : ""}`);
     }
 
     console.log(`✓ Created ${assignments.length} assignments total`);
-    return assignments;
+    return { assignments, nextOrdinal };
   }
 
   protected async createSubmissions(

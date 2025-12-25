@@ -1,5 +1,3 @@
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Survey, SurveyResponse } from "@/types/survey";
 import { createClient } from "@/utils/supabase/server";
 import {
@@ -30,6 +28,7 @@ import { TZDate } from "@date-fns/tz";
 import { headers } from "next/headers";
 import Link from "next/link";
 import RegradeRequestsTable from "./RegradeRequestsTable";
+import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 
 export default async function StudentDashboard({
   course_id,
@@ -47,14 +46,6 @@ export default async function StudentDashboard({
     .eq("student_profile_id", private_profile_id)
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: false })
-    .limit(5);
-  const { data: topics } = await supabase.from("discussion_topics").select("*").eq("class_id", course_id);
-
-  const { data: discussions } = await supabase
-    .from("discussion_threads")
-    .select("*")
-    .eq("root_class_id", course_id)
-    .order("created_at", { ascending: false })
     .limit(5);
 
   const { data: surveysRaw } = await supabase
@@ -311,24 +302,8 @@ export default async function StudentDashboard({
         </Stack>
       </Box>
 
-      <Box>
-        <Heading size="lg" mb={4}>
-          Recent Discussions
-        </Heading>
-        <Stack spaceY={4}>
-          {discussions?.map((thread) => {
-            const topic = topics?.find((t) => t.id === thread.topic_id);
-            if (!topic) {
-              return <Skeleton key={thread.id} height="100px" />;
-            }
-            return (
-              <Link href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
-                <DiscussionPostSummary thread={thread} topic={topic} />
-              </Link>
-            );
-          })}
-        </Stack>
-      </Box>
+      {/* Discussion Activity Summary */}
+      {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
 
       <Box>
         <Heading size="lg" mb={4}>
