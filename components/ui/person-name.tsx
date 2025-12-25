@@ -1,3 +1,4 @@
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Avatar, HStack, Text, TextProps, VStack } from "@chakra-ui/react";
 import { memo } from "react";
@@ -17,8 +18,19 @@ function PersonName({
   textProps?: TextProps;
 }) {
   const userProfile = useUserProfile(uid);
+  const isStaff = useIsGraderOrInstructor();
+
+  // Show the real name in parentheses if the profile is a pseudonym and viewer is staff
+  const displayName = userProfile?.name || "";
+  const realNameSuffix = isStaff && userProfile?.real_name ? ` (${userProfile.real_name})` : "";
+
   if (!showAvatar) {
-    return <>{userProfile?.name}</>;
+    return (
+      <>
+        {displayName}
+        {realNameSuffix}
+      </>
+    );
   }
   return (
     <HStack w="100%">
@@ -27,7 +39,14 @@ function PersonName({
         <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack>
-        <Text {...textProps}>{userProfile?.name}</Text>
+        <Text {...textProps}>
+          {displayName}
+          {realNameSuffix && (
+            <Text as="span" color="fg.muted" fontSize="xs">
+              {realNameSuffix}
+            </Text>
+          )}
+        </Text>
       </VStack>
     </HStack>
   );

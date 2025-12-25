@@ -1,12 +1,13 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import {
+  useGraderPseudonymousMode,
   useRubricCheck,
   useRubricChecksByRubric,
   useRubricCriteria,
   useRubricCriteriaByRubric,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
   useSubmissionController,
@@ -481,6 +482,12 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                   <HStack gap={0} flexWrap="wrap">
                     <Text fontSize="sm" fontStyle="italic" color="fg.muted">
                       {commentAuthor?.name}
+                      {isGraderOrInstructor && commentAuthor?.real_name && (
+                        <Text as="span" fontSize="xs">
+                          {" "}
+                          ({commentAuthor.real_name})
+                        </Text>
+                      )}
                     </Text>
                     {comment.submission_review_id && (
                       <ReviewRoundTag submission_review_id={comment.submission_review_id} />
@@ -532,6 +539,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
+  const isStaff = useIsGraderOrInstructor();
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -541,6 +549,9 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
   if (!authorProfile || !comment) {
     return <Skeleton height="100px" width="100%" />;
   }
+
+  // Show real name in parentheses for staff when viewing pseudonymous profiles
+  const realNameSuffix = isStaff && authorProfile?.real_name ? ` (${authorProfile.real_name})` : "";
 
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
@@ -565,7 +576,14 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
             borderColor="border.emphasized"
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
-              <Text fontWeight="bold">{authorProfile?.name}</Text>
+              <Text fontWeight="bold">
+                {authorProfile?.name}
+                {realNameSuffix && (
+                  <Text as="span" fontWeight="normal" color="fg.muted" fontSize="xs">
+                    {realNameSuffix}
+                  </Text>
+                )}
+              </Text>
               <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
@@ -648,6 +666,11 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const review = useActiveSubmissionReview();
   const rubric = useRubricWithParts(review?.rubric_id);
   const [selectOpen, setSelectOpen] = useState(true);
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -981,7 +1004,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
               }
               allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
               defaultSingleLine={true}
-              sendMessage={async (message, profile_id) => {
+              sendMessage={async (message) => {
                 let points = selectedCheckOption.check?.points;
                 if (selectedSubOption !== null) {
                   points = selectedSubOption.points;
@@ -1005,7 +1028,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   class_id: file.class_id,
                   submission_file_id: file.id,
                   submission_id: submission.id,
-                  author: profile_id,
+                  // Use the determined author profile based on grader pseudonymous mode
+                  author: authorProfileId,
                   released: review ? review.released : true,
                   points: points ?? null,
                   submission_review_id: submissionReviewId ?? null,
