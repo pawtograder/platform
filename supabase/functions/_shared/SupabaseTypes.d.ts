@@ -8194,6 +8194,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out: boolean;
           updated_at: string;
           user_id: string;
         };
@@ -8210,6 +8211,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id: string;
         };
@@ -8226,6 +8228,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id?: string;
         };
@@ -10684,6 +10687,10 @@ export type Database = {
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
+      };
+      sis_sync_enrollment: {
+        Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
+        Returns: Json;
       };
       soft_delete_survey: {
         Args: { p_survey_id: string; p_survey_logical_id: string };

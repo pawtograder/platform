@@ -81,6 +81,14 @@ export default function EnrollmentsTable() {
   const labSections = useLabSections();
   const classSections = useClassSections();
 
+  const setSisSyncOptOut = useCallback(
+    async (userRoleId: number, sis_sync_opt_out: boolean) => {
+      const { error } = await supabase.from("user_roles").update({ sis_sync_opt_out }).eq("id", userRoleId);
+      if (error) throw error;
+    },
+    [supabase]
+  );
+
   const disableUserRole = useCallback(
     async (userRoleId: string) => {
       const { error } = await supabase.from("user_roles").update({ disabled: true }).eq("id", parseInt(userRoleId));
@@ -614,6 +622,65 @@ export default function EnrollmentsTable() {
         }
       },
       {
+        id: "sis_sync_opt_out",
+        header: "SIS Sync Override",
+        accessorFn: (row) => {
+          if (row.type === "invitation") return null;
+          return row.sis_sync_opt_out ? "Opted out" : "Managed by SIS";
+        },
+        cell: ({ row }) => {
+          if (row.original.type === "invitation") {
+            return (
+              <Text color="gray.400" fontSize="sm">
+                N/A
+              </Text>
+            );
+          }
+
+          const enrollment = row.original;
+          const isChecked = enrollment.sis_sync_opt_out === true;
+
+          return (
+            <Box
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <Checkbox.Root
+                checked={isChecked}
+                onCheckedChange={async (checked) => {
+                  const next = checked.checked.valueOf() === true;
+                  try {
+                    await setSisSyncOptOut(enrollment.id, next);
+                    toaster.create({
+                      title: "SIS Sync Override Updated",
+                      description: next
+                        ? "This enrollment will no longer be modified by SIS sync."
+                        : "This enrollment is now managed by SIS sync.",
+                      type: "success"
+                    });
+                  } catch (error) {
+                    toaster.create({
+                      title: "Failed to update SIS sync override",
+                      description: error instanceof Error ? error.message : "Unknown error",
+                      type: "error"
+                    });
+                  }
+                }}
+              >
+                <Checkbox.HiddenInput />
+                <Checkbox.Control>
+                  <CheckIcon />
+                </Checkbox.Control>
+                <Text ml={2} fontSize="sm">
+                  {isChecked ? "Opted out" : "Auto"}
+                </Text>
+              </Checkbox.Root>
+            </Box>
+          );
+        }
+      },
+      {
         id: "tags",
         header: "Tags",
         accessorFn: (row) => {
@@ -880,6 +947,7 @@ export default function EnrollmentsTable() {
       "GitHub Org Status",
       "SIS User ID",
       "SIS Linked",
+      "SIS Sync Opt Out",
       "Tags"
     ];
 
@@ -954,6 +1022,9 @@ export default function EnrollmentsTable() {
       // Get SIS Linked status
       const sisLinked = original.type === "invitation" ? "N/A" : original.canvas_id ? "Yes" : "No";
 
+      // Get SIS opt out status
+      const sisOptOut = original.type === "invitation" ? "N/A" : original.sis_sync_opt_out ? "Yes" : "No";
+
       // Get tags
       let tags = "N/A (Pending)";
       if (original.type === "enrollment") {
@@ -976,6 +1047,7 @@ export default function EnrollmentsTable() {
         githubOrgStatus,
         sisUserId,
         sisLinked,
+        sisOptOut,
         tags
       ];
     });

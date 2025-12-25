@@ -7,9 +7,24 @@ declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
 };
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { createInvitationsBulk, type InvitationRequest } from "../_shared/InvitationUtils.ts";
 import * as Sentry from "npm:@sentry/deno";
-import type { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
+
+type SISSycEnrollmentResult = {
+  success: boolean;
+  class_id: number;
+  expire_missing: boolean;
+  counts: {
+    invitations_created: number;
+    invitations_updated: number;
+    invitations_expired: number;
+    invitations_reactivated: number;
+    enrollments_created: number;
+    enrollments_updated: number;
+    enrollments_disabled: number;
+    enrollments_reenabled: number;
+    enrollments_adopted: number;
+  };
+};
 
 /**
  * Parse Retry-After header value (supports both delta-seconds and HTTP-date formats)
@@ -504,7 +519,7 @@ interface CourseImportResponse {
 /**
  * Sync existing SIS-linked classes with latest enrollment data
  */
-export async function syncSISClasses(supabase: SupabaseClient<Database>, classId: number | null, scope: Sentry.Scope) {
+export async function syncSISClasses(_supabase: SupabaseClient<Database>, classId: number | null, scope: Sentry.Scope) {
   scope?.setTag("function", "sis-sync");
 
   const adminSupabase = createClient<Database>(
@@ -694,827 +709,93 @@ export async function syncSISClasses(supabase: SupabaseClient<Database>, classId
         });
       });
 
-      // Step 2: Get current invitations and enrollments for this class (only from SIS-enabled sections)
-      let currentInvitations: GetResult<
-        Database["public"],
-        Database["public"]["Tables"]["invitations"]["Row"],
-        "invitations",
-        Database["public"]["Tables"]["invitations"]["Relationships"],
-        "id, sis_user_id, role, status, class_section_id, lab_section_id, sis_managed"
-      >[] = [];
-      let currentEnrollments: GetResult<
-        Database["public"],
-        Database["public"]["Tables"]["user_roles"]["Row"],
-        "user_roles",
-        Database["public"]["Tables"]["user_roles"]["Relationships"],
-        "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
-      >[] = [];
-
-      // Build filters based on which section types have enabled sections
-      const invitationFilters = [];
-      const enrollmentFilters = [];
-
-      // Only include sections that actually have SIS CRNs
-      const enabledClassSectionsWithSIS = enabledClassSections.filter((s) => s.sis_crn !== null);
-      const enabledLabSectionsWithSIS = enabledLabSections.filter((s) => s.sis_crn !== null);
-
-      if (enabledClassSectionsWithSIS.length > 0) {
-        const enabledClassSectionIds = enabledClassSectionsWithSIS.map((s) => s.id);
-        invitationFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
-        enrollmentFilters.push(`class_section_id.in.(${enabledClassSectionIds.join(",")})`);
-      }
-
-      if (enabledLabSectionsWithSIS.length > 0) {
-        const enabledLabSectionIds = enabledLabSectionsWithSIS.map((s) => s.id);
-        invitationFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
-        enrollmentFilters.push(`lab_section_id.in.(${enabledLabSectionIds.join(",")})`);
-      }
-
-      // Only fetch if we have any enabled sections
-      if (invitationFilters.length > 0) {
-        const { data: invitations } = await adminSupabase
-          .from("invitations")
-          .select("id, sis_user_id, role, status, class_section_id, lab_section_id, sis_managed")
-          .eq("class_id", classData.id)
-          .or(invitationFilters.join(","))
-          .limit(1000);
-        currentInvitations = invitations || [];
-
-        const { data: enrollments } = await adminSupabase
-          .from("user_roles")
-          .select("id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)")
-          .eq("class_id", classData.id)
-          .not("users.sis_user_id", "is", null)
-          .or(enrollmentFilters.join(","))
-          .limit(1000);
-        currentEnrollments = enrollments || [];
-      }
-
-      // Step 3: Build current state maps
-      const currentInvitationsBySIS = new Map(currentInvitations.map((inv) => [inv.sis_user_id, inv]));
-
-      const currentEnrollmentsBySIS = new Map(currentEnrollments.map((enr) => [enr.users.sis_user_id, enr]));
-
-      // CRITICAL: Get ALL existing user roles in this class (regardless of sections)
-      // This catches users who might need section updates, not just those in SIS-enabled sections
-      const { data: allExistingUserRoles } = await adminSupabase
-        .from("user_roles")
-        .select(
-          "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id), invitations(sis_managed)"
-        )
-        .eq("class_id", classData.id)
-        .not("users.sis_user_id", "is", null)
-        .eq("disabled", false)
-        .limit(1000);
-
-      const allExistingUsersBySIS = new Set(
-        (allExistingUserRoles || []).map((enr) => enr.users.sis_user_id).filter((id) => id !== null)
-      );
-
-      // Create a comprehensive map of ALL existing enrollments (not just SIS-enabled sections)
-      const allExistingEnrollmentsBySIS = new Map(
-        (allExistingUserRoles || []).map((enr) => [enr.users.sis_user_id, enr])
-      );
-
-      // Step 4: Collect all SIS users across all sections for this class
+      // Atomic enrollment + metadata sync via DB RPC (all writes happen in one transaction)
       const allSISUsers = new Map<
         number,
-        {
-          name: string;
-          role: "instructor" | "grader" | "student";
-          classCRN: number | null;
-          labCRN: number | null;
-        }
+        { name: string; role: "instructor" | "grader" | "student"; classCRN: number | null; labCRN: number | null }
       >();
+      const roleHierarchy = { instructor: 3, grader: 2, student: 1 } as const;
 
       sisEnrollmentByCRN.forEach((sectionData, crn) => {
-        [...sectionData.instructors, ...sectionData.graders, ...sectionData.students].forEach((user) => {
-          const existing = allSISUsers.get(Number(user.sis_user_id));
-          const roleHierarchy = { instructor: 3, grader: 2, student: 1 };
+        const users = [...sectionData.instructors, ...sectionData.graders, ...sectionData.students];
+        users.forEach((user) => {
+          const sisUserId = Number(user.sis_user_id);
+          const existing = allSISUsers.get(sisUserId);
 
           if (!existing) {
-            // New user - create entry with appropriate section assignment
-            allSISUsers.set(Number(user.sis_user_id), {
+            allSISUsers.set(sisUserId, {
               name: user.name,
               role: user.role,
               classCRN: sectionData.sectionType === "class" ? crn : null,
               labCRN: sectionData.sectionType === "lab" ? crn : null
             });
+            return;
+          }
 
-            scope?.addBreadcrumb({
-              message: `New user ${user.sis_user_id} added`,
-              category: "debug",
-              data: {
-                userId: user.sis_user_id,
-                userName: user.name,
-                role: user.role,
-                crn,
-                sectionType: sectionData.sectionType
-              }
-            });
+          if (roleHierarchy[user.role] > roleHierarchy[existing.role]) {
+            existing.role = user.role;
+            existing.name = user.name;
+          }
+
+          if (sectionData.sectionType === "class") {
+            existing.classCRN = crn;
           } else {
-            // Existing user - handle role hierarchy and section assignment
-            const shouldUpdateRole = roleHierarchy[user.role] > roleHierarchy[existing.role];
-
-            if (shouldUpdateRole) {
-              // Update role and preserve existing section assignments
-              existing.role = user.role;
-              existing.name = user.name; // Update name in case it changed
-
-              scope?.addBreadcrumb({
-                message: `User ${user.sis_user_id} role upgraded`,
-                category: "debug",
-                data: {
-                  userId: user.sis_user_id,
-                  userName: user.name,
-                  newRole: user.role,
-                  crn,
-                  sectionType: sectionData.sectionType
-                }
-              });
-            }
-
-            // Always add section assignment (class or lab) regardless of role hierarchy
-            if (sectionData.sectionType === "class") {
-              if (existing.classCRN && existing.classCRN !== crn) {
-                scope?.addBreadcrumb({
-                  message: `WARNING: User ${user.sis_user_id} has multiple class sections`,
-                  category: "warning",
-                  data: {
-                    userId: user.sis_user_id,
-                    existingClassCRN: existing.classCRN,
-                    newClassCRN: crn
-                  }
-                });
-              }
-              existing.classCRN = crn;
-            } else {
-              if (existing.labCRN && existing.labCRN !== crn) {
-                scope?.addBreadcrumb({
-                  message: `WARNING: User ${user.sis_user_id} has multiple lab sections`,
-                  category: "warning",
-                  data: {
-                    userId: user.sis_user_id,
-                    existingLabCRN: existing.labCRN,
-                    newLabCRN: crn
-                  }
-                });
-              }
-              existing.labCRN = crn;
-            }
-
-            scope?.addBreadcrumb({
-              message: `User ${user.sis_user_id} section assignment updated`,
-              category: "debug",
-              data: {
-                userId: user.sis_user_id,
-                userName: user.name,
-                role: existing.role,
-                classCRN: existing.classCRN,
-                labCRN: existing.labCRN,
-                addedSectionType: sectionData.sectionType,
-                addedCRN: crn
-              }
-            });
+            existing.labCRN = crn;
           }
         });
       });
 
-      // Debug logging: Summary of all SIS users and their assignments
-      const debugSummary = {
-        classId: classData.id,
-        className: classData.name,
-        totalUsers: allSISUsers.size,
-        usersByRole: Array.from(allSISUsers.values()).reduce(
-          (acc, user) => {
-            acc[user.role] = (acc[user.role] || 0) + 1;
-            return acc;
-          },
-          {} as Record<string, number>
-        ),
-        usersWithBothSections: Array.from(allSISUsers.values()).filter((user) => user.classCRN && user.labCRN).length,
-        usersWithOnlyClass: Array.from(allSISUsers.values()).filter((user) => user.classCRN && !user.labCRN).length,
-        usersWithOnlyLab: Array.from(allSISUsers.values()).filter((user) => !user.classCRN && user.labCRN).length,
-        sampleUsers: Array.from(allSISUsers.entries())
-          .slice(0, 5)
-          .map(([id, user]) => ({
-            sisUserId: id,
-            name: user.name,
-            role: user.role,
-            classCRN: user.classCRN,
-            labCRN: user.labCRN
-          }))
-      };
+      const rosterPayload = Array.from(allSISUsers.entries()).map(([sis_user_id, u]) => ({
+        sis_user_id,
+        name: u.name,
+        role: u.role,
+        class_section_crn: u.classCRN ?? null,
+        lab_section_crn: u.labCRN ?? null
+      }));
 
-      scope?.addBreadcrumb({
-        message: `SIS Users Summary for class ${classData.name}`,
-        category: "debug",
-        data: debugSummary
-      });
-
-      let newInvitationsCount = 0;
-      let expiredInvitationsCount = 0;
-      let disabledUsersCount = 0;
-      let reenabledUsersCount = 0;
-      let updatedMetadataCount = 0;
-      let updatedSectionAssignmentsCount = 0;
-
-      // Pre-fetch all class and lab sections by CRN for efficient lookup across multiple steps
-      const classSectionsByCRN = new Map<number, number>();
-      const labSectionsByCRN = new Map<number, number>();
-
-      // Fetch all enabled class sections (only those with SIS CRNs)
-      if (enabledClassSectionsWithSIS.length > 0) {
-        const { data: classSections } = await adminSupabase
-          .from("class_sections")
-          .select("id, sis_crn")
-          .eq("class_id", classData.id)
-          .in(
-            "id",
-            enabledClassSectionsWithSIS.map((s) => s.id)
-          )
-          .limit(1000);
-
-        if (classSections) {
-          classSections.forEach((section) => {
-            if (section.sis_crn) {
-              classSectionsByCRN.set(section.sis_crn, section.id);
-            }
-          });
-        }
-
-        scope?.addBreadcrumb({
-          message: `Loaded class sections cache`,
-          category: "debug",
-          data: {
-            classId: classData.id,
-            enabledClassSectionCount: enabledClassSectionsWithSIS.length,
-            fetchedClassSectionCount: classSections?.length || 0,
-            classSectionCRNs: Array.from(classSectionsByCRN.keys())
-          }
-        });
-      }
-
-      // Fetch all enabled lab sections (only those with SIS CRNs)
-      if (enabledLabSectionsWithSIS.length > 0) {
-        const { data: labSections } = await adminSupabase
-          .from("lab_sections")
-          .select("id, sis_crn")
-          .eq("class_id", classData.id)
-          .in(
-            "id",
-            enabledLabSectionsWithSIS.map((s) => s.id)
-          )
-          .limit(1000);
-
-        if (labSections) {
-          labSections.forEach((section) => {
-            if (section.sis_crn) {
-              labSectionsByCRN.set(section.sis_crn, section.id);
-            }
-          });
-        }
-
-        scope?.addBreadcrumb({
-          message: `Loaded lab sections cache`,
-          category: "debug",
-          data: {
-            classId: classData.id,
-            enabledLabSectionCount: enabledLabSectionsWithSIS.length,
-            fetchedLabSectionCount: labSections?.length || 0,
-            labSectionCRNs: Array.from(labSectionsByCRN.keys())
-          }
-        });
-      }
-
-      // Step 5: Create invitations for new SIS users
-      const newInvitations: InvitationRequest[] = [];
-
-      for (const [sisUserId, userData] of allSISUsers) {
-        // Skip if user is already enrolled (check ALL user roles, not just section-specific ones)
-        if (allExistingUsersBySIS.has(sisUserId)) {
-          continue;
-        }
-
-        // Get section IDs for both class and lab sections using cached data
-        let classSectionId = null;
-        let labSectionId = null;
-
-        // Get class section ID if user has a class CRN
-        if (userData.classCRN) {
-          classSectionId = classSectionsByCRN.get(userData.classCRN) || null;
-          if (!classSectionId) {
-            scope?.addBreadcrumb({
-              message: `Missing class section for CRN ${userData.classCRN}`,
-              category: "error",
-              data: {
-                classId: classData.id,
-                userId: sisUserId,
-                crn: userData.classCRN,
-                availableClassCRNs: Array.from(classSectionsByCRN.keys())
-              }
-            });
-            Sentry.captureMessage(
-              `SIS Import: Missing class section for CRN ${userData.classCRN} in class ${classData.name}`,
-              scope
-            );
-          }
-        }
-
-        // Get lab section ID if user has a lab CRN
-        if (userData.labCRN) {
-          labSectionId = labSectionsByCRN.get(userData.labCRN) || null;
-          if (!labSectionId) {
-            scope?.addBreadcrumb({
-              message: `Missing lab section for CRN ${userData.labCRN}`,
-              category: "error",
-              data: {
-                classId: classData.id,
-                userId: sisUserId,
-                crn: userData.labCRN,
-                availableLabCRNs: Array.from(labSectionsByCRN.keys())
-              }
-            });
-            Sentry.captureMessage(
-              `SIS Import: Missing lab section for CRN ${userData.labCRN} in class ${classData.name}`,
-              scope
-            );
-          }
-        }
-
-        // Check if user already has any invitation
-        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
-        if (existingInvitation) {
-          // Only update pending invitations; accepted ones are handled by user_roles flow
-          const needsSectionUpdate =
-            existingInvitation.class_section_id !== classSectionId ||
-            existingInvitation.lab_section_id !== labSectionId ||
-            existingInvitation.role !== userData.role;
-
-          if (existingInvitation.status === "pending" && needsSectionUpdate) {
-            // Update the existing pending invitation instead of creating a new one
-            const { error: updateError } = await adminSupabase
-              .from("invitations")
-              .update({
-                role: userData.role,
-                class_section_id: classSectionId,
-                lab_section_id: labSectionId,
-                updated_at: new Date().toISOString()
-              })
-              .eq("id", existingInvitation.id);
-
-            if (updateError) {
-              scope?.addBreadcrumb({
-                message: `Failed to update existing invitation for user ${sisUserId}`,
-                category: "error",
-                data: { error: updateError, classId: classData.id }
-              });
-            } else {
-              updatedSectionAssignmentsCount++;
-            }
-            continue;
-          }
-
-          // If there is an expired SIS-managed invitation and the user is back in SIS,
-          // reactivate it by setting status back to pending and updating role/sections
-          if (existingInvitation.status === "expired" && existingInvitation.sis_managed !== false) {
-            console.log(`Reactivating expired invitation for user ${sisUserId}`);
-            const { error: unexpireError } = await adminSupabase
-              .from("invitations")
-              .update({
-                status: "pending",
-                role: userData.role,
-                class_section_id: classSectionId,
-                lab_section_id: labSectionId,
-                updated_at: new Date().toISOString()
-              })
-              .eq("id", existingInvitation.id);
-
-            if (unexpireError) {
-              console.error(unexpireError);
-              scope?.addBreadcrumb({
-                message: `Failed to reactivate expired invitation for user ${sisUserId}`,
-                category: "error",
-                data: { error: unexpireError, classId: classData.id }
-              });
-              throw unexpireError;
-            } else {
-              scope?.addBreadcrumb({
-                message: `Reactivated expired invitation -> pending for user ${sisUserId}`,
-                category: "info",
-                data: { classId: classData.id, invitationId: existingInvitation.id }
-              });
-            }
-            continue;
-          }
-
-          // For any other existing invitation statuses, do not create a new one
-          continue;
-        }
-
-        newInvitations.push({
-          sis_user_id: sisUserId,
-          role: userData.role,
-          name: userData.name,
-          class_section_id: classSectionId || undefined,
-          lab_section_id: labSectionId || undefined
-        });
-      }
-
-      // Create new invitations in bulk using shared utility (no limit on count)
-      if (newInvitations.length > 0) {
-        try {
-          // Find a system user or admin to use as the inviter
-          // For SIS sync operations, we'll use the first admin user in the system
-          const { data: adminUser, error: adminError } = await adminSupabase
-            .from("user_roles")
-            .select("user_id")
-            .eq("role", "admin")
-            .eq("disabled", false)
-            .limit(1)
-            .single();
-
-          if (adminError || !adminUser) {
-            scope?.addBreadcrumb({
-              message: "No admin user found for SIS sync invitations",
-              category: "error",
-              data: { error: adminError?.message }
-            });
-            throw new UserVisibleError("No admin user available to create invitations");
-          }
-
-          scope?.addBreadcrumb({
-            message: `Creating ${newInvitations.length} invitations via shared utility`,
-            category: "info",
-            data: { classId: classData.id, count: newInvitations.length }
-          });
-
-          // Use shared utility to create all invitations at once (no batching needed)
-          const inviteResult = await createInvitationsBulk(
-            supabase, //Act as user!
-            classData.id,
-            adminUser.user_id,
-            newInvitations,
-            scope
-          );
-
-          newInvitationsCount = inviteResult.invitations.length;
-
-          // Log summary of results
-          scope?.addBreadcrumb({
-            message: `Invitation creation complete: ${inviteResult.invitations.length} created, ${inviteResult.errors.length} errors`,
-            category: "info",
-            data: {
-              classId: classData.id,
-              totalProcessed: newInvitations.length,
-              totalCreated: inviteResult.invitations.length,
-              totalErrors: inviteResult.errors.length
-            }
-          });
-
-          // If we have some errors but also some successes, log but don't fail completely
-          if (inviteResult.errors.length > 0) {
-            scope?.addBreadcrumb({
-              message: `SIS Import: ${inviteResult.errors.length} invitation errors encountered`,
-              category: "warning",
-              data: {
-                classId: classData.id,
-                errorCount: inviteResult.errors.length,
-                sampleErrors: inviteResult.errors.slice(0, 5) // Include first 5 errors for context
-              }
-            });
-            Sentry.captureMessage(`SIS Import: ${inviteResult.errors.length} invitation errors encountered`, scope);
-          }
-        } catch (error) {
-          scope?.addBreadcrumb({
-            message: `Error in invitation creation`,
-            category: "error",
-            data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
-          });
-          Sentry.captureMessage(
-            `Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`,
-            scope
-          );
-          throw new UserVisibleError(
-            `Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-
-      // Step 6: Update section assignments for existing users (if they've moved between sections)
-
-      for (const [sisUserId, userData] of allSISUsers) {
-        // Get the correct section IDs for this user based on their current SIS assignment using cached data
-        let correctClassSectionId = null;
-        let correctLabSectionId = null;
-
-        // Get class section ID if user has a class CRN
-        if (userData.classCRN) {
-          correctClassSectionId = classSectionsByCRN.get(userData.classCRN) || null;
-          if (!correctClassSectionId) {
-            scope?.addBreadcrumb({
-              message: `Missing class section for CRN ${userData.classCRN} during section update`,
-              category: "error",
-              data: {
-                classId: classData.id,
-                userId: sisUserId,
-                crn: userData.classCRN,
-                availableClassCRNs: Array.from(classSectionsByCRN.keys())
-              }
-            });
-            Sentry.captureMessage(
-              `SIS Import: Missing class section for CRN ${userData.classCRN} in class ${classData.name} during section update`,
-              scope
-            );
-          }
-        }
-
-        // Get lab section ID if user has a lab CRN
-        if (userData.labCRN) {
-          correctLabSectionId = labSectionsByCRN.get(userData.labCRN) || null;
-          if (!correctLabSectionId) {
-            scope?.addBreadcrumb({
-              message: `Missing lab section for CRN ${userData.labCRN} during section update`,
-              category: "error",
-              data: {
-                classId: classData.id,
-                userId: sisUserId,
-                crn: userData.labCRN,
-                availableLabCRNs: Array.from(labSectionsByCRN.keys())
-              }
-            });
-            Sentry.captureMessage(
-              `SIS Import: Missing lab section for CRN ${userData.labCRN} in class ${classData.name} during section update`,
-              scope
-            );
-          }
-        }
-
-        // Check if user has an existing invitation that needs section updates
-        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
-        if (existingInvitation && existingInvitation.status === "pending") {
-          const needsUpdate =
-            existingInvitation.class_section_id !== correctClassSectionId ||
-            existingInvitation.lab_section_id !== correctLabSectionId;
-
-          if (needsUpdate) {
-            const { error: updateError } = await adminSupabase
-              .from("invitations")
-              .update({
-                class_section_id: correctClassSectionId,
-                lab_section_id: correctLabSectionId,
-                updated_at: new Date().toISOString()
-              })
-              .eq("id", existingInvitation.id);
-
-            if (updateError) {
-              scope?.addBreadcrumb({
-                message: `Failed to update invitation sections for user ${sisUserId}`,
-                category: "error",
-                data: {
-                  classId: classData.id,
-                  userId: sisUserId,
-                  error: updateError,
-                  oldClassSection: existingInvitation.class_section_id,
-                  newClassSection: correctClassSectionId,
-                  oldLabSection: existingInvitation.lab_section_id,
-                  newLabSection: correctLabSectionId
-                }
-              });
-            } else {
-              updatedSectionAssignmentsCount++;
-            }
-          }
-        }
-
-        // Check if user has an existing enrollment that needs section updates
-        // Use the comprehensive enrollment map to catch ALL existing users, not just those in SIS-enabled sections
-        const existingEnrollment = allExistingEnrollmentsBySIS.get(Number(sisUserId));
-        if (existingEnrollment && !existingEnrollment.disabled) {
-          const needsUpdate =
-            existingEnrollment.class_section_id !== correctClassSectionId ||
-            existingEnrollment.lab_section_id !== correctLabSectionId;
-
-          if (needsUpdate) {
-            const { error: updateError } = await adminSupabase
-              .from("user_roles")
-              .update({
-                class_section_id: correctClassSectionId,
-                lab_section_id: correctLabSectionId
-              })
-              .eq("id", existingEnrollment.id);
-
-            if (updateError) {
-              scope?.addBreadcrumb({
-                message: `Failed to update user role sections for user ${sisUserId}`,
-                category: "error",
-                data: {
-                  classId: classData.id,
-                  userId: sisUserId,
-                  error: updateError,
-                  oldClassSection: existingEnrollment.class_section_id,
-                  newClassSection: correctClassSectionId,
-                  oldLabSection: existingEnrollment.lab_section_id,
-                  newLabSection: correctLabSectionId
-                }
-              });
-            } else {
-              updatedSectionAssignmentsCount++;
-            }
-          }
-        }
-      }
-
-      if (updatedSectionAssignmentsCount > 0) {
-        updatedMetadataCount += updatedSectionAssignmentsCount;
-        scope?.addBreadcrumb({
-          message: `Updated section assignments for ${updatedSectionAssignmentsCount} users`,
-          category: "info",
-          data: { classId: classData.id, count: updatedSectionAssignmentsCount }
-        });
-      }
-
-      // Step 7: Handle users no longer in SIS
-      const sisUserIds = new Set(allSISUsers.keys());
-
-      // 7a. Mark invitations as expired for users no longer in SIS
-      // IMPORTANT: Only expire SIS-managed invitations, never expire manually created ones
-      const invitationsToExpire = currentInvitations.filter(
-        (inv) =>
-          (inv.status === "pending" || inv.status === "accepted") &&
-          !sisUserIds.has(Number(inv.sis_user_id)) &&
-          inv.sis_managed !== false // Expire both pending and accepted SIS-managed invitations
-      );
-
-      if (invitationsToExpire.length > 0) {
-        scope?.addBreadcrumb({
-          message: `About to expire ${invitationsToExpire.length} invitations`,
-          category: "warning",
-          data: {
-            classId: classData.id,
-            totalCurrentInvitations: currentInvitations.length,
-            totalSISUsers: sisUserIds.size,
-            invitationsToExpire: invitationsToExpire.length,
-            sampleExpiring: invitationsToExpire.slice(0, 3).map((inv) => ({
-              sisUserId: inv.sis_user_id,
-              classSectionId: inv.class_section_id,
-              labSectionId: inv.lab_section_id
-            }))
-          }
-        });
-      }
-
-      if (invitationsToExpire.length > 0) {
-        const { error: expireError } = await adminSupabase
-          .from("invitations")
-          .update({
-            status: "expired",
-            updated_at: new Date().toISOString()
-          })
-          .in(
-            "id",
-            invitationsToExpire.map((inv) => inv.id)
-          );
-
-        if (expireError) {
-          scope?.addBreadcrumb({
-            message: `Failed to expire ${invitationsToExpire.length} old invitations`,
-            category: "error",
-            data: { classId: classData.id, error: expireError }
-          });
-        } else {
-          expiredInvitationsCount = invitationsToExpire.length;
-        }
-      }
-
-      // Build quick-lookup sets of SIS-managed section IDs for membership checks
-      const sisManagedClassSectionIds = new Set(enabledClassSectionsWithSIS.map((s) => s.id));
-      const sisManagedLabSectionIds = new Set(enabledLabSectionsWithSIS.map((s) => s.id));
-
-      // 7b. Disable user_roles for enrolled users no longer in THIS CLASS's SIS data
-      // Use the comprehensive enrollment map to catch ALL users, not just those in SIS-enabled sections
-      // Only disable users who were originally from SIS (have canvas_id set to their nuid)
-      const enrolledUsersToDisable = Array.from(allExistingEnrollmentsBySIS.values()).filter(
-        (enr) =>
-          enr.users.sis_user_id &&
-          enr.canvas_id &&
-          !sisUserIds.has(Number(enr.users.sis_user_id)) &&
-          !enr.disabled && // Don't re-disable already disabled users
-          enr.invitations !== null && //Only disable users who have an invitation
-          enr.invitations.sis_managed !== false && //Only disable users who were originally from SIS
-          // Don't disable users who are notin a SIS-managed section
-          (enr.class_section_id === null || sisManagedClassSectionIds.has(enr.class_section_id)) &&
-          (enr.lab_section_id === null || sisManagedLabSectionIds.has(enr.lab_section_id))
-      );
-
-      if (enrolledUsersToDisable.length > 0) {
-        const { error: disableError, count } = await adminSupabase
-          .from("user_roles")
-          .update({
-            disabled: true
-          })
-          .eq("class_id", classData.id)
-          .in(
-            "canvas_id",
-            enrolledUsersToDisable.map((enr) => enr.canvas_id)
-          )
-          .eq("disabled", false); // Only disable currently active users
-
-        if (disableError) {
-          Sentry.captureException(disableError, scope);
-        } else {
-          disabledUsersCount = count || 0;
-        }
-        console.log("Enrolled users to disable", enrolledUsersToDisable);
-      } else {
-        console.log("No enrolled users to disable");
-      }
-
-      // 7c. Re-enable users who are back in SIS (were disabled but now present again)
-      const usersToReenable = Array.from(allExistingEnrollmentsBySIS.values()).filter(
-        (enr) => enr.users.sis_user_id && enr.canvas_id && sisUserIds.has(enr.users.sis_user_id) && enr.disabled // Only re-enable currently disabled users
-      );
-
-      if (usersToReenable.length > 0) {
-        const { error: reenableError, count } = await adminSupabase
-          .from("user_roles")
-          .update({
-            disabled: false
-          })
-          .eq("class_id", classData.id)
-          .in(
-            "canvas_id",
-            usersToReenable.map((enr) => enr.canvas_id)
-          )
-          .eq("disabled", true); // Only re-enable currently disabled users
-
-        if (reenableError) {
-          Sentry.captureException(reenableError, scope);
-        } else {
-          reenabledUsersCount = count || 0;
-        }
-      }
-
-      // Step 7: Update section metadata if changed
-      for (const [crn, sectionData] of sisEnrollmentByCRN) {
-        const sectionMeta = sectionData.sectionMeta;
-
-        if (sectionData.sectionType === "class") {
-          const { error: updateError } = await adminSupabase
-            .from("class_sections")
-            .update({
-              meeting_location: sectionMeta.meeting_location,
-              meeting_times: sectionMeta.meeting_times,
-              updated_at: new Date().toISOString()
-            })
-            .eq("class_id", classData.id)
-            .eq("sis_crn", crn);
-
-          if (!updateError) updatedMetadataCount++;
-        } else {
-          // Parse meeting times for lab sections to extract start/end times
-          const parsedTimes = parseMeetingTimes(sectionMeta.meeting_times || "", scope);
-
-          const labUpdateData: Database["public"]["Tables"]["lab_sections"]["Update"] = {
-            meeting_location: sectionMeta.meeting_location,
-            meeting_times: sectionMeta.meeting_times
+      const sectionUpdates = Array.from(sisEnrollmentByCRN.entries()).map(([crn, sectionData]) => {
+        const meta = sectionData.sectionMeta;
+        if (sectionData.sectionType === "lab") {
+          const parsed = parseMeetingTimes(meta.meeting_times || "", scope);
+          return {
+            section_type: "lab" as const,
+            sis_crn: crn,
+            meeting_location: meta.meeting_location,
+            meeting_times: meta.meeting_times,
+            campus: meta.campus,
+            day_of_week: parsed.dayOfWeek,
+            start_time: parsed.startTime,
+            end_time: parsed.endTime
           };
-          const mt = sectionMeta.meeting_times?.trim() ?? "";
-          if (!mt) {
-            // SIS cleared times; clear derived fields too
-            labUpdateData.start_time = null;
-            labUpdateData.end_time = null;
-            labUpdateData.day_of_week = null;
-          } else if (parsedTimes.startTime && parsedTimes.endTime) {
-            // Only write when we have both ends
-            labUpdateData.start_time = parsedTimes.startTime;
-            labUpdateData.end_time = parsedTimes.endTime;
-            labUpdateData.day_of_week = parsedTimes.dayOfWeek ?? null;
-          }
-
-          const { error: updateError } = await adminSupabase
-            .from("lab_sections")
-            .update(labUpdateData)
-            .eq("class_id", classData.id)
-            .eq("sis_crn", crn);
-
-          if (!updateError) {
-            updatedMetadataCount++;
-            scope?.addBreadcrumb({
-              message: `Updated lab section ${crn} with parsed meeting times`,
-              category: "info",
-              data: {
-                crn,
-                originalMeetingTimes: sectionMeta.meeting_times,
-                parsedTimes,
-                classId: classData.id
-              }
-            });
-          } else {
-            Sentry.captureException(updateError, scope);
-          }
         }
+        return {
+          section_type: "class" as const,
+          sis_crn: crn,
+          meeting_location: meta.meeting_location,
+          meeting_times: meta.meeting_times,
+          campus: meta.campus
+        };
+      });
+
+      const { data: syncData, error: syncError } = await adminSupabase.rpc("sis_sync_enrollment", {
+        p_class_id: classData.id,
+        p_roster_data: rosterPayload,
+        p_sync_options: {
+          expire_missing: true,
+          section_updates: sectionUpdates
+        }
+      });
+
+      if (syncError) {
+        throw new UserVisibleError(`sis_sync_enrollment failed: ${syncError.message}`);
       }
+
+      const syncResult = syncData as unknown as SISSycEnrollmentResult;
+      const newInvitationsCount = syncResult.counts.invitations_created;
+      const expiredInvitationsCount = syncResult.counts.invitations_expired;
+      const disabledUsersCount = syncResult.counts.enrollments_disabled;
+      const reenabledUsersCount = syncResult.counts.enrollments_reenabled;
+      const updatedMetadataCount = sectionUpdates.length;
 
       // Update sync status for all processed sections
       const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Expired: ${expiredInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;

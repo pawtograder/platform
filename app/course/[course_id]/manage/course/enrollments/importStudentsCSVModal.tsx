@@ -15,11 +15,20 @@ import { FaFileImport } from "react-icons/fa";
 type AppRole = Database["public"]["Enums"]["app_role"];
 const allowedRoles: ReadonlyArray<AppRole> = ["instructor", "grader", "student"];
 
+function parseOptionalBoolean(value?: string): boolean | undefined {
+  const v = value?.trim().toLowerCase();
+  if (!v) return undefined;
+  if (["true", "t", "1", "yes", "y"].includes(v)) return true;
+  if (["false", "f", "0", "no", "n"].includes(v)) return false;
+  return undefined;
+}
+
 type CSVRecord = {
   email?: string;
   name: string;
   role?: string;
   sis_id?: string;
+  sis_sync_opt_out?: string;
 };
 
 type FormValues = {
@@ -65,11 +74,11 @@ const ImportStudentsCSVModalContent = () => {
   const [isConfirmingImport, setIsConfirmingImport] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [usersToPreviewAdd, setUsersToPreviewAdd] = useState<
-    Array<{ email?: string; name: string; role: AppRole; sis_id?: number }>
+    Array<{ email?: string; name: string; role: AppRole; sis_id?: number; sis_sync_opt_out?: boolean }>
   >([]);
   const [notifyOnAdd, setNotifyOnAdd] = useState<boolean>(false);
   const [usersToPreviewIgnore, setUsersToPreviewIgnore] = useState<
-    Array<{ email?: string; name: string; role: AppRole; sis_id?: number }>
+    Array<{ email?: string; name: string; role: AppRole; sis_id?: number; sis_sync_opt_out?: boolean }>
   >([]);
   const [importMode, setImportMode] = useState<"email" | "sis_id" | null>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -176,12 +185,14 @@ const ImportStudentsCSVModalContent = () => {
             const rawSisId = record.sis_id?.trim();
             const sisIdAsNumber =
               rawSisId && rawSisId !== "" && !isNaN(parseInt(rawSisId, 10)) ? parseInt(rawSisId, 10) : undefined;
+            const sis_sync_opt_out = parseOptionalBoolean(record.sis_sync_opt_out);
 
             return {
               email: record.email?.trim(),
               name: record.name?.trim(),
               role: role,
-              sis_id: sisIdAsNumber
+              sis_id: sisIdAsNumber,
+              sis_sync_opt_out
             };
           })
           .filter((user) => {
@@ -314,8 +325,20 @@ const ImportStudentsCSVModalContent = () => {
           setSisUserMap(existingUserMap);
         }
 
-        const toAdd: Array<{ email?: string; name: string; role: AppRole; sis_id?: number }> = [];
-        const toIgnore: Array<{ email?: string; name: string; role: AppRole; sis_id?: number }> = [];
+        const toAdd: Array<{
+          email?: string;
+          name: string;
+          role: AppRole;
+          sis_id?: number;
+          sis_sync_opt_out?: boolean;
+        }> = [];
+        const toIgnore: Array<{
+          email?: string;
+          name: string;
+          role: AppRole;
+          sis_id?: number;
+          sis_sync_opt_out?: boolean;
+        }> = [];
 
         processedUsers.forEach((user) => {
           const identifier = detectedMode === "sis_id" ? user.sis_id : user.email;
@@ -389,6 +412,17 @@ const ImportStudentsCSVModalContent = () => {
                   });
                   throw new Error(`RPC Error for ${user.name}: ${enrollError.message}`);
                 }
+
+                if (user.sis_sync_opt_out === true) {
+                  const { error: optOutErr } = await supabase
+                    .from("user_roles")
+                    .update({ sis_sync_opt_out: true })
+                    .eq("class_id", Number(course_id))
+                    .eq("user_id", existingUserId);
+                  if (optOutErr) {
+                    throw new Error(`Failed to set sis_sync_opt_out for ${user.name}: ${optOutErr.message}`);
+                  }
+                }
               } else {
                 // User doesn't exist in system - create invitation
                 await invitationCreate(
@@ -418,6 +452,26 @@ const ImportStudentsCSVModalContent = () => {
                 },
                 supabase
               );
+
+              if (user.sis_sync_opt_out === true) {
+                // Best-effort: set override if the user is now enrolled (email import can also create an invitation)
+                const { data: userRow, error: userErr } = await supabase
+                  .from("users")
+                  .select("user_id")
+                  .eq("email", user.email!)
+                  .maybeSingle();
+                if (userErr) throw new Error(`Failed to look up user by email for opt-out: ${userErr.message}`);
+                if (userRow?.user_id) {
+                  const { error: optOutErr } = await supabase
+                    .from("user_roles")
+                    .update({ sis_sync_opt_out: true })
+                    .eq("class_id", Number(course_id))
+                    .eq("user_id", userRow.user_id);
+                  if (optOutErr) {
+                    throw new Error(`Failed to set sis_sync_opt_out for ${user.name}: ${optOutErr.message}`);
+                  }
+                }
+              }
               return { identifier: user.email, name: user.name, status: "fulfilled" };
             }
           } catch (error) {
@@ -545,7 +599,13 @@ const ImportStudentsCSVModalContent = () => {
                         p={2}
                       >
                         {usersToPreviewAdd.map(
-                          (user: { email?: string; name: string; role: AppRole; sis_id?: number }) => {
+                          (user: {
+                            email?: string;
+                            name: string;
+                            role: AppRole;
+                            sis_id?: number;
+                            sis_sync_opt_out?: boolean;
+                          }) => {
                             const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
                             const key = importMode === "sis_id" ? `sis_${user.sis_id}` : user.email!;
 
@@ -569,6 +629,12 @@ const ImportStudentsCSVModalContent = () => {
                             return (
                               <Text as="li" key={key}>
                                 {user.name} ({identifier}) - Role: {user.role}
+                                {user.sis_sync_opt_out ? (
+                                  <Text as="span" color="orange.600" fontWeight="medium">
+                                    {" "}
+                                    (SIS sync override)
+                                  </Text>
+                                ) : null}
                                 <Text as="span" color={actionColor} fontWeight="medium">
                                   {actionText}
                                 </Text>
@@ -595,12 +661,24 @@ const ImportStudentsCSVModalContent = () => {
                         p={2}
                       >
                         {usersToPreviewIgnore.map(
-                          (user: { email?: string; name: string; role: AppRole; sis_id?: number }) => {
+                          (user: {
+                            email?: string;
+                            name: string;
+                            role: AppRole;
+                            sis_id?: number;
+                            sis_sync_opt_out?: boolean;
+                          }) => {
                             const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
                             const key = importMode === "sis_id" ? `sis_ignore_${user.sis_id}` : `ignore_${user.email}`;
                             return (
                               <Text as="li" key={key}>
                                 {user.name} ({identifier}) - Role: {user.role}
+                                {user.sis_sync_opt_out ? (
+                                  <Text as="span" color="orange.600" fontWeight="medium">
+                                    {" "}
+                                    (SIS sync override)
+                                  </Text>
+                                ) : null}
                               </Text>
                             );
                           }
@@ -656,6 +734,10 @@ const ImportStudentsCSVModalContent = () => {
                         <Text fontSize="sm" color="fg.subtle">
                           If &apos;role&apos; is not provided or invalid, it defaults to &apos;student&apos;. Valid
                           roles: student, grader, instructor.
+                        </Text>
+                        <Text fontSize="sm" color="fg.subtle">
+                          Optional: include a &apos;sis_sync_opt_out&apos; column (true/false) to mark created
+                          enrollments as <strong>not</strong> managed by SIS sync.
                         </Text>
                       </VStack>
                     )}
