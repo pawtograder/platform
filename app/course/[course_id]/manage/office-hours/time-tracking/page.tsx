@@ -4,15 +4,15 @@ import { Box, Card, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import React, { useMemo, useState } from "react";
 import { BsExclamationTriangle } from "react-icons/bs";
-import { useHelpRequestWorkSessions } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestWorkSessions, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
-import { ColumnDef } from "@tanstack/react-table";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import PersonAvatar from "@/components/ui/person-avatar";
-import Link from "next/link";
+import { formatDuration } from "@/utils/time-formatting";
+import WorkSessionsTable from "./work-sessions-table";
 
 type WorkSessionWithDetails = {
   id: number;
@@ -25,34 +25,35 @@ type WorkSessionWithDetails = {
   longest_wait_seconds_at_start: number | null;
   notes: string | null;
   taName: string;
+  studentName: string;
   durationSeconds: number;
   helpRequestTitle?: string;
 };
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  } else if (minutes > 0) {
-    return `${minutes}m`;
-  } else {
-    return `${seconds}s`;
-  }
-}
-
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString();
-}
 
 export default function TimeTrackingPage() {
   const { course_id } = useParams();
   const courseId = Number(course_id);
   const allSessions = useHelpRequestWorkSessions();
   const profiles = useAllProfilesForClass();
+  const helpRequestStudents = useHelpRequestStudents();
   const [dateFilter, setDateFilter] = useState<{ start?: string; end?: string }>({});
+
+  // Create a map of help_request_id to student name(s)
+  const helpRequestStudentMap = useMemo(() => {
+    const map = new Map<number, string>();
+    helpRequestStudents.forEach((hrs) => {
+      const profile = profiles.find((p) => p.id === hrs.profile_id);
+      if (profile && profile.name) {
+        const existing = map.get(hrs.help_request_id);
+        if (existing) {
+          map.set(hrs.help_request_id, `${existing}, ${profile.name}`);
+        } else {
+          map.set(hrs.help_request_id, profile.name);
+        }
+      }
+    });
+    return map;
+  }, [helpRequestStudents, profiles]);
 
   // Process sessions with TA names and durations
   const sessionsWithDetails: WorkSessionWithDetails[] = useMemo(() => {
@@ -77,14 +78,16 @@ export default function TimeTrackingPage() {
         const durationSeconds = Math.floor((endTime - startTime) / 1000);
 
         const taProfile = profiles.find((p) => p.id === session.ta_profile_id);
+        const studentName = helpRequestStudentMap.get(session.help_request_id) || "Unknown Student";
 
         return {
           ...session,
           durationSeconds,
-          taName: taProfile?.name || "Unknown TA"
+          taName: taProfile?.name || "Unknown TA",
+          studentName
         };
       });
-  }, [allSessions, profiles, dateFilter]);
+  }, [allSessions, profiles, dateFilter, helpRequestStudentMap]);
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
@@ -99,7 +102,8 @@ export default function TimeTrackingPage() {
     const todayTotal = todaySessions.reduce((sum, s) => sum + s.durationSeconds, 0);
     const weekTotal = weekSessions.reduce((sum, s) => sum + s.durationSeconds, 0);
     const allTotal = sessionsWithDetails.reduce((sum, s) => sum + s.durationSeconds, 0);
-    const avgDuration = sessionsWithDetails.length > 0 ? allTotal / sessionsWithDetails.length : 0;
+    const avgDurationRaw = sessionsWithDetails.length > 0 ? allTotal / sessionsWithDetails.length : 0;
+    const avgDuration = Math.round(avgDurationRaw / 60) * 60; // Round to nearest minute
 
     return {
       todayTotal,
@@ -144,97 +148,21 @@ export default function TimeTrackingPage() {
     return Array.from(grouped.entries())
       .map(([taId, stats]) => {
         const taProfile = profiles.find((p) => p.id === taId);
+        const avgSecondsRaw = stats.totalSeconds / stats.sessions;
+        const avgSeconds = Math.round(avgSecondsRaw / 60) * 60; // Round to nearest minute
+        const vsAverageRaw = avgSecondsRaw - overallAvg;
+        const vsAverage = Math.round(vsAverageRaw / 60) * 60; // Round to nearest minute
         return {
           taId,
           taName: taProfile?.name || "Unknown TA",
           totalSeconds: stats.totalSeconds,
           sessions: stats.sessions,
-          avgSeconds: stats.totalSeconds / stats.sessions,
-          vsAverage: stats.totalSeconds / stats.sessions - overallAvg
+          avgSeconds,
+          vsAverage
         };
       })
       .sort((a, b) => b.totalSeconds - a.totalSeconds);
   }, [sessionsWithDetails, profiles, summaryStats.avgDuration]);
-
-  // Table columns
-  const columns = useMemo<ColumnDef<WorkSessionWithDetails>[]>(
-    () => [
-      {
-        id: "ta",
-        header: "TA",
-        accessorFn: (row) => row.taName,
-        cell: ({ row }) => {
-          const session = row.original;
-          return (
-            <HStack gap={2}>
-              <PersonAvatar uid={session.ta_profile_id} size="sm" />
-              <Text>{session.taName}</Text>
-            </HStack>
-          );
-        }
-      },
-      {
-        id: "date",
-        header: "Date",
-        accessorFn: (row) => row.started_at,
-        cell: ({ row }) => formatDate(row.original.started_at)
-      },
-      {
-        id: "help_request",
-        header: "Help Request",
-        accessorFn: (row) => row.help_request_id,
-        cell: ({ row }) => (
-          <Link href={`/course/${courseId}/manage/office-hours/request/${row.original.help_request_id}`}>
-            <Button variant="ghost" size="sm">
-              Request #{row.original.help_request_id}
-            </Button>
-          </Link>
-        )
-      },
-      {
-        id: "duration",
-        header: "Duration",
-        accessorFn: (row) => row.durationSeconds,
-        cell: ({ row }) => {
-          const session = row.original;
-          const isActive = !session.ended_at;
-          return (
-            <HStack gap={1}>
-              <Text>{formatDuration(session.durationSeconds)}</Text>
-              {isActive && (
-                <Box as="span" px={1.5} py={0.5} borderRadius="full" bg="colorPalette.500" color="white" fontSize="xs">
-                  Active
-                </Box>
-              )}
-            </HStack>
-          );
-        }
-      },
-      {
-        id: "queue_depth",
-        header: "Queue Depth",
-        accessorFn: (row) => row.queue_depth_at_start,
-        cell: ({ row }) => row.original.queue_depth_at_start ?? "N/A"
-      },
-      {
-        id: "wait_context",
-        header: "Wait Context",
-        accessorFn: (row) => row.longest_wait_seconds_at_start,
-        cell: ({ row }) => {
-          const waitSeconds = row.original.longest_wait_seconds_at_start;
-          if (waitSeconds === null) return "N/A";
-          return formatDuration(waitSeconds);
-        }
-      },
-      {
-        id: "notes",
-        header: "Notes",
-        accessorFn: (row) => row.notes || "",
-        cell: ({ row }) => row.original.notes || "-"
-      }
-    ],
-    [courseId]
-  );
 
   // Use processed sessions as table data
   const tableData = sessionsWithDetails;
@@ -425,10 +353,10 @@ export default function TimeTrackingPage() {
                   <Box
                     key={session.id}
                     p={2}
-                    bg="orange.50"
+                    bg="bg.warning"
                     borderRadius="md"
                     borderWidth="1px"
-                    borderColor="orange.200"
+                    borderColor="border.warning"
                   >
                     <Text fontSize="sm">
                       <Text as="span" fontWeight="semibold">
@@ -468,94 +396,7 @@ export default function TimeTrackingPage() {
           </Text>
         </Card.Header>
         <Card.Body>
-          {/* Note: The table will use useCustomTable but we need to render it manually since we're overriding data */}
-          <Box overflowX="auto">
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  {columns.map((col) => (
-                    <th
-                      key={col.id}
-                      style={{
-                        padding: "8px",
-                        textAlign: "left",
-                        borderBottom: "1px solid #e2e8f0",
-                        fontWeight: "semibold"
-                      }}
-                    >
-                      {typeof col.header === "string" ? col.header : col.id}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {tableData.map((session) => (
-                  <tr key={session.id}>
-                    {columns.map((col) => {
-                      // Render cell using the cell function if available
-                      let cellContent: React.ReactNode;
-                      if (col.cell && typeof col.cell === "function") {
-                        try {
-                          const getValue = () => {
-                            if ("accessorFn" in col && typeof col.accessorFn === "function") {
-                              return col.accessorFn(session, 0);
-                            }
-                            if ("accessorKey" in col && col.accessorKey) {
-                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              return (session as any)[col.accessorKey];
-                            }
-                            return "";
-                          };
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          cellContent = col.cell({
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            row: { original: session, getValue } as any,
-                            getValue
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          } as any);
-                        } catch {
-                          // Fallback to simple value
-                          const value =
-                            "accessorFn" in col && typeof col.accessorFn === "function"
-                              ? col.accessorFn(session, 0)
-                              : "accessorKey" in col && col.accessorKey
-                                ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                  (session as any)[col.accessorKey]
-                                : "";
-                          cellContent = String(value ?? "");
-                        }
-                      } else {
-                        const value =
-                          "accessorFn" in col && typeof col.accessorFn === "function"
-                            ? col.accessorFn(session, 0)
-                            : "accessorKey" in col && col.accessorKey
-                              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                (session as any)[col.accessorKey]
-                              : "";
-                        cellContent = String(value ?? "");
-                      }
-                      return (
-                        <td
-                          key={col.id}
-                          style={{
-                            padding: "8px",
-                            borderBottom: "1px solid #e2e8f0"
-                          }}
-                        >
-                          {cellContent}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {tableData.length === 0 && (
-              <Box p={8} textAlign="center">
-                <Text color="fg.muted">No work sessions found</Text>
-              </Box>
-            )}
-          </Box>
+          <WorkSessionsTable sessions={tableData} courseId={courseId} />
         </Card.Body>
       </Card.Root>
     </VStack>

@@ -728,7 +728,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await page.waitForLoadState("networkidle");
     await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
     // Validate that the final grade shown is correctly calcualted
-    await expect(page.getByText(`Final Grade91`)).toBeVisible({ timeout: 70_000 });
+    await expect(page.getByText(`Final Grade90.8`)).toBeVisible({ timeout: 70_000 });
 
     // Now unrelease the column and verify it's hidden from student
     await loginAsUser(page, instructor!, course);

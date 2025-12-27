@@ -1,37 +1,19 @@
 "use client";
 
 import PersonAvatar from "@/components/ui/person-avatar";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import { useOfficeHoursController, useWorkSessionsForRequest } from "@/hooks/useOfficeHoursRealtime";
-import { Box, HStack, Icon, IconButton, Separator, Stack, Text } from "@chakra-ui/react";
-import { useMemo } from "react";
+import { Box, Collapsible, HStack, Icon, IconButton, Separator, Stack, Text } from "@chakra-ui/react";
+import { useMemo, useState } from "react";
 import { BsClock, BsPencil, BsPeople, BsTrash } from "react-icons/bs";
+import { LuChevronDown, LuChevronRight } from "react-icons/lu";
+import { formatDuration, formatDateTime } from "@/utils/time-formatting";
 
 interface WorkSessionHistoryProps {
   help_request_id: number;
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined) return "In progress";
-
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  } else if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
-  } else {
-    return `${secs}s`;
-  }
-}
-
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleString();
 }
 
 export default function WorkSessionHistory({ help_request_id }: WorkSessionHistoryProps) {
@@ -39,6 +21,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
   const profiles = useAllProfilesForClass();
   const isInstructor = useIsInstructor();
   const controller = useOfficeHoursController();
+  const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
 
   // Sort sessions by start time (newest first)
   const sortedSessions = useMemo(() => {
@@ -64,6 +47,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
   }, [sortedSessions, profiles]);
 
   const handleDelete = async (sessionId: number) => {
+    setDeletingSessionId(sessionId);
     try {
       await controller.helpRequestWorkSessions.delete(sessionId);
       toaster.success({
@@ -75,6 +59,8 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
         title: "Error",
         description: `Failed to delete session: ${error instanceof Error ? error.message : "Unknown error"}`
       });
+    } finally {
+      setDeletingSessionId(null);
     }
   };
 
@@ -89,127 +75,161 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
   }
 
   return (
-    <Stack spaceY={3}>
-      <Text fontSize="lg" fontWeight="semibold">
-        Work Session History ({sessionsWithDuration.length})
-      </Text>
+    <Collapsible.Root defaultOpen={false}>
+      <Collapsible.Trigger asChild>
+        <HStack
+          cursor="pointer"
+          _hover={{ opacity: 0.8 }}
+          transition="opacity 0.2s"
+          role="button"
+          tabIndex={0}
+          justify="space-between"
+          w="100%"
+          py={1}
+        >
+          <Text fontSize="lg" fontWeight="semibold">
+            Work Session History ({sessionsWithDuration.length})
+          </Text>
+          <Collapsible.Context>
+            {(collapsible) => (
+              <Icon as={collapsible.open ? LuChevronDown : LuChevronRight} boxSize={5} color="fg.muted" />
+            )}
+          </Collapsible.Context>
+        </HStack>
+      </Collapsible.Trigger>
+      <Collapsible.Content>
+        <Stack spaceY={3} mt={2}>
+          {sessionsWithDuration.map((session, index) => {
+            const isActive = !session.ended_at;
 
-      {sessionsWithDuration.map((session, index) => {
-        const isActive = !session.ended_at;
+            return (
+              <Box
+                key={session.id}
+                p={4}
+                borderWidth="1px"
+                borderRadius="md"
+                bg={isActive ? "bg.emphasized" : "bg.subtle"}
+                borderColor={isActive ? "border.emphasized" : "border.subtle"}
+              >
+                <HStack justify="space-between" align="start">
+                  <Stack spaceY={2} flex="1">
+                    <HStack gap={2}>
+                      <PersonAvatar uid={session.ta_profile_id} size="sm" />
+                      <Text fontWeight="medium">{session.taName}</Text>
+                      {isActive && (
+                        <Box
+                          as="span"
+                          px={2}
+                          py={0.5}
+                          borderRadius="full"
+                          bg="colorPalette.500"
+                          color="white"
+                          fontSize="xs"
+                          fontWeight="semibold"
+                        >
+                          Active
+                        </Box>
+                      )}
+                    </HStack>
 
-        return (
-          <Box
-            key={session.id}
-            p={4}
-            borderWidth="1px"
-            borderRadius="md"
-            bg={isActive ? "bg.emphasized" : "bg.subtle"}
-            borderColor={isActive ? "border.emphasized" : "border.subtle"}
-          >
-            <HStack justify="space-between" align="start">
-              <Stack spaceY={2} flex="1">
-                <HStack gap={2}>
-                  <PersonAvatar uid={session.ta_profile_id} size="sm" />
-                  <Text fontWeight="medium">{session.taName}</Text>
-                  {isActive && (
-                    <Box
-                      as="span"
-                      px={2}
-                      py={0.5}
-                      borderRadius="full"
-                      bg="colorPalette.500"
-                      color="white"
-                      fontSize="xs"
-                      fontWeight="semibold"
-                    >
-                      Active
-                    </Box>
-                  )}
-                </HStack>
+                    <HStack gap={4} fontSize="sm" color="fg.muted">
+                      <HStack gap={1}>
+                        <Icon as={BsClock} />
+                        <Text>
+                          {formatDuration(session.durationSeconds)}
+                          {isActive && " (so far)"}
+                        </Text>
+                      </HStack>
 
-                <HStack gap={4} fontSize="sm" color="fg.muted">
-                  <HStack gap={1}>
-                    <Icon as={BsClock} />
-                    <Text>
-                      {formatDuration(session.durationSeconds)}
-                      {isActive && " (so far)"}
+                      <HStack gap={1}>
+                        <Icon as={BsPeople} />
+                        <Text>Queue depth: {session.queue_depth_at_start ?? "N/A"}</Text>
+                      </HStack>
+
+                      {session.longest_wait_seconds_at_start !== null && (
+                        <Text>Longest wait: {formatDuration(session.longest_wait_seconds_at_start)}</Text>
+                      )}
+                    </HStack>
+
+                    <Text fontSize="xs" color="fg.muted">
+                      Started: {formatDateTime(session.started_at)}
+                      {` • Duration: ${formatDuration(session.durationSeconds)}${isActive ? " (so far)" : ""}`}
+                      {session.ended_at && ` • Ended: ${formatDateTime(session.ended_at)}`}
                     </Text>
-                  </HStack>
 
-                  <HStack gap={1}>
-                    <Icon as={BsPeople} />
-                    <Text>Queue depth: {session.queue_depth_at_start ?? "N/A"}</Text>
-                  </HStack>
+                    {session.notes && (
+                      <Box mt={2} p={2} bg="bg.emphasized" borderRadius="md">
+                        <Text fontSize="sm" fontStyle="italic">
+                          {session.notes}
+                        </Text>
+                      </Box>
+                    )}
+                  </Stack>
 
-                  {session.longest_wait_seconds_at_start !== null && (
-                    <Text>Longest wait: {formatDuration(session.longest_wait_seconds_at_start)}</Text>
+                  {isInstructor && (
+                    <HStack gap={1}>
+                      <IconButton
+                        aria-label="Edit session"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          // TODO: Implement edit modal
+                          toaster.info({
+                            title: "Edit session",
+                            description: "Edit functionality coming soon"
+                          });
+                        }}
+                      >
+                        <Icon as={BsPencil} />
+                      </IconButton>
+                      <PopConfirm
+                        triggerLabel="Delete session"
+                        trigger={
+                          <IconButton
+                            aria-label="Delete session"
+                            size="sm"
+                            variant="ghost"
+                            colorPalette="red"
+                            disabled={deletingSessionId === session.id}
+                            loading={deletingSessionId === session.id}
+                          >
+                            <Icon as={BsTrash} />
+                          </IconButton>
+                        }
+                        confirmHeader="Delete Work Session"
+                        confirmText="Are you sure you want to delete this work session? This action cannot be undone."
+                        onConfirm={async () => {
+                          await handleDelete(session.id);
+                        }}
+                        placement="bottom-end"
+                      />
+                    </HStack>
                   )}
                 </HStack>
 
-                <Text fontSize="xs" color="fg.muted">
-                  Started: {formatDate(session.started_at)}
-                  {session.ended_at && ` • Ended: ${formatDate(session.ended_at)}`}
+                {index < sessionsWithDuration.length - 1 && <Separator mt={3} />}
+              </Box>
+            );
+          })}
+
+          {sessionsWithDuration.length > 1 && (
+            <Box p={3} bg="bg.emphasized" borderRadius="md" borderWidth="1px">
+              <HStack justify="space-between">
+                <Text fontWeight="semibold">Total Time:</Text>
+                <Text fontWeight="bold" fontSize="lg">
+                  {formatDuration(
+                    sessionsWithDuration.reduce((sum, s) => {
+                      const start = new Date(s.started_at).getTime();
+                      const end = s.ended_at ? new Date(s.ended_at).getTime() : Date.now();
+                      return sum + Math.floor((end - start) / 1000);
+                    }, 0)
+                  )}
                 </Text>
-
-                {session.notes && (
-                  <Box mt={2} p={2} bg="bg.emphasized" borderRadius="md">
-                    <Text fontSize="sm" fontStyle="italic">
-                      {session.notes}
-                    </Text>
-                  </Box>
-                )}
-              </Stack>
-
-              {isInstructor && (
-                <HStack gap={1}>
-                  <IconButton
-                    aria-label="Edit session"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      // TODO: Implement edit modal
-                      toaster.info({
-                        title: "Edit session",
-                        description: "Edit functionality coming soon"
-                      });
-                    }}
-                  >
-                    <Icon as={BsPencil} />
-                  </IconButton>
-                  <IconButton
-                    aria-label="Delete session"
-                    size="sm"
-                    variant="ghost"
-                    colorPalette="red"
-                    onClick={() => handleDelete(session.id)}
-                  >
-                    <Icon as={BsTrash} />
-                  </IconButton>
-                </HStack>
-              )}
-            </HStack>
-
-            {index < sessionsWithDuration.length - 1 && <Separator mt={3} />}
-          </Box>
-        );
-      })}
-
-      {sessionsWithDuration.length > 1 && (
-        <Box p={3} bg="bg.emphasized" borderRadius="md" borderWidth="1px">
-          <HStack justify="space-between">
-            <Text fontWeight="semibold">Total Time:</Text>
-            <Text fontWeight="bold" fontSize="lg">
-              {formatDuration(
-                sessionsWithDuration.reduce((sum, s) => {
-                  const start = new Date(s.started_at).getTime();
-                  const end = s.ended_at ? new Date(s.ended_at).getTime() : Date.now();
-                  return sum + Math.floor((end - start) / 1000);
-                }, 0)
-              )}
-            </Text>
-          </HStack>
-        </Box>
-      )}
-    </Stack>
+              </HStack>
+            </Box>
+          )}
+        </Stack>
+      </Collapsible.Content>
+    </Collapsible.Root>
   );
 }

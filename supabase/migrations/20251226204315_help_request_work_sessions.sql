@@ -165,8 +165,8 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- Handle assignment start: assignee changed from NULL to a profile_id
-    IF OLD.assignee IS NULL AND NEW.assignee IS NOT NULL THEN
+    -- Handle assignment start: assignee changed from NULL to a profile_id, or reassigned to a different profile
+    IF NEW.assignee IS NOT NULL AND (OLD.assignee IS NULL OR OLD.assignee <> NEW.assignee) THEN
         -- End any existing active session for this request (shouldn't happen, but safety check)
         UPDATE public.help_request_work_sessions
         SET ended_at = NOW()

@@ -3967,6 +3967,15 @@ final;`,
 
     let totalCreated = 0;
     let totalResolved = 0;
+    let globalIndex = 0; // Track global index across batches
+
+    // Helper function to generate skewed duration (1-40 minutes, skewed toward shorter times)
+    const generateSkewedDurationMinutes = (): number => {
+      // Use power function to skew toward lower values (0-1 range)
+      const skewed = Math.pow(Math.random(), 2);
+      // Scale to 1-40 minutes
+      return Math.floor(skewed * 39) + 1;
+    };
 
     for (const batch of helpRequestBatches) {
       console.log(
@@ -3974,14 +3983,23 @@ final;`,
       );
 
       const batchPromises = batch.map(async () => {
+        // Determine if this request should be resolved (exactly half)
+        const isResolved = globalIndex < Math.floor(config.numHelpRequests / 2);
+        globalIndex++;
+
         // Select a random student as the creator
         const creator = students[Math.floor(Math.random() * students.length)];
         const isPrivate = Math.random() < 0.3; // 30% chance of being private
-        const isResolved = Math.random() < 0.8; // 80% chance of being resolved
-        const status = isResolved ? (Math.random() < 0.5 ? "resolved" : "closed") : "open";
+        const status = isResolved ? "resolved" : "open";
 
         // Select a random help request template
         const messageTemplate = HELP_REQUEST_TEMPLATES[Math.floor(Math.random() * HELP_REQUEST_TEMPLATES.length)];
+
+        // For resolved requests, select a random TA (grader) to resolve it
+        const resolver = isResolved && graders.length > 0 ? graders[Math.floor(Math.random() * graders.length)] : null;
+
+        // Calculate resolved_at timestamp (reused for work sessions)
+        const resolvedAt = isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000) : null;
 
         // Create the help request
         const { data: helpRequestData, error: helpRequestError } = await this.rateLimitManager.trackAndLimit(
@@ -3996,12 +4014,9 @@ final;`,
                 is_private: isPrivate,
                 status: status,
                 created_by: creator.private_profile_id,
-                assignee: isResolved
-                  ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id
-                  : null,
-                resolved_at: isResolved
-                  ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString()
-                  : null // Random time in last 7 days
+                assignee: isResolved && resolver ? resolver.private_profile_id : null,
+                resolved_by: isResolved && resolver ? resolver.private_profile_id : null,
+                resolved_at: resolvedAt ? resolvedAt.toISOString() : null
               })
               .select("id")
         );
@@ -4087,6 +4102,59 @@ final;`,
               "help_request_messages",
               () => supabase.from("help_request_messages").insert(messageInserts).select("id"),
               messageInserts.length
+            );
+          }
+        }
+
+        // Create work sessions for resolved requests
+        if (isResolved && graders.length > 0 && resolvedAt) {
+          // Create 1-3 work sessions
+          const numWorkSessions = Math.floor(Math.random() * 3) + 1; // 1, 2, or 3
+
+          const workSessionInserts: Array<{
+            help_request_id: number;
+            class_id: number;
+            ta_profile_id: string;
+            started_at: string;
+            ended_at: string;
+          }> = [];
+
+          // Generate work sessions, working backwards from resolved_at
+          let currentTime = new Date(resolvedAt);
+
+          for (let i = 0; i < numWorkSessions; i++) {
+            // Select a random TA (grader)
+            const ta = graders[Math.floor(Math.random() * graders.length)];
+
+            // Generate skewed duration (1-40 minutes, skewed toward shorter)
+            const durationMinutes = generateSkewedDurationMinutes();
+            const durationMs = durationMinutes * 60 * 1000;
+
+            // Set ended_at to current time, started_at to duration before that
+            const endedAt = new Date(currentTime);
+            const startedAt = new Date(currentTime.getTime() - durationMs);
+
+            workSessionInserts.push({
+              help_request_id: helpRequestId,
+              class_id: class_id,
+              ta_profile_id: ta.private_profile_id,
+              started_at: startedAt.toISOString(),
+              ended_at: endedAt.toISOString()
+            });
+
+            // Move current time back by duration + some gap (5-30 minutes) for next session
+            const gapMinutes = Math.floor(Math.random() * 25) + 5;
+            currentTime = new Date(currentTime.getTime() - durationMs - gapMinutes * 60 * 1000);
+          }
+
+          // Insert work sessions (reverse order so earliest is first)
+          if (workSessionInserts.length > 0) {
+            // Reverse to insert in chronological order (earliest first)
+            workSessionInserts.reverse();
+            await this.rateLimitManager.trackAndLimit(
+              "help_request_work_sessions",
+              () => supabase.from("help_request_work_sessions").insert(workSessionInserts).select("id"),
+              workSessionInserts.length
             );
           }
         }
