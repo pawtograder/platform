@@ -4,6 +4,7 @@ import { CalendarEvent, useAllCalendarEvents } from "@/hooks/useCalendarEvents";
 import { Box, Button, Card, Flex, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
+import CalendarSubscribeButton from "./calendar-subscribe-button";
 import {
   addDays,
   addMonths,
@@ -1331,7 +1332,9 @@ export default function CalendarScheduleSummary() {
             <Heading size="sm">Schedule</Heading>
           </HStack>
 
-          <HStack gap={2} />
+          <HStack gap={2}>
+            <CalendarSubscribeButton />
+          </HStack>
         </Flex>
       </Card.Header>
 

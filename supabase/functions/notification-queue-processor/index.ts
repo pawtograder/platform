@@ -902,9 +902,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           notification_reason: body.notification_reason,
           action: body.action,
           msg_id: n.msg_id
-        })
-        .select()
-        .single();
+        });
 
       if (insertError) {
         // If duplicate (same thread_id within same second), that's okay - skip
@@ -917,6 +915,8 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
             error: insertError.message
           });
           Sentry.captureException(insertError, scope);
+          // Don't archive on failure - allow retry via queue visibility timeout
+          continue;
         }
       }
 
