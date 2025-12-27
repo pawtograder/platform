@@ -68,6 +68,7 @@ export class OfficeHoursController {
   private _helpRequestFeedback?: TableController<"help_request_feedback">;
   private _helpRequestFileReferences?: TableController<"help_request_file_references">;
   private _videoMeetingSessions?: TableController<"video_meeting_sessions">;
+  private _helpRequestWorkSessions?: TableController<"help_request_work_sessions">;
 
   private _classRealTimeController: ClassRealTimeController;
 
@@ -256,6 +257,21 @@ export class OfficeHoursController {
     return this._videoMeetingSessions;
   }
 
+  get helpRequestWorkSessions(): TableController<"help_request_work_sessions"> {
+    if (!this._helpRequestWorkSessions) {
+      this._helpRequestWorkSessions = new TableController({
+        client: this._client,
+        table: "help_request_work_sessions",
+        query: this._client.from("help_request_work_sessions").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        realtimeFilter: {
+          class_id: this.classId
+        }
+      });
+    }
+    return this._helpRequestWorkSessions;
+  }
+
   set officeHoursRealTimeController(officeHoursRealTimeController: OfficeHoursRealTimeController) {
     this._officeHoursRealTimeController = officeHoursRealTimeController;
   }
@@ -416,6 +432,7 @@ export class OfficeHoursController {
     this._helpRequestFeedback?.close();
     this._helpRequestFileReferences?.close();
     this._videoMeetingSessions?.close();
+    this._helpRequestWorkSessions?.close();
 
     // Close per-help-request message controllers
     for (const controller of this._helpRequestMessageControllers.values()) {
@@ -617,6 +634,20 @@ export function useHelpRequestFeedback() {
   const controller = useOfficeHoursController();
   return useTableControllerTableValues(controller.helpRequestFeedback);
 }
+
+export function useHelpRequestWorkSessions() {
+  const controller = useOfficeHoursController();
+  return useTableControllerTableValues(controller.helpRequestWorkSessions);
+}
+
+export function useWorkSessionsForRequest(help_request_id: number | undefined) {
+  const allSessions = useHelpRequestWorkSessions();
+  
+  if (!help_request_id || !allSessions) return [];
+  
+  return allSessions.filter((session) => session.help_request_id === help_request_id);
+}
+
 export { useConnectionStatus } from "./useConnectionStatus";
 export { useHelpRequestFileReferences } from "./useHelpRequestFileReferences";
 export { useRealtimeChat } from "./useRealtimeChat";

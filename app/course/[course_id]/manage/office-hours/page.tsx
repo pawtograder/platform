@@ -9,6 +9,7 @@ import ModerationManagement from "./moderationManagement";
 import StudentKarmaManagement from "./studentKarmaManagement";
 import StudentActivitySummary from "./studentActivitySummary";
 import HelpRequestFeedback from "./feedback";
+import TimeTrackingPage from "./time-tracking/page";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 
 /**
@@ -50,6 +51,9 @@ export default function OfficeHoursAdminPage() {
             <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="activity">
               Student Activity
             </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="time-tracking">
+              Time Tracking
+            </Tabs.Trigger>
             {isInstructor && (
               <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="feedback">
                 Feedback
@@ -85,6 +89,10 @@ export default function OfficeHoursAdminPage() {
 
           <Tabs.Content value="activity">
             <StudentActivitySummary />
+          </Tabs.Content>
+
+          <Tabs.Content value="time-tracking">
+            <TimeTrackingPage />
           </Tabs.Content>
 
           {isInstructor && (
