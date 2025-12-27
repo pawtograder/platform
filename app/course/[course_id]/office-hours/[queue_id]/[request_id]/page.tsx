@@ -3,10 +3,15 @@
 import { useParams } from "next/navigation";
 import CurrentRequest from "../currentRequest";
 import { useQueueData } from "@/hooks/useQueueData";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
+import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 
 export default function RequestDetailPage() {
   const { queue_id, course_id, request_id } = useParams();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const isDesktop = useBreakpointValue({ base: false, lg: true }) ?? false;
+  const showFullSidebar = isDesktop && sidebarOpen;
 
   const { queueRequests, userRequests } = useQueueData({
     courseId: Number(course_id),
@@ -31,5 +36,27 @@ export default function RequestDetailPage() {
     return <div>Request not found.</div>;
   }
 
-  return <CurrentRequest request={request} position={position} />;
+  return (
+    <Flex direction="row" gap={{ base: 3, lg: 6 }} align="stretch">
+      <Box
+        flex={{ lg: showFullSidebar ? 4 : "unset" }}
+        width={{ base: "52px", lg: showFullSidebar ? "auto" : "52px" }}
+        minW={0}
+      >
+        <HelpRequestSidebar
+          requestId={Number(request_id)}
+          isOpen={showFullSidebar}
+          onToggle={() => {
+            if (!isDesktop) return;
+            setSidebarOpen((v) => !v);
+          }}
+          queueId={Number(queue_id)}
+          isManageMode={false}
+        />
+      </Box>
+      <Box flex={{ lg: 8 }} minW={0}>
+        <CurrentRequest request={request} position={position} />
+      </Box>
+    </Flex>
+  );
 }
