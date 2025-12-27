@@ -642,9 +642,9 @@ export function useHelpRequestWorkSessions() {
 
 export function useWorkSessionsForRequest(help_request_id: number | undefined) {
   const allSessions = useHelpRequestWorkSessions();
-  
+
   if (!help_request_id || !allSessions) return [];
-  
+
   return allSessions.filter((session) => session.help_request_id === help_request_id);
 }
 

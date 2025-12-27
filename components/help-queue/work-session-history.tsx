@@ -15,11 +15,11 @@ interface WorkSessionHistoryProps {
 
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return "In progress";
-  
+
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
-  
+
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   } else if (minutes > 0) {
@@ -43,9 +43,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
   // Sort sessions by start time (newest first)
   const sortedSessions = useMemo(() => {
     if (!sessions) return [];
-    return [...sessions].sort((a, b) => 
-      new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
-    );
+    return [...sessions].sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
   }, [sessions]);
 
   // Calculate duration for each session
@@ -54,9 +52,9 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
       const startTime = new Date(session.started_at).getTime();
       const endTime = session.ended_at ? new Date(session.ended_at).getTime() : Date.now();
       const durationSeconds = Math.floor((endTime - startTime) / 1000);
-      
+
       const taProfile = profiles.find((p) => p.id === session.ta_profile_id);
-      
+
       return {
         ...session,
         durationSeconds,
@@ -95,10 +93,10 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
       <Text fontSize="lg" fontWeight="semibold">
         Work Session History ({sessionsWithDuration.length})
       </Text>
-      
+
       {sessionsWithDuration.map((session, index) => {
         const isActive = !session.ended_at;
-        
+
         return (
           <Box
             key={session.id}
@@ -111,10 +109,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
             <HStack justify="space-between" align="start">
               <Stack spaceY={2} flex="1">
                 <HStack gap={2}>
-                  <PersonAvatar
-                    uid={session.ta_profile_id}
-                    size="sm"
-                  />
+                  <PersonAvatar uid={session.ta_profile_id} size="sm" />
                   <Text fontWeight="medium">{session.taName}</Text>
                   {isActive && (
                     <Box
@@ -131,7 +126,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
                     </Box>
                   )}
                 </HStack>
-                
+
                 <HStack gap={4} fontSize="sm" color="fg.muted">
                   <HStack gap={1}>
                     <Icon as={BsClock} />
@@ -140,26 +135,22 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
                       {isActive && " (so far)"}
                     </Text>
                   </HStack>
-                  
+
                   <HStack gap={1}>
                     <Icon as={BsPeople} />
-                    <Text>
-                      Queue depth: {session.queue_depth_at_start ?? "N/A"}
-                    </Text>
+                    <Text>Queue depth: {session.queue_depth_at_start ?? "N/A"}</Text>
                   </HStack>
-                  
+
                   {session.longest_wait_seconds_at_start !== null && (
-                    <Text>
-                      Longest wait: {formatDuration(session.longest_wait_seconds_at_start)}
-                    </Text>
+                    <Text>Longest wait: {formatDuration(session.longest_wait_seconds_at_start)}</Text>
                   )}
                 </HStack>
-                
+
                 <Text fontSize="xs" color="fg.muted">
                   Started: {formatDate(session.started_at)}
                   {session.ended_at && ` • Ended: ${formatDate(session.ended_at)}`}
                 </Text>
-                
+
                 {session.notes && (
                   <Box mt={2} p={2} bg="bg.emphasized" borderRadius="md">
                     <Text fontSize="sm" fontStyle="italic">
@@ -168,7 +159,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
                   </Box>
                 )}
               </Stack>
-              
+
               {isInstructor && (
                 <HStack gap={1}>
                   <IconButton
@@ -197,14 +188,12 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
                 </HStack>
               )}
             </HStack>
-            
-            {index < sessionsWithDuration.length - 1 && (
-              <Separator mt={3} />
-            )}
+
+            {index < sessionsWithDuration.length - 1 && <Separator mt={3} />}
           </Box>
         );
       })}
-      
+
       {sessionsWithDuration.length > 1 && (
         <Box p={3} bg="bg.emphasized" borderRadius="md" borderWidth="1px">
           <HStack justify="space-between">
@@ -224,4 +213,3 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
     </Stack>
   );
 }
-
