@@ -92,6 +92,15 @@ export function OfficeHoursHeader({
   }, [allQueueAssignments, helpQueues, private_profile_id, isManageMode]);
 
   const handleStartStopWorking = async (queueId: number, isWorking: boolean, assignmentId?: number) => {
+    // Guard: check if private_profile_id is present before proceeding
+    if (!private_profile_id) {
+      toaster.error({
+        title: "Error",
+        description: "Unable to start working: user profile not found. Please refresh the page."
+      });
+      return;
+    }
+
     try {
       if (isWorking && assignmentId) {
         await helpQueueAssignments.update(assignmentId, {
@@ -106,7 +115,7 @@ export function OfficeHoursHeader({
         await helpQueueAssignments.create({
           class_id: Number(course_id),
           help_queue_id: queueId,
-          ta_profile_id: private_profile_id!,
+          ta_profile_id: private_profile_id,
           is_active: true,
           started_at: new Date().toISOString(),
           ended_at: null,

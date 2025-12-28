@@ -13,22 +13,7 @@ import { Button } from "@/components/ui/button";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { formatDuration } from "@/utils/time-formatting";
 import WorkSessionsTable from "./work-sessions-table";
-
-type WorkSessionWithDetails = {
-  id: number;
-  help_request_id: number;
-  class_id: number;
-  ta_profile_id: string;
-  started_at: string;
-  ended_at: string | null;
-  queue_depth_at_start: number | null;
-  longest_wait_seconds_at_start: number | null;
-  notes: string | null;
-  taName: string;
-  studentName: string;
-  durationSeconds: number;
-  helpRequestTitle?: string;
-};
+import { WorkSessionWithDetails } from "@/types/work-sessions";
 
 export default function TimeTrackingPage() {
   const { course_id } = useParams();

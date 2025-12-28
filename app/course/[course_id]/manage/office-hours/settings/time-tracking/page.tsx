@@ -13,22 +13,7 @@ import { Button } from "@/components/ui/button";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { formatDuration } from "@/utils/time-formatting";
 import WorkSessionsTable from "../../time-tracking/work-sessions-table";
-
-type WorkSessionWithDetails = {
-  id: number;
-  help_request_id: number;
-  class_id: number;
-  ta_profile_id: string;
-  started_at: string;
-  ended_at: string | null;
-  queue_depth_at_start: number | null;
-  longest_wait_seconds_at_start: number | null;
-  notes: string | null;
-  taName: string;
-  studentName: string;
-  durationSeconds: number;
-  helpRequestTitle?: string;
-};
+import { WorkSessionWithDetails } from "@/types/work-sessions";
 
 export default function TimeTrackingSettingsPage() {
   const { course_id } = useParams();
@@ -54,15 +39,13 @@ export default function TimeTrackingSettingsPage() {
     }
   }, [courseId, router]);
 
-  // Early return if course_id is invalid (prevents rendering with invalid data)
-  if (courseId === null) {
-    return null;
-  }
-
+  // All hooks must be called unconditionally before any early returns
   const allSessions = useHelpRequestWorkSessions();
   const profiles = useAllProfilesForClass();
   const helpRequestStudents = useHelpRequestStudents();
   const [dateFilter, setDateFilter] = useState<{ start?: string; end?: string }>({});
+  const tickColor = useColorModeValue("#000000", "#FFFFFF");
+  const tooltipBg = useColorModeValue("#FFFFFF", "#1A1A1A");
 
   // Create a map of help_request_id to student name(s)
   const helpRequestStudentMap = useMemo(() => {
@@ -193,8 +176,10 @@ export default function TimeTrackingSettingsPage() {
   // Use processed sessions as table data
   const tableData = sessionsWithDetails;
 
-  const tickColor = useColorModeValue("#000000", "#FFFFFF");
-  const tooltipBg = useColorModeValue("#FFFFFF", "#1A1A1A");
+  // Conditional render if course_id is invalid (after all hooks have been called)
+  if (courseId === null) {
+    return null;
+  }
 
   return (
     <VStack align="stretch" gap={6} p={4}>
