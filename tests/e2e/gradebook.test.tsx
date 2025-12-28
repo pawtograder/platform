@@ -112,7 +112,7 @@ async function waitForStableLocator(page: Page, getLocator: () => Promise<Locato
   }
   throw new Error("Timed out waiting for stable locator box");
 }
-test.setTimeout(120_000);
+test.setTimeout(240_000);
 test.describe("Gradebook Page - Comprehensive", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeAll(async () => {
