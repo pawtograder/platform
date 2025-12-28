@@ -162,7 +162,11 @@ export default function HelpRequestList() {
               {enhancedRequests
                 .filter((r) => r.status === "in_progress" && r.assignee === private_profile_id)
                 .map((request) => (
-                  <NextLink href={`/course/${course_id}/manage/office-hours/request/${request.id}`} key={request.id}>
+                  <NextLink
+                    href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
+                    key={request.id}
+                    aria-label={request.request}
+                  >
                     <HelpRequestTeaser
                       data={{
                         user: request.students[0] || "unknown",
@@ -190,7 +194,11 @@ export default function HelpRequestList() {
               {enhancedRequests
                 .filter((r) => r.status === "open")
                 .map((request) => (
-                  <NextLink href={`/course/${course_id}/manage/office-hours/request/${request.id}`} key={request.id}>
+                  <NextLink
+                    href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
+                    key={request.id}
+                    aria-label={request.request}
+                  >
                     <HelpRequestTeaser
                       data={{
                         user: request.students[0] || "unknown",
@@ -219,7 +227,11 @@ export default function HelpRequestList() {
               {enhancedRequests
                 .filter((r) => r.status === "resolved")
                 .map((request) => (
-                  <NextLink href={`/course/${course_id}/manage/office-hours/request/${request.id}`} key={request.id}>
+                  <NextLink
+                    href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
+                    key={request.id}
+                    aria-label={request.request}
+                  >
                     <HelpRequestTeaser
                       data={{
                         user: request.students[0] || "unknown",
@@ -248,7 +260,11 @@ export default function HelpRequestList() {
               {enhancedRequests
                 .filter((r) => r.status === "closed")
                 .map((request) => (
-                  <NextLink href={`/course/${course_id}/manage/office-hours/request/${request.id}`} key={request.id}>
+                  <NextLink
+                    href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
+                    key={request.id}
+                    aria-label={request.request}
+                  >
                     <HelpRequestTeaser
                       data={{
                         user: request.students[0] || "unknown",

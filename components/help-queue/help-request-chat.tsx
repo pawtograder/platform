@@ -36,6 +36,7 @@ import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import HelpRequestFeedbackModal from "./help-request-feedback-modal";
 import VideoCallControls from "./video-call-controls";
+import WorkSessionHistory from "./work-session-history";
 
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
@@ -1361,6 +1362,13 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         {request && (
           <Box mt={2}>
             <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
+          </Box>
+        )}
+
+        {/* Work Session History (Staff only) */}
+        {isInstructorOrGrader && request && (
+          <Box mt={4} p={4} borderWidth="1px" borderRadius="md" bg="bg.subtle">
+            <WorkSessionHistory help_request_id={request.id} />
           </Box>
         )}
       </Box>

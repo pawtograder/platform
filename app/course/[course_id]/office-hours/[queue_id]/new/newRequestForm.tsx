@@ -10,6 +10,7 @@ import {
   useHelpRequestStudents,
   useHelpRequestTemplates,
   useHelpQueues,
+  useHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import {
@@ -28,7 +29,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
 import { X } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
 import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
 
@@ -67,6 +68,7 @@ export default function HelpRequestForm() {
     getValues,
     watch,
     reset,
+    setError,
     formState: { errors, isSubmitting },
     handleSubmit
   } = useForm<HelpRequest & { file_references?: HelpRequestFormFileReference[] }>({
@@ -114,6 +116,13 @@ export default function HelpRequestForm() {
   const helpQueues = allHelpQueues.filter((queue) => queue.available);
   const isLoadingQueues = false; // Individual hooks don't expose loading state
   const connectionError = null; // Will be handled by connection status if needed
+
+  // Get help queue assignments to check for active staff
+  const allHelpQueueAssignments = useHelpQueueAssignments();
+  const queueIdsWithActiveStaff = useMemo(() => {
+    const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
+    return new Set(activeAssignments.map((a) => a.help_queue_id));
+  }, [allHelpQueueAssignments]);
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -255,6 +264,29 @@ export default function HelpRequestForm() {
   // Watch the selected help queue to validate against existing requests
   const selectedHelpQueue = watch("help_queue");
 
+  // Validate that selected queue has active staff
+  useEffect(() => {
+    if (selectedHelpQueue) {
+      const selectedQueue = helpQueues.find((q) => q.id === selectedHelpQueue);
+      if (selectedQueue && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+        setError("help_queue", {
+          type: "manual",
+          message: "This queue is not currently staffed. Please select a queue with active staff members."
+        });
+      } else {
+        // Clear the error if queue has active staff
+        const errorMessage = errors.help_queue?.message;
+        if (
+          errors.help_queue?.type === "manual" &&
+          typeof errorMessage === "string" &&
+          errorMessage.includes("not currently staffed")
+        ) {
+          setValue("help_queue", selectedHelpQueue, { shouldValidate: true });
+        }
+      }
+    }
+  }, [selectedHelpQueue, helpQueues, queueIdsWithActiveStaff, setError, setValue, errors.help_queue]);
+
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -281,8 +313,21 @@ export default function HelpRequestForm() {
           return;
         }
 
-        // Check for conflicts based on solo vs group request rules
+        // Check if selected queue has active staff
         const selectedQueueId = getValues("help_queue");
+        if (selectedQueueId && !queueIdsWithActiveStaff.has(selectedQueueId)) {
+          toaster.error({
+            title: "Error",
+            description: "This queue is not currently staffed. Please select a queue with active staff members."
+          });
+          setError("help_queue", {
+            type: "manual",
+            message: "This queue is not currently staffed. Please select a queue with active staff members."
+          });
+          return;
+        }
+
+        // Check for conflicts based on solo vs group request rules
         const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
         const is_private = getValues("is_private");
         if (isCreatingSoloRequest) {
@@ -477,6 +522,8 @@ export default function HelpRequestForm() {
       handleSubmit,
       isSubmittingGuard,
       setIsSubmittingGuard,
+      queueIdsWithActiveStaff,
+      setError,
       private_profile_id,
       course_id,
       userActiveRequests,
@@ -583,7 +630,26 @@ export default function HelpRequestForm() {
                   }
                   onChange={(option: SelectOption | null) => {
                     const val = option?.value ?? "";
-                    field.onChange(val === "" ? undefined : Number.parseInt(val));
+                    const queueId = val === "" ? undefined : Number.parseInt(val);
+                    field.onChange(queueId);
+
+                    // Immediately validate if selected queue has active staff
+                    if (queueId && !queueIdsWithActiveStaff.has(queueId)) {
+                      setError("help_queue", {
+                        type: "manual",
+                        message: "This queue is not currently staffed. Please select a queue with active staff members."
+                      });
+                    } else if (queueId && queueIdsWithActiveStaff.has(queueId)) {
+                      // Clear any existing error if queue has active staff
+                      const errorMessage = errors.help_queue?.message;
+                      if (
+                        errors.help_queue?.type === "manual" &&
+                        typeof errorMessage === "string" &&
+                        errorMessage.includes("not currently staffed")
+                      ) {
+                        setError("help_queue", { type: "manual", message: undefined });
+                      }
+                    }
                   }}
                 />
               )}
