@@ -4241,6 +4241,74 @@ export type Database = {
           }
         ];
       };
+      help_request_work_sessions: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          ended_at: string | null;
+          help_request_id: number;
+          id: number;
+          longest_wait_seconds_at_start: number | null;
+          notes: string | null;
+          queue_depth_at_start: number | null;
+          started_at: string;
+          ta_profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          ended_at?: string | null;
+          help_request_id: number;
+          id?: number;
+          longest_wait_seconds_at_start?: number | null;
+          notes?: string | null;
+          queue_depth_at_start?: number | null;
+          started_at?: string;
+          ta_profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          ended_at?: string | null;
+          help_request_id?: number;
+          id?: number;
+          longest_wait_seconds_at_start?: number | null;
+          notes?: string | null;
+          queue_depth_at_start?: number | null;
+          started_at?: string;
+          ta_profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_work_sessions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_work_sessions_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_work_sessions_ta_profile_id_fkey";
+            columns: ["ta_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_work_sessions_ta_profile_id_fkey";
+            columns: ["ta_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       help_requests: {
         Row: {
           assignee: string | null;
@@ -9896,6 +9964,13 @@ export type Database = {
           student_profile_id_param: string;
         };
         Returns: string;
+      };
+      calculate_queue_metrics_at_start: {
+        Args: { p_help_request_id: number; p_queue_id: number };
+        Returns: {
+          longest_wait_seconds: number;
+          queue_depth: number;
+        }[];
       };
       call_edge_function_internal: {
         Args: {

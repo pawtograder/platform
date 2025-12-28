@@ -106,8 +106,8 @@ test.describe("Office Hours", () => {
     //Make a private request first
     await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
-    await page.getByRole("textbox").click();
-    await page.getByRole("textbox").fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
+    await page.getByRole("textbox", { name: "Help Request Description" }).click();
+    await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
     await argosScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
@@ -124,8 +124,8 @@ test.describe("Office Hours", () => {
     //Make a public request
     await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
-    await page.getByRole("textbox").click();
-    await page.getByRole("textbox").fill(HELP_REQUEST_MESSAGE_1);
+    await page.getByRole("textbox", { name: "Help Request Description" }).click();
+    await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
     await expect(page.getByText("Your position in the queue")).toBeVisible();
@@ -165,6 +165,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_RESPONSE_1);
     await argosScreenshot(page, "Office Hours - Instructor View Request with Comments");
     await page.getByRole("button", { name: "Send" }).click();
+    await page.getByRole("button", { name: "Show queue requests" }).click();
     await page.getByRole("link", { name: PRIVATE_HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(
       "Thanks in advance! I might try to open a more geeral request too."
