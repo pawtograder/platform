@@ -109,17 +109,20 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ============================================================================
 
 -- Schedule daily partition maintenance (runs at midnight UTC)
+-- Idempotent: unschedule if exists, then schedule
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
         -- Unschedule if it already exists
-        PERFORM cron.unschedule('audit-partition-maintenance');
+        IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'audit-partition-maintenance') THEN
+            PERFORM cron.unschedule('audit-partition-maintenance');
+        END IF;
         
         -- Schedule the job
         PERFORM cron.schedule(
             'audit-partition-maintenance',
             '0 0 * * *',  -- Run daily at midnight UTC
-            $$SELECT public.audit_maintain_partitions()$$
+            'SELECT public.audit_maintain_partitions()'
         );
     ELSE
         RAISE NOTICE 'pg_cron extension not available - partition maintenance job not scheduled';
@@ -440,21 +443,30 @@ CREATE INDEX IF NOT EXISTS idx_audit_created_at ON public.audit (created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_table ON public.audit ("table");
 
 -- ============================================================================
--- Step 10: Grant permissions (matching original audit table permissions)
+-- Step 10: Grant permissions (restricted for security)
 -- ============================================================================
 
--- Grant permissions to authenticated and service_role (anon was revoked in later migration)
-GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER, TRUNCATE ON TABLE public.audit TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER, TRUNCATE ON TABLE public.audit TO service_role;
+-- Grant only INSERT to authenticated - triggers are SECURITY DEFINER so they can insert
+-- Users cannot modify, delete, or read audit logs directly (no UPDATE, DELETE, TRUNCATE, SELECT)
+-- Note: If SELECT is needed for RLS policies, it should be granted separately
+GRANT INSERT ON TABLE public.audit TO authenticated;
+
+-- Grant SELECT and INSERT to service_role for maintenance operations
+-- Service role needs SELECT for queries and INSERT for potential manual operations
+-- No destructive permissions (UPDATE, DELETE, TRUNCATE) to prevent accidental data loss
+GRANT SELECT, INSERT ON TABLE public.audit TO service_role;
 
 -- ============================================================================
--- Step 11: Add foreign key constraint (matching original)
+-- Step 11: Add foreign key constraint with ON DELETE SET NULL
 -- ============================================================================
 
+-- Use ON DELETE SET NULL to preserve audit records when users are deleted
+-- user_id is nullable, so this allows user deletion while maintaining audit trail
 ALTER TABLE public.audit 
     ADD CONSTRAINT audit_user_id_fkey 
     FOREIGN KEY (user_id) 
-    REFERENCES public.users(user_id);
+    REFERENCES public.users(user_id)
+    ON DELETE SET NULL;
 
 -- ============================================================================
 -- Step 12: Enable RLS on discussion digest tables
