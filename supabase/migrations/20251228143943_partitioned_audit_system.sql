@@ -117,7 +117,7 @@ BEGIN
         WHERE schemaname = 'public' 
         AND tablename LIKE 'audit_%'
         AND tablename ~ '^audit_[0-9]{8}$'
-        AND substring(tablename from 7)::date < CURRENT_DATE - 90
+        AND to_date(substring(tablename from 7 for 8), 'YYYYMMDD') < CURRENT_DATE - 90
     LOOP
         EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', old_partition_name);
     END LOOP;
