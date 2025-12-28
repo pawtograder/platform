@@ -55,6 +55,24 @@ BEGIN
              FOR VALUES FROM (%L) TO (%L)',
             partition_name, start_date, end_date
         );
+        
+        -- Enable RLS on each partition
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', partition_name);
+    END LOOP;
+END $$;
+
+-- Ensure RLS is enabled on any existing partitions (safety check)
+DO $$
+DECLARE
+    partition_name text;
+BEGIN
+    FOR partition_name IN 
+        SELECT tablename FROM pg_tables 
+        WHERE schemaname = 'public' 
+        AND tablename LIKE 'audit_%'
+        AND tablename ~ '^audit_[0-9]{8}$'
+    LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', partition_name);
     END LOOP;
 END $$;
 
@@ -88,6 +106,8 @@ BEGIN
                  FOR VALUES FROM (%L) TO (%L)',
                 partition_name, start_date, end_date
             );
+            -- Enable RLS on newly created partition
+            EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', partition_name);
         END IF;
     END LOOP;
     
