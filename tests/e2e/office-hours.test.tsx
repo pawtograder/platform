@@ -165,7 +165,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_RESPONSE_1);
     await argosScreenshot(page, "Office Hours - Instructor View Request with Comments");
     await page.getByRole("button", { name: "Send" }).click();
-    await page.getByRole('button', { name: 'Show queue requests' }).click();
+    await page.getByRole("button", { name: "Show queue requests" }).click();
     await page.getByRole("link", { name: PRIVATE_HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(
       "Thanks in advance! I might try to open a more geeral request too."
