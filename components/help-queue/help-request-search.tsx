@@ -108,7 +108,7 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
   }, [helpRequestStudents]);
 
   const studentNameMap = useMemo(() => {
-    return studentRoster?.reduce(
+    return (studentRoster || []).reduce(
       (acc, student) => {
         acc[student.id] = student.name || student.short_name || student.sortable_name || "Unknown Student";
         return acc;

@@ -35,10 +35,10 @@ interface RequestRowProps {
 }
 
 export function RequestRow({ request, href, selected, queue, students = [], variant = "default" }: RequestRowProps) {
-  const student1Profile = useUserProfile(students[0] || "");
-  const student2Profile = useUserProfile(students[1] || "");
-  const student3Profile = useUserProfile(students[2] || "");
-  const assigneeProfile = useUserProfile(request.assignee || "");
+  const student1Profile = useUserProfile(students[0] || null);
+  const student2Profile = useUserProfile(students[1] || null);
+  const student3Profile = useUserProfile(students[2] || null);
+  const assigneeProfile = useUserProfile(request.assignee || null);
 
   const statusColor = useMemo(() => {
     switch (request.status) {

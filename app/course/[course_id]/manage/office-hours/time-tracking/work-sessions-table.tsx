@@ -519,18 +519,19 @@ export default function WorkSessionsTable({ sessions, courseId }: WorkSessionsTa
                     <Table.Cell
                       key={cell.id}
                       p={0}
-                      style={
-                        colIdx === 0
-                          ? {
+                      {...(colIdx === 0
+                        ? {
+                            bg: "bg.subtle",
+                            borderRightWidth: "1px",
+                            borderRightStyle: "solid",
+                            borderColor: "border.muted",
+                            sx: {
                               position: "sticky",
                               left: 0,
-                              zIndex: 1,
-                              background: "bg.subtle",
-                              borderRight: "1px solid",
-                              borderColor: "border.muted"
+                              zIndex: 1
                             }
-                          : {}
-                      }
+                          }
+                        : {})}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </Table.Cell>

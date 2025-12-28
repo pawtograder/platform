@@ -147,7 +147,7 @@ export default function OfficeHoursSearchPage() {
       .map((request): EnhancedHelpRequest => {
         const associatedStudents = requestStudentsMap[request.id] || [];
         const students =
-          associatedStudents.length > 0 ? associatedStudents : ([request.created_by!].filter(Boolean) as string[]);
+          associatedStudents.length > 0 ? associatedStudents : ([request.created_by].filter(Boolean) as string[]);
         return {
           ...request,
           queue: queueMap[request.help_queue],
@@ -212,20 +212,40 @@ export default function OfficeHoursSearchPage() {
           </Text>
           <HStack gap="2" flexWrap="wrap">
             <Badge
+              role="button"
+              tabIndex={0}
+              aria-pressed={!statusFilter}
               colorPalette={!statusFilter ? "blue" : "gray"}
               variant={!statusFilter ? "solid" : "subtle"}
               cursor="pointer"
               onClick={() => setStatusFilter(null)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setStatusFilter(null);
+                }
+              }}
+              _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
             >
               All
             </Badge>
             {["open", "in_progress", "resolved", "closed"].map((status) => (
               <Badge
                 key={status}
+                role="button"
+                tabIndex={0}
+                aria-pressed={statusFilter === status}
                 colorPalette={statusFilter === status ? "blue" : "gray"}
                 variant={statusFilter === status ? "solid" : "subtle"}
                 cursor="pointer"
                 onClick={() => setStatusFilter(statusFilter === status ? null : status)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setStatusFilter(statusFilter === status ? null : status);
+                  }
+                }}
+                _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
               >
                 {status.replace("_", " ")} ({statusCounts[status]})
               </Badge>
@@ -240,20 +260,40 @@ export default function OfficeHoursSearchPage() {
             </Text>
             <HStack gap="2" flexWrap="wrap">
               <Badge
+                role="button"
+                tabIndex={0}
+                aria-pressed={!queueFilter}
                 colorPalette={!queueFilter ? "blue" : "gray"}
                 variant={!queueFilter ? "solid" : "subtle"}
                 cursor="pointer"
                 onClick={() => setQueueFilter(null)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setQueueFilter(null);
+                  }
+                }}
+                _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
               >
                 All Queues
               </Badge>
               {availableQueues.map((queue) => (
                 <Badge
                   key={queue.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={queueFilter === queue.id}
                   colorPalette={queueFilter === queue.id ? "blue" : "gray"}
                   variant={queueFilter === queue.id ? "solid" : "subtle"}
                   cursor="pointer"
                   onClick={() => setQueueFilter(queueFilter === queue.id ? null : queue.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setQueueFilter(queueFilter === queue.id ? null : queue.id);
+                    }
+                  }}
+                  _focus={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}
                 >
                   {queue.name.replace(/ Queue$/, "")}
                 </Badge>

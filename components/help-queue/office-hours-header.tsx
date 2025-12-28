@@ -288,13 +288,16 @@ export function OfficeHoursHeader({
               <Button
                 colorPalette="red"
                 size="sm"
-                onClick={() => {
-                  const firstAssignment = allQueueAssignments.find(
-                    (a) =>
-                      a.ta_profile_id === private_profile_id && a.is_active && a.help_queue_id === workingQueues[0]?.id
-                  );
-                  if (firstAssignment && workingQueues[0]) {
-                    handleStartStopWorking(workingQueues[0].id, true, firstAssignment.id);
+                onClick={async () => {
+                  // Stop all working queues
+                  for (const queue of workingQueues) {
+                    if (!queue) continue;
+                    const assignment = allQueueAssignments.find(
+                      (a) => a.ta_profile_id === private_profile_id && a.is_active && a.help_queue_id === queue.id
+                    );
+                    if (assignment) {
+                      await handleStartStopWorking(queue.id, true, assignment.id);
+                    }
                   }
                 }}
               >

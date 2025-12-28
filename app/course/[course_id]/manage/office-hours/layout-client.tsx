@@ -51,7 +51,13 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
   }, [pathname, officeHoursBaseHref, request_id]);
 
   useEffect(() => {
-    document.title = `${courseController.course.name} - Office Hours`;
+    try {
+      const name = courseController.course.name;
+      document.title = `${name} - Office Hours`;
+    } catch {
+      // Course not loaded yet, do nothing
+      return;
+    }
   }, [courseController.course.name]);
 
   return (

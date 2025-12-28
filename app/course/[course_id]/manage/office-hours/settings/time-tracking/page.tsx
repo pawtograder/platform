@@ -1,8 +1,8 @@
 "use client";
 
 import { Box, Card, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
-import { useParams } from "next/navigation";
-import React, { useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import React, { useMemo, useState, useEffect } from "react";
 import { BsExclamationTriangle } from "react-icons/bs";
 import { useHelpRequestWorkSessions, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
@@ -32,7 +32,33 @@ type WorkSessionWithDetails = {
 
 export default function TimeTrackingSettingsPage() {
   const { course_id } = useParams();
-  const courseId = Number(course_id);
+  const router = useRouter();
+
+  // Validate and parse course_id
+  const courseId = useMemo(() => {
+    if (!course_id || typeof course_id !== "string") {
+      return null;
+    }
+    // Check if it's a valid numeric string
+    if (!/^\d+$/.test(course_id)) {
+      return null;
+    }
+    const parsed = Number.parseInt(course_id, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }, [course_id]);
+
+  // Redirect if course_id is invalid
+  useEffect(() => {
+    if (courseId === null) {
+      router.replace("/");
+    }
+  }, [courseId, router]);
+
+  // Early return if course_id is invalid (prevents rendering with invalid data)
+  if (courseId === null) {
+    return null;
+  }
+
   const allSessions = useHelpRequestWorkSessions();
   const profiles = useAllProfilesForClass();
   const helpRequestStudents = useHelpRequestStudents();

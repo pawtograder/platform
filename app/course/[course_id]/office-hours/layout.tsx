@@ -24,7 +24,7 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
     return allHelpRequests.find((r) => r.id === requestId);
   }, [allHelpRequests, requestId]);
 
-  const helpQueue = useHelpQueue(queue_id ? Number(queue_id) : undefined);
+  const helpQueue = useHelpQueue(queue_id ? Number(queue_id) : currentRequestData?.help_queue || undefined);
   const currentRequest = useMemo(() => {
     if (!currentRequestData || !helpQueue) return undefined;
     return {
