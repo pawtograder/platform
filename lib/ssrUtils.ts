@@ -96,7 +96,9 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
       global: {
         fetch: createFetch({
           next: {
-            revalidate: revalidate || 300,
+            // Use longer TTL as fallback since triggers handle invalidation automatically
+            // 3600s = 1 hour fallback ensures stale data doesn't persist indefinitely
+            revalidate: revalidate || 3600,
             tags: tags || ["supabase"]
           }
         })
@@ -184,52 +186,81 @@ export async function fetchCourseControllerData(
   role: "instructor" | "student" | "grader" | "admin"
 ): Promise<CourseControllerInitialData> {
   const isStaff = role === "instructor" || role === "grader" || role === "admin";
-  const client = await createClientWithCaching({
-    tags: [`course_controller:${course_id}:${isStaff ? "staff" : "student"}`]
+  const roleKey = isStaff ? "staff" : "student";
+
+  // Create individual clients for each table to match trigger invalidation tags
+  const profilesClient = await createClientWithCaching({
+    tags: [`profiles:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const userRolesClient = await createClientWithCaching({
+    tags: [`user_roles:${course_id}:${roleKey}`, `profiles:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers - includes both user_roles and profiles tags
+    // since the query joins profiles data
+  });
+  const discussionThreadsClient = await createClientWithCaching({
+    tags: [`discussion_threads:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const tagsClient = await createClientWithCaching({
+    tags: [`tags:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const labSectionsClient = await createClientWithCaching({
+    tags: [`lab_sections:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const labSectionMeetingsClient = await createClientWithCaching({
+    tags: [`lab_section_meetings:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const classSectionsClient = await createClientWithCaching({
+    tags: [`class_sections:${course_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
   });
   const studentDeadlineExtensionsClient = await createClientWithCaching({
-    tags: [`student_deadline_extensions:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`student_deadline_extensions:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentDueDateExceptionsClient = await createClientWithCaching({
-    tags: [`assignment_due_date_exceptions:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 10 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`assignment_due_date_exceptions:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentsClient = await createClientWithCaching({
-    tags: [`assignments:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 10 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`assignments:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentGroupsClient = await createClientWithCaching({
-    tags: [`assignment_groups:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 5 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`assignment_groups:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const discussionTopicsClient = await createClientWithCaching({
-    tags: [`discussion_topics:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`discussion_topics:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const repositoriesClient = await createClientWithCaching({
-    tags: [`repositories:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`repositories:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const gradebookColumnsClient = await createClientWithCaching({
-    tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const discordChannelsClient = await createClientWithCaching({
-    tags: [`discord_channels:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 60 // discord channels don't change often
+    tags: [`discord_channels:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const discordMessagesClient = await createClientWithCaching({
-    tags: [`discord_messages:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // discord messages are created dynamically but don't change after
+    tags: [`discord_messages:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const surveysClient = await createClientWithCaching({
-    tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const labSectionLeadersClient = await createClientWithCaching({
-    tags: [`lab_section_leaders:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 60 // lab section leaders don't change often
+    tags: [`lab_section_leaders:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
 
   // Fetch all data in parallel for maximum performance
@@ -254,31 +285,38 @@ export async function fetchCourseControllerData(
     labSectionLeaders
   ] = await Promise.all([
     // Profiles
-    fetchAllPages<UserProfile>(client.from("profiles").select("*").eq("class_id", course_id)),
+    fetchAllPages<UserProfile>(profilesClient.from("profiles").select("*").eq("class_id", course_id)),
 
     // User roles with profiles and users
     isStaff
       ? fetchAllPages<UserRoleWithPrivateProfileAndUser>(
-          client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", course_id)
+          userRolesClient
+            .from("user_roles")
+            .select("*, profiles!private_profile_id(*), users(*)")
+            .eq("class_id", course_id)
         )
       : Promise.resolve(undefined),
 
     // Discussion thread teasers (only root-level threads, right now only for staff b/c permissions)
     isStaff
-      ? fetchAllPages<DiscussionThread>(client.from("discussion_threads").select("*").eq("root_class_id", course_id))
+      ? fetchAllPages<DiscussionThread>(
+          discussionThreadsClient.from("discussion_threads").select("*").eq("root_class_id", course_id)
+        )
       : Promise.resolve(undefined),
 
     // Tags
-    fetchAllPages<Tag>(client.from("tags").select("*").eq("class_id", course_id)),
+    fetchAllPages<Tag>(tagsClient.from("tags").select("*").eq("class_id", course_id)),
 
     // Lab sections
-    fetchAllPages<LabSection>(client.from("lab_sections").select("*").eq("class_id", course_id)),
+    fetchAllPages<LabSection>(labSectionsClient.from("lab_sections").select("*").eq("class_id", course_id)),
 
     // Lab section meetings
-    fetchAllPages<LabSectionMeeting>(client.from("lab_section_meetings").select("*").eq("class_id", course_id)),
+    fetchAllPages<LabSectionMeeting>(
+      labSectionMeetingsClient.from("lab_section_meetings").select("*").eq("class_id", course_id)
+    ),
 
     // Class sections
-    fetchAllPages<ClassSection>(client.from("class_sections").select("*").eq("class_id", course_id)),
+    fetchAllPages<ClassSection>(classSectionsClient.from("class_sections").select("*").eq("class_id", course_id)),
 
     // Student deadline extensions
     isStaff
@@ -390,19 +428,38 @@ export async function fetchAssignmentControllerData(
   isStaff: boolean
 ): Promise<AssignmentControllerInitialData> {
   const roleKey = isStaff ? "staff" : "student";
-  const client = await createClientWithCaching({ tags: [`assignment_controller:${assignment_id}:${roleKey}`] });
+
+  // Create individual clients for each table to match trigger invalidation tags
+  const rubricsClient = await createClientWithCaching({
+    tags: [`rubrics:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const rubricPartsClient = await createClientWithCaching({
+    tags: [`rubric_parts:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const rubricCriteriaClient = await createClientWithCaching({
+    tags: [`rubric_criteria:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const rubricChecksClient = await createClientWithCaching({
+    tags: [`rubric_checks:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
+  const rubricCheckReferencesClient = await createClientWithCaching({
+    tags: [`rubric_check_references:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
+  });
   const regradeRequestsClient = await createClientWithCaching({
-    tags: [`regrade_requests:${assignment_id}:${roleKey}`],
-    revalidate: 10 // regrade requests are updated somewhat frequently, a good candidate for using invalidation
+    tags: [`regrade_requests:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentGroupsClient = await createClientWithCaching({
-    tags: [`assignment_groups:${assignment_id}:${roleKey}`],
-    revalidate: 10 // assignment groups are updated somewhat frequently, a good candidate for using invalidation
+    tags: [`assignment_groups:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
   });
-  const submissionsClient = await createClientWithCaching({
-    tags: [`submissions:${assignment_id}:${roleKey}`],
-    revalidate: 10 // submissions are updated somewhat frequently, a good candidate for using invalidation
-  });
+  // Submissions are not cached - always fetch fresh data
+  const submissionsClient = await createClientWithCaching({ revalidate: 0 });
 
   // Fetch all data in parallel for maximum performance
   const [
@@ -435,20 +492,22 @@ export async function fetchAssignmentControllerData(
       : Promise.resolve(undefined),
 
     // Rubrics
-    fetchAllPages<Rubric>(client.from("rubrics").select("*").eq("assignment_id", assignment_id)),
+    fetchAllPages<Rubric>(rubricsClient.from("rubrics").select("*").eq("assignment_id", assignment_id)),
 
     // Rubric parts
-    fetchAllPages<RubricPart>(client.from("rubric_parts").select("*").eq("assignment_id", assignment_id)),
+    fetchAllPages<RubricPart>(rubricPartsClient.from("rubric_parts").select("*").eq("assignment_id", assignment_id)),
 
     // Rubric criteria
-    fetchAllPages<RubricCriteria>(client.from("rubric_criteria").select("*").eq("assignment_id", assignment_id)),
+    fetchAllPages<RubricCriteria>(
+      rubricCriteriaClient.from("rubric_criteria").select("*").eq("assignment_id", assignment_id)
+    ),
 
     // Rubric checks
-    fetchAllPages<RubricCheck>(client.from("rubric_checks").select("*").eq("assignment_id", assignment_id)),
+    fetchAllPages<RubricCheck>(rubricChecksClient.from("rubric_checks").select("*").eq("assignment_id", assignment_id)),
 
     // Rubric check references
     fetchAllPages<RubricCheckReference>(
-      client.from("rubric_check_references").select("*").eq("assignment_id", assignment_id)
+      rubricCheckReferencesClient.from("rubric_check_references").select("*").eq("assignment_id", assignment_id)
     )
   ]);
 
