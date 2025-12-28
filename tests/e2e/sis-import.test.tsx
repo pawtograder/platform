@@ -962,10 +962,14 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     });
     await setUserSisId(newUser.user_id, sis_user_id);
 
+    if (!invitation?.id) {
+      throw new Error("Invitation ID is missing");
+    }
+
     // Link the enrollment to the invitation
     await supabase
       .from("user_roles")
-      .update({ invitation_id: invitation?.id })
+      .update({ invitation_id: invitation.id })
       .eq("class_id", course.id)
       .eq("user_id", newUser.user_id);
 
@@ -973,7 +977,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     await supabase
       .from("invitations")
       .update({ status: "accepted", accepted_at: new Date().toISOString() })
-      .eq("id", invitation?.id);
+      .eq("id", invitation.id);
 
     // Drop from SIS
     await simulateSISSync({ class_id: course.id, roster: [] });

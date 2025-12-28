@@ -156,6 +156,23 @@ export type SimulatedSISRosterEntry = {
   lab_section_crn?: number | null;
 };
 
+export type SISSyncEnrollmentResult = {
+  success: boolean;
+  class_id: number;
+  expire_missing: boolean;
+  counts: {
+    invitations_created: number;
+    invitations_updated: number;
+    invitations_expired: number;
+    invitations_reactivated: number;
+    enrollments_created: number;
+    enrollments_updated: number;
+    enrollments_disabled: number;
+    enrollments_reenabled: number;
+    enrollments_adopted: number;
+  };
+};
+
 export async function simulateSISSync({
   class_id,
   roster,
@@ -175,7 +192,7 @@ export async function simulateSISSync({
     start_time?: string | null;
     end_time?: string | null;
   }>;
-}) {
+}): Promise<SISSyncEnrollmentResult> {
   const { data, error } = await supabase.rpc("sis_sync_enrollment", {
     p_class_id: class_id,
     p_roster_data: roster,
@@ -186,7 +203,8 @@ export async function simulateSISSync({
   });
 
   if (error) throw new Error(`sis_sync_enrollment failed: ${error.message}`);
-  return data;
+  if (!data) throw new Error("sis_sync_enrollment returned null");
+  return data as SISSyncEnrollmentResult;
 }
 
 export async function getEnrollmentState(
