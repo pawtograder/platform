@@ -62,9 +62,10 @@ export async function POST(request: NextRequest) {
         revalidateTag(tag);
         results.push({ tag, success: true });
       } catch (error) {
-        scope.captureException(error, {
-          tags: { tag },
-          level: "warning"
+        Sentry.withScope((scope) => {
+          scope.setTag("tag", tag);
+          scope.setLevel("warning");
+          Sentry.captureException(error);
         });
         results.push({ tag, success: false });
       }
@@ -88,7 +89,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     scope.setTag("error_type", "unexpected_error");
-    scope.captureException(error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
