@@ -1,9 +1,10 @@
 "use client";
 
 import { OfficeHoursHeader, type OfficeHoursViewMode } from "@/components/help-queue/office-hours-header";
+import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 import { useCourseController } from "@/hooks/useCourseController";
-import { Box } from "@chakra-ui/react";
-import { useEffect, useMemo } from "react";
+import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, usePathname } from "next/navigation";
 import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 
@@ -11,6 +12,16 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
   const { course_id, request_id, queue_id } = useParams();
   const courseController = useCourseController();
   const pathname = usePathname();
+
+  // Sidebar state - persists across request navigation
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isDesktop = useBreakpointValue({ base: false, lg: true }) ?? false;
+  const showFullSidebar = isDesktop && sidebarOpen;
+
+  const handleSidebarToggle = useCallback(() => {
+    if (!isDesktop) return;
+    setSidebarOpen((prev) => !prev);
+  }, [isDesktop]);
 
   const officeHoursBaseHref = `/course/${course_id}/manage/office-hours`;
 
@@ -50,6 +61,9 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
     return "working"; // default to working
   }, [pathname, officeHoursBaseHref, request_id]);
 
+  // Show sidebar only when viewing a specific request
+  const showSidebar = !!requestId;
+
   useEffect(() => {
     try {
       const name = courseController.course.name;
@@ -68,9 +82,26 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
         currentRequest={currentRequest}
         isManageMode={true}
       />
-      <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }}>
-        {children}
-      </Box>
+      <Flex flex="1" minH="0" overflow="hidden" px={{ base: 2, md: 3 }} py={{ base: 2, md: 2 }} gap={2}>
+        {showSidebar && (
+          <Box
+            flexShrink={0}
+            width={{ base: "44px", lg: showFullSidebar ? "280px" : "44px" }}
+            transition="width 0.2s ease-in-out"
+          >
+            <HelpRequestSidebar
+              requestId={requestId}
+              isOpen={showFullSidebar}
+              onToggle={handleSidebarToggle}
+              queueId={queue_id ? Number(queue_id) : currentRequestData?.help_queue}
+              isManageMode={true}
+            />
+          </Box>
+        )}
+        <Box flex="1" minW={0} overflow="hidden">
+          {children}
+        </Box>
+      </Flex>
     </Box>
   );
 }

@@ -2,7 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { Assignment, HelpRequest, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
-import { Accordion, Badge, Box, Flex, HStack, Icon, IconButton, Input, Separator, Stack, Text } from "@chakra-ui/react";
+import { Accordion, Badge, Box, Flex, HStack, Icon, IconButton, Input, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -1179,46 +1179,42 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       width="100%"
       maxW={{ base: "md", md: "full" }}
       mx="auto"
-      height={isPopOut ? "100vh" : "calc(100vh - var(--nav-height))"}
+      height={isPopOut ? "100vh" : "100%"}
     >
-      {/* Header Section */}
+      {/* Compact Header - Single Row */}
       <Box
         width="100%"
         borderBottomWidth="1px"
         borderColor="border.subtle"
         bg="bg.subtle"
-        px={{ base: 3, md: 4 }}
-        py={3}
+        px={{ base: 2, md: 3 }}
+        py={2}
       >
-        {/* Top Row: Back button, Title, Status, Actions */}
-        <Flex justify="space-between" align="center" mb={2}>
-          <HStack gap={2}>
-            {/* Back Button - Hide in popout mode */}
+        <Flex justify="space-between" align="center" gap={2} flexWrap="wrap">
+          {/* Left: Back, Title, Status */}
+          <HStack gap={2} minW={0} flex="1">
             {!isPopOut && pathname.includes("/manage/office-hours/request/") && (
-              <IconButton aria-label="Go back" variant="ghost" onClick={handleBackNavigation} size="sm">
+              <IconButton aria-label="Go back" variant="ghost" onClick={handleBackNavigation} size="xs">
                 <Icon as={BsArrowLeft} />
               </IconButton>
             )}
-
-            {/* Title */}
-            <Text fontWeight="semibold" fontSize="lg">
+            <Text fontWeight="semibold" fontSize="md" truncate>
               {requestTitle}
             </Text>
-
-            {/* Status Badge */}
             {request && <HelpRequestStatusBadge status={request.status} />}
-
-            {/* Privacy Badge */}
             {request?.is_private && (
-              <Badge colorPalette="purple" size="sm" variant="outline">
+              <Badge colorPalette="purple" size="xs" variant="outline">
                 Private
               </Badge>
             )}
+            <Text fontSize="xs" color="fg.muted" flexShrink={0}>
+              {createdTimeAgo}
+            </Text>
           </HStack>
 
-          {/* Primary Actions */}
-          <HStack gap={2}>
-            {/* Start Helping Button - Prominent for unassigned requests (Staff only) */}
+          {/* Right: Actions */}
+          <HStack gap={1} flexShrink={0}>
+            {/* Start Helping - Most prominent */}
             {isInstructorOrGrader &&
               !readOnly &&
               request &&
@@ -1227,16 +1223,21 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 <HelpRequestAssignment request={request} />
               )}
 
-            {/* Resolve Button */}
+            {/* Assignment status when already assigned */}
+            {isInstructorOrGrader && !readOnly && request && request.assignee && (
+              <HelpRequestAssignment request={request} />
+            )}
+
+            {/* Resolve */}
             {!readOnly &&
               canAccessRequestControls &&
               request &&
               request.status !== "resolved" &&
               request.status !== "closed" && (
                 <PopConfirm
-                  triggerLabel="Resolve Request"
+                  triggerLabel="Resolve"
                   trigger={
-                    <Button size="sm" colorPalette="blue" variant="outline">
+                    <Button size="xs" colorPalette="blue" variant="outline">
                       <Icon as={BsCheck} />
                       Resolve
                     </Button>
@@ -1247,88 +1248,35 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 />
               )}
 
-            {/* Provide Feedback Button for resolved requests */}
+            {/* Feedback for resolved */}
             {readOnly && !hasExistingFeedback && canAccessRequestControls && !isInstructorOrGrader && (
-              <Button size="sm" colorPalette="blue" onClick={provideFeedback}>
+              <Button size="xs" colorPalette="blue" onClick={provideFeedback}>
                 <Icon as={BsStar} />
-                Provide Feedback
+                Feedback
               </Button>
             )}
-          </HStack>
-        </Flex>
 
-        {/* Metadata Row */}
-        <Flex
-          direction={{ base: "column", md: "row" }}
-          gap={{ base: 2, md: 4 }}
-          align={{ base: "stretch", md: "center" }}
-          justify="space-between"
-        >
-          {/* Left Side: Metadata */}
-          <HStack gap={4} flexWrap="wrap" fontSize="sm" color="fg.muted">
-            {/* Students */}
-            {request && (
-              <HStack gap={1}>
-                <Icon as={BsPeople} />
-                <HelpRequestStudents
-                  request={request}
-                  students={students}
-                  currentUserCanEdit={!readOnly && canAccessRequestControls}
-                  currentAssociations={helpRequestStudentData}
-                />
-              </HStack>
+            {/* Video Call */}
+            {!readOnly && canAccessVideoControls && request && (
+              <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
             )}
 
-            {/* Created Time */}
-            {request && (
-              <HStack gap={1}>
-                <Icon as={BsClock} />
-                <Text fontSize="sm">{createdTimeAgo}</Text>
-              </HStack>
-            )}
+            {/* Watch */}
+            <HelpRequestWatchButton helpRequestId={request_id} variant="ghost" size="xs" />
 
-            {/* Assignment (Staff only) */}
-            {isInstructorOrGrader && request && (
-              <HStack gap={1}>
-                <Icon as={BsPersonCheck} />
-                <HelpRequestAssignment request={request} compact />
-              </HStack>
-            )}
-          </HStack>
-
-          {/* Right Side: Secondary Actions Toolbar */}
-          <HStack gap={1} flexWrap="wrap">
-            {/* Pop Out Button */}
+            {/* Pop Out */}
             {!isPopOut && (
-              <Tooltip content="Pop out chat" showArrow>
+              <Tooltip content="Pop out" showArrow>
                 <IconButton aria-label="Pop out chat" size="xs" variant="ghost" onClick={popOutChat}>
                   <Icon as={BsBoxArrowUpRight} boxSize={3} />
                 </IconButton>
               </Tooltip>
             )}
 
-            {/* Watch Button */}
-            <HelpRequestWatchButton helpRequestId={request_id} variant="ghost" size="xs" />
-
-            {/* Discord Link (Staff only) */}
+            {/* Staff-only actions */}
             {isInstructorOrGrader && request && (
-              <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
-            )}
-
-            {/* Video Call Controls */}
-            {!readOnly && canAccessVideoControls && request && (
-              <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
-            )}
-
-            {/* Staff Actions Separator */}
-            {isInstructorOrGrader && !readOnly && request && (
               <>
-                <Separator orientation="vertical" height="20px" />
-
-                {/* Assignment status (only when already assigned) */}
-                {request.assignee && <HelpRequestAssignment request={request} />}
-
-                {/* Moderation */}
+                <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
                 <Tooltip content="Moderation" showArrow>
                   <IconButton
                     aria-label="Moderation"
@@ -1340,8 +1288,6 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                     <Icon as={BsShield} boxSize={3} />
                   </IconButton>
                 </Tooltip>
-
-                {/* Karma */}
                 <Tooltip content="Karma" showArrow>
                   <IconButton
                     aria-label="Karma"
@@ -1358,23 +1304,62 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
           </HStack>
         </Flex>
 
-        {/* Code References Section (collapsible) */}
-        {request && (
-          <Box mt={2}>
-            <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
-          </Box>
-        )}
+        {/* Collapsible Details Row - Students, Code Refs, Work Sessions */}
+        <Accordion.Root collapsible size="sm">
+          <Accordion.Item value="details" borderWidth={0}>
+            <Accordion.ItemTrigger px={0} py={1} _hover={{ bg: "transparent" }}>
+              <HStack gap={2} fontSize="xs" color="fg.muted">
+                <Icon as={BsPeople} boxSize={3} />
+                <Text>
+                  {students.length} student{students.length !== 1 ? "s" : ""}
+                </Text>
+                {isInstructorOrGrader && request && (
+                  <>
+                    <Text>•</Text>
+                    <HelpRequestAssignment request={request} compact />
+                  </>
+                )}
+                <Accordion.ItemIndicator>
+                  <Icon as={BsChevronDown} boxSize={3} />
+                </Accordion.ItemIndicator>
+              </HStack>
+            </Accordion.ItemTrigger>
+            <Accordion.ItemContent>
+              <Accordion.ItemBody px={0} py={2}>
+                <Stack gap={2}>
+                  {/* Students */}
+                  {request && (
+                    <HStack gap={1} fontSize="sm">
+                      <Icon as={BsPeople} boxSize={3} color="fg.muted" />
+                      <HelpRequestStudents
+                        request={request}
+                        students={students}
+                        currentUserCanEdit={!readOnly && canAccessRequestControls}
+                        currentAssociations={helpRequestStudentData}
+                      />
+                    </HStack>
+                  )}
 
-        {/* Work Session History (Staff only) */}
-        {isInstructorOrGrader && request && (
-          <Box mt={4} p={4} borderWidth="1px" borderRadius="md" bg="bg.subtle">
-            <WorkSessionHistory help_request_id={request.id} />
-          </Box>
-        )}
+                  {/* Code References */}
+                  {request && (
+                    <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
+                  )}
+
+                  {/* Work Session History (Staff only) */}
+                  {isInstructorOrGrader && request && (
+                    <Box p={2} borderWidth="1px" borderRadius="md" bg="bg.muted">
+                      <WorkSessionHistory help_request_id={request.id} />
+                    </Box>
+                  )}
+                </Stack>
+              </Accordion.ItemBody>
+            </Accordion.ItemContent>
+          </Accordion.Item>
+        </Accordion.Root>
       </Box>
 
-      {/* Chat Section */}
-      <Flex flex="1" width="100%" overflow="auto" justify="center" align="stretch">
+      {/* Chat Section - Maximized */}
+      <Flex flex="1" width="100%" overflow="hidden" justify="center" align="stretch" minH={0}>
         <RealtimeChat request_id={request_id} helpRequestStudentIds={studentIds} readOnly={readOnly} />
       </Flex>
 

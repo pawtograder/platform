@@ -21,10 +21,10 @@ function NavLink({ href, selected, children }: { href: string; selected: boolean
   return (
     <NextLink href={href}>
       <Box
-        px={3}
-        py={1.5}
+        px={2}
+        py={1}
         rounded="md"
-        fontSize="sm"
+        fontSize="xs"
         fontWeight={selected ? "semibold" : "medium"}
         bg={selected ? "bg.emphasized" : "transparent"}
         color={selected ? "fg" : "fg.muted"}
@@ -139,7 +139,7 @@ export function OfficeHoursHeader({
     const isAllRequestsPage = pathname?.startsWith(`${officeHoursBaseHref}/all-requests`);
     const isSettingsPage = pathname?.startsWith(`${officeHoursBaseHref}/settings`);
 
-    // Manage mode header
+    // Manage mode header - compact design
     return (
       <Box
         position="sticky"
@@ -148,13 +148,13 @@ export function OfficeHoursHeader({
         bg="bg.panel"
         borderBottomWidth="1px"
         borderColor="border.emphasized"
-        px={{ base: 3, md: 6 }}
-        py={{ base: 3, md: 4 }}
+        px={{ base: 2, md: 3 }}
+        py={{ base: 2, md: 2 }}
       >
-        <Flex align="center" justify="space-between" gap={4} wrap="wrap">
-          <HStack gap={4} flexShrink={0} align="center">
-            <HStack gap={4}>
-              <HStack gap={2} align="center">
+        <Flex align="center" justify="space-between" gap={2} wrap="wrap">
+          <HStack gap={2} flexShrink={0} align="center">
+            <HStack gap={2}>
+              <HStack gap={1} align="center">
                 <NavLink href={officeHoursBaseHref} selected={!showRequestCrumb && isWorkingPage}>
                   Working
                 </NavLink>
@@ -162,7 +162,7 @@ export function OfficeHoursHeader({
                   <Badge
                     colorPalette="green"
                     variant="subtle"
-                    size="sm"
+                    size="xs"
                     whiteSpace="nowrap"
                     title={workingQueues
                       .map((q) => q?.name)
@@ -179,10 +179,10 @@ export function OfficeHoursHeader({
               <MenuRoot>
                 <MenuTrigger asChild>
                   <Box
-                    px={3}
-                    py={1.5}
+                    px={2}
+                    py={1}
                     rounded="md"
-                    fontSize="sm"
+                    fontSize="xs"
                     fontWeight={isSettingsPage ? "semibold" : "medium"}
                     bg={isSettingsPage ? "bg.emphasized" : "transparent"}
                     color={isSettingsPage ? "fg" : "fg.muted"}
@@ -274,16 +274,16 @@ export function OfficeHoursHeader({
               </MenuRoot>
             </HStack>
             {currentRequest && (
-              <HStack gap={2} color="fg.muted">
-                <FiChevronRight />
+              <HStack gap={1} color="fg.muted">
+                <FiChevronRight size={12} />
                 <NextLink href={`${officeHoursBaseHref}/all-requests?queue=${queue_id}`}>
-                  <Text fontSize="sm" fontWeight="medium" color="fg" _hover={{ textDecoration: "underline" }}>
+                  <Text fontSize="xs" fontWeight="medium" color="fg" _hover={{ textDecoration: "underline" }}>
                     {currentRequest.queueName}
                   </Text>
                 </NextLink>
-                <FiChevronRight />
-                <Box borderBottom="3px solid" borderColor="orange.600" pb={1}>
-                  <Text fontSize="sm" fontWeight="semibold" color="fg" truncate maxW={{ base: "60vw", md: "40vw" }}>
+                <FiChevronRight size={12} />
+                <Box borderBottom="2px solid" borderColor="orange.600" pb={0.5}>
+                  <Text fontSize="xs" fontWeight="semibold" color="fg" truncate maxW={{ base: "40vw", md: "25vw" }}>
                     Request #{currentRequest.id}
                   </Text>
                 </Box>
@@ -291,12 +291,12 @@ export function OfficeHoursHeader({
             )}
           </HStack>
 
-          <HStack gap={3} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
+          <HStack gap={2} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
             <HelpRequestSearch isManageMode={true} />
             {workingQueues.length > 0 && (
               <Button
                 colorPalette="red"
-                size="sm"
+                size="xs"
                 onClick={async () => {
                   // Stop all working queues
                   for (const queue of workingQueues) {

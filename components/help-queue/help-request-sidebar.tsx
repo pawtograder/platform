@@ -163,15 +163,15 @@ export function HelpRequestSidebar({
         position={{ base: "relative", lg: "sticky" }}
         top="0"
         alignSelf="flex-start"
-        width={{ base: "52px", lg: "52px" }}
+        width="44px"
       >
-        <Box px="2" py="2">
+        <Box px="1" py="1">
           <Tooltip content="Show queue requests">
-            <Button aria-label="Show queue requests" variant="ghost" size="sm" onClick={onToggle} width="100%">
+            <Button aria-label="Show queue requests" variant="ghost" size="xs" onClick={onToggle} width="100%">
               <FaChevronRight />
             </Button>
           </Tooltip>
-          <Text mt="2" fontSize="xs" color="fg.muted" textAlign="center">
+          <Text mt="1" fontSize="2xs" color="fg.muted" textAlign="center">
             {workingRequests.length + openRequests.length + closedRequests.length}
           </Text>
         </Box>
@@ -197,21 +197,21 @@ export function HelpRequestSidebar({
       position={{ base: "relative", lg: "sticky" }}
       top="0"
       alignSelf="flex-start"
-      maxH={{ base: "calc(100dvh - 120px)", lg: "calc(100dvh - 120px)" }}
+      maxH={{ base: "calc(100dvh - 80px)", lg: "calc(100dvh - 80px)" }}
     >
-      <Box px="4" py="3" borderBottomWidth="1px" borderColor="border.muted">
-        <HStack justify="space-between" align="start" gap="2">
+      <Box px="2" py="2" borderBottomWidth="1px" borderColor="border.muted">
+        <HStack justify="space-between" align="center" gap="1">
           <Box>
-            <Text fontWeight="semibold" fontSize="sm">
+            <Text fontWeight="semibold" fontSize="xs">
               {sidebarTitle}
             </Text>
-            <Text color="fg.muted" fontSize="xs">
+            <Text color="fg.muted" fontSize="2xs">
               {workingRequests.length + openRequests.length + closedRequests.length} request
               {workingRequests.length + openRequests.length + closedRequests.length === 1 ? "" : "s"}
             </Text>
           </Box>
           <Tooltip content="Hide sidebar">
-            <Button aria-label="Hide sidebar" variant="ghost" size="sm" onClick={onToggle}>
+            <Button aria-label="Hide sidebar" variant="ghost" size="xs" onClick={onToggle}>
               <FaChevronLeft />
             </Button>
           </Tooltip>
@@ -221,7 +221,7 @@ export function HelpRequestSidebar({
       <Box
         ref={scrollRef}
         overflowY="auto"
-        maxH={{ base: "calc(100dvh - 180px)", lg: "calc(100dvh - 180px)" }}
+        maxH={{ base: "calc(100dvh - 130px)", lg: "calc(100dvh - 130px)" }}
         onScroll={(e) => {
           lastScrollTopRef.current = (e.target as HTMLDivElement).scrollTop;
         }}
