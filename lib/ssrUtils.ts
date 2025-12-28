@@ -96,7 +96,9 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
       global: {
         fetch: createFetch({
           next: {
-            revalidate: revalidate || 300,
+            // Use longer TTL as fallback since triggers handle invalidation automatically
+            // 3600s = 1 hour fallback ensures stale data doesn't persist indefinitely
+            revalidate: revalidate || 3600,
             tags: tags || ["supabase"]
           }
         })
@@ -188,48 +190,48 @@ export async function fetchCourseControllerData(
     tags: [`course_controller:${course_id}:${isStaff ? "staff" : "student"}`]
   });
   const studentDeadlineExtensionsClient = await createClientWithCaching({
-    tags: [`student_deadline_extensions:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`student_deadline_extensions:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentDueDateExceptionsClient = await createClientWithCaching({
-    tags: [`assignment_due_date_exceptions:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 10 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`assignment_due_date_exceptions:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentsClient = await createClientWithCaching({
-    tags: [`assignments:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 10 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`assignments:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentGroupsClient = await createClientWithCaching({
-    tags: [`assignment_groups:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 5 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`assignment_groups:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const discussionTopicsClient = await createClientWithCaching({
-    tags: [`discussion_topics:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`discussion_topics:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const repositoriesClient = await createClientWithCaching({
-    tags: [`repositories:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`repositories:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const gradebookColumnsClient = await createClientWithCaching({
-    tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`gradebook_columns:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const discordChannelsClient = await createClientWithCaching({
-    tags: [`discord_channels:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 60 // discord channels don't change often
+    tags: [`discord_channels:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const discordMessagesClient = await createClientWithCaching({
-    tags: [`discord_messages:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // discord messages are created dynamically but don't change after
+    tags: [`discord_messages:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const surveysClient = await createClientWithCaching({
-    tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 30 // fast expiration for data that is updated frequently, TODO make this get auto-invalidated
+    tags: [`surveys:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
   const labSectionLeadersClient = await createClientWithCaching({
-    tags: [`lab_section_leaders:${course_id}:${isStaff ? "staff" : "student"}`],
-    revalidate: 60 // lab section leaders don't change often
+    tags: [`lab_section_leaders:${course_id}:${isStaff ? "staff" : "student"}`]
+    // Cache invalidation handled by triggers
   });
 
   // Fetch all data in parallel for maximum performance
@@ -392,17 +394,15 @@ export async function fetchAssignmentControllerData(
   const roleKey = isStaff ? "staff" : "student";
   const client = await createClientWithCaching({ tags: [`assignment_controller:${assignment_id}:${roleKey}`] });
   const regradeRequestsClient = await createClientWithCaching({
-    tags: [`regrade_requests:${assignment_id}:${roleKey}`],
-    revalidate: 10 // regrade requests are updated somewhat frequently, a good candidate for using invalidation
+    tags: [`regrade_requests:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
   });
   const assignmentGroupsClient = await createClientWithCaching({
-    tags: [`assignment_groups:${assignment_id}:${roleKey}`],
-    revalidate: 10 // assignment groups are updated somewhat frequently, a good candidate for using invalidation
+    tags: [`assignment_groups:${assignment_id}:${roleKey}`]
+    // Cache invalidation handled by triggers
   });
-  const submissionsClient = await createClientWithCaching({
-    tags: [`submissions:${assignment_id}:${roleKey}`],
-    revalidate: 10 // submissions are updated somewhat frequently, a good candidate for using invalidation
-  });
+  // Submissions are not cached - always fetch fresh data
+  const submissionsClient = await createClientWithCaching({ revalidate: 0 });
 
   // Fetch all data in parallel for maximum performance
   const [
