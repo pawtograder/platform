@@ -47,7 +47,7 @@ function NavLink({ href, selected, children }: { href: string; selected: boolean
 interface OfficeHoursHeaderProps {
   mode: OfficeHoursViewMode;
   officeHoursBaseHref: string;
-  currentRequest?: { id: number; queueName: string };
+  currentRequest?: { id: number; queueName: string; queueId?: number };
   isManageMode?: boolean;
 }
 
@@ -68,6 +68,14 @@ export function OfficeHoursHeader({
   const { helpQueueAssignments } = controller;
 
   const showRequestCrumb = !!currentRequest;
+
+  // Get queue ID from current request, falling back to queue_id from params
+  const currentRequestQueueId = useMemo(() => {
+    if (currentRequest?.queueId) {
+      return currentRequest.queueId;
+    }
+    return queue_id ? Number(queue_id) : undefined;
+  }, [currentRequest?.queueId, queue_id]);
 
   // Get queues with active staff assignments (for student mode)
   const queuesWithActiveStaff = useMemo(() => {
@@ -276,7 +284,13 @@ export function OfficeHoursHeader({
             {currentRequest && (
               <HStack gap={1} color="fg.muted">
                 <FiChevronRight size={12} />
-                <NextLink href={`${officeHoursBaseHref}/all-requests?queue=${queue_id}`}>
+                <NextLink
+                  href={
+                    currentRequestQueueId
+                      ? `${officeHoursBaseHref}/all-requests?queue=${currentRequestQueueId}`
+                      : `${officeHoursBaseHref}/all-requests`
+                  }
+                >
                   <Text fontSize="xs" fontWeight="medium" color="fg" _hover={{ textDecoration: "underline" }}>
                     {currentRequest.queueName}
                   </Text>
@@ -347,7 +361,13 @@ export function OfficeHoursHeader({
           {currentRequest && (
             <HStack gap={2} color="fg.muted">
               <FiChevronRight />
-              <NextLink href={`${officeHoursBaseHref}?view=browse&queue=${queue_id}`}>
+              <NextLink
+                href={
+                  currentRequestQueueId
+                    ? `${officeHoursBaseHref}?view=browse&queue=${currentRequestQueueId}`
+                    : `${officeHoursBaseHref}?view=browse`
+                }
+              >
                 <Text fontSize="sm" fontWeight="medium" color="fg" _hover={{ textDecoration: "underline" }}>
                   {currentRequest.queueName}
                 </Text>

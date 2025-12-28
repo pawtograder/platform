@@ -29,7 +29,8 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
     if (!currentRequestData || !helpQueue) return undefined;
     return {
       id: currentRequestData.id,
-      queueName: helpQueue.name
+      queueName: helpQueue.name,
+      queueId: currentRequestData.help_queue
     };
   }, [currentRequestData, helpQueue]);
 
@@ -44,8 +45,10 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
   }, [searchParams, request_id, queue_id]);
 
   useEffect(() => {
-    document.title = `${courseController.course.name} - Office Hours`;
-  }, [courseController.course.name]);
+    if (courseController?.course?.name) {
+      document.title = `${courseController.course.name} - Office Hours`;
+    }
+  }, [courseController?.course?.name]);
 
   return (
     <ClassProfileProvider>

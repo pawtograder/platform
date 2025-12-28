@@ -38,7 +38,8 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
     if (!currentRequestData || !helpQueue) return undefined;
     return {
       id: currentRequestData.id,
-      queueName: helpQueue.name
+      queueName: helpQueue.name,
+      queueId: currentRequestData.help_queue
     };
   }, [currentRequestData, helpQueue]);
 
@@ -65,14 +66,10 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
   const showSidebar = !!requestId;
 
   useEffect(() => {
-    try {
-      const name = courseController.course.name;
-      document.title = `${name} - Office Hours`;
-    } catch {
-      // Course not loaded yet, do nothing
-      return;
+    if (courseController?.course?.name) {
+      document.title = `${courseController.course.name} - Office Hours`;
     }
-  }, [courseController.course.name]);
+  }, [courseController?.course?.name]);
 
   return (
     <Box height="100dvh" overflow="hidden" display="flex" flexDirection="column">

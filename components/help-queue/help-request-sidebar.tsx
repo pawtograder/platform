@@ -89,7 +89,7 @@ export function HelpRequestSidebar({
 
       if (isAssignedToMe && (request.status === "open" || request.status === "in_progress")) {
         working.push(request);
-      } else if (!isClosed && request.status === "open") {
+      } else if (!isClosed && (request.status === "open" || request.status === "in_progress")) {
         open.push(request);
       } else if (isClosed) {
         closed.push(request);
