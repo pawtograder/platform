@@ -456,3 +456,10 @@ ALTER TABLE public.audit
     FOREIGN KEY (user_id) 
     REFERENCES public.users(user_id);
 
+-- ============================================================================
+-- Step 12: Enable RLS on discussion digest tables
+-- ============================================================================
+
+ALTER TABLE public.discussion_digest_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.discussion_digest_send_times ENABLE ROW LEVEL SECURITY;
+
