@@ -595,6 +595,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // New column header should be visible
     await expect(page.getByText("Extra Credit")).toBeVisible();
 
+    // Wait for dialog backdrop to be fully removed (fixes WebKit flakiness where backdrop intercepts clicks)
+    await expect(page.locator('[data-part="backdrop"]')).toHaveCount(0, { timeout: 5000 });
+
     await waitForVirtualizerIdle(page);
     await page.waitForTimeout(3000);
 
