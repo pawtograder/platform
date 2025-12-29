@@ -7,3 +7,10 @@ button,
 select {
   cursor: pointer;
 }
+
+/* Fix for WebKit: Disable pointer events on dialog backdrop during exit animation.
+   Without this, the backdrop intercepts clicks even when data-state="closed",
+   causing flaky tests especially in WebKit where animation timing differs. */
+[data-part="backdrop"][data-state="closed"] {
+  pointer-events: none !important;
+}

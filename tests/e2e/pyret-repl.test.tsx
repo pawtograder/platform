@@ -10,7 +10,6 @@ import {
   TestingUser,
   getTestRunPrefix
 } from "./TestingUtils";
-import { argosScreenshot } from "@argos-ci/playwright";
 
 let course: Course;
 let student: TestingUser;
@@ -267,7 +266,6 @@ test.describe("Pyret REPL Integration", () => {
     ).not.toBeVisible();
 
     await page.waitForLoadState("networkidle");
-    await argosScreenshot(page, "pyret-repl-test-results-initial");
 
     const replToggle = page.getByRole("button", { name: /Interactive Pyret REPL/i }).first();
     await expect(replToggle).toBeVisible();
@@ -287,7 +285,6 @@ test.describe("Pyret REPL Integration", () => {
     await expect(
       page.getByText("Partial credit: Your solution works for some cases but needs improvement for edge cases.")
     ).toBeVisible();
-    await argosScreenshot(page, "pyret-repl-expanded");
 
     await replToggle.click();
     await expect(replContainer).not.toBeVisible();
@@ -303,8 +300,6 @@ test.describe("Pyret REPL Integration", () => {
       const replElement = document.querySelector('[id^="pyret-repl-region-"]');
       return replElement && replElement.children.length > 0;
     });
-
-    await argosScreenshot(page, "pyret-repl-second-expanded");
   });
 
   test("Instructor can view both student and instructor-only Pyret REPLs", async ({ page }) => {
@@ -322,7 +317,6 @@ test.describe("Pyret REPL Integration", () => {
 
     await expect(page.getByRole("tabpanel").getByRole("link", { name: "Hidden Test (Instructor Only)" })).toBeVisible();
     await page.waitForLoadState("networkidle");
-    await argosScreenshot(page, "pyret-repl-instructor-view");
 
     const instructorReplToggle = page.getByRole("button", { name: /Instructor-Only.*Interactive Pyret REPL/i });
 
@@ -334,8 +328,6 @@ test.describe("Pyret REPL Integration", () => {
         const replElement = document.querySelector('[id^="pyret-repl-region-"]');
         return replElement && replElement.children.length > 0;
       });
-
-      await argosScreenshot(page, "pyret-repl-instructor-only-expanded");
     }
 
     const studentReplToggles = page
@@ -365,7 +357,6 @@ test.describe("Pyret REPL Integration", () => {
       await replToggle.click();
       await page.waitForTimeout(5000);
       await page.waitForLoadState("networkidle");
-      await argosScreenshot(page, "pyret-repl-error-handling");
     }
   });
 
@@ -401,7 +392,5 @@ test.describe("Pyret REPL Integration", () => {
       }
       return loadedCount >= expectedCount;
     }, expectedOpenReplCount);
-
-    await argosScreenshot(page, "pyret-repl-multiple-open");
   });
 });
