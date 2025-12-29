@@ -154,14 +154,15 @@ END $$;
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.audit_statement_trigger()
-RETURNS trigger AS $$
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth
+AS $$
 DECLARE
     remote_ip text;
     current_user_id uuid;
 BEGIN
-    -- Set fixed search_path to prevent search_path attacks
-    PERFORM set_config('search_path', 'pg_catalog, public', true);
-    
     -- Get current user ID
     current_user_id := auth.uid();
     
@@ -197,7 +198,7 @@ BEGIN
     
     RETURN NULL;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 -- Add comment for documentation
 COMMENT ON FUNCTION public.audit_statement_trigger() IS 
