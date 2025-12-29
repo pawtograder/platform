@@ -300,7 +300,6 @@ test.describe("Pyret REPL Integration", () => {
       const replElement = document.querySelector('[id^="pyret-repl-region-"]');
       return replElement && replElement.children.length > 0;
     });
-
   });
 
   test("Instructor can view both student and instructor-only Pyret REPLs", async ({ page }) => {
@@ -329,7 +328,6 @@ test.describe("Pyret REPL Integration", () => {
         const replElement = document.querySelector('[id^="pyret-repl-region-"]');
         return replElement && replElement.children.length > 0;
       });
-
     }
 
     const studentReplToggles = page
@@ -394,6 +392,5 @@ test.describe("Pyret REPL Integration", () => {
       }
       return loadedCount >= expectedCount;
     }, expectedOpenReplCount);
-
   });
 });
