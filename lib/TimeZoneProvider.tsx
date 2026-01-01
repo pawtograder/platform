@@ -53,7 +53,10 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
 
   const dismissModal = () => {
     setShowModal(false);
-    // Don't reset the mode - let the user's selection (if any) persist
+    // Save the current mode when dismissing (whether user changed it or kept the default)
+    if (isClient) {
+      localStorage.setItem(COOKIE_NAME, mode);
+    }
   };
 
   const openModal = () => {
