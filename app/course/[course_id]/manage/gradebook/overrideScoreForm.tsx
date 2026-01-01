@@ -141,6 +141,7 @@ export function OverrideScoreForm({
               <Field label="Score" errorText={errors.score_override?.message?.toString()} flex={1} minW="5em">
                 <Input
                   type="number"
+                  step="any"
                   {...register("score_override", { valueAsNumber: true })}
                   placeholder={studentGradebookColumn.score?.toString()}
                 />

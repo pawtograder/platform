@@ -207,12 +207,11 @@ abstract class DependencySourceBase implements DependencySource {
       }
       throw new Error(`Unsupported key type: ${typeof key}`);
     }
-    return this.valuesMap
-      .get(context.student_id)
-      ?.find(
-        (value) =>
-          value.key === key && value.class_id === class_id && value.is_private === context.is_private_calculation
-      )?.value;
+    const studentValues = this.valuesMap.get(context.student_id);
+    const matchingValue = studentValues?.find(
+      (value) => value.key === key && value.class_id === class_id && value.is_private === context.is_private_calculation
+    );
+    return matchingValue?.value;
   }
 }
 
@@ -452,7 +451,16 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         if (Array.isArray(key)) {
           const values = key.map((k) => {
             if (typeof k !== "string") return undefined;
-            return readOverride(k) ?? readBase(k);
+            const overrideVal = readOverride(k);
+            const baseVal = readBase(k);
+            // If we have an override value but base has score_override, use base's score_override
+            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
+              return {
+                ...baseVal,
+                score: baseVal.score_override
+              };
+            }
+            return overrideVal ?? baseVal;
           });
           this._pushMissingIfNeeded(
             context,
@@ -461,9 +469,19 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
           return values;
         }
         if (isDenseMatrix(key)) {
-          const values = (key as Matrix<string>)
-            .toArray()
-            .map((k) => (typeof k === "string" ? (readOverride(k) ?? readBase(k)) : undefined));
+          const values = (key as Matrix<string>).toArray().map((k) => {
+            if (typeof k !== "string") return undefined;
+            const overrideVal = readOverride(k);
+            const baseVal = readBase(k);
+            // If we have an override value but base has score_override, use base's score_override
+            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
+              return {
+                ...baseVal,
+                score: baseVal.score_override
+              };
+            }
+            return overrideVal ?? baseVal;
+          });
           this._pushMissingIfNeeded(
             context,
             values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
@@ -471,7 +489,22 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
           return values;
         }
       } else if (typeof key === "string") {
-        const value = readOverride(key) ?? readBase(key);
+        const overrideValue = readOverride(key);
+        const baseValue = readBase(key);
+
+        // If we have an override value (freshly calculated), but the base value has a score_override,
+        // we should use the base value's score_override instead of the calculated override value
+        let value: GradebookColumnStudentWithMaxScore | undefined;
+        if (overrideValue && baseValue && baseValue.score_override !== null && baseValue.score_override !== undefined) {
+          // Use base value with its score_override
+          value = {
+            ...baseValue,
+            score: baseValue.score_override
+          };
+        } else {
+          // Use override value if available, otherwise use base value
+          value = overrideValue ?? baseValue;
+        }
         if (value) {
           this._pushMissingIfNeeded(context, value);
           return value;
@@ -498,48 +531,57 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const uniqueGradebookColumnIds = Array.from(gradebookColumnIds);
     const studentIds = Array.from(students);
 
-    // Fetch all gradebook column students with pagination
+    // Fetch gradebook column students using the bulk RPC function with pagination
+    // The RPC function uses stable sorting (ORDER BY id) to ensure consistent pagination
     const allGradebookColumnStudents: GradebookColumnStudent[] = [];
-    let from = 0;
     const pageSize = 1000;
+    let offset = 0;
 
     while (true) {
-      const to = from + pageSize - 1;
-      let query = supabase
-        .from("gradebook_column_students")
-        .select("*")
-        .in("gradebook_column_id", uniqueGradebookColumnIds);
+      const { data: pageData, error: rpcError } = await (
+        supabase.rpc as unknown as (
+          name: string,
+          args: {
+            p_student_ids: unknown;
+            p_gradebook_column_ids: unknown;
+            p_limit: number;
+            p_offset: number;
+          }
+        ) => Promise<{ data: GradebookColumnStudent[] | null; error: unknown }>
+      )("get_gradebook_column_students_bulk", {
+        p_student_ids: studentIds,
+        p_gradebook_column_ids: uniqueGradebookColumnIds,
+        p_limit: pageSize,
+        p_offset: offset
+      });
 
-      // If 20 or fewer students, filter by student_id for better performance
-      if (studentIds.length <= 20) {
-        query = query.in("student_id", studentIds);
+      if (rpcError) {
+        throw new Error(
+          `Failed to fetch gradebook column students via RPC at offset ${offset}: ${JSON.stringify(rpcError)}`
+        );
       }
 
-      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await query.range(from, to);
-
-      if (gradebookColumnsFetchError) {
-        throw gradebookColumnsFetchError;
-      }
-
-      if (!gradebookColumnStudents || gradebookColumnStudents.length === 0) {
+      if (!pageData || pageData.length === 0) {
         break;
       }
 
-      allGradebookColumnStudents.push(...gradebookColumnStudents);
+      allGradebookColumnStudents.push(...pageData);
 
-      if (gradebookColumnStudents.length < pageSize) {
+      // If we got fewer rows than the page size, we've reached the end
+      if (pageData.length < pageSize) {
         break;
       }
 
-      from += pageSize;
+      offset += pageSize;
     }
 
     // Fetch all gradebook columns with pagination
     const allGradebookColumns: GradebookColumn[] = [];
-    from = 0;
+    let from = 0;
+    const columnPageSize = 1000;
 
     while (true) {
-      const to = from + pageSize - 1;
+      const to = from + columnPageSize - 1;
       const { data: gradebookColumns, error: gradebookColumnsError } = await supabase
         .from("gradebook_columns")
         .select("*")
@@ -556,19 +598,16 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
 
       allGradebookColumns.push(...gradebookColumns);
 
-      if (gradebookColumns.length < pageSize) {
+      if (gradebookColumns.length < columnPageSize) {
         break;
       }
 
-      from += pageSize;
+      from += columnPageSize;
     }
 
     for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
-    console.log(
-      `Retrieved ${allGradebookColumnStudents.length} gradebook column students for ${students.size} students and ${gradebookColumnIds.size} gradebook columns`
-    );
     const ret = allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
@@ -874,7 +913,7 @@ export async function addDependencySourceFunctions({
     return value < threshold ? 1 : 0;
   };
   imports["countif"] = (
-    _context: ExpressionContext,
+    context: ExpressionContext,
     value: GradebookColumnStudentWithMaxScore[],
     condition: (value: GradebookColumnStudentWithMaxScore) => boolean
   ) => {
@@ -904,11 +943,30 @@ export async function addDependencySourceFunctions({
       value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
     }
     if (Array.isArray(value)) {
+      // Log input to help diagnose issues
+      console.log(
+        `Mean called with ${value.length} values (weighted=${weighted}):`,
+        JSON.stringify(
+          value.map((v) => ({
+            score: isGradebookColumnStudent(v) ? v.score : "N/A",
+            max_score: isGradebookColumnStudent(v) ? v.max_score : "N/A",
+            column_slug: isGradebookColumnStudent(v) ? (v as unknown as { column_slug?: string })?.column_slug : "N/A",
+            released: isGradebookColumnStudent(v) ? v.released : "N/A",
+            is_private: isGradebookColumnStudent(v) ? v.is_private : "N/A",
+            is_missing: isGradebookColumnStudent(v) ? v.is_missing : "N/A"
+          }))
+        )
+      );
+
       const valuesToAverage = value.map((v) => {
         if (isGradebookColumnStudent(v)) {
-          if (!v.released && !v.is_private) {
-            return undefined;
-          } else if (v.is_missing) {
+          // Assert that we are never leaking across is_private boundaries
+          if (v.is_private !== _context.is_private_calculation) {
+            throw new Error(
+              `Mean called with gradebook column student that is_private mismatch: ${v.is_private} !== ${_context.is_private_calculation}`
+            );
+          }
+          if (v.is_missing) {
             if (v.is_excused) {
               return { score: undefined, max_score: v.max_score };
             }
@@ -924,18 +982,82 @@ export async function addDependencySourceFunctions({
         );
       });
       const validValues = valuesToAverage.filter(
-        (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
+        (v) =>
+          v !== undefined &&
+          v.score !== undefined &&
+          v.max_score !== undefined &&
+          v.max_score !== null &&
+          v.max_score > 0 &&
+          v.score !== null
       );
+
+      // Check for scores exceeding max_score (data integrity issue)
+      const scoresExceedingMax = validValues.filter((v) => {
+        if (!v || v.score === undefined || v.max_score === undefined) return false;
+        return v.score > v.max_score;
+      });
+      if (scoresExceedingMax.length > 0) {
+        console.warn(
+          `Mean calculation: Found ${scoresExceedingMax.length} values where score > max_score: ${JSON.stringify(
+            scoresExceedingMax.map((v) => {
+              if (!v || v.score === undefined || v.max_score === undefined) return {};
+              return {
+                score: v.score,
+                max_score: v.max_score,
+                column_slug: (v as unknown as { column_slug?: string })?.column_slug,
+                ratio: v.score / v.max_score
+              };
+            })
+          )}`
+        );
+      }
+
       if (validValues.length === 0) {
+        console.warn(
+          `Mean calculation: No valid values after filtering. Input values: ${JSON.stringify(
+            valuesToAverage.map((v) => ({
+              score: v?.score,
+              max_score: v?.max_score,
+              column_slug: (v as unknown as { column_slug?: string })?.column_slug
+            }))
+          )}`
+        );
         return undefined;
       }
       if (weighted) {
         const totalPoints = validValues.reduce((a, b) => a + (b?.max_score ?? 0), 0);
         const totalScore = validValues.reduce((a, b) => a + (b?.score ?? 0), 0);
         if (totalPoints === 0) {
+          console.warn(
+            `Mean calculation: totalPoints is 0 after filtering. Input values: ${JSON.stringify(
+              valuesToAverage.map((v) => ({
+                score: v?.score,
+                max_score: v?.max_score,
+                column_slug: (v as unknown as { column_slug?: string })?.column_slug
+              }))
+            )}`
+          );
           return undefined;
         }
         const ret = (100 * totalScore) / totalPoints;
+        // Log if result exceeds 100% to help diagnose issues
+        if (ret > 100) {
+          console.warn(
+            `Mean calculation resulted in score > 100%: ${ret}%. Values: ${JSON.stringify(
+              validValues.map((v) => {
+                if (!v || v.score === undefined || v.max_score === undefined) return {};
+                return {
+                  score: v.score,
+                  max_score: v.max_score,
+                  column_slug: (v as unknown as { column_slug?: string })?.column_slug,
+                  contribution_to_score: v.score,
+                  contribution_to_points: v.max_score,
+                  ratio: v.score / v.max_score
+                };
+              })
+            )}, totalScore: ${totalScore}, totalPoints: ${totalPoints}, calculation: (100 * ${totalScore}) / ${totalPoints}`
+          );
+        }
         return ret;
       } else {
         const ret =
@@ -950,21 +1072,78 @@ export async function addDependencySourceFunctions({
     value: GradebookColumnStudentWithMaxScore[],
     count: number
   ) => {
-    console.log("Drop_lowest called with value:", value);
     if (isDenseMatrix(value)) {
       value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
     }
     if (Array.isArray(value)) {
-      const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      // Log input values to help diagnose issues
+      const inputSummary = value.map((v) => ({
+        score: v.score,
+        max_score: v.max_score,
+        column_slug: (v as unknown as { column_slug?: string })?.column_slug,
+        is_droppable: v.is_droppable
+      }));
+      console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
+
+      // Filter out entries with max_score <= 0 before sorting and selecting to drop
+      // These entries should be preserved and not count toward drop_lowest
+      const validEntries = value.filter((v) => (v.max_score ?? 0) > 0);
+
+      // Sort to identify which items to drop by relative score (score/max_score), but preserve original order in output
+      const sorted = [...validEntries].sort((a, b) => {
+        const aScore = a.score ?? 0;
+        const bScore = b.score ?? 0;
+        const aMaxScore = a.max_score ?? 1;
+        const bMaxScore = b.max_score ?? 1;
+        // Calculate relative scores (percentage)
+        const aRatio = aMaxScore > 0 ? aScore / aMaxScore : 0;
+        const bRatio = bMaxScore > 0 ? bScore / bMaxScore : 0;
+        return aRatio - bRatio;
+      });
+      const toDrop = new Set<GradebookColumnStudentWithMaxScore>();
       let numDropped = 0;
       for (const v of sorted) {
         if (numDropped < count && v.is_droppable) {
+          toDrop.add(v);
           numDropped++;
-          continue;
         }
-        ret.push(v);
       }
+
+      // Return items in original order, excluding only those marked for dropping that have max_score > 0
+      // Preserve all entries with max_score <= 0 untouched
+      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      for (const v of value) {
+        // Only exclude items that were chosen to drop AND have max_score > 0
+        if (!(toDrop.has(v) && (v.max_score ?? 0) > 0)) {
+          ret.push(v);
+        }
+      }
+
+      // Log output values
+      const outputSummary = ret.map((v) => ({
+        score: v.score,
+        max_score: v.max_score,
+        column_slug: (v as unknown as { column_slug?: string })?.column_slug
+      }));
+      console.log(
+        `Drop_lowest returning ${ret.length} values after dropping ${numDropped}:`,
+        JSON.stringify(outputSummary)
+      );
+
+      // Warn if any returned values have invalid max_score
+      const invalidMaxScore = ret.filter((v) => !v.max_score || v.max_score <= 0);
+      if (invalidMaxScore.length > 0) {
+        console.warn(
+          `Drop_lowest: ${invalidMaxScore.length} returned values have invalid max_score: ${JSON.stringify(
+            invalidMaxScore.map((v) => ({
+              score: v.score,
+              max_score: v.max_score,
+              column_slug: (v as unknown as { column_slug?: string })?.column_slug
+            }))
+          )}`
+        );
+      }
+
       return ret;
     }
     throw new Error("Drop_lowest called with non-matrix value");

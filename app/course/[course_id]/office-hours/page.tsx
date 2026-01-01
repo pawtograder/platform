@@ -1,26 +1,27 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { redirect } from "next/navigation";
-import { Box, Card, Container, Heading, Stack, Text, Grid, Badge, Button, HStack, VStack } from "@chakra-ui/react";
-import NextLink from "next/link";
-import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonBadge } from "react-icons/bs";
-import PersonAvatar from "@/components/ui/person-avatar";
-import { useMemo, useCallback } from "react";
-import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
-import { ClassProfileProvider } from "@/hooks/useClassProfiles";
+import { QueueCard } from "@/components/help-queue/queue-card";
+import { RequestRow } from "@/components/help-queue/request-row";
 import {
-  useHelpQueues,
+  useConnectionStatus,
   useHelpQueueAssignments,
+  useHelpQueues,
   useHelpRequests,
-  useHelpRequestStudents,
-  useConnectionStatus
+  useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
-import type { HelpRequest, HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Box, Flex, Heading, Stack, Text } from "@chakra-ui/react";
+import { redirect, useParams, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo } from "react";
+import Markdown from "react-markdown";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
-  const classId = Number(course_id);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  const view = searchParams.get("view") || "browse";
+  const selectedQueueId = searchParams.get("queue") ? Number(searchParams.get("queue")) : null;
 
   // Use individual hooks for office hours data
   const allHelpQueues = useHelpQueues();
@@ -29,50 +30,27 @@ export default function OfficeHoursPage() {
   const helpRequestStudents = useHelpRequestStudents();
   const { connectionStatus, connectionError, isLoading } = useConnectionStatus();
 
+  // Get current user profile IDs (needed for My Requests view)
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+
   // Filter data based on requirements
-  const helpQueues = allHelpQueues.filter((queue) => queue.available);
   const helpQueueAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
+
+  const helpQueues = allHelpQueues
+    .filter((queue) => queue.available)
+    .sort((a, b) => {
+      const aHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === a.id);
+      const bHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === b.id);
+      if (aHasActive === bHasActive) return 0;
+      return aHasActive ? -1 : 1;
+    });
+
   const activeHelpRequests = allHelpRequests.filter(
     (request) => request.status === "open" || request.status === "in_progress"
   );
 
-  // Memoize computation-heavy operations with proper dependencies
-  const activeRequestsByQueue = useMemo(() => {
-    if (!activeHelpRequests?.length || !helpRequestStudents?.length) return {};
-
-    // Create mapping of request ID to student profile IDs
-    const studentsByRequestId = helpRequestStudents.reduce(
-      (acc, student) => {
-        if (!acc[student.help_request_id]) {
-          acc[student.help_request_id] = [];
-        }
-        acc[student.help_request_id].push(student.profile_id);
-        return acc;
-      },
-      {} as Record<number, string[]>
-    );
-
-    // Group requests by queue ID, ensuring consistent number types
-    return activeHelpRequests.reduce(
-      (acc, request) => {
-        const queueId = Number(request.help_queue);
-        if (!acc[queueId]) {
-          acc[queueId] = [];
-        }
-        acc[queueId].push({
-          ...request,
-          students: studentsByRequestId[request.id] || []
-        });
-        return acc;
-      },
-      {} as Record<number, (HelpRequest & { students: string[] })[]>
-    );
-  }, [activeHelpRequests, helpRequestStudents]);
-
-  // Group active assignments by queue with proper dependencies
+  // Group active assignments by queue
   const activeAssignmentsByQueue = useMemo(() => {
-    if (!helpQueueAssignments?.length) return {};
-
     return helpQueueAssignments.reduce(
       (acc, assignment) => {
         const queueId = assignment.help_queue_id;
@@ -82,59 +60,82 @@ export default function OfficeHoursPage() {
         acc[queueId].push(assignment);
         return acc;
       },
-      {} as Record<number, HelpQueueAssignment[]>
+      {} as Record<number, typeof helpQueueAssignments>
     );
   }, [helpQueueAssignments]);
 
-  // Memoize helper functions to prevent unnecessary re-renders
-  const getQueueIcon = useCallback((type: string) => {
-    switch (type) {
-      case "video":
-        return <BsCameraVideo />;
-      case "in_person":
-        return <BsGeoAlt />;
-      default:
-        return <BsChatText />;
-    }
-  }, []);
+  // Create mapping of request ID to student profile IDs
+  const requestStudentsMap = useMemo(() => {
+    return helpRequestStudents.reduce(
+      (acc, student) => {
+        if (!acc[student.help_request_id]) {
+          acc[student.help_request_id] = [];
+        }
+        acc[student.help_request_id].push(student.profile_id);
+        return acc;
+      },
+      {} as Record<number, string[]>
+    );
+  }, [helpRequestStudents]);
 
-  const getQueueDescription = useCallback((type: string) => {
-    switch (type) {
-      case "video":
-        return "Live video chat with TAs";
-      case "in_person":
-        return "Get help in person";
-      case "text":
-        return "Text-based help and discussion";
-      default:
-        return "Get help from TAs and instructors";
+  // Get requests for selected queue
+  const selectedQueueRequests = useMemo(() => {
+    if (!selectedQueueId) return [];
+    return activeHelpRequests.filter((r) => r.help_queue === selectedQueueId);
+  }, [activeHelpRequests, selectedQueueId]);
+
+  // Get all requests where user is creator or participant (for My Requests view)
+  const myRequests = useMemo(() => {
+    const userProfileIds = [private_profile_id, public_profile_id];
+    const userParticipatedRequestIds = new Set(
+      helpRequestStudents
+        .filter((student) => userProfileIds.includes(student.profile_id))
+        .map((student) => student.help_request_id)
+    );
+
+    return allHelpRequests.filter(
+      (request) =>
+        (request.created_by && userProfileIds.includes(request.created_by)) ||
+        userParticipatedRequestIds.has(request.id)
+    );
+  }, [allHelpRequests, helpRequestStudents, private_profile_id, public_profile_id]);
+
+  // Group and sort requests for My Requests view
+  const groupedMyRequests = useMemo(() => {
+    const openRequests = myRequests
+      .filter((r) => r.status === "open" || r.status === "in_progress")
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const closedRequests = myRequests
+      .filter((r) => r.status === "resolved" || r.status === "closed")
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    return { openRequests, closedRequests };
+  }, [myRequests]);
+
+  // Auto-select first queue if none selected
+  useEffect(() => {
+    if (view === "browse" && !selectedQueueId && helpQueues.length > 0) {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("view", "browse");
+      next.set("queue", helpQueues[0].id.toString());
+      router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
     }
-  }, []);
+  }, [view, selectedQueueId, helpQueues, searchParams, router, course_id]);
 
   if (isLoading) {
     return (
-      <Container>
-        <Box textAlign="center" py={8}>
-          <Text>Loading help queues...</Text>
-        </Box>
-      </Container>
+      <Box textAlign="center" py={8}>
+        <Text>Loading help queues...</Text>
+      </Box>
     );
   }
 
   if (connectionError || connectionStatus?.overall === "disconnected") {
     return (
-      <Container>
-        <Box textAlign="center" py={8}>
-          <Card.Root variant="outline" borderColor="red.200">
-            <Card.Body>
-              <Text color="red.500">{connectionError || "Connection error. Please try refreshing the page."}</Text>
-              <Button mt={4} onClick={() => window.location.reload()}>
-                Refresh Page
-              </Button>
-            </Card.Body>
-          </Card.Root>
-        </Box>
-      </Container>
+      <Box textAlign="center" py={8}>
+        <Text color="red.500">{connectionError || "Connection error. Please try refreshing the page."}</Text>
+      </Box>
     );
   }
 
@@ -144,131 +145,163 @@ export default function OfficeHoursPage() {
     redirect(`/course/${course_id}/office-hours/${availableQueues[0].id}`);
   }
 
-  return (
-    <ClassProfileProvider>
-      <ModerationBanNotice classId={classId}>
-        <Container maxW={{ base: "md", md: "6xl" }} px={{ base: 3, md: 0 }} my={{ base: 2, md: 4 }}>
-          <Stack spaceY={{ base: 4, md: 6 }}>
-            <Box textAlign="center">
-              <Heading size={{ base: "md", md: "lg" }} mb={{ base: 1, md: 2 }}>
-                Ask for Help
-              </Heading>
-              <Text>Choose a help queue to get assistance from course staff</Text>
-            </Box>
+  if (view === "browse") {
+    return (
+      <Box height={{ base: "auto", lg: "100%" }} minH={0} overflow={{ base: "visible", lg: "hidden" }}>
+        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" height="100%" minH={0}>
+          <Box flex={{ lg: 4 }} minW={0} overflowY={{ base: "visible", lg: "auto" }} minH={0}>
+            <Stack spaceY={1}>
+              {availableQueues.map((queue) => {
+                const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+                const openRequestCount = activeHelpRequests.filter((r) => r.help_queue === queue.id).length;
+                return (
+                  <QueueCard
+                    key={queue.id}
+                    queue={queue}
+                    selected={queue.id === selectedQueueId}
+                    onClickAction={() => {
+                      const next = new URLSearchParams(searchParams.toString());
+                      next.set("view", "browse");
+                      next.set("queue", queue.id.toString());
+                      router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
+                    }}
+                    openRequestCount={openRequestCount}
+                    activeAssignments={queueAssignments}
+                  />
+                );
+              })}
+            </Stack>
+          </Box>
 
-            {availableQueues.length === 0 ? (
-              <Card.Root>
-                <Card.Body>
-                  <Text textAlign="center">No help queues are currently available.</Text>
-                </Card.Body>
-              </Card.Root>
-            ) : (
-              <Box maxW={{ base: "md", md: "full" }} w={{ base: "auto", md: "full" }} mx="auto">
-                <Grid columns={{ base: 1, md: 2 }} gap={{ base: 3, md: 4 }}>
-                  {availableQueues.map((queue) => {
-                    const queueRequests = activeRequestsByQueue[Number(queue.id)] || [];
-                    // Flatten all student IDs from all requests in this queue
-                    const activeUsers = queueRequests.flatMap((request) => request.students);
-                    const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-                    const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
+          <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
+            <Heading size="md" mb="4" flexShrink={0}>
+              {selectedQueueId
+                ? availableQueues.find((q) => q.id === selectedQueueId)?.name || "Select a queue"
+                : "Select a queue"}
+            </Heading>
+            {selectedQueueId && (
+              <Markdown>{availableQueues.find((q) => q.id === selectedQueueId)?.description || ""}</Markdown>
+            )}
 
+            <Box
+              borderWidth="1px"
+              borderColor="border.emphasized"
+              bg="bg.panel"
+              rounded="md"
+              overflow="hidden"
+              minH={0}
+              display="flex"
+              flexDirection="column"
+            >
+              <Box overflowY={{ base: "visible", lg: "auto" }} minH={0}>
+                {selectedQueueId && selectedQueueRequests.length === 0 ? (
+                  <Text px="4" py="3" color="fg.muted" fontSize="sm">
+                    No open requests in this queue.
+                  </Text>
+                ) : selectedQueueId ? (
+                  selectedQueueRequests.map((request) => {
+                    const queue = availableQueues.find((q) => q.id === request.help_queue);
+                    const students = requestStudentsMap[request.id] || [];
                     return (
-                      <Card.Root
-                        key={`queue-${queue.id}-${queue.name}`}
-                        variant="outline"
-                        w="full"
-                        role="region"
-                        aria-label={`Help queue: ${queue.name}`}
-                        _hover={{ borderColor: "border.emphasized" }}
-                      >
-                        <Card.Body>
-                          <Stack spaceY={4}>
-                            <Stack direction="row" align="center" justify="space-between">
-                              <Stack direction="row" align="center" spaceX={2}>
-                                <Box color={queue.color || "fg.default"}>{getQueueIcon(queue.queue_type)}</Box>
-                                <Heading size="sm">{queue.name}</Heading>
-                              </Stack>
-                              <Badge
-                                colorPalette={
-                                  queue.queue_type === "video"
-                                    ? "green"
-                                    : queue.queue_type === "in_person"
-                                      ? "orange"
-                                      : "blue"
-                                }
-                              >
-                                {queue.queue_type}
-                              </Badge>
-                            </Stack>
+                      <RequestRow
+                        key={request.id}
+                        request={request}
+                        href={`/course/${course_id}/office-hours/${request.help_queue}/${request.id}`}
+                        queue={queue}
+                        students={students}
+                      />
+                    );
+                  })
+                ) : (
+                  <Text px="4" py="3" color="fg.muted" fontSize="sm">
+                    Select a queue to view requests.
+                  </Text>
+                )}
+              </Box>
+            </Box>
+          </Box>
+        </Flex>
+      </Box>
+    );
+  }
 
-                            <Text fontSize="sm">{queue.description || getQueueDescription(queue.queue_type)}</Text>
+  // My Requests view
+  return (
+    <Box height={{ base: "auto", lg: "100%" }} minH={0} overflow={{ base: "visible", lg: "hidden" }}>
+      <Heading size="md" mb="4" flexShrink={0}>
+        My Requests
+      </Heading>
 
-                            {/* Active staff in queue */}
-                            <VStack align="stretch" spaceY={2}>
-                              <HStack align="center" spaceX={2}>
-                                <BsPersonBadge />
-                                <Text fontSize="sm" fontWeight="medium">
-                                  Staff on duty ({activeStaff.length})
-                                </Text>
-                              </HStack>
-
-                              {activeStaff.length > 0 ? (
-                                <HStack wrap="wrap" gap={2}>
-                                  {activeStaff.slice(0, 4).map((staffId, index) => (
-                                    <PersonAvatar
-                                      key={`staff-${staffId}-${index}-${queue.id}`}
-                                      uid={staffId}
-                                      size="sm"
-                                    />
-                                  ))}
-                                  {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}
-                                </HStack>
-                              ) : (
-                                <Text fontSize="xs" color="gray.500">
-                                  No staff currently on duty
-                                </Text>
-                              )}
-                            </VStack>
-
-                            {/* Active students in queue */}
-                            <VStack align="stretch" spaceY={2}>
-                              <HStack align="center" spaceX={2}>
-                                <BsPeople />
-                                <Text fontSize="sm" fontWeight="medium">
-                                  Currently in queue ({queueRequests.length})
-                                </Text>
-                              </HStack>
-
-                              {activeUsers.length > 0 ? (
-                                <HStack wrap="wrap" gap={2}>
-                                  {activeUsers.slice(0, 6).map((userId, index) => (
-                                    <PersonAvatar key={`user-${userId}-${index}-${queue.id}`} uid={userId} size="xs" />
-                                  ))}
-                                  {activeUsers.length > 6 && <Text fontSize="xs">+{activeUsers.length - 6} more</Text>}
-                                </HStack>
-                              ) : (
-                                <Text fontSize="xs" color="gray.500">
-                                  No one currently in queue
-                                </Text>
-                              )}
-                            </VStack>
-
-                            <NextLink href={`/course/${course_id}/office-hours/${queue.id}`} passHref>
-                              <Button variant="outline" size="sm" width="full">
-                                Join Queue
-                              </Button>
-                            </NextLink>
-                          </Stack>
-                        </Card.Body>
-                      </Card.Root>
+      <Box
+        borderWidth="1px"
+        borderColor="border.emphasized"
+        bg="bg.panel"
+        rounded="md"
+        overflow="hidden"
+        minH={0}
+        display="flex"
+        flexDirection="column"
+      >
+        <Box overflowY={{ base: "visible", lg: "auto" }} minH={0}>
+          {groupedMyRequests.openRequests.length === 0 && groupedMyRequests.closedRequests.length === 0 ? (
+            <Text px="4" py="3" color="fg.muted" fontSize="sm">
+              You haven&apos;t created or participated in any help requests yet.
+            </Text>
+          ) : (
+            <>
+              {groupedMyRequests.openRequests.length > 0 && (
+                <>
+                  {groupedMyRequests.closedRequests.length > 0 && (
+                    <Box px="4" py="2" bg="bg.subtle" borderBottomWidth="1px" borderColor="border.muted">
+                      <Text fontWeight="semibold" fontSize="sm" color="fg.muted">
+                        Open Requests
+                      </Text>
+                    </Box>
+                  )}
+                  {groupedMyRequests.openRequests.map((request) => {
+                    const queue = availableQueues.find((q) => q.id === request.help_queue);
+                    const students = requestStudentsMap[request.id] || [];
+                    return (
+                      <RequestRow
+                        key={request.id}
+                        request={request}
+                        href={`/course/${course_id}/office-hours/${request.help_queue}/${request.id}`}
+                        queue={queue}
+                        students={students}
+                      />
                     );
                   })}
-                </Grid>
-              </Box>
-            )}
-          </Stack>
-        </Container>
-      </ModerationBanNotice>
-    </ClassProfileProvider>
+                </>
+              )}
+
+              {groupedMyRequests.closedRequests.length > 0 && (
+                <>
+                  {groupedMyRequests.openRequests.length > 0 && (
+                    <Box px="4" py="2" bg="bg.subtle" borderBottomWidth="1px" borderColor="border.muted">
+                      <Text fontWeight="semibold" fontSize="sm" color="fg.muted">
+                        Resolved/Closed Requests
+                      </Text>
+                    </Box>
+                  )}
+                  {groupedMyRequests.closedRequests.map((request) => {
+                    const queue = availableQueues.find((q) => q.id === request.help_queue);
+                    const students = requestStudentsMap[request.id] || [];
+                    return (
+                      <RequestRow
+                        key={request.id}
+                        request={request}
+                        href={`/course/${course_id}/office-hours/${request.help_queue}/${request.id}`}
+                        queue={queue}
+                        students={students}
+                      />
+                    );
+                  })}
+                </>
+              )}
+            </>
+          )}
+        </Box>
+      </Box>
+    </Box>
   );
 }

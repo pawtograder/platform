@@ -9,7 +9,13 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-import { useAssignmentController, useRegradeRequest, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useGraderPseudonymousMode,
+  useRegradeRequest,
+  useRubricCheck,
+  useRubricCriteria
+} from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useProfileRole } from "@/hooks/useCourseController";
 import {
@@ -40,6 +46,7 @@ import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+import DiscordMessageLink from "@/components/discord/discord-message-link";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -96,6 +103,7 @@ const statusConfig: Record<
 function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType }) {
   const authorProfile = useUserProfile(comment.author);
   const authorRole = useProfileRole(comment.author);
+  const isStaff = useIsGraderOrInstructor();
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -105,6 +113,9 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
   if (!authorProfile) {
     return <Skeleton height="60px" width="100%" />;
   }
+
+  // Show real name in parentheses for staff when viewing pseudonymous profiles
+  const realNameSuffix = isStaff && authorProfile?.real_name ? ` (${authorProfile.real_name})` : "";
 
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
@@ -132,7 +143,14 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
             borderColor="border.muted"
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
-              <Text fontWeight="bold">{authorProfile?.name}</Text>
+              <Text fontWeight="bold">
+                {authorProfile?.name}
+                {realNameSuffix && (
+                  <Text as="span" fontWeight="normal" color="fg.muted" fontSize="xs">
+                    {realNameSuffix}
+                  </Text>
+                )}
+              </Text>
               <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
@@ -217,7 +235,6 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const { regradeRequests } = useAssignmentController();
-  const regradeRequest = useRegradeRequest(regradeRequestId);
 
   // Reset adjustment to 0 when popover opens
   useEffect(() => {
@@ -277,8 +294,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
             : `Request resolved. Score adjusted by ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} points.`,
         type: "success"
       });
-    } catch (error) {
-      console.error("Error resolving request:", error);
+    } catch {
       toaster.create({
         title: "Error",
         description: "Failed to resolve request. Please try again.",
@@ -287,15 +303,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
     } finally {
       setIsUpdating(false);
     }
-  }, [
-    finalScore,
-    pointsAdjustmentNum,
-    regradeRequestId,
-    privateProfileId,
-    regradeRequests,
-    regradeRequest,
-    initialPoints
-  ]);
+  }, [finalScore, pointsAdjustmentNum, regradeRequestId, privateProfileId, regradeRequests]);
 
   return (
     <PopoverRoot
@@ -531,7 +539,6 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   const [isUpdating, setIsUpdating] = useState(false);
 
   const { regradeRequests } = useAssignmentController();
-  const regradeRequest = useRegradeRequest(regradeRequestId);
 
   // Reset adjustment to 0 when popover opens
   useEffect(() => {
@@ -592,8 +599,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
             : `Request closed. Adjusted by ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts from grader's decision.`,
         type: "success"
       });
-    } catch (error) {
-      console.error("Error closing request:", error);
+    } catch {
       toaster.create({
         title: "Error",
         description: "Failed to close request. Please try again.",
@@ -602,15 +608,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     } finally {
       setIsUpdating(false);
     }
-  }, [
-    finalScore,
-    pointsAdjustmentNum,
-    regradeRequestId,
-    privateProfileId,
-    regradeRequests,
-    regradeRequest,
-    resolvedPoints
-  ]);
+  }, [finalScore, pointsAdjustmentNum, regradeRequestId, privateProfileId, regradeRequests]);
 
   return (
     <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
@@ -844,8 +842,7 @@ function EditablePoints({
         description: `${type === "resolved" ? "Resolved" : "Final"} points have been updated.`,
         type: "success"
       });
-    } catch (error) {
-      console.error("Error updating points:", error);
+    } catch {
       toaster.create({
         title: "Error",
         description: "Failed to update points. Please try again.",
@@ -940,9 +937,12 @@ export default function RegradeRequestWrapper({
   children: React.ReactNode;
 }) {
   const regradeRequest = useRegradeRequest(regradeRequestId);
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile for staff when pseudonymous grading is enabled
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
@@ -1003,11 +1003,10 @@ export default function RegradeRequestWrapper({
         assignment_id: regradeRequest.assignment_id,
         submission_regrade_request_id: regradeRequest.id,
         class_id: regradeRequest.class_id,
-        author: private_profile_id
+        author: authorProfileId
       };
       await submission_regrade_request_comments.create(values);
     } catch (error) {
-      console.error("Error creating comment or updating regrade request:", error);
       toaster.create({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to add comment. Please try again.",
@@ -1042,7 +1041,6 @@ export default function RegradeRequestWrapper({
         type: "success"
       });
     } catch (error) {
-      console.error("Error escalating request:", error);
       toaster.create({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to escalate request. Please try again.",
@@ -1113,7 +1111,7 @@ export default function RegradeRequestWrapper({
                         points={regradeRequest.resolved_points}
                         regradeRequestId={regradeRequest.id}
                         type="resolved"
-                        privateProfileId={private_profile_id}
+                        privateProfileId={authorProfileId}
                         isAdditive={rubricCriteria?.is_additive ?? true}
                       />
                     ) : (
@@ -1143,6 +1141,7 @@ export default function RegradeRequestWrapper({
                 {regradeRequest.closed_at && (
                   <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
                     Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
+                    {/* Note: Instructors always sign final decisions with their real identity */}
                     {isInstructor ? (
                       <EditablePoints
                         points={regradeRequest.closed_points}
@@ -1204,12 +1203,22 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
               </VStack>
+              {/* Discord Link for grader/instructor */}
+              {isGraderOrInstructor && regradeRequest.status !== "draft" && (
+                <DiscordMessageLink
+                  resourceType="regrade_request"
+                  resourceId={regradeRequest.id}
+                  size="sm"
+                  variant="ghost"
+                />
+              )}
+
               {/* Resolve Button for opened status + grader/instructor */}
               {regradeRequest.status === "opened" && isGraderOrInstructor && (
                 <ResolveRequestPopover
                   initialPoints={regradeRequest.initial_points}
                   regradeRequestId={regradeRequest.id}
-                  privateProfileId={private_profile_id}
+                  privateProfileId={authorProfileId}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
                 />
@@ -1226,6 +1235,7 @@ export default function RegradeRequestWrapper({
               )}
 
               {/* Close Button for escalated status + instructor */}
+              {/* Note: Instructors always sign final decisions with their real identity (private_profile_id) */}
               {regradeRequest.status === "escalated" && isInstructor && (
                 <CloseRequestPopover
                   initialPoints={regradeRequest.initial_points}

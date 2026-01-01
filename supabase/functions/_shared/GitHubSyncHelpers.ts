@@ -10,8 +10,8 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
-import { getCreateContentLimiter } from "../github-async-worker/index.ts";
 import * as github from "./GitHubWrapper.ts";
+import { getCreateContentLimiter } from "./GitHubWrapper.ts";
 import { Redis } from "./Redis.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 
@@ -68,9 +68,9 @@ function getSyncLimiter(org: string): Bottleneck {
     const password = upstashToken;
     limiter = new Bottleneck({
       id: `sync_repo_to_handout:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 30,
-      maxConcurrent: 30,
-      reservoirRefreshAmount: 30,
+      reservoir: 20,
+      maxConcurrent: 20,
+      reservoirRefreshAmount: 20,
       reservoirRefreshInterval: 60_000,
       datastore: "ioredis",
       timeout: 600000, // 10 minutes

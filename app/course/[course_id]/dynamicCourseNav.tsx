@@ -27,9 +27,12 @@ import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
   FiBookOpen,
+  FiCheckSquare,
   FiClipboard,
   FiClock,
   FiCompass,
+  FiFileText,
+  FiHash,
   FiMenu,
   FiMessageSquare,
   FiSettings,
@@ -39,6 +42,7 @@ import {
 import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "./UserMenu";
+import { NavigationProgressBar } from "@/components/ui/navigation-progress";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -85,11 +89,45 @@ const LinkItems = (courseID: number) => [
     feature_flag: "gradebook"
   },
   {
+    name: "Surveys",
+    icon: FiFileText,
+    student_only: true,
+    target: `/course/${courseID}/surveys`,
+    feature_flag: "surveys"
+  },
+  {
+    name: "Surveys",
+    icon: FiFileText,
+    instructors_or_graders_only: true,
+    target: `/course/${courseID}/manage/surveys`,
+    feature_flag: "surveys"
+  },
+  {
+    name: "Polls",
+    icon: FiCheckSquare,
+    student_only: true,
+    target: `/course/${courseID}/polls`,
+    feature_flag: "polls"
+  },
+  {
+    name: "Polls",
+    icon: FiCheckSquare,
+    instructors_or_graders_only: true,
+    target: `/course/${courseID}/manage/polls`,
+    feature_flag: "polls"
+  },
+  {
     name: "Course Settings",
     icon: FiSettings,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/course/`,
     submenu: [
+      {
+        name: "Discord",
+        icon: FiMessageSquare,
+        instructors_or_graders_only: true,
+        target: `/course/${courseID}/manage/discord`
+      },
       {
         name: "Enrollments",
         icon: FiUsers,
@@ -103,6 +141,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/lab-sections`
       },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
+      {
+        name: "Discussion Topics",
+        icon: FiHash,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/discussion-topics`
+      },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
         name: "Due Date Extensions",
@@ -251,7 +295,9 @@ export default function DynamicCourseNav() {
       bg="bg.subtle"
       borderBottomWidth="1px"
       borderBottomColor="border.emphasized"
+      position="relative"
     >
+      <NavigationProgressBar />
       {/* Mobile Layout */}
       <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">

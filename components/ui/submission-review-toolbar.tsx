@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useAssignmentController,
   useMyReviewAssignments,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
@@ -46,7 +47,7 @@ import {
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
 import { formatDueDateInTimezone } from "@/lib/utils";
-import { createClient } from "@/utils/supabase/client";
+import { formatDate } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
 import PersonName from "./person-name";
@@ -181,6 +182,7 @@ function CompleteReviewAssignmentDialog({
   setIsLoading: (loading: boolean) => void;
 }) {
   const { private_profile_id } = useClassProfiles();
+  const { reviewAssignments } = useAssignmentController();
 
   return (
     <Popover.Content>
@@ -241,18 +243,10 @@ function CompleteReviewAssignmentDialog({
               onClick={async () => {
                 try {
                   setIsLoading(true);
-                  const supabase = createClient();
-                  const { error } = await supabase
-                    .from("review_assignments")
-                    .update({
-                      completed_at: new Date().toISOString(),
-                      completed_by: private_profile_id
-                    })
-                    .eq("id", reviewAssignment.id);
-
-                  if (error) {
-                    throw error;
-                  }
+                  await reviewAssignments.update(reviewAssignment.id, {
+                    completed_at: new Date().toISOString(),
+                    completed_by: private_profile_id
+                  });
 
                   toaster.success({
                     title: "Review assignment marked as complete",
@@ -260,9 +254,14 @@ function CompleteReviewAssignmentDialog({
                   });
                 } catch (error) {
                   console.error("Error marking review assignment as complete", error);
+                  // Extract error message from Supabase error
+                  const errorMessage =
+                    error instanceof Error
+                      ? error.message
+                      : "An error occurred while marking the review assignment as complete. Please double-check that all required checks are completed and try again.";
                   toaster.error({
-                    title: "Error marking review assignment as complete",
-                    description: "An error occurred while marking the review assignment as complete."
+                    title: "Cannot complete review assignment",
+                    description: errorMessage
                   });
                 } finally {
                   setIsLoading(false);
@@ -506,9 +505,21 @@ function ReviewAssignmentActions() {
     return <></>;
   }
 
-  // If the review assignment is already completed, don't show actions
+  // If the review assignment is completed, show completion message instead of actions
   if (isStudent && activeReviewAssignment && activeReviewAssignment.completed_at) {
-    return <></>;
+    return (
+      <HStack w="100%" alignItems="center" justifyContent="space-between">
+        {activeReviewAssignment.completed_by && rubric && (
+          <Text>
+            {rubric.name} completed on{" "}
+            <span data-visual-test="blackout">
+              {formatDate(activeReviewAssignment.completed_at, "MM/dd/yyyy hh:mm a")}
+            </span>{" "}
+            by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
+          </Text>
+        )}
+      </HStack>
+    );
   }
 
   return (
@@ -588,14 +599,16 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   );
 }
 
-function CompletedReviewHistory() {
+function CompletedReviewHistory({ excludeReviewAssignmentId }: { excludeReviewAssignmentId?: number }) {
   const submission = useSubmission();
   const myAssignedReviews = useMyReviewAssignments(submission?.id);
   return (
     <>
-      {myAssignedReviews.map((ra) => {
-        return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
-      })}
+      {myAssignedReviews
+        .filter((ra) => ra.id !== excludeReviewAssignmentId)
+        .map((ra) => {
+          return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
+        })}
     </>
   );
 }
@@ -629,7 +642,13 @@ export default function SubmissionReviewToolbar() {
         <ReviewAssignmentActions />
       </VStack>
       {/* Only show completed history when NOT actively working on another review */}
-      {!hasActiveIncompleteReview && <CompletedReviewHistory />}
+      {!hasActiveIncompleteReview && (
+        <CompletedReviewHistory
+          excludeReviewAssignmentId={
+            activeReviewAssignment && activeReviewAssignment.completed_at ? activeReviewAssignmentId : undefined
+          }
+        />
+      )}
     </Box>
   );
 }

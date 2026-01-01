@@ -12,7 +12,7 @@ import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
-import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
+import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTableControllerValueById } from "@/lib/TableController";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
@@ -20,7 +20,7 @@ import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Te
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { FaEye, FaEyeSlash, FaPencilAlt, FaReply, FaThumbtack } from "react-icons/fa";
+import { FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
@@ -105,12 +105,12 @@ function ThreadActions({
     await discussionThreadTeasers.update(thread.id, {
       pinned: newPinnedStatus
     });
-  }, [thread.id, thread.pinned, thread.class_id, discussionThreadTeasers]);
+  }, [thread.id, thread.pinned, discussionThreadTeasers]);
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
-      <Tooltip content="Watch">
-        <ThreadWatchButton thread={thread} />
+      <Tooltip content="Follow">
+        <ThreadFollowButton thread={thread} />
       </Tooltip>
       <Tooltip content="Like">
         <DiscussionThreadLikeButton thread={thread} />
@@ -150,8 +150,8 @@ function ThreadActions({
   );
 }
 
-function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
-  const { status, setThreadWatchStatus } = useDiscussionThreadWatchStatus(thread.id);
+function ThreadFollowButton({ thread }: { thread: DiscussionThreadType }) {
+  const { status, setThreadWatchStatus } = useDiscussionThreadFollowStatus(thread.id);
   return (
     <Button
       variant="ghost"
@@ -160,8 +160,8 @@ function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
         setThreadWatchStatus(!status);
       }}
     >
-      {status ? "Unwatch" : "Watch"}
-      {status ? <FaEyeSlash /> : <FaEye />}
+      {status ? "Unfollow" : "Follow"}
+      {status ? <FaStar /> : <FaRegStar />}
     </Button>
   );
 }
@@ -282,10 +282,11 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
 
 export default function ThreadView() {
   const { root_id } = useParams();
+  const rootId = Number.parseInt(root_id as string);
   return (
     <Box width="100%">
-      <DiscussionThreadsControllerProvider root_id={Number.parseInt(root_id as string)}>
-        <DiscussionPostWithChildren root_id={Number.parseInt(root_id as string)} />
+      <DiscussionThreadsControllerProvider root_id={rootId}>
+        <DiscussionPostWithChildren root_id={rootId} />
       </DiscussionThreadsControllerProvider>
     </Box>
   );

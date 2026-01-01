@@ -8,6 +8,7 @@ import { createClient } from "@/utils/supabase/client";
 import { CourseController, useCourseController } from "./useCourseController";
 import { Spinner } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
+import { toaster } from "@/components/ui/toaster";
 
 const TRACE_WHAT_IF_CALCULATIONS = false;
 
@@ -68,6 +69,8 @@ class GradebookWhatIfController {
   private _subscribers: (() => void)[] = [];
   private _gradebookUnsubscribe: (() => void) | null = null;
   private _assignments: AssignmentForStudentDashboard[] = [];
+  // Track shown errors to avoid spamming the user with duplicate toasts (scoped per controller instance)
+  private _shownExpressionErrors = new Set<string>();
 
   constructor(
     private gradebookController: GradebookController,
@@ -410,7 +413,7 @@ class GradebookWhatIfController {
             }
 
             //Track not released values
-            if (!ret.released && !ret.is_private) {
+            if (!ret.released && !ret.is_private && (ret.score === null || ret.score === undefined)) {
               if (!context.incomplete_values) {
                 context.incomplete_values = {};
               }
@@ -639,24 +642,39 @@ class GradebookWhatIfController {
         }
         return value <= threshold ? 1 : 0;
       };
-      imports["min"] = (...values: (number | GradebookColumnStudentWithMaxScore)[]) => {
-        const validValues = values
-          .filter((v) => {
-            if (isGradebookColumnStudent(v)) {
-              return v.score !== undefined;
+      // Helper to flatten and extract scalar values from mixed inputs (numbers, GradebookColumnStudent, arrays, matrices)
+      const extractScalarValues = (values: unknown[]): number[] => {
+        const result: number[] = [];
+        for (const v of values) {
+          if (v === null || v === undefined) continue;
+          if (typeof v === "number") {
+            result.push(v);
+          } else if (isGradebookColumnStudent(v)) {
+            if (v.score !== undefined && v.score !== null) {
+              result.push(v.score);
             }
-            return v !== undefined;
-          })
-          .map((v) => {
-            if (isGradebookColumnStudent(v)) {
-              return v.score;
-            }
-            return v;
-          });
+          } else if (isDenseMatrix(v)) {
+            result.push(...extractScalarValues(v.toArray()));
+          } else if (Array.isArray(v)) {
+            result.push(...extractScalarValues(v));
+          }
+        }
+        return result;
+      };
+
+      imports["min"] = (...values: unknown[]) => {
+        const validValues = extractScalarValues(values);
         if (validValues.length === 0) {
           return undefined;
         }
         return Math.min(...validValues);
+      };
+      imports["max"] = (...values: unknown[]) => {
+        const validValues = extractScalarValues(values);
+        if (validValues.length === 0) {
+          return undefined;
+        }
+        return Math.max(...validValues);
       };
       imports["larger"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
         if (isGradebookColumnStudent(value)) {
@@ -811,9 +829,40 @@ class GradebookWhatIfController {
             scope: new Sentry.Scope(),
             class_id: this.gradebookController.class_id
           };
-          const result = instrumented.evaluate({
-            context: context
-          });
+          let result;
+          let evalError: Error | null = null;
+          try {
+            result = instrumented.evaluate({
+              context: context
+            });
+          } catch (err) {
+            evalError = err instanceof Error ? err : new Error(String(err));
+            // Log to Sentry but don't crash the app
+            Sentry.captureException(err, {
+              extra: {
+                columnId,
+                policy,
+                columnSlug: column.slug,
+                expression: column.score_expression
+              }
+            });
+            // Show toast only once per column to avoid spamming the user
+            const errorKey = `${columnId}`;
+            if (!this._shownExpressionErrors.has(errorKey)) {
+              this._shownExpressionErrors.add(errorKey);
+              toaster.create({
+                title: "Grade calculation error",
+                description: `Unable to calculate "${column.name || column.slug}". We've been notified and are looking into it.`,
+                type: "warning",
+                duration: 8000
+              });
+            }
+          }
+          // If evaluation failed, skip processing this policy
+          if (evalError) {
+            scores[policy as "report_only" | "assume_max" | "assume_zero"] = undefined;
+            continue;
+          }
           let score: number;
           if (typeof result === "object" && result !== null && "entries" in result) {
             const lastEntry = result.entries[result.entries.length - 1];
@@ -901,6 +950,8 @@ class GradebookWhatIfController {
       this._gradebookUnsubscribe();
       this._gradebookUnsubscribe = null;
     }
+    // Clear error tracking Set when controller is cleaned up
+    this._shownExpressionErrors.clear();
   }
 }
 

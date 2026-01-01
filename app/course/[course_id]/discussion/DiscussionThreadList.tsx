@@ -7,6 +7,7 @@ import { MenuContent, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  useAssignments,
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
   useDiscussionThreadTeasers,
@@ -35,7 +36,7 @@ import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
 import { Fragment, useMemo, useState } from "react";
-import { FaFilter, FaPlus, FaThumbsUp, FaThumbtack } from "react-icons/fa";
+import { FaFilter, FaHeart, FaPlus, FaThumbtack } from "react-icons/fa";
 
 interface Props {
   thread_id: number;
@@ -45,6 +46,8 @@ interface Props {
 
 export const DiscussionThreadTeaser = (props: Props) => {
   const thread = useDiscussionThreadTeaser(props.thread_id);
+  const topics = useDiscussionTopics();
+  const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
   const { root_id } = useParams();
   const selected = root_id ? props.thread_id === Number.parseInt(root_id as string) : false;
   const is_answered = thread?.answer != undefined;
@@ -74,6 +77,11 @@ export const DiscussionThreadTeaser = (props: Props) => {
           <Stack spaceY="0" fontSize="sm" flex="1" truncate>
             <HStack>
               {thread?.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="3" />}
+              {topic && (
+                <Badge colorPalette={topic.color} variant="subtle" flexShrink={0}>
+                  {topic.topic}
+                </Badge>
+              )}
               <Text
                 fontWeight="medium"
                 flex="1"
@@ -118,7 +126,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
                 </Text>
                 {thread?.likes_count != null && thread.likes_count > 0 && (
                   <HStack alignItems="center">
-                    <Icon as={FaThumbsUp} color="fg.subtle" boxSize="3" />
+                    <Icon as={FaHeart} color="fg.subtle" boxSize="3" />
                     <Text fontSize="xs" color="text.muted">
                       {thread.likes_count}
                     </Text>
@@ -147,10 +155,20 @@ export default function DiscussionThreadList() {
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const list = useDiscussionThreadTeasers();
   const topics = useDiscussionTopics();
+  const assignments = useAssignments();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOption, setFilterOption] = useState("all");
   const [sortOption, setSortOption] = useState("newest");
+
+  /**
+   * Create a map of assignment IDs to assignment titles for display in filter.
+   */
+  const assignmentMap = useMemo(() => {
+    const map = new Map<number, string>();
+    assignments.forEach((a) => map.set(a.id, a.title));
+    return map;
+  }, [assignments]);
 
   const processedList = useMemo(() => {
     let filteredList = list;
@@ -226,17 +244,50 @@ export default function DiscussionThreadList() {
     }
   };
 
+  /**
+   * Type definition for filter collection items.
+   * Includes an optional `disabled` flag used to mark divider/separator items
+   * as non-selectable.
+   */
+  type FilterItem = {
+    value: string;
+    label: string;
+    disabled?: boolean;
+  };
+
   // Create collections for Select components
+  // Group topics into general topics and assignment-linked topics for better organization
   const filterCollection = useMemo(() => {
-    const items = [
+    // Separate topics into general (no assignment link) and assignment-linked
+    const generalTopics = topics?.filter((t) => !t.assignment_id).sort((a, b) => a.ordinal - b.ordinal) || [];
+    const assignmentTopics = topics?.filter((t) => t.assignment_id).sort((a, b) => a.ordinal - b.ordinal) || [];
+
+    const items: FilterItem[] = [
       { value: "all", label: "All Threads" },
       { value: "unanswered", label: "Unanswered Questions" },
       { value: "answered", label: "Answered Questions" },
-      { value: "my_posts", label: "My Posts" },
-      ...(topics?.map((topic) => ({ value: `topic-${topic.id}`, label: topic.topic })) || [])
+      { value: "my_posts", label: "My Posts" }
     ];
+
+    // Add general topics
+    generalTopics.forEach((topic) => {
+      items.push({ value: `topic-${topic.id}`, label: topic.topic });
+    });
+
+    // Add assignment-linked topics with assignment name in label
+    if (assignmentTopics.length > 0) {
+      // Divider item is marked as disabled to prevent selection.
+      // Uses a special "divider-" prefix for identification in rendering logic.
+      items.push({ value: "divider-assignment", label: "Assignment Topics", disabled: true });
+      assignmentTopics.forEach((topic) => {
+        const assignmentTitle = topic.assignment_id ? assignmentMap.get(topic.assignment_id) : undefined;
+        const label = assignmentTitle ? `${topic.topic} (${assignmentTitle})` : topic.topic;
+        items.push({ value: `topic-${topic.id}`, label });
+      });
+    }
+
     return createListCollection({ items });
-  }, [topics]);
+  }, [topics, assignmentMap]);
 
   const sortCollection = useMemo(() => {
     const items = [
@@ -265,7 +316,7 @@ export default function DiscussionThreadList() {
           </Button>
           <MenuRoot open={isFilterOpen} onOpenChange={(e) => setIsFilterOpen(e.open)}>
             <MenuTrigger asChild>
-              <Button size="sm" variant="outline" colorPalette="gray">
+              <Button size="sm" variant="outline" colorPalette="gray" data-testid="filter-threads-button">
                 <Icon as={FaFilter} />
               </Button>
             </MenuTrigger>
@@ -282,12 +333,19 @@ export default function DiscussionThreadList() {
                     collection={filterCollection}
                     size="sm"
                     value={filterOption ? [filterOption] : []}
-                    onValueChange={(details) => setFilterOption(details.value[0] || "all")}
+                    onValueChange={(details) => {
+                      const newValue = details.value[0];
+                      // Safeguard: skip divider values to prevent invalid filter state
+                      if (newValue && newValue.startsWith("divider-")) {
+                        return;
+                      }
+                      setFilterOption(newValue || "all");
+                    }}
                     width="100%"
                   >
                     <Select.Label display="none">Filter discussion threads</Select.Label>
                     <Select.Control>
-                      <Select.Trigger>
+                      <Select.Trigger data-testid="filter-dropdown">
                         <Select.ValueText placeholder="Filter by..." />
                       </Select.Trigger>
                       <Select.IndicatorGroup>
@@ -297,16 +355,41 @@ export default function DiscussionThreadList() {
                     <Portal>
                       <Select.Positioner>
                         <Select.Content>
-                          {filterCollection.items.map((item) => (
-                            <Select.Item key={item.value} item={item}>
-                              {item.label}
-                              <Select.ItemIndicator />
-                            </Select.Item>
-                          ))}
+                          {filterCollection.items.map((item) => {
+                            // Render divider items as visual separators (disabled, non-selectable)
+                            const isDivider = item.value.startsWith("divider-");
+                            if (isDivider) {
+                              return (
+                                <Box
+                                  key={item.value}
+                                  role="separator"
+                                  aria-disabled="true"
+                                  py="1.5"
+                                  px="2"
+                                  cursor="default"
+                                  userSelect="none"
+                                >
+                                  <HStack gap="2">
+                                    <Separator flex="1" />
+                                    <Text fontSize="xs" fontWeight="medium" color="fg.muted">
+                                      {item.label}
+                                    </Text>
+                                    <Separator flex="1" />
+                                  </HStack>
+                                </Box>
+                              );
+                            }
+                            return (
+                              <Select.Item key={item.value} item={item}>
+                                {item.label}
+                                <Select.ItemIndicator />
+                              </Select.Item>
+                            );
+                          })}
                         </Select.Content>
                       </Select.Positioner>
                     </Portal>
-                    <Select.HiddenSelect aria-label="Filter discussion threads" />
+                    <Select.HiddenSelect />
                   </Select.Root>
 
                   <Select.Root

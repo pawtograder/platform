@@ -1,12 +1,13 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import {
+  useGraderPseudonymousMode,
   useRubricCheck,
   useRubricChecksByRubric,
   useRubricCriteria,
   useRubricCriteriaByRubric,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
   useSubmissionController,
@@ -25,8 +26,11 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
-import { common, createStarryNight } from "@wooorm/starry-night";
-import "@wooorm/starry-night/style/both";
+// Dynamic import of starry-night to reduce build memory usage
+// Note: The actual loading happens in useEffect, but we need to avoid static import
+// Derive the type from a type-level import expression to avoid isolatedModules issues
+type StarryNightModule = typeof import("@wooorm/starry-night");
+type StarryNightHighlighter = Awaited<ReturnType<StarryNightModule["createStarryNight"]>>;
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
 import { Element, ElementContent, Properties, Root, RootContent } from "hast";
@@ -115,7 +119,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   const submissionReview = useActiveSubmissionReview();
   const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
 
-  const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
+  const [starryNight, setStarryNight] = useState<StarryNightHighlighter | undefined>(undefined);
   const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
     lineNumber: 0,
     top: 0,
@@ -153,7 +157,14 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
 
   useEffect(() => {
     async function highlight() {
-      const highlighter = await createStarryNight(common);
+      // Dynamic import to reduce build memory usage
+      const starryNightModule = await import("@wooorm/starry-night");
+      // Load CSS styles dynamically - ignore TypeScript error as this is a CSS import
+      // @ts-expect-error - CSS imports don't have TypeScript declarations
+      await import("@wooorm/starry-night/style/both").catch(() => {
+        // Ignore import errors for CSS - styles may already be loaded
+      });
+      const highlighter = await starryNightModule.createStarryNight(starryNightModule.common);
       setStarryNight(highlighter);
     }
     highlight();
@@ -471,6 +482,12 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                   <HStack gap={0} flexWrap="wrap">
                     <Text fontSize="sm" fontStyle="italic" color="fg.muted">
                       {commentAuthor?.name}
+                      {isGraderOrInstructor && commentAuthor?.real_name && (
+                        <Text as="span" fontSize="xs">
+                          {" "}
+                          ({commentAuthor.real_name})
+                        </Text>
+                      )}
                     </Text>
                     {comment.submission_review_id && (
                       <ReviewRoundTag submission_review_id={comment.submission_review_id} />
@@ -522,6 +539,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
+  const isStaff = useIsGraderOrInstructor();
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -531,6 +549,9 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
   if (!authorProfile || !comment) {
     return <Skeleton height="100px" width="100%" />;
   }
+
+  // Show real name in parentheses for staff when viewing pseudonymous profiles
+  const realNameSuffix = isStaff && authorProfile?.real_name ? ` (${authorProfile.real_name})` : "";
 
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
@@ -555,7 +576,14 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
             borderColor="border.emphasized"
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
-              <Text fontWeight="bold">{authorProfile?.name}</Text>
+              <Text fontWeight="bold">
+                {authorProfile?.name}
+                {realNameSuffix && (
+                  <Text as="span" fontWeight="normal" color="fg.muted" fontSize="xs">
+                    {realNameSuffix}
+                  </Text>
+                )}
+              </Text>
               <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
@@ -638,6 +666,11 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const review = useActiveSubmissionReview();
   const rubric = useRubricWithParts(review?.rubric_id);
   const [selectOpen, setSelectOpen] = useState(true);
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -669,9 +702,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
         )
         .map((check: RubricCheck) => check.rubric_criteria_id);
       // Using the effective rubric (either manually selected or default)
-      criteriaWithAnnotationChecks = rubricCriteria.filter((criteria: RubricCriteria) =>
-        annotationChecks.includes(criteria.id)
-      );
+      criteriaWithAnnotationChecks = rubricCriteria
+        .filter((criteria: RubricCriteria) => annotationChecks.includes(criteria.id))
+        .sort((a, b) => a.ordinal - b.ordinal);
     }
 
     const criteriaOptions: RubricCriteriaSelectGroupOption[] =
@@ -687,6 +720,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 (check.annotation_target === "file" || check.annotation_target === null) &&
                 check.rubric_criteria_id === criteria.id
             )
+            .sort((a, b) => a.ordinal - b.ordinal)
             .map((check) => {
               // Count existing annotations for this specific check
               const existingAnnotationsForCheck = existingComments.filter(
@@ -970,7 +1004,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
               }
               allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
               defaultSingleLine={true}
-              sendMessage={async (message, profile_id) => {
+              sendMessage={async (message) => {
                 let points = selectedCheckOption.check?.points;
                 if (selectedSubOption !== null) {
                   points = selectedSubOption.points;
@@ -994,7 +1028,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   class_id: file.class_id,
                   submission_file_id: file.id,
                   submission_id: submission.id,
-                  author: profile_id,
+                  // Use the determined author profile based on grader pseudonymous mode
+                  author: authorProfileId,
                   released: review ? review.released : true,
                   points: points ?? null,
                   submission_review_id: submissionReviewId ?? null,

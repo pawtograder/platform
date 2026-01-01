@@ -66,6 +66,7 @@ export default function ImportGradebookColumns() {
   const [studentIdentifierCol, setStudentIdentifierCol] = useState<number | null>(null);
   const [studentIdentifierType, setStudentIdentifierType] = useState<"email" | "sid">("email");
   const [columnMappings, setColumnMappings] = useState<Record<number, number | "new" | "ignore">>({}); // import col idx -> existing col id or 'new'
+  const [autoMatchedColumns, setAutoMatchedColumns] = useState<Set<number>>(new Set()); // Track which columns were auto-matched
   const [newColumnMaxScores, setNewColumnMaxScores] = useState<Record<number, number>>({}); // import col idx -> max score for new columns
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const studentRoster = useStudentRoster();
@@ -81,41 +82,39 @@ export default function ImportGradebookColumns() {
       // 1. For new columns, insert them and get their IDs
       const newCols = previewData.previewCols.filter((col) => col.isNew);
       let sortOrder = existingColumnsNotFromHook.length;
-      await Promise.all(
-        newCols.map(async (col) => {
-          const randomChars = Math.random().toString(36).substring(2, 10);
-          const slug =
-            col.name
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, "-")
-              .replace(/(^-|-$)/g, "") +
-            "-" +
-            randomChars;
-          const maxScore = col.maxScore ?? 100;
+      for (const col of newCols) {
+        const randomChars = Math.random().toString(36).substring(2, 10);
+        const slug =
+          col.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "") +
+          "-" +
+          randomChars;
+        const maxScore = col.maxScore ?? 100;
 
-          const insertObj = {
-            name: col.name + ` (Imported ${new Date().toLocaleDateString()} #${randomChars})`,
-            gradebook_id: gradebookController.gradebook_id,
-            class_id: gradebookController.class_id,
-            external_data: {
-              source: "csv",
-              fileName: importJob?.filename,
-              date: new Date().toISOString(),
-              creator: private_profile_id
-            },
-            max_score: maxScore,
-            description: null,
-            dependencies: null,
-            slug,
-            sort_order: sortOrder++
-          };
-          const { data, error } = await supabase.from("gradebook_columns").insert(insertObj).select().single();
-          if (error) {
-            throw new Error(error.message);
-          }
-          col.newColId = data.id;
-        })
-      );
+        const insertObj = {
+          name: col.name,
+          gradebook_id: gradebookController.gradebook_id,
+          class_id: gradebookController.class_id,
+          external_data: {
+            source: "csv",
+            fileName: importJob?.filename,
+            date: new Date().toISOString(),
+            creator: private_profile_id
+          },
+          max_score: maxScore,
+          description: null,
+          dependencies: null,
+          slug,
+          sort_order: sortOrder++
+        };
+        const { data, error } = await supabase.from("gradebook_columns").insert(insertObj).select().single();
+        if (error) {
+          throw new Error(error.message);
+        }
+        col.newColId = data.id;
+      }
       // 1b. For each OLD column that was created by an import, update its expression to refer to the new file
       await Promise.all(
         existingColumnsNotFromHook
@@ -230,6 +229,21 @@ export default function ImportGradebookColumns() {
         title: "Import successful!",
         description: "Gradebook columns and scores have been imported."
       });
+      // Reset all state after successful import
+      setImportJob(undefined);
+      setStep(1);
+      setStudentIdentifierCol(null);
+      setStudentIdentifierType("email");
+      setColumnMappings({});
+      setAutoMatchedColumns(new Set());
+      setNewColumnMaxScores({});
+      setPreviewData(null);
+      setExpandedSections({
+        hasChanges: true,
+        noChangesInFile: false,
+        notInFile: false,
+        noRosterMatch: false
+      });
       setDialogOpen(false);
     } catch (err: unknown) {
       const error = err as Error;
@@ -255,13 +269,16 @@ export default function ImportGradebookColumns() {
     reader.onload = (e) => {
       const csvText = e.target?.result as string;
       const parsedRows: string[][] = parse(csvText, {
-        skip_empty_lines: true
+        skip_empty_lines: true,
+        relax_column_count: true
       });
 
-      // Trim all values in all cells and filter out rows where all values are blank or just whitespace
+      // Trim all values in all cells and filter out empty rows (rows where all values are blank or just whitespace)
       const rows = parsedRows
+        .filter((row) => row && row.length > 0) // Skip null/undefined rows and empty arrays
         .map((row) => row.map((cell) => (cell ?? "").trim()))
         .filter((row) => {
+          // Skip rows where all cells are empty or whitespace
           return row.some((cell) => cell.length > 0);
         });
 
@@ -297,6 +314,7 @@ export default function ImportGradebookColumns() {
       // Auto-detect exact matches between CSV columns and existing gradebook columns
       // Default all columns to "ignore" unless they match
       const autoMappings: Record<number, number | "new" | "ignore"> = {};
+      const autoMatchedIndices = new Set<number>();
       header.forEach((csvColName, idx) => {
         if (idx === currentIdCol) return; // Skip identifier column
 
@@ -308,6 +326,7 @@ export default function ImportGradebookColumns() {
 
         if (exactMatch) {
           autoMappings[idx] = exactMatch.id;
+          autoMatchedIndices.add(idx);
         } else {
           // Default to ignored if no match found
           autoMappings[idx] = "ignore";
@@ -318,6 +337,7 @@ export default function ImportGradebookColumns() {
       // Use a ref-like check by getting current state via a function
       setColumnMappings((currentMappings) => {
         if (Object.keys(currentMappings).length === 0) {
+          setAutoMatchedColumns(autoMatchedIndices);
           return autoMappings;
         }
         return currentMappings;
@@ -513,7 +533,7 @@ export default function ImportGradebookColumns() {
                                   >
                                     {col}
                                   </Text>
-                                  {isMapped && isExisting && matchedColumn && (
+                                  {isMapped && isExisting && matchedColumn && autoMatchedColumns.has(idx) && (
                                     <Box
                                       px={2}
                                       py={0.5}
@@ -538,6 +558,12 @@ export default function ImportGradebookColumns() {
                                           ...m,
                                           [idx]: newMapping
                                         }));
+                                        // Remove from auto-matched set when user manually changes
+                                        setAutoMatchedColumns((prev) => {
+                                          const next = new Set(prev);
+                                          next.delete(idx);
+                                          return next;
+                                        });
                                         // Set default max score when selecting "new"
                                         if (e.target.value === "new") {
                                           setNewColumnMaxScores((scores) => ({
@@ -595,7 +621,7 @@ export default function ImportGradebookColumns() {
                                 )}
                                 {isIgnored && (
                                   <Text fontSize="sm" color="fg.muted" ml="120px" fontStyle="italic">
-                                    This column will be ignored
+                                    Map to an existing column or create a new column
                                   </Text>
                                 )}
                               </VStack>
@@ -911,12 +937,26 @@ export default function ImportGradebookColumns() {
                                   );
                                 }
 
-                                if (
-                                  col.isNew ||
+                                // Check if this is a new entry (has new value but no old value)
+                                const isNewEntry = !hasOldValue && hasNewValue;
+
+                                // Check if values are unchanged
+                                const isUnchanged =
                                   s.oldValue === null ||
                                   s.oldValue === undefined ||
-                                  String(s.oldValue).trim() === String(s.newValue).trim()
-                                ) {
+                                  String(s.oldValue).trim() === String(s.newValue).trim();
+
+                                if (isNewEntry) {
+                                  // New entry - highlight in green/bold
+                                  return (
+                                    <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
+                                      <Text as="b" color="fg.success">
+                                        {s.newValue}
+                                      </Text>
+                                    </Table.Cell>
+                                  );
+                                } else if (isUnchanged) {
+                                  // Unchanged or no value
                                   return (
                                     <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
                                       {s.newValue !== null && s.newValue !== undefined && s.newValue !== ""
@@ -925,6 +965,7 @@ export default function ImportGradebookColumns() {
                                     </Table.Cell>
                                   );
                                 } else {
+                                  // Updated value - show old value struck through and new value in green/bold
                                   return (
                                     <Table.Cell key={colIdx} style={{ width: gradeColWidth, minWidth: gradeColWidth }}>
                                       <s>{s.oldValue}</s>{" "}

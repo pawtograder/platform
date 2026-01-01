@@ -17,7 +17,6 @@ import SyncStaffTeamButton from "./syncStaffTeamButton";
 export default async function ManageAssignmentsPage({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
   const client = await createClient();
-  const { data: classes } = await client.from("classes").select("*").eq("id", Number(course_id));
   const assignments = await client
     .from("assignment_overview")
     .select("*")

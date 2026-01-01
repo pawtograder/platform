@@ -63,6 +63,16 @@ export function useSelfReviewSettings() {
   return controller.assignment.assignment_self_review_settings;
 }
 
+/**
+ * Returns whether grader pseudonymous mode is enabled for this assignment.
+ * When enabled, graders' comments should use their public profile (pseudonym)
+ * instead of their private profile (real name).
+ */
+export function useGraderPseudonymousMode() {
+  const controller = useAssignmentController();
+  return controller.assignment.grader_pseudonymous_mode || false;
+}
+
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
   return useTableControllerValueById(controller.rubricChecksController, rubric_check_id);
@@ -563,6 +573,15 @@ export function useAssignmentController() {
   const ctx = useContext(AssignmentContext);
   if (!ctx) throw new Error("useAssignmentController must be used within AssignmentProvider");
   return ctx.assignmentController;
+}
+
+/**
+ * Returns the current assignment data from the AssignmentController.
+ * This hook provides access to assignment properties like release_date, regrade_deadlin, etc.
+ */
+export function useAssignmentData() {
+  const controller = useAssignmentController();
+  return controller.assignment;
 }
 
 // --- Provider ---

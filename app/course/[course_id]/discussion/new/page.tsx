@@ -6,9 +6,10 @@ import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
-import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
+import { useAssignments, useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
+import { Box, Fieldset, Flex, Heading, Icon, Input, Text, Separator } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
+import { useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
@@ -43,7 +44,30 @@ export default function NewDiscussionThread() {
   });
 
   const topics = useDiscussionTopics();
+  const assignments = useAssignments();
   const topicId = watch("topic_id");
+
+  /**
+   * Create a map of assignment IDs to assignment titles for display.
+   */
+  const assignmentMap = useMemo(() => {
+    const map = new Map<number, string>();
+    assignments.forEach((a) => map.set(a.id, a.title));
+    return map;
+  }, [assignments]);
+
+  /**
+   * Group topics into general topics (no assignment link) and assignment-linked topics.
+   * Sort each group by ordinal for consistent display order.
+   */
+  const { generalTopics, assignmentTopics } = useMemo(() => {
+    if (!topics) return { generalTopics: [], assignmentTopics: [] };
+
+    const general = topics.filter((t) => !t.assignment_id).sort((a, b) => a.ordinal - b.ordinal);
+    const assignment = topics.filter((t) => t.assignment_id).sort((a, b) => a.ordinal - b.ordinal);
+
+    return { generalTopics: general, assignmentTopics: assignment };
+  }, [topics]);
 
   const onSubmit = handleSubmit(async (data) => {
     try {
@@ -99,8 +123,9 @@ export default function NewDiscussionThread() {
                         value={field.value}
                         onChange={field.onChange}
                       >
+                        {/* General Topics Section */}
                         <Flex flexWrap="wrap" gap="2" w="100%">
-                          {topics?.map((topic) => (
+                          {generalTopics.map((topic) => (
                             <Box key={topic.id} flex="1" minW={{ base: "100%", lg: "40%" }}>
                               <RadioCardItem
                                 w="100%"
@@ -115,6 +140,44 @@ export default function NewDiscussionThread() {
                             </Box>
                           ))}
                         </Flex>
+
+                        {/* Assignment-Linked Topics Section */}
+                        {assignmentTopics.length > 0 && (
+                          <>
+                            <Flex align="center" w="100%" gap="2" my="3">
+                              <Separator flex="1" />
+                              <Text fontSize="sm" color="fg.muted" fontWeight="medium">
+                                Assignment Topics
+                              </Text>
+                              <Separator flex="1" />
+                            </Flex>
+                            <Flex flexWrap="wrap" gap="2" w="100%">
+                              {assignmentTopics.map((topic) => {
+                                const assignmentTitle = topic.assignment_id
+                                  ? assignmentMap.get(topic.assignment_id)
+                                  : undefined;
+                                return (
+                                  <Box key={topic.id} flex="1" minW={{ base: "100%", lg: "40%" }}>
+                                    <RadioCardItem
+                                      w="100%"
+                                      p="0"
+                                      m="0"
+                                      indicator={false}
+                                      colorPalette={topic.color}
+                                      description={
+                                        assignmentTitle
+                                          ? `${topic.description} (${assignmentTitle})`
+                                          : topic.description
+                                      }
+                                      value={topic.id?.toString() || ""}
+                                      label={topic.topic}
+                                    />
+                                  </Box>
+                                );
+                              })}
+                            </Flex>
+                          </>
+                        )}
                       </RadioCardRoot>
                     );
                   }}

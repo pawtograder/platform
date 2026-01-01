@@ -20,10 +20,22 @@ export type Database = {
       pop: {
         Args: { queue_name: string };
         Returns: unknown[];
+        SetofOptions: {
+          from: "*";
+          to: "message_record";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
       };
       read: {
         Args: { n: number; queue_name: string; sleep_seconds: number };
         Returns: unknown[];
+        SetofOptions: {
+          from: "*";
+          to: "message_record";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
       };
       send: {
         Args: { message: Json; queue_name: string; sleep_seconds?: number };
@@ -724,6 +736,7 @@ export type Database = {
           description: string | null;
           due_date: string;
           gradebook_column_id: number | null;
+          grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
@@ -736,6 +749,7 @@ export type Database = {
           meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
+          regrade_deadline: string | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
@@ -756,6 +770,7 @@ export type Database = {
           description?: string | null;
           due_date: string;
           gradebook_column_id?: number | null;
+          grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -768,6 +783,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
@@ -788,6 +804,7 @@ export type Database = {
           description?: string | null;
           due_date?: string;
           gradebook_column_id?: number | null;
+          grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -800,6 +817,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
@@ -852,6 +870,59 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_for_student_dashboard";
             referencedColumns: ["assignment_self_review_setting_id"];
+          }
+        ];
+      };
+      async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Json;
+          error_message: string | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Json | null;
+          log_id: number | null;
+          method: Database["public"]["Enums"]["github_async_method"];
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method: Database["public"]["Enums"]["github_async_method"];
+          original_msg_id?: number | null;
+          retry_count: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method?: Database["public"]["Enums"]["github_async_method"];
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "async_worker_dlq_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -1097,6 +1168,115 @@ export type Database = {
           }
         ];
       };
+      calendar_events: {
+        Row: {
+          calendar_type: string;
+          change_announced_at: string | null;
+          class_id: number;
+          created_at: string;
+          description: string | null;
+          end_announced_at: string | null;
+          end_time: string;
+          id: number;
+          location: string | null;
+          organizer_name: string | null;
+          queue_name: string | null;
+          raw_ics_data: Json | null;
+          start_announced_at: string | null;
+          start_time: string;
+          title: string;
+          uid: string;
+          updated_at: string;
+        };
+        Insert: {
+          calendar_type: string;
+          change_announced_at?: string | null;
+          class_id: number;
+          created_at?: string;
+          description?: string | null;
+          end_announced_at?: string | null;
+          end_time: string;
+          id?: number;
+          location?: string | null;
+          organizer_name?: string | null;
+          queue_name?: string | null;
+          raw_ics_data?: Json | null;
+          start_announced_at?: string | null;
+          start_time: string;
+          title: string;
+          uid: string;
+          updated_at?: string;
+        };
+        Update: {
+          calendar_type?: string;
+          change_announced_at?: string | null;
+          class_id?: number;
+          created_at?: string;
+          description?: string | null;
+          end_announced_at?: string | null;
+          end_time?: string;
+          id?: number;
+          location?: string | null;
+          organizer_name?: string | null;
+          queue_name?: string | null;
+          raw_ics_data?: Json | null;
+          start_announced_at?: string | null;
+          start_time?: string;
+          title?: string;
+          uid?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendar_events_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      calendar_sync_state: {
+        Row: {
+          calendar_type: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          last_etag: string | null;
+          last_hash: string | null;
+          last_sync_at: string | null;
+          sync_error: string | null;
+        };
+        Insert: {
+          calendar_type: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          last_etag?: string | null;
+          last_hash?: string | null;
+          last_sync_at?: string | null;
+          sync_error?: string | null;
+        };
+        Update: {
+          calendar_type?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          last_etag?: string | null;
+          last_hash?: string | null;
+          last_sync_at?: string | null;
+          sync_error?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "calendar_sync_state_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       class_metrics_totals: {
         Row: {
           active_graders_total: number | null;
@@ -1248,13 +1428,51 @@ export type Database = {
           }
         ];
       };
+      class_staff_settings: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          setting_key: string;
+          setting_value: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          setting_key: string;
+          setting_value?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          setting_key?: string;
+          setting_value?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_staff_settings_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       classes: {
         Row: {
           archived: boolean | null;
           course_title: string | null;
           created_at: string;
           description: string | null;
+          discord_channel_group_id: string | null;
+          discord_server_id: string | null;
           end_date: string | null;
+          events_ics_url: string | null;
           features: Json | null;
           github_org: string | null;
           gradebook_id: number | null;
@@ -1262,6 +1480,7 @@ export type Database = {
           is_demo: boolean;
           late_tokens_per_student: number;
           name: string | null;
+          office_hours_ics_url: string | null;
           slug: string | null;
           start_date: string | null;
           term: number | null;
@@ -1272,7 +1491,10 @@ export type Database = {
           course_title?: string | null;
           created_at?: string;
           description?: string | null;
+          discord_channel_group_id?: string | null;
+          discord_server_id?: string | null;
           end_date?: string | null;
+          events_ics_url?: string | null;
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
@@ -1280,6 +1502,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
           term?: number | null;
@@ -1290,7 +1513,10 @@ export type Database = {
           course_title?: string | null;
           created_at?: string;
           description?: string | null;
+          discord_channel_group_id?: string | null;
+          discord_server_id?: string | null;
           end_date?: string | null;
+          events_ics_url?: string | null;
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
@@ -1298,6 +1524,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
           term?: number | null;
@@ -1310,6 +1537,311 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "gradebooks";
             referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Json;
+          error_message: string | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Json | null;
+          log_id: number | null;
+          method: string;
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method: string;
+          original_msg_id?: number | null;
+          retry_count: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          log_id?: number | null;
+          method?: string;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_async_worker_dlq_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_channels: {
+        Row: {
+          channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          class_id: number;
+          created_at: string;
+          discord_channel_id: string;
+          id: number;
+          resource_id: number | null;
+        };
+        Insert: {
+          channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          class_id: number;
+          created_at?: string;
+          discord_channel_id: string;
+          id?: number;
+          resource_id?: number | null;
+        };
+        Update: {
+          channel_type?: Database["public"]["Enums"]["discord_channel_type"];
+          class_id?: number;
+          created_at?: string;
+          discord_channel_id?: string;
+          id?: number;
+          resource_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_channels_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_invites: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          expires_at: string;
+          guild_id: string;
+          id: number;
+          invite_code: string;
+          invite_url: string;
+          used: boolean;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          expires_at: string;
+          guild_id: string;
+          id?: number;
+          invite_code: string;
+          invite_url: string;
+          used?: boolean;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          expires_at?: string;
+          guild_id?: string;
+          id?: number;
+          invite_code?: string;
+          invite_url?: string;
+          used?: boolean;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_invites_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discord_invites_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      discord_messages: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          discord_channel_id: string;
+          discord_message_id: string;
+          id: number;
+          resource_id: number;
+          resource_type: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          discord_channel_id: string;
+          discord_message_id: string;
+          id?: number;
+          resource_id: number;
+          resource_type: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          discord_channel_id?: string;
+          discord_message_id?: string;
+          id?: number;
+          resource_id?: number;
+          resource_type?: Database["public"]["Enums"]["discord_resource_type"];
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_messages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discord_roles: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          discord_role_id: string;
+          id: number;
+          role_type: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          discord_role_id: string;
+          id?: number;
+          role_type: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          discord_role_id?: string;
+          id?: number;
+          role_type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_roles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      discussion_digest_items: {
+        Row: {
+          action: string | null;
+          author_name: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          msg_id: number | null;
+          notification_reason: string | null;
+          teaser: string | null;
+          thread_id: number;
+          thread_name: string;
+          thread_url: string | null;
+          topic_id: number | null;
+          user_id: string;
+        };
+        Insert: {
+          action?: string | null;
+          author_name: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          msg_id?: number | null;
+          notification_reason?: string | null;
+          teaser?: string | null;
+          thread_id: number;
+          thread_name: string;
+          thread_url?: string | null;
+          topic_id?: number | null;
+          user_id: string;
+        };
+        Update: {
+          action?: string | null;
+          author_name?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          msg_id?: number | null;
+          notification_reason?: string | null;
+          teaser?: string | null;
+          thread_id?: number;
+          thread_name?: string;
+          thread_url?: string | null;
+          topic_id?: number | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_digest_items_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_digest_items_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      discussion_digest_send_times: {
+        Row: {
+          class_id: number;
+          last_sent_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          last_sent_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          last_sent_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_digest_send_times_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_digest_send_times_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           }
         ];
       };
@@ -1640,38 +2172,134 @@ export type Database = {
           }
         ];
       };
+      discussion_topic_followers: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          following: boolean;
+          id: number;
+          topic_id: number;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          following?: boolean;
+          id?: number;
+          topic_id: number;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          following?: boolean;
+          id?: number;
+          topic_id?: number;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_topic_followers_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topic_followers_topic_id_fkey";
+            columns: ["topic_id"];
+            isOneToOne: false;
+            referencedRelation: "discussion_topics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topic_followers_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discussion_topics: {
         Row: {
+          assignment_id: number | null;
           class_id: number;
           color: string;
           created_at: string;
+          default_follow: boolean;
           description: string;
+          icon: string | null;
           id: number;
           ordinal: number;
           topic: string;
           updated_at: string;
         };
         Insert: {
+          assignment_id?: number | null;
           class_id: number;
           color: string;
           created_at?: string;
+          default_follow?: boolean;
           description: string;
+          icon?: string | null;
           id?: number;
           ordinal?: number;
           topic: string;
           updated_at?: string;
         };
         Update: {
+          assignment_id?: number | null;
           class_id?: number;
           color?: string;
           created_at?: string;
+          default_follow?: boolean;
           description?: string;
+          icon?: string | null;
           id?: number;
           ordinal?: number;
           topic?: string;
           updated_at?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discussion_topics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "discussion_topics_class_id_fkey";
             columns: ["class_id"];
@@ -3613,6 +4241,74 @@ export type Database = {
           }
         ];
       };
+      help_request_work_sessions: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          ended_at: string | null;
+          help_request_id: number;
+          id: number;
+          longest_wait_seconds_at_start: number | null;
+          notes: string | null;
+          queue_depth_at_start: number | null;
+          started_at: string;
+          ta_profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          ended_at?: string | null;
+          help_request_id: number;
+          id?: number;
+          longest_wait_seconds_at_start?: number | null;
+          notes?: string | null;
+          queue_depth_at_start?: number | null;
+          started_at?: string;
+          ta_profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          ended_at?: string | null;
+          help_request_id?: number;
+          id?: number;
+          longest_wait_seconds_at_start?: number | null;
+          notes?: string | null;
+          queue_depth_at_start?: number | null;
+          started_at?: string;
+          ta_profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_work_sessions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_work_sessions_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_work_sessions_ta_profile_id_fkey";
+            columns: ["ta_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_work_sessions_ta_profile_id_fkey";
+            columns: ["ta_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       help_requests: {
         Row: {
           assignee: string | null;
@@ -3885,6 +4581,59 @@ export type Database = {
           }
         ];
       };
+      lab_section_leaders: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          lab_section_id: number;
+          profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          lab_section_id: number;
+          profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          lab_section_id?: number;
+          profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lab_section_leaders_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lab_section_leaders_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lab_section_leaders_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lab_section_leaders_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       lab_section_meetings: {
         Row: {
           cancelled: boolean;
@@ -3942,7 +4691,6 @@ export type Database = {
           description: string | null;
           end_time: string | null;
           id: number;
-          lab_leader_id: string | null;
           meeting_location: string | null;
           meeting_times: string | null;
           name: string;
@@ -3958,7 +4706,6 @@ export type Database = {
           description?: string | null;
           end_time?: string | null;
           id?: number;
-          lab_leader_id?: string | null;
           meeting_location?: string | null;
           meeting_times?: string | null;
           name: string;
@@ -3974,7 +4721,6 @@ export type Database = {
           description?: string | null;
           end_time?: string | null;
           id?: number;
-          lab_leader_id?: string | null;
           meeting_location?: string | null;
           meeting_times?: string | null;
           name?: string;
@@ -3989,20 +4735,99 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
-          },
+          }
+        ];
+      };
+      live_poll_responses: {
+        Row: {
+          created_at: string;
+          id: string;
+          is_submitted: boolean;
+          live_poll_id: string;
+          public_profile_id: string | null;
+          response: Json;
+          submitted_at: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          id?: string;
+          is_submitted?: boolean;
+          live_poll_id: string;
+          public_profile_id?: string | null;
+          response?: Json;
+          submitted_at?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          id?: string;
+          is_submitted?: boolean;
+          live_poll_id?: string;
+          public_profile_id?: string | null;
+          response?: Json;
+          submitted_at?: string | null;
+        };
+        Relationships: [
           {
-            foreignKeyName: "lab_sections_lab_leader_id_fkey";
-            columns: ["lab_leader_id"];
+            foreignKeyName: "live_poll_responses_live_poll_id_fkey";
+            columns: ["live_poll_id"];
             isOneToOne: false;
-            referencedRelation: "profiles";
+            referencedRelation: "live_polls";
             referencedColumns: ["id"];
           },
           {
-            foreignKeyName: "lab_sections_lab_leader_id_fkey";
-            columns: ["lab_leader_id"];
+            foreignKeyName: "live_poll_responses_public_profile_id_fkey";
+            columns: ["public_profile_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
+            referencedRelation: "user_roles";
+            referencedColumns: ["public_profile_id"];
+          }
+        ];
+      };
+      live_polls: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          deactivates_at: string | null;
+          id: string;
+          is_live: boolean;
+          question: Json;
+          require_login: boolean;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          deactivates_at?: string | null;
+          id?: string;
+          is_live?: boolean;
+          question?: Json;
+          require_login?: boolean;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          deactivates_at?: string | null;
+          id?: string;
+          is_live?: boolean;
+          question?: Json;
+          require_login?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "live_polls_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "live_polls_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["public_profile_id"];
           }
         ];
       };
@@ -4119,24 +4944,30 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          discussion_notification: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id: number;
+          regrade_request_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           updated_at: string;
           user_id: string;
         };
         Insert: {
           class_id: number;
           created_at?: string;
+          discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
+          regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           updated_at?: string;
           user_id: string;
         };
         Update: {
           class_id?: number;
           created_at?: string;
+          discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
+          regrade_request_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           updated_at?: string;
           user_id?: string;
         };
@@ -4228,325 +5059,6 @@ export type Database = {
           user_id?: string | null;
         };
         Relationships: [];
-      };
-      poll_question_answers: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          description: string | null;
-          id: number;
-          ordinal: number;
-          poll: number;
-          poll_question: number;
-          title: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          ordinal?: number;
-          poll: number;
-          poll_question: number;
-          title: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          ordinal?: number;
-          poll?: number;
-          poll_question?: number;
-          title?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_question_answers_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_answers_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_answers_poll_question_fkey";
-            columns: ["poll_question"];
-            isOneToOne: false;
-            referencedRelation: "poll_questions";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      poll_question_results: {
-        Row: {
-          count: number;
-          created_at: string;
-          id: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-        };
-        Insert: {
-          count?: number;
-          created_at?: string;
-          id?: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-        };
-        Update: {
-          count?: number;
-          created_at?: string;
-          id?: number;
-          poll?: number;
-          poll_question?: number;
-          poll_question_answer?: number;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_question_results_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_results_poll_question_answer_fkey";
-            columns: ["poll_question_answer"];
-            isOneToOne: false;
-            referencedRelation: "poll_question_answers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_question_results_poll_question_fkey";
-            columns: ["poll_question"];
-            isOneToOne: false;
-            referencedRelation: "poll_questions";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      poll_questions: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          description: string | null;
-          id: number;
-          poll: number;
-          question_type: string;
-          title: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          poll: number;
-          question_type?: string;
-          title: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          description?: string | null;
-          id?: number;
-          poll?: number;
-          question_type?: string;
-          title?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_questions_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_questions_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      poll_response_answers: {
-        Row: {
-          created_at: string;
-          id: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-          poll_response: number;
-          profile_id: string;
-        };
-        Insert: {
-          created_at?: string;
-          id?: number;
-          poll: number;
-          poll_question: number;
-          poll_question_answer: number;
-          poll_response: number;
-          profile_id?: string;
-        };
-        Update: {
-          created_at?: string;
-          id?: number;
-          poll?: number;
-          poll_question?: number;
-          poll_question_answer?: number;
-          poll_response?: number;
-          profile_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_response_answers_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_poll_question_answer_fkey";
-            columns: ["poll_question_answer"];
-            isOneToOne: false;
-            referencedRelation: "poll_question_answers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_poll_question_fkey";
-            columns: ["poll_question"];
-            isOneToOne: false;
-            referencedRelation: "poll_questions";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_poll_response_fkey";
-            columns: ["poll_response"];
-            isOneToOne: false;
-            referencedRelation: "poll_responses";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_response_answers_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
-          }
-        ];
-      };
-      poll_responses: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          ended_at: string | null;
-          id: number;
-          poll: number;
-          profile_id: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          ended_at?: string | null;
-          id?: number;
-          poll: number;
-          profile_id: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          ended_at?: string | null;
-          id?: number;
-          poll?: number;
-          profile_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "poll_responses_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_responses_poll_fkey";
-            columns: ["poll"];
-            isOneToOne: false;
-            referencedRelation: "polls";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_responses_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "poll_responses_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
-          }
-        ];
-      };
-      polls: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          description: string | null;
-          due_date: string | null;
-          flair: Json | null;
-          id: number;
-          name: string;
-          released_at: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          description?: string | null;
-          due_date?: string | null;
-          flair?: Json | null;
-          id?: number;
-          name: string;
-          released_at?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          description?: string | null;
-          due_date?: string | null;
-          flair?: Json | null;
-          id?: number;
-          name?: string;
-          released_at?: string | null;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "polls_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          }
-        ];
       };
       profiles: {
         Row: {
@@ -4940,6 +5452,7 @@ export type Database = {
           completed_by: string | null;
           created_at: string;
           due_date: string;
+          hard_deadline: boolean;
           id: number;
           max_allowable_late_tokens: number;
           release_date: string | null;
@@ -4956,6 +5469,7 @@ export type Database = {
           completed_by?: string | null;
           created_at?: string;
           due_date: string;
+          hard_deadline?: boolean;
           id?: number;
           max_allowable_late_tokens?: number;
           release_date?: string | null;
@@ -4972,6 +5486,7 @@ export type Database = {
           completed_by?: string | null;
           created_at?: string;
           due_date?: string;
+          hard_deadline?: boolean;
           id?: number;
           max_allowable_late_tokens?: number;
           release_date?: string | null;
@@ -7348,6 +7863,260 @@ export type Database = {
           }
         ];
       };
+      survey_assignments: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: string;
+          profile_id: string;
+          survey_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: string;
+          profile_id: string;
+          survey_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: string;
+          profile_id?: string;
+          survey_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_assignments_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_assignments_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_assignments_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "survey_assignments_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      survey_responses: {
+        Row: {
+          created_at: string;
+          deleted_at: string | null;
+          id: string;
+          is_submitted: boolean;
+          profile_id: string;
+          response: Json;
+          submitted_at: string | null;
+          survey_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          deleted_at?: string | null;
+          id?: string;
+          is_submitted?: boolean;
+          profile_id?: string;
+          response?: Json;
+          submitted_at?: string | null;
+          survey_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_responses_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "survey_responses_survey_id_fkey";
+            columns: ["survey_id"];
+            isOneToOne: false;
+            referencedRelation: "surveys";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      survey_templates: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          description: string;
+          id: string;
+          scope: Database["public"]["Enums"]["template_scope"];
+          template: Json;
+          title: string;
+          updated_at: string;
+          version: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          description?: string;
+          id?: string;
+          scope?: Database["public"]["Enums"]["template_scope"];
+          template?: Json;
+          title?: string;
+          updated_at?: string;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_templates_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_templates_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      surveys: {
+        Row: {
+          allow_response_editing: boolean;
+          assigned_to_all: boolean;
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          deleted_at: string | null;
+          description: string | null;
+          due_date: string | null;
+          id: string;
+          json: Json;
+          status: Database["public"]["Enums"]["survey_status"];
+          survey_id: string;
+          title: string;
+          type: Database["public"]["Enums"]["survey_type"];
+          updated_at: string;
+          validation_errors: string | null;
+          version: number;
+        };
+        Insert: {
+          allow_response_editing?: boolean;
+          assigned_to_all?: boolean;
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title: string;
+          type?: Database["public"]["Enums"]["survey_type"];
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Update: {
+          allow_response_editing?: boolean;
+          assigned_to_all?: boolean;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          due_date?: string | null;
+          id?: string;
+          json?: Json;
+          status?: Database["public"]["Enums"]["survey_status"];
+          survey_id?: string;
+          title?: string;
+          type?: Database["public"]["Enums"]["survey_type"];
+          updated_at?: string;
+          validation_errors?: string | null;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "surveys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       system_settings: {
         Row: {
           created_at: string;
@@ -7493,6 +8262,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out: boolean;
           updated_at: string;
           user_id: string;
         };
@@ -7509,6 +8279,7 @@ export type Database = {
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id: string;
         };
@@ -7525,6 +8296,7 @@ export type Database = {
           private_profile_id?: string;
           public_profile_id?: string;
           role?: Database["public"]["Enums"]["app_role"];
+          sis_sync_opt_out?: boolean;
           updated_at?: string;
           user_id?: string;
         };
@@ -7598,6 +8370,8 @@ export type Database = {
         Row: {
           avatar_url: string | null;
           created_at: string;
+          discord_id: string | null;
+          discord_username: string | null;
           email: string | null;
           github_user_id: string | null;
           github_username: string | null;
@@ -7609,6 +8383,8 @@ export type Database = {
         Insert: {
           avatar_url?: string | null;
           created_at?: string;
+          discord_id?: string | null;
+          discord_username?: string | null;
           email?: string | null;
           github_user_id?: string | null;
           github_username?: string | null;
@@ -7620,6 +8396,8 @@ export type Database = {
         Update: {
           avatar_url?: string | null;
           created_at?: string;
+          discord_id?: string | null;
+          discord_username?: string | null;
           email?: string | null;
           github_user_id?: string | null;
           github_username?: string | null;
@@ -9008,7 +9786,7 @@ export type Database = {
         }[];
       };
       admin_get_classes: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           archived: boolean;
           created_at: string;
@@ -9037,7 +9815,7 @@ export type Database = {
         }[];
       };
       admin_get_sis_sync_status: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           class_id: number;
           class_name: string;
@@ -9078,10 +9856,7 @@ export type Database = {
         };
         Returns: boolean;
       };
-      admin_trigger_sis_sync: {
-        Args: { p_class_id?: number };
-        Returns: Json;
-      };
+      admin_trigger_sis_sync: { Args: { p_class_id?: number }; Returns: Json };
       admin_update_class: {
         Args: {
           p_class_id: number;
@@ -9105,10 +9880,7 @@ export type Database = {
         Args: { p_name: string; p_section_id: number; p_updated_by?: string };
         Returns: boolean;
       };
-      authorize_for_admin: {
-        Args: { p_user_id?: string };
-        Returns: boolean;
-      };
+      authorize_for_admin: { Args: { p_user_id?: string }; Returns: boolean };
       authorize_for_private_discussion_thread: {
         Args: { p_root: number };
         Returns: boolean;
@@ -9148,18 +9920,13 @@ export type Database = {
         };
         Returns: boolean;
       };
+      authorizeforanyclassstaff: { Args: never; Returns: boolean };
       authorizeforassignmentgroup: {
         Args: { _assignment_group_id: number };
         Returns: boolean;
       };
-      authorizeforclass: {
-        Args: { class__id: number };
-        Returns: boolean;
-      };
-      authorizeforclassgrader: {
-        Args: { class__id: number };
-        Returns: boolean;
-      };
+      authorizeforclass: { Args: { class__id: number }; Returns: boolean };
+      authorizeforclassgrader: { Args: { class__id: number }; Returns: boolean };
       authorizeforclassinstructor: {
         Args: { class__id: number };
         Returns: boolean;
@@ -9172,14 +9939,10 @@ export type Database = {
         Args: { _user_id: string };
         Returns: boolean;
       };
-      authorizeforpoll: {
-        Args: { class__id: number; poll__id: number } | { poll__id: number };
-        Returns: boolean;
-      };
-      authorizeforprofile: {
-        Args: { profile_id: string };
-        Returns: boolean;
-      };
+      authorizeforpoll:
+        | { Args: { poll__id: number }; Returns: boolean }
+        | { Args: { class__id: number; poll__id: number }; Returns: boolean };
+      authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
@@ -9201,6 +9964,13 @@ export type Database = {
           student_profile_id_param: string;
         };
         Returns: string;
+      };
+      calculate_queue_metrics_at_start: {
+        Args: { p_help_request_id: number; p_queue_id: number };
+        Returns: {
+          longest_wait_seconds: number;
+          queue_depth: number;
+        }[];
       };
       call_edge_function_internal: {
         Args: {
@@ -9230,16 +10000,32 @@ export type Database = {
         Args: { help_request_id: number };
         Returns: boolean;
       };
-      channel_has_subscribers: {
-        Args: { p_channel: string };
+      can_access_poll_response: {
+        Args: { poll_id: string; profile_id: string };
         Returns: boolean;
       };
-      check_assignment_deadlines_passed: {
-        Args: Record<PropertyKey, never>;
-        Returns: undefined;
+      channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
+      check_assignment_deadlines_passed: { Args: never; Returns: undefined };
+      check_assignment_release_dates: { Args: never; Returns: undefined };
+      check_can_add_to_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
       };
-      check_assignment_release_dates: {
-        Args: Record<PropertyKey, never>;
+      check_can_remove_from_help_request: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_profile_id_to_remove: string;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
+      check_discord_role_sync_after_link: {
+        Args: { p_user_id: string };
         Returns: undefined;
       };
       check_github_error_threshold: {
@@ -9255,13 +10041,10 @@ export type Database = {
         Returns: boolean;
       };
       cleanup_expired_realtime_subscriptions: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: undefined;
       };
-      cleanup_github_async_errors: {
-        Args: Record<PropertyKey, never>;
-        Returns: undefined;
-      };
+      cleanup_github_async_errors: { Args: never; Returns: undefined };
       clear_all_incomplete_review_assignments: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
@@ -9288,12 +10071,23 @@ export type Database = {
         };
         Returns: Json;
       };
-      create_all_repos_for_assignment: {
-        Args:
-          | { assignment_id: number; course_id: number; p_force?: boolean }
-          | { assignment_id: number; course_id: number; p_force?: boolean };
-        Returns: undefined;
-      };
+      create_all_repos_for_assignment:
+        | {
+            Args: {
+              assignment_id: number;
+              course_id: number;
+              p_force?: boolean;
+            };
+            Returns: undefined;
+          }
+        | {
+            Args: {
+              assignment_id: number;
+              course_id: number;
+              p_force?: boolean;
+            };
+            Returns: undefined;
+          };
       create_help_request_message_notification: {
         Args: {
           p_author_name: string;
@@ -9355,6 +10149,10 @@ export type Database = {
         Args: { class_id?: number; p_force?: boolean; user_id: string };
         Returns: undefined;
       };
+      create_survey_assignments: {
+        Args: { p_profile_ids: string[]; p_survey_id: string };
+        Returns: undefined;
+      };
       create_system_notification: {
         Args: {
           p_backdrop_dismiss?: boolean;
@@ -9386,10 +10184,8 @@ export type Database = {
         };
         Returns: number;
       };
-      custom_access_token_hook: {
-        Args: { event: Json };
-        Returns: Json;
-      };
+      custom_access_token_hook: { Args: { event: Json }; Returns: Json };
+      deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
@@ -9413,6 +10209,51 @@ export type Database = {
         Args: { p_class_id: number; p_submission_ids: number[] };
         Returns: Json;
       };
+      enqueue_discord_batch_role_sync: { Args: never; Returns: undefined };
+      enqueue_discord_channel_creation: {
+        Args: {
+          p_channel_name?: string;
+          p_channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          p_class_id: number;
+          p_guild_id?: string;
+          p_resource_id?: number;
+        };
+        Returns: undefined;
+      };
+      enqueue_discord_help_request_message: {
+        Args: { p_action?: string; p_help_request_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_invites_for_existing_users: {
+        Args: { p_class_id: number; p_guild_id: string };
+        Returns: undefined;
+      };
+      enqueue_discord_queue_assignment_message: {
+        Args: { p_action?: string; p_queue_assignment_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_register_commands: { Args: never; Returns: undefined };
+      enqueue_discord_regrade_request_message: {
+        Args: { p_action?: string; p_regrade_request_id: number };
+        Returns: undefined;
+      };
+      enqueue_discord_role_creation: {
+        Args: { p_class_id: number; p_guild_id?: string; p_role_type: string };
+        Returns: undefined;
+      };
+      enqueue_discord_role_sync: {
+        Args: {
+          p_action?: string;
+          p_class_id: number;
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_user_id: string;
+        };
+        Returns: undefined;
+      };
+      enqueue_discord_roles_creation: {
+        Args: { p_class_id: number; p_guild_id?: string };
+        Returns: undefined;
+      };
       enqueue_github_archive_repo: {
         Args: {
           p_class_id: number;
@@ -9422,9 +10263,22 @@ export type Database = {
         };
         Returns: number;
       };
-      enqueue_github_create_repo: {
-        Args:
-          | {
+      enqueue_github_create_repo:
+        | {
+            Args: {
+              p_class_id: number;
+              p_course_slug: string;
+              p_debug_id?: string;
+              p_github_usernames: string[];
+              p_is_template_repo?: boolean;
+              p_org: string;
+              p_repo_name: string;
+              p_template_repo: string;
+            };
+            Returns: number;
+          }
+        | {
+            Args: {
               p_assignment_group_id?: number;
               p_assignment_id?: number;
               p_class_id: number;
@@ -9437,19 +10291,9 @@ export type Database = {
               p_profile_id?: string;
               p_repo_name: string;
               p_template_repo: string;
-            }
-          | {
-              p_class_id: number;
-              p_course_slug: string;
-              p_debug_id?: string;
-              p_github_usernames: string[];
-              p_is_template_repo?: boolean;
-              p_org: string;
-              p_repo_name: string;
-              p_template_repo: string;
             };
-        Returns: number;
-      };
+            Returns: number;
+          };
       enqueue_github_sync_repo_permissions: {
         Args: {
           p_class_id: number;
@@ -9492,24 +10336,19 @@ export type Database = {
         };
         Returns: undefined;
       };
+      enqueue_gradebook_row_recalculation_batch: {
+        Args: { p_rows: Json[] };
+        Returns: undefined;
+      };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
       };
-      generate_anon_name: {
-        Args: Record<PropertyKey, never>;
-        Returns: string;
-      };
-      get_all_class_metrics: {
-        Args: Record<PropertyKey, never>;
-        Returns: Json;
-      };
-      get_assignment_llm_metrics: {
-        Args: Record<PropertyKey, never>;
-        Returns: Json;
-      };
+      generate_anon_name: { Args: never; Returns: string };
+      get_all_class_metrics: { Args: never; Returns: Json };
+      get_assignment_llm_metrics: { Args: never; Returns: Json };
       get_async_github_metrics: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: {
           avg_latency_ms: number;
           calls_total: number;
@@ -9517,6 +10356,25 @@ export type Database = {
           errors_recent_1h: number;
           errors_total: number;
           method: string;
+        }[];
+      };
+      get_async_queue_sizes: {
+        Args: never;
+        Returns: {
+          async_queue_size: number;
+          dlq_queue_size: number;
+          gradebook_row_recalculate_queue_size: number;
+        }[];
+      };
+      get_circuit_breaker_statuses: {
+        Args: never;
+        Returns: {
+          is_open: boolean;
+          key: string;
+          open_until: string;
+          scope: string;
+          state: string;
+          trip_count: number;
         }[];
       };
       get_github_api_metrics_recent: {
@@ -9534,6 +10392,31 @@ export type Database = {
         Returns: {
           open_until: string;
           state: string;
+        }[];
+      };
+      get_gradebook_column_students_bulk: {
+        Args: {
+          p_gradebook_column_ids: Json;
+          p_limit?: number;
+          p_offset?: number;
+          p_student_ids: Json;
+        };
+        Returns: {
+          class_id: number;
+          created_at: string;
+          gradebook_column_id: number;
+          gradebook_id: number;
+          id: number;
+          incomplete_values: Json;
+          is_droppable: boolean;
+          is_excused: boolean;
+          is_missing: boolean;
+          is_private: boolean;
+          released: boolean;
+          score: number;
+          score_override: number;
+          score_override_note: string;
+          student_id: string;
         }[];
       };
       get_gradebook_records_for_all_students: {
@@ -9562,10 +10445,7 @@ export type Database = {
           total_submitters: number;
         }[];
       };
-      get_llm_tags_breakdown: {
-        Args: Record<PropertyKey, never>;
-        Returns: Json;
-      };
+      get_llm_tags_breakdown: { Args: never; Returns: Json };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
@@ -9621,6 +10501,12 @@ export type Database = {
           workflow_path: string | null;
           workflow_run_id: number;
         }[];
+        SetofOptions: {
+          from: "*";
+          to: "workflow_runs";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
       };
       get_workflow_statistics: {
         Args: { p_class_id: number; p_duration_hours?: number };
@@ -9675,6 +10561,12 @@ export type Database = {
           sort_order: number | null;
           updated_at: string;
         };
+        SetofOptions: {
+          from: "*";
+          to: "gradebook_columns";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
       };
       gradebook_column_move_right: {
         Args: { p_column_id: number };
@@ -9696,6 +10588,12 @@ export type Database = {
           slug: string;
           sort_order: number | null;
           updated_at: string;
+        };
+        SetofOptions: {
+          from: "*";
+          to: "gradebook_columns";
+          isOneToOne: true;
+          isSetofReturn: false;
         };
       };
       help_request_is_private: {
@@ -9723,20 +10621,31 @@ export type Database = {
         Args: { p_class_id: number; p_updates: Json };
         Returns: boolean;
       };
-      intval: {
-        Args: { "": string };
-        Returns: number;
+      insert_discord_message: {
+        Args: {
+          p_class_id: number;
+          p_discord_channel_id: string;
+          p_discord_message_id: string;
+          p_resource_id: number;
+          p_resource_type: string;
+        };
+        Returns: undefined;
+      };
+      invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
+      invoke_discord_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
       };
       invoke_email_batch_processor_background_task: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: undefined;
       };
       invoke_github_async_worker_background_task: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: undefined;
       };
       invoke_gradebook_recalculation_background_task: {
-        Args: Record<PropertyKey, never>;
+        Args: never;
         Returns: undefined;
       };
       is_allowed_grader_key: {
@@ -9747,10 +10656,9 @@ export type Database = {
         Args: { classid: number; userid: string };
         Returns: boolean;
       };
-      is_instructor_for_class: {
-        Args: { _class_id: number; _person_id: string } | { _person_id: string; classid: number };
-        Returns: boolean;
-      };
+      is_instructor_for_class:
+        | { Args: { _class_id: number; _person_id: string }; Returns: boolean }
+        | { Args: { _person_id: string; classid: number }; Returns: boolean };
       is_instructor_for_student: {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
@@ -9777,6 +10685,18 @@ export type Database = {
         };
         Returns: undefined;
       };
+      mark_discord_invite_used: {
+        Args: { p_guild_id: string; p_user_id: string };
+        Returns: undefined;
+      };
+      only_calendar_or_discord_ids_changed: {
+        Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
+        Returns: boolean;
+      };
+      only_discord_ids_changed: {
+        Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
+        Returns: boolean;
+      };
       open_github_circuit: {
         Args: {
           p_event: string;
@@ -9787,6 +10707,7 @@ export type Database = {
         };
         Returns: number;
       };
+      process_calendar_announcements: { Args: never; Returns: Json };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
@@ -9842,9 +10763,21 @@ export type Database = {
         Args: { p_user_id: string };
         Returns: boolean;
       };
+      sis_sync_enrollment: {
+        Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
+        Returns: Json;
+      };
+      soft_delete_survey: {
+        Args: { p_survey_id: string; p_survey_logical_id: string };
+        Returns: undefined;
+      };
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
+      };
+      sync_existing_users_after_roles_created: {
+        Args: { p_class_id: number };
+        Returns: undefined;
       };
       sync_lab_section_meetings: {
         Args: { lab_section_id_param: number };
@@ -9871,10 +10804,11 @@ export type Database = {
           operation: string;
         }[];
       };
-      trigger_sis_sync: {
+      trigger_discord_role_sync_for_user: {
         Args: { p_class_id?: number };
         Returns: Json;
       };
+      trigger_sis_sync: { Args: { p_class_id?: number }; Returns: Json };
       unregister_realtime_subscription: {
         Args: { p_channel: string; p_client_id: string };
         Returns: undefined;
@@ -9900,6 +10834,14 @@ export type Database = {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
+      update_gradebook_column_student_with_recalc: {
+        Args: { p_id: number; p_updates: Json };
+        Returns: undefined;
+      };
+      update_gradebook_column_students_batch_with_recalc: {
+        Args: { p_updates: Json[] };
+        Returns: Json;
+      };
       update_gradebook_row: {
         Args: {
           p_class_id: number;
@@ -9910,6 +10852,10 @@ export type Database = {
           p_updates: Json[];
         };
         Returns: number;
+      };
+      update_gradebook_rows_batch: {
+        Args: { p_batch_updates: Json[] };
+        Returns: Json;
       };
       update_regrade_request_points: {
         Args: {
@@ -9951,6 +10897,16 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+      discord_channel_type:
+        | "general"
+        | "assignment"
+        | "lab"
+        | "office_hours"
+        | "regrades"
+        | "scheduling"
+        | "operations";
+      discord_resource_type: "help_request" | "regrade_request";
+      discussion_notification_type: "immediate" | "digest" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -9984,6 +10940,9 @@ export type Database = {
         | "request_resolved"
         | "video_joined"
         | "video_left";
+      survey_status: "draft" | "published" | "closed";
+      survey_type: "assign_all" | "specific" | "peer";
+      template_scope: "global" | "course";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -10111,6 +11070,9 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+      discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades", "scheduling", "operations"],
+      discord_resource_type: ["help_request", "regrade_request"],
+      discussion_notification_type: ["immediate", "digest", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",
@@ -10146,7 +11108,10 @@ export const Constants = {
         "request_resolved",
         "video_joined",
         "video_left"
-      ]
+      ],
+      survey_status: ["draft", "published", "closed"],
+      survey_type: ["assign_all", "specific", "peer"],
+      template_scope: ["global", "course"]
     }
   }
 } as const;

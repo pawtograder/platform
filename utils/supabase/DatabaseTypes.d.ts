@@ -287,6 +287,13 @@ export type DiscussionThreadWatcher = GetResult<
   Database["public"]["Tables"]["discussion_thread_watchers"]["Relationships"],
   "*"
 >;
+export type DiscussionTopicFollower = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["discussion_topic_followers"]["Row"],
+  "discussion_topic_followers",
+  Database["public"]["Tables"]["discussion_topic_followers"]["Relationships"],
+  "*"
+>;
 export type DiscussionThreadReadStatus = GetResult<
   Database["public"],
   Database["public"]["Tables"]["discussion_thread_read_status"]["Row"],
@@ -952,6 +959,22 @@ export type LabSectionMeeting = GetResult<
   "lab_section_meetings",
   Database["public"]["Tables"]["lab_section_meetings"]["Relationships"],
   "*"
+>;
+
+export type LabSectionLeader = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_section_leaders"]["Row"],
+  "lab_section_leaders",
+  Database["public"]["Tables"]["lab_section_leaders"]["Relationships"],
+  "*"
+>;
+
+export type LabSectionWithLeaders = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*, lab_section_leaders(*, profiles(*))"
 >;
 
 export type LabSectionWithLeader = GetResult<

@@ -77,6 +77,14 @@ export interface HelpRequestConfig {
 export interface DiscussionConfig {
   postsPerTopic: number;
   maxRepliesPerPost: number;
+  numAdditionalTopics?: number; // Number of additional general discussion topics to create (beyond assignment-specific ones)
+}
+
+export interface SurveyConfig {
+  numSurveys: number;
+  numTemplates: number;
+  responseRate: number; // Percentage of students who respond (0-1)
+  submissionRate: number; // Percentage of responses that are submitted (0-1)
 }
 
 export interface SeedingConfiguration {
@@ -93,6 +101,7 @@ export interface SeedingConfiguration {
   groupAssignmentConfig?: GroupAssignmentConfig;
   helpRequestConfig?: HelpRequestConfig;
   discussionConfig?: DiscussionConfig;
+  surveyConfig?: SurveyConfig;
   gradingScheme?: "current" | "specification";
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
@@ -163,6 +172,425 @@ const HELP_REQUEST_REPLIES = [
   "Try caching expensive computations to avoid redundant work",
   "Make sure your algorithm has the correct time complexity"
 ];
+
+// List of 24 general discussion topic names for classes (non-assignment related)
+const GENERAL_DISCUSSION_TOPICS = [
+  "Assignments",
+  "Logistics",
+  "Readings",
+  "Memes",
+  "Study Groups",
+  "Office Hours",
+  "Exam Prep",
+  "Course Materials",
+  "Career Advice",
+  "Tech Stack",
+  "Best Practices",
+  "Debugging Tips",
+  "Resource Sharing",
+  "Project Ideas",
+  "Code Reviews",
+  "Algorithms & Data Structures",
+  "Industry Trends",
+  "Interview Prep",
+  "Open Source",
+  "Side Projects",
+  "Learning Resources",
+  "Q&A",
+  "Announcements",
+  "General Discussion"
+];
+
+// SurveyJS survey templates for realistic data
+const SURVEYJS_TEMPLATES = {
+  courseExperience: {
+    title: "Course Experience Survey",
+    description: "Help us improve the course by sharing your overall experience.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "overall_quality",
+            title: "How would you rate the overall quality of this course?",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Poor",
+            maxRateDescription: "Excellent",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "organization",
+            title: "The course material was well-organized and easy to follow.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree",
+            isRequired: true
+          },
+          {
+            type: "comment",
+            name: "most_valuable",
+            title: "What did you find most valuable about this course?",
+            placeholder: "Please share your thoughts...",
+            rows: 4
+          },
+          {
+            type: "comment",
+            name: "suggestions",
+            title: "What suggestions do you have for improving this course?",
+            placeholder: "Your feedback helps us improve...",
+            rows: 4
+          }
+        ]
+      }
+    ]
+  },
+
+  instructorFeedback: {
+    title: "Instructor Feedback Survey",
+    description: "Provide feedback on instruction and course delivery.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "clarity",
+            title: "The instructor explained concepts clearly.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "responsiveness",
+            title: "The instructor was responsive to student questions.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree",
+            isRequired: true
+          },
+          {
+            type: "radiogroup",
+            name: "office_hours",
+            title: "How often did you attend office hours?",
+            choices: ["Never", "Rarely", "Sometimes", "Often", "Very Often"],
+            isRequired: true
+          },
+          {
+            type: "comment",
+            name: "instructor_comments",
+            title: "Additional comments about the instructor:",
+            rows: 3
+          }
+        ]
+      }
+    ]
+  },
+
+  assignmentFeedback: {
+    title: "Assignment Feedback Survey",
+    description: "Share your thoughts on the course assignments and projects.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "difficulty",
+            title: "The assignments were appropriate for the course level.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Too Easy",
+            maxRateDescription: "Too Hard",
+            isRequired: true
+          },
+          {
+            type: "checkbox",
+            name: "helpful_types",
+            title: "Which types of assignments did you find most helpful? (Select all that apply)",
+            choices: [
+              "Programming projects",
+              "Written problem sets",
+              "Lab exercises",
+              "Group projects",
+              "Reading assignments"
+            ],
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "workload",
+            title: "The workload was manageable.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree"
+          },
+          {
+            type: "comment",
+            name: "assignment_suggestions",
+            title: "Do you have any suggestions for future assignments?",
+            placeholder: "Optional feedback...",
+            rows: 3
+          }
+        ]
+      }
+    ]
+  },
+
+  midtermCheckIn: {
+    title: "Midterm Check-in Survey",
+    description: "Quick check-in to see how you're doing halfway through the semester.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "confidence",
+            title: "How confident do you feel about the material covered so far?",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Not Confident",
+            maxRateDescription: "Very Confident",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "pace",
+            title: "The pace of the course is:",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Too Slow",
+            maxRateDescription: "Too Fast",
+            isRequired: true
+          },
+          {
+            type: "checkbox",
+            name: "study_resources",
+            title: "What resources have you been using to study? (Select all that apply)",
+            choices: [
+              "Lecture notes",
+              "Textbook",
+              "Online tutorials",
+              "Study groups",
+              "Office hours",
+              "Discussion forums"
+            ]
+          },
+          {
+            type: "text",
+            name: "review_topic",
+            title: "What topic would you like more review on?",
+            placeholder: "e.g., recursion, data structures..."
+          },
+          {
+            type: "boolean",
+            name: "need_help",
+            title: "Do you feel you need additional support or tutoring?",
+            isRequired: true
+          }
+        ]
+      }
+    ]
+  },
+
+  weeklyReflection: {
+    title: "Weekly Reflection",
+    description: "A quick reflection on this week's material.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "understanding",
+            title: "How well do you understand this week's material?",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Not at all",
+            maxRateDescription: "Very well",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "time_spent",
+            title: "Approximately how many hours did you spend on coursework this week?",
+            rateMin: 0,
+            rateMax: 20,
+            rateStep: 2,
+            displayMode: "buttons"
+          },
+          {
+            type: "text",
+            name: "clearest_concept",
+            title: "What concept was clearest to you this week?"
+          },
+          {
+            type: "text",
+            name: "confusing_concept",
+            title: "What concept was most confusing?"
+          },
+          {
+            type: "comment",
+            name: "questions",
+            title: "Any questions or concerns?",
+            rows: 3
+          }
+        ]
+      }
+    ]
+  },
+
+  labFeedback: {
+    title: "Lab Session Feedback",
+    description: "Tell us about your experience in today's lab.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "lab_helpful",
+            title: "How helpful was today's lab session?",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Not helpful",
+            maxRateDescription: "Very helpful",
+            isRequired: true
+          },
+          {
+            type: "radiogroup",
+            name: "completion",
+            title: "Did you complete the lab exercises?",
+            choices: ["Yes, completed all", "Mostly completed", "About half", "Less than half", "Did not complete"],
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "ta_helpful",
+            title: "The TA/lab instructor was helpful.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree"
+          },
+          {
+            type: "comment",
+            name: "lab_comments",
+            title: "Additional feedback about the lab:",
+            rows: 3
+          }
+        ]
+      }
+    ]
+  },
+
+  peerFeedback: {
+    title: "Peer Feedback Survey",
+    description: "Provide constructive feedback about your team member's contributions and collaboration.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "rating",
+            name: "contribution",
+            title: "How would you rate this team member's overall contribution to the project?",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Minimal",
+            maxRateDescription: "Exceptional",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "communication",
+            title: "This team member communicated effectively with the group.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "reliability",
+            title: "This team member completed their assigned tasks on time.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "collaboration",
+            title: "This team member was collaborative and supportive of others.",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Strongly Disagree",
+            maxRateDescription: "Strongly Agree",
+            isRequired: true
+          },
+          {
+            type: "rating",
+            name: "quality",
+            title: "The quality of work produced by this team member was:",
+            rateMin: 1,
+            rateMax: 5,
+            minRateDescription: "Poor",
+            maxRateDescription: "Excellent",
+            isRequired: true
+          },
+          {
+            type: "checkbox",
+            name: "strengths",
+            title: "What were this team member's strengths? (Select all that apply)",
+            choices: [
+              "Technical skills",
+              "Problem-solving",
+              "Communication",
+              "Leadership",
+              "Time management",
+              "Creativity",
+              "Attention to detail",
+              "Helping others"
+            ]
+          },
+          {
+            type: "comment",
+            name: "positive_feedback",
+            title: "What did this team member do well?",
+            placeholder: "Share specific examples of positive contributions...",
+            rows: 3
+          },
+          {
+            type: "comment",
+            name: "improvement_areas",
+            title: "What could this team member improve on?",
+            placeholder: "Provide constructive suggestions for improvement...",
+            rows: 3
+          },
+          {
+            type: "comment",
+            name: "additional_comments",
+            title: "Any additional comments?",
+            placeholder: "Optional...",
+            rows: 3
+          }
+        ]
+      }
+    ]
+  }
+};
 
 // ============================
 // HELPER FUNCTIONS
@@ -552,6 +980,11 @@ export class DatabaseSeeder {
     return this;
   }
 
+  withSurveys(config: SurveyConfig): this {
+    this.config.surveyConfig = config;
+    return this;
+  }
+
   // Method to validate and get complete configuration
   protected getCompleteConfiguration(): SeedingConfiguration {
     // Validate required fields
@@ -605,6 +1038,7 @@ export class DatabaseSeeder {
       groupAssignmentConfig: this.config.groupAssignmentConfig || defaultGroupAssignmentConfig,
       helpRequestConfig: this.config.helpRequestConfig,
       discussionConfig: this.config.discussionConfig,
+      surveyConfig: this.config.surveyConfig,
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
       recycleUsers: this.config.recycleUsers !== false // Default to true unless explicitly disabled
@@ -658,7 +1092,13 @@ export class DatabaseSeeder {
       }
 
       // // Create assignments and submissions
-      const assignments = await this.createAssignments(config, class_id, students);
+      const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students);
+
+      // Create additional discussion topics if configured
+      if (config.discussionConfig?.numAdditionalTopics) {
+        await this.createAdditionalDiscussionTopics(config.discussionConfig.numAdditionalTopics, class_id, nextOrdinal);
+      }
+
       const submissionData = await this.createSubmissions(assignments, students, class_id);
 
       // Create workflow events and errors for ALL submissions
@@ -797,6 +1237,11 @@ export class DatabaseSeeder {
       // Create help requests if configured
       if (config.helpRequestConfig) {
         await this.createHelpRequests(config.helpRequestConfig, class_id, students, instructors, graders);
+      }
+
+      // Create surveys if configured
+      if (config.surveyConfig) {
+        await this.createSurveys(config.surveyConfig, class_id, students, instructors);
       }
 
       // Display final summary
@@ -1017,8 +1462,7 @@ export class DatabaseSeeder {
       name: `Lab ${String.fromCharCode(65 + i)}`,
       day_of_week: "monday" as const,
       start_time: "09:00",
-      end_time: "10:00",
-      lab_leader_id: instructors[i % instructors.length].private_profile_id
+      end_time: "10:00"
     }));
 
     console.log(`Creating ${labSectionsData.length} lab sections`);
@@ -1027,6 +1471,20 @@ export class DatabaseSeeder {
       () => supabase.from("lab_sections").insert(labSectionsData).select("id, name"),
       labSectionsData.length
     );
+
+    // Insert lab section leaders into junction table
+    if (labSections && labSections.length > 0) {
+      const labSectionLeadersData = labSections.map((section, i) => ({
+        lab_section_id: section.id,
+        profile_id: instructors[i % instructors.length].private_profile_id,
+        class_id: class_id
+      }));
+      await this.rateLimitManager.trackAndLimit(
+        "lab_section_leaders",
+        () => supabase.from("lab_section_leaders").insert(labSectionLeadersData).select(),
+        labSectionLeadersData.length
+      );
+    }
 
     // Define tag types
     const studentTagTypes = defineTagTypes("Student", config.sectionsAndTagsConfig!.numStudentTags);
@@ -1601,20 +2059,94 @@ export class DatabaseSeeder {
     console.log(`✓ Discussion threads seeding completed`);
   }
 
+  protected async createAdditionalDiscussionTopics(
+    numTopics: number,
+    class_id: number,
+    startingOrdinal: number
+  ): Promise<void> {
+    if (numTopics <= 0) {
+      return;
+    }
+
+    console.log(`\n💬 Creating ${numTopics} additional discussion topics...`);
+
+    const topicColors = ["red", "orange", "yellow", "green", "teal", "blue", "cyan", "purple", "pink", "gray"];
+    const topicDescriptions: Record<string, string> = {
+      Assignments: "Questions and notes about assignments.",
+      Logistics: "Anything else about the class",
+      Readings: "Follow-ups and discussion of assigned and optional readings",
+      Memes: "#random",
+      "Study Groups": "Find study partners and organize study sessions",
+      "Office Hours": "Questions and discussions about office hours",
+      "Exam Prep": "Share study strategies and exam preparation tips",
+      "Course Materials": "Discussion about textbooks, slides, and other course materials",
+      "Career Advice": "Career guidance and professional development discussions",
+      "Tech Stack": "Discussions about technologies and tools used in the course",
+      "Best Practices": "Share and discuss coding best practices",
+      "Debugging Tips": "Tips and tricks for debugging code",
+      "Resource Sharing": "Share useful resources, tutorials, and learning materials",
+      "Project Ideas": "Brainstorm and discuss project ideas",
+      "Code Reviews": "Request and provide code review feedback",
+      "Algorithms & Data Structures": "Deep dive into algorithms and data structures",
+      "Industry Trends": "Discuss current trends and developments in the industry",
+      "Interview Prep": "Share interview experiences and preparation strategies",
+      "Open Source": "Discuss open source contributions and projects",
+      "Side Projects": "Share and discuss personal side projects",
+      "Learning Resources": "Recommend and discuss learning resources",
+      "Q&A": "General questions and answers",
+      Announcements: "Important announcements and updates",
+      "General Discussion": "General class-related discussions"
+    };
+
+    let currentOrdinal = startingOrdinal;
+    let createdCount = 0;
+
+    for (let i = 0; i < numTopics; i++) {
+      const topicIndex = i % GENERAL_DISCUSSION_TOPICS.length;
+      const topicName = GENERAL_DISCUSSION_TOPICS[topicIndex];
+      const topicDescription = topicDescriptions[topicName] || `Discussion about ${topicName}`;
+      const topicColor = topicColors[currentOrdinal % topicColors.length];
+
+      // If we're looping, add a number suffix to make topics unique
+      const displayName =
+        i >= GENERAL_DISCUSSION_TOPICS.length
+          ? `${topicName} ${Math.floor(i / GENERAL_DISCUSSION_TOPICS.length) + 1}`
+          : topicName;
+
+      const { error: topicError } = await supabase.from("discussion_topics").insert({
+        class_id: class_id,
+        topic: displayName,
+        description: topicDescription,
+        color: topicColor,
+        assignment_id: null, // These are general topics, not assignment-specific
+        ordinal: currentOrdinal,
+        default_follow: false
+      });
+
+      if (topicError) {
+        console.warn(`⚠ Failed to create discussion topic "${displayName}": ${topicError.message}`);
+      } else {
+        createdCount++;
+        currentOrdinal++;
+      }
+    }
+
+    console.log(`✓ Created ${createdCount} additional discussion topics`);
+  }
+
   private async createAssignments(
     config: SeedingConfiguration,
     class_id: number,
     students: TestingUser[]
-  ): Promise<
-    Array<{
+  ): Promise<{
+    assignments: Array<{
       id: number;
       title: string;
       due_date: string;
       groups?: Array<{ id: number; name: string; memberCount: number; members: string[] }>;
-    }>
-  > {
-    console.log("\n📚 Creating assignments...");
-
+    }>;
+    nextOrdinal: number;
+  }> {
     const assignments: Array<{
       id: number;
       title: string;
@@ -1628,6 +2160,19 @@ export class DatabaseSeeder {
 
     // Calculate group size for group assignments
     const groupSize = calculateGroupSize(students.length);
+
+    // Get the maximum ordinal from existing discussion topics to determine starting ordinal
+    const { data: existingTopics, error: topicsError } = await supabase
+      .from("discussion_topics")
+      .select("ordinal")
+      .eq("class_id", class_id)
+      .order("ordinal", { ascending: false })
+      .limit(1);
+
+    let nextOrdinal = 1;
+    if (!topicsError && existingTopics && existingTopics.length > 0) {
+      nextOrdinal = existingTopics[0].ordinal + 1;
+    }
 
     // Track assignment indices
     let labAssignmentIdx = 1;
@@ -1774,11 +2319,33 @@ export class DatabaseSeeder {
 
       assignments.push(assignmentResult);
 
+      // Create a discussion topic for this assignment
+      const topicName = `${title} Discussion`;
+      const topicDescription = `Questions and discussions about ${title}`;
+      const topicColors = ["red", "orange", "yellow", "green", "teal", "blue", "cyan", "purple", "pink", "gray"];
+      const topicColor = topicColors[(nextOrdinal - 1) % topicColors.length];
+
+      const { error: topicError } = await supabase.from("discussion_topics").insert({
+        class_id: class_id,
+        topic: topicName,
+        description: topicDescription,
+        color: topicColor,
+        assignment_id: assignmentData.id,
+        ordinal: nextOrdinal,
+        default_follow: false
+      });
+
+      if (topicError) {
+        console.warn(`⚠ Failed to create discussion topic for ${title}: ${topicError.message}`);
+      } else {
+        nextOrdinal++;
+      }
+
       console.log(`✓ Created ${title}${groups.length > 0 ? ` with ${groups.length} groups` : ""}`);
     }
 
     console.log(`✓ Created ${assignments.length} assignments total`);
-    return assignments;
+    return { assignments, nextOrdinal };
   }
 
   protected async createSubmissions(
@@ -3400,6 +3967,15 @@ final;`,
 
     let totalCreated = 0;
     let totalResolved = 0;
+    let globalIndex = 0; // Track global index across batches
+
+    // Helper function to generate skewed duration (1-40 minutes, skewed toward shorter times)
+    const generateSkewedDurationMinutes = (): number => {
+      // Use power function to skew toward lower values (0-1 range)
+      const skewed = Math.pow(Math.random(), 2);
+      // Scale to 1-40 minutes
+      return Math.floor(skewed * 39) + 1;
+    };
 
     for (const batch of helpRequestBatches) {
       console.log(
@@ -3407,14 +3983,23 @@ final;`,
       );
 
       const batchPromises = batch.map(async () => {
+        // Determine if this request should be resolved (exactly half)
+        const isResolved = globalIndex < Math.floor(config.numHelpRequests / 2);
+        globalIndex++;
+
         // Select a random student as the creator
         const creator = students[Math.floor(Math.random() * students.length)];
         const isPrivate = Math.random() < 0.3; // 30% chance of being private
-        const isResolved = Math.random() < 0.8; // 80% chance of being resolved
-        const status = isResolved ? (Math.random() < 0.5 ? "resolved" : "closed") : "open";
+        const status = isResolved ? "resolved" : "open";
 
         // Select a random help request template
         const messageTemplate = HELP_REQUEST_TEMPLATES[Math.floor(Math.random() * HELP_REQUEST_TEMPLATES.length)];
+
+        // For resolved requests, select a random TA (grader) to resolve it
+        const resolver = isResolved && graders.length > 0 ? graders[Math.floor(Math.random() * graders.length)] : null;
+
+        // Calculate resolved_at timestamp (reused for work sessions)
+        const resolvedAt = isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000) : null;
 
         // Create the help request
         const { data: helpRequestData, error: helpRequestError } = await this.rateLimitManager.trackAndLimit(
@@ -3429,12 +4014,9 @@ final;`,
                 is_private: isPrivate,
                 status: status,
                 created_by: creator.private_profile_id,
-                assignee: isResolved
-                  ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id
-                  : null,
-                resolved_at: isResolved
-                  ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString()
-                  : null // Random time in last 7 days
+                assignee: isResolved && resolver ? resolver.private_profile_id : null,
+                resolved_by: isResolved && resolver ? resolver.private_profile_id : null,
+                resolved_at: resolvedAt ? resolvedAt.toISOString() : null
               })
               .select("id")
         );
@@ -3520,6 +4102,59 @@ final;`,
               "help_request_messages",
               () => supabase.from("help_request_messages").insert(messageInserts).select("id"),
               messageInserts.length
+            );
+          }
+        }
+
+        // Create work sessions for resolved requests
+        if (isResolved && graders.length > 0 && resolvedAt) {
+          // Create 1-3 work sessions
+          const numWorkSessions = Math.floor(Math.random() * 3) + 1; // 1, 2, or 3
+
+          const workSessionInserts: Array<{
+            help_request_id: number;
+            class_id: number;
+            ta_profile_id: string;
+            started_at: string;
+            ended_at: string;
+          }> = [];
+
+          // Generate work sessions, working backwards from resolved_at
+          let currentTime = new Date(resolvedAt);
+
+          for (let i = 0; i < numWorkSessions; i++) {
+            // Select a random TA (grader)
+            const ta = graders[Math.floor(Math.random() * graders.length)];
+
+            // Generate skewed duration (1-40 minutes, skewed toward shorter)
+            const durationMinutes = generateSkewedDurationMinutes();
+            const durationMs = durationMinutes * 60 * 1000;
+
+            // Set ended_at to current time, started_at to duration before that
+            const endedAt = new Date(currentTime);
+            const startedAt = new Date(currentTime.getTime() - durationMs);
+
+            workSessionInserts.push({
+              help_request_id: helpRequestId,
+              class_id: class_id,
+              ta_profile_id: ta.private_profile_id,
+              started_at: startedAt.toISOString(),
+              ended_at: endedAt.toISOString()
+            });
+
+            // Move current time back by duration + some gap (5-30 minutes) for next session
+            const gapMinutes = Math.floor(Math.random() * 25) + 5;
+            currentTime = new Date(currentTime.getTime() - durationMs - gapMinutes * 60 * 1000);
+          }
+
+          // Insert work sessions (reverse order so earliest is first)
+          if (workSessionInserts.length > 0) {
+            // Reverse to insert in chronological order (earliest first)
+            workSessionInserts.reverse();
+            await this.rateLimitManager.trackAndLimit(
+              "help_request_work_sessions",
+              () => supabase.from("help_request_work_sessions").insert(workSessionInserts).select("id"),
+              workSessionInserts.length
             );
           }
         }
@@ -4063,6 +4698,220 @@ public class Entrypoint {
 
     // Flatten results from all chunks
     return chunkResults.flat();
+  }
+
+  protected async createSurveys(
+    config: SurveyConfig,
+    class_id: number,
+    students: TestingUser[],
+    instructors: TestingUser[]
+  ) {
+    console.log(`\n📋 Creating ${config.numSurveys} surveys...`);
+
+    // First, create survey templates
+    const templates = await this.createSurveyTemplates(config, class_id, instructors);
+    console.log(`   ✓ Created ${templates.length} survey templates`);
+
+    // Create surveys
+    const surveys = [];
+    const surveyTypes = Object.keys(SURVEYJS_TEMPLATES);
+
+    for (let i = 0; i < config.numSurveys; i++) {
+      const instructor = instructors[Math.floor(Math.random() * instructors.length)];
+      const surveyType = surveyTypes[i % surveyTypes.length] as keyof typeof SURVEYJS_TEMPLATES;
+      const template = SURVEYJS_TEMPLATES[surveyType];
+
+      // Determine survey status (70% published, 20% draft, 10% closed)
+      const statusRoll = Math.random();
+      const status = statusRoll < 0.7 ? "published" : statusRoll < 0.9 ? "draft" : "closed";
+
+      // Create survey with SurveyJS JSON format
+      const surveyData = {
+        class_id: class_id,
+        created_by: instructor.private_profile_id,
+        title:
+          `${template.title} ${i > surveyTypes.length - 1 ? `#${Math.floor(i / surveyTypes.length) + 1}` : ""}`.trim(),
+        description: template.description,
+        json: template, // Store the entire SurveyJS template
+        status: status as "draft" | "published" | "closed",
+        allow_response_editing: Math.random() < 0.7, // 70% allow editing
+        due_date: status === "published" ? addDays(new Date(), Math.floor(Math.random() * 30) + 7).toISOString() : null,
+        version: 1
+      };
+
+      const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit("surveys", () =>
+        supabase.from("surveys").insert(surveyData).select("id, survey_id, status, title")
+      );
+
+      if (surveyError) {
+        throw new Error(`Failed to create survey: ${surveyError.message}`);
+      }
+
+      surveys.push(surveyResult[0]);
+      console.log(`   ✓ Created survey: "${surveyResult[0].title}" (${surveyResult[0].status})`);
+    }
+
+    // Create responses for published surveys
+    const publishedSurveys = surveys.filter((s) => s.status === "published");
+    if (publishedSurveys.length > 0) {
+      await this.createSurveyResponses(
+        publishedSurveys,
+        students,
+        class_id,
+        config.responseRate,
+        config.submissionRate
+      );
+    }
+
+    console.log(`✓ Created ${surveys.length} surveys with responses`);
+  }
+
+  private async createSurveyTemplates(config: SurveyConfig, class_id: number, instructors: TestingUser[]) {
+    console.log(`   Creating ${config.numTemplates} survey templates...`);
+
+    const templates = [];
+    const surveyTypes = Object.keys(SURVEYJS_TEMPLATES);
+
+    for (let i = 0; i < config.numTemplates; i++) {
+      const instructor = instructors[Math.floor(Math.random() * instructors.length)];
+      const surveyType = surveyTypes[i % surveyTypes.length] as keyof typeof SURVEYJS_TEMPLATES;
+      const template = SURVEYJS_TEMPLATES[surveyType];
+
+      const templateData = {
+        class_id: class_id,
+        created_by: instructor.private_profile_id,
+        title: `${template.title} Template`,
+        description: `Reusable template: ${template.description}`,
+        template: template, // Store the full SurveyJS template
+        scope: "course" as const,
+        version: 1
+      };
+
+      const { data: templateResult, error: templateError } = await this.rateLimitManager.trackAndLimit(
+        "survey_templates",
+        () => supabase.from("survey_templates").insert(templateData).select("id, title")
+      );
+
+      if (templateError) {
+        throw new Error(`Failed to create survey template: ${templateError.message}`);
+      }
+
+      templates.push(templateResult[0]);
+    }
+
+    return templates;
+  }
+
+  private async createSurveyResponses(
+    surveys: Array<{ id: string; survey_id: string; status: string; title: string }>,
+    students: TestingUser[],
+    class_id: number,
+    responseRate: number,
+    submissionRate: number
+  ) {
+    console.log(`   Creating survey responses...`);
+
+    const responsesToCreate: Array<{
+      survey_id: string;
+      profile_id: string;
+      response: Record<string, any>;
+      is_submitted: boolean;
+      submitted_at: string | null;
+    }> = [];
+
+    for (const survey of surveys) {
+      // Get the survey JSON to generate appropriate responses
+      const { data: surveyData } = await supabase.from("surveys").select("json").eq("id", survey.id).single();
+
+      if (!surveyData || !surveyData.json) continue;
+
+      const surveyJson = surveyData.json as { pages: Array<{ elements: Array<any> }> };
+      const allElements = surveyJson.pages.flatMap((page) => page.elements || []);
+
+      // Determine which students respond (based on responseRate)
+      const respondingStudents = students.filter(() => Math.random() < responseRate);
+
+      for (const student of respondingStudents) {
+        const isSubmitted = Math.random() < submissionRate;
+        const responseData: Record<string, any> = {};
+
+        // Generate responses for each question element
+        allElements.forEach((element) => {
+          if (!element.name) return;
+          responseData[element.name] = this.generateSurveyJSResponse(element);
+        });
+
+        responsesToCreate.push({
+          survey_id: survey.id,
+          profile_id: student.private_profile_id,
+          response: responseData,
+          is_submitted: isSubmitted,
+          submitted_at: isSubmitted ? new Date().toISOString() : null
+        });
+      }
+    }
+
+    // Batch insert responses
+    if (responsesToCreate.length > 0) {
+      const BATCH_SIZE = this.rateLimits["survey_responses"]?.batchSize || 100;
+      const chunks = chunkArray(responsesToCreate, BATCH_SIZE);
+
+      for (const chunk of chunks) {
+        const { error: responseError } = await this.rateLimitManager.trackAndLimit(
+          "survey_responses",
+          () => supabase.from("survey_responses").insert(chunk).select("id"),
+          chunk.length
+        );
+
+        if (responseError) {
+          throw new Error(`Failed to create survey responses: ${responseError.message}`);
+        }
+      }
+
+      const submittedCount = responsesToCreate.filter((r) => r.is_submitted).length;
+      console.log(`   ✓ Created ${responsesToCreate.length} responses (${submittedCount} submitted)`);
+    }
+  }
+
+  private generateSurveyJSResponse(element: any): any {
+    switch (element.type) {
+      case "rating": {
+        const min = element.rateMin || 1;
+        const max = element.rateMax || 5;
+        const step = element.rateStep || 1;
+        const range = (max - min) / step;
+        return min + Math.floor(Math.random() * (range + 1)) * step;
+      }
+
+      case "radiogroup":
+      case "dropdown": {
+        const choices = element.choices || [];
+        if (choices.length === 0) return null;
+        return choices[Math.floor(Math.random() * choices.length)];
+      }
+
+      case "checkbox": {
+        const checkboxChoices = element.choices || [];
+        if (checkboxChoices.length === 0) return [];
+        // Select 1-3 random options
+        const numSelections = Math.floor(Math.random() * Math.min(3, checkboxChoices.length)) + 1;
+        return faker.helpers.arrayElements(checkboxChoices, numSelections);
+      }
+
+      case "boolean":
+        return Math.random() < 0.5;
+
+      case "text":
+        return faker.lorem.sentence();
+
+      case "comment": {
+        const rows = element.rows || 3;
+        return faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
+      }
+
+      default:
+        return null;
+    }
   }
 }
 

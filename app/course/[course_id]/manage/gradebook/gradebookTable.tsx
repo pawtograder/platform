@@ -64,7 +64,6 @@ import { useForm } from "@refinedev/react-hook-form";
 import {
   Column,
   ColumnDef,
-  filterFns,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
@@ -1028,7 +1027,7 @@ function GenericGradebookColumnHeader({
   clearSorting,
   columnModel,
   header,
-  rowModel,
+  coreRowModel,
   classSections,
   labSections
 }: {
@@ -1038,7 +1037,7 @@ function GenericGradebookColumnHeader({
   clearSorting: () => void;
   columnModel: Column<UserProfile, unknown>;
   header: Header<UserProfile, unknown>;
-  rowModel: RowModel<UserProfile>;
+  coreRowModel: RowModel<UserProfile>;
   classSections?: ClassSection[];
   labSections?: LabSection[];
 }) {
@@ -1120,7 +1119,7 @@ function GenericGradebookColumnHeader({
             isOpen={showFilter}
             onClose={() => setShowFilter(false)}
             triggerRef={ref}
-            rowModel={rowModel}
+            rowModel={coreRowModel}
           />
         )}
       </Box>
@@ -1909,7 +1908,16 @@ export default function GradebookTable() {
         accessorFn: (row) => row.name,
         cell: ({ row }) => <StudentNameCell uid={row.original.id} />,
         enableColumnFilter: true,
-        filterFn: filterFns.includesString,
+        filterFn: (row, columnId, filterValue) => {
+          const studentName = row.original.name || "";
+          if (!filterValue) return true;
+          if (Array.isArray(filterValue)) {
+            // When multiple names are selected, check if student name is in the array
+            return filterValue.some((name) => studentName.toLowerCase().includes(String(name).toLowerCase()));
+          }
+          // Single string filter - case-insensitive partial match
+          return studentName.toLowerCase().includes(String(filterValue).toLowerCase());
+        },
         enableSorting: true
       }
     ];
@@ -2044,6 +2052,7 @@ export default function GradebookTable() {
 
   const headerGroups = table.getHeaderGroups();
   const rowModel = table.getRowModel();
+  const coreRowModel = table.getCoreRowModel();
 
   // Virtualization setup
   const parentRef = useRef<HTMLDivElement>(null);
@@ -2590,7 +2599,7 @@ export default function GradebookTable() {
                             clearSorting={header.column.clearSorting}
                             columnModel={header.column}
                             header={header}
-                            rowModel={rowModel}
+                            coreRowModel={coreRowModel}
                             classSections={classSections?.data}
                             labSections={labSections}
                           />

@@ -1,9 +1,7 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { Redis } from "../_shared/Redis.ts";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
@@ -15,7 +13,7 @@ import type {
   SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError } from "../_shared/GitHubWrapper.ts";
+import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
@@ -33,54 +31,6 @@ type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
-
-const createContentLimiters = new Map<string, Bottleneck>();
-/**
- * GitHub limits the number of content-creating requests per organization per-minute and per-hour
- * @param org GitHub organization
- * @returns
- */
-export function getCreateContentLimiter(org: string): Bottleneck {
-  const key = org || "unknown";
-  const existing = createContentLimiters.get(key);
-  if (existing) return existing;
-  let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 50,
-      reservoirRefreshAmount: 50,
-      reservoirRefreshInterval: 60_000,
-      maxConcurrent: 50,
-      datastore: "ioredis",
-      timeout: 600000, // 10 minutes
-      clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default"
-      },
-      Redis
-    });
-    limiter.on("error", (err: Error) => console.error(err));
-  } else {
-    console.log("No Upstash URL or token found, using local limiter");
-    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
-    limiter = new Bottleneck({
-      id: `create_repo:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 10,
-      maxConcurrent: 10,
-      reservoirRefreshAmount: 10,
-      reservoirRefreshInterval: 60_000
-    });
-  }
-  createContentLimiters.set(key, limiter);
-  return limiter;
-}
 
 function toMsLatency(enqueuedAt: string): number {
   try {
@@ -249,6 +199,206 @@ async function requeueWithDelay(
   }
 }
 
+async function sendToDeadLetterQueue(
+  adminSupabase: SupabaseClient<Database>,
+  envelope: GitHubAsyncEnvelope,
+  meta: { msg_id: number; enqueued_at: string },
+  error: unknown,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorType = error instanceof Error ? error.constructor.name : "Unknown";
+  const retryCount = envelope.retry_count ?? 0;
+
+  // Send to DLQ queue
+  try {
+    const dlqResult = await adminSupabase.schema("pgmq_public").rpc("send", {
+      queue_name: "async_calls_dlq",
+      message: envelope as unknown as Json,
+      sleep_seconds: 0
+    });
+    if (dlqResult.error) {
+      scope.setContext("dlq_send_error", {
+        error_message: dlqResult.error.message,
+        original_msg_id: meta.msg_id
+      });
+      Sentry.captureException(dlqResult.error, scope);
+      // Log to Sentry with comprehensive context before returning
+      scope.setTag("dlq", "true");
+      scope.setTag("retry_count", String(retryCount));
+      scope.setContext("dead_letter_queue", {
+        original_msg_id: meta.msg_id,
+        method: envelope.method,
+        retry_count: retryCount,
+        error_message: errorMessage,
+        error_type: errorType,
+        enqueued_at: meta.enqueued_at,
+        class_id: envelope.class_id,
+        debug_id: envelope.debug_id,
+        log_id: envelope.log_id
+      });
+      Sentry.captureMessage(
+        `Failed to send message to dead letter queue after ${retryCount} retries: ${envelope.method}`,
+        {
+          level: "error",
+          tags: {
+            dlq: "true",
+            method: envelope.method,
+            retry_count: String(retryCount)
+          }
+        }
+      );
+      return false;
+    }
+  } catch (e) {
+    scope.setContext("dlq_send_exception", {
+      error_message: e instanceof Error ? e.message : String(e),
+      original_msg_id: meta.msg_id
+    });
+    Sentry.captureException(e, scope);
+    // Log to Sentry with comprehensive context before returning
+    scope.setTag("dlq", "true");
+    scope.setTag("retry_count", String(retryCount));
+    scope.setContext("dead_letter_queue", {
+      original_msg_id: meta.msg_id,
+      method: envelope.method,
+      retry_count: retryCount,
+      error_message: errorMessage,
+      error_type: errorType,
+      enqueued_at: meta.enqueued_at,
+      class_id: envelope.class_id,
+      debug_id: envelope.debug_id,
+      log_id: envelope.log_id
+    });
+    Sentry.captureMessage(
+      `Failed to send message to dead letter queue after ${retryCount} retries: ${envelope.method}`,
+      {
+        level: "error",
+        tags: {
+          dlq: "true",
+          method: envelope.method,
+          retry_count: String(retryCount)
+        }
+      }
+    );
+    return false;
+  }
+
+  // Record in DLQ tracking table
+  try {
+    const queryBuilder = adminSupabase.from("async_worker_dlq_messages" as never);
+    const { error: insertError } = await queryBuilder.insert({
+      original_msg_id: meta.msg_id,
+      method: envelope.method,
+      envelope: envelope as unknown as Json,
+      error_message: errorMessage,
+      error_type: errorType,
+      retry_count: retryCount,
+      last_error_context: {
+        error_message: errorMessage,
+        error_type: errorType,
+        enqueued_at: meta.enqueued_at,
+        failed_at: new Date().toISOString()
+      } as unknown as Json,
+      class_id: envelope.class_id,
+      debug_id: envelope.debug_id,
+      log_id: envelope.log_id
+    });
+
+    if (insertError) {
+      scope.setContext("dlq_table_insert_error", {
+        error_message: insertError.message,
+        original_msg_id: meta.msg_id
+      });
+      Sentry.captureException(insertError, scope);
+      // Log to Sentry with comprehensive context before returning
+      scope.setTag("dlq", "true");
+      scope.setTag("retry_count", String(retryCount));
+      scope.setContext("dead_letter_queue", {
+        original_msg_id: meta.msg_id,
+        method: envelope.method,
+        retry_count: retryCount,
+        error_message: errorMessage,
+        error_type: errorType,
+        enqueued_at: meta.enqueued_at,
+        class_id: envelope.class_id,
+        debug_id: envelope.debug_id,
+        log_id: envelope.log_id
+      });
+      Sentry.captureMessage(
+        `Failed to insert message into DLQ tracking table after ${retryCount} retries: ${envelope.method}`,
+        {
+          level: "error",
+          tags: {
+            dlq: "true",
+            method: envelope.method,
+            retry_count: String(retryCount)
+          }
+        }
+      );
+      return false;
+    }
+  } catch (e) {
+    scope.setContext("dlq_table_insert_exception", {
+      error_message: e instanceof Error ? e.message : String(e),
+      original_msg_id: meta.msg_id
+    });
+    Sentry.captureException(e, scope);
+    // Log to Sentry with comprehensive context before returning
+    scope.setTag("dlq", "true");
+    scope.setTag("retry_count", String(retryCount));
+    scope.setContext("dead_letter_queue", {
+      original_msg_id: meta.msg_id,
+      method: envelope.method,
+      retry_count: retryCount,
+      error_message: errorMessage,
+      error_type: errorType,
+      enqueued_at: meta.enqueued_at,
+      class_id: envelope.class_id,
+      debug_id: envelope.debug_id,
+      log_id: envelope.log_id
+    });
+    Sentry.captureMessage(
+      `Failed to insert message into DLQ tracking table after ${retryCount} retries: ${envelope.method}`,
+      {
+        level: "error",
+        tags: {
+          dlq: "true",
+          method: envelope.method,
+          retry_count: String(retryCount)
+        }
+      }
+    );
+    return false;
+  }
+
+  // Log to Sentry with comprehensive context
+  scope.setTag("dlq", "true");
+  scope.setTag("retry_count", String(retryCount));
+  scope.setContext("dead_letter_queue", {
+    original_msg_id: meta.msg_id,
+    method: envelope.method,
+    retry_count: retryCount,
+    error_message: errorMessage,
+    error_type: errorType,
+    enqueued_at: meta.enqueued_at,
+    class_id: envelope.class_id,
+    debug_id: envelope.debug_id,
+    log_id: envelope.log_id
+  });
+
+  Sentry.captureMessage(`Message sent to dead letter queue after ${retryCount} retries: ${envelope.method}`, {
+    level: "error",
+    tags: {
+      dlq: "true",
+      method: envelope.method,
+      retry_count: String(retryCount)
+    }
+  });
+
+  return true;
+}
+
 async function recordGitHubAsyncError(
   adminSupabase: SupabaseClient<Database>,
   org: string,
@@ -382,6 +532,25 @@ export async function processEnvelope(
       if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
         const row = orgCirc.data[0] as { state?: string; open_until?: string };
         if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          // Check retry count - if >= 5, send to DLQ instead of requeuing
+          const currentRetryCount = envelope.retry_count ?? 0;
+          if (currentRetryCount >= 5) {
+            const error = new Error(`Circuit breaker open for org ${org} after ${currentRetryCount} retries`);
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope);
+            } else {
+              console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", {
+                msg_id: meta.msg_id,
+                reason: "DLQ send failed"
+              });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+                level: "error"
+              });
+            }
+            return false;
+          }
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org");
@@ -400,6 +569,25 @@ export async function processEnvelope(
       if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
         const row = methodCirc.data[0] as { state?: string; open_until?: string };
         if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          // Check retry count - if >= 5, send to DLQ instead of requeuing
+          const currentRetryCount = envelope.retry_count ?? 0;
+          if (currentRetryCount >= 5) {
+            const error = new Error(`Circuit breaker open for ${envelope.method} after ${currentRetryCount} retries`);
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope);
+            } else {
+              console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", {
+                msg_id: meta.msg_id,
+                reason: "DLQ send failed"
+              });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+                level: "error"
+              });
+            }
+            return false;
+          }
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org_method");
@@ -413,6 +601,25 @@ export async function processEnvelope(
   } catch (e) {
     // circuit check failure should not break processing; continue
     Sentry.captureException(e, scope);
+  }
+
+  // Test DLQ failure injection - throw error if enabled via environment variable
+  // When enabled, if a message has been retried at least once, always fail it again
+  // to ensure it reaches the DLQ threshold (5 retries)
+  // Protected: only enabled in non-production environments with explicit flag
+  const nodeEnv = Deno.env.get("NODE_ENV");
+  const injectDlqFailure = Deno.env.get("INJECT_DLQ_FAILURE");
+  const retryCount = envelope.retry_count ?? 0;
+  if (nodeEnv !== "production" && injectDlqFailure === "1") {
+    if (retryCount >= 1 || Math.random() < 0.5) {
+      const error = new Error(`DLQ test failure injection - simulating processing error (retry ${retryCount})`);
+      scope.setTag("dlq_test_injection", "true");
+      scope.setContext("dlq_test_injection", {
+        retry_count: retryCount,
+        method: envelope.method
+      });
+      throw error;
+    }
   }
 
   try {
@@ -1003,6 +1210,25 @@ export async function processEnvelope(
           console.error("error", e);
           Sentry.captureException(e, scope);
         }
+        // Check retry count - if >= 5, send to DLQ instead of requeuing
+        const currentRetryCount = envelope.retry_count ?? 0;
+        if (currentRetryCount >= 5) {
+          const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+          if (dlqSuccess) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope);
+          } else {
+            console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+            scope.setContext("dlq_archive_skipped", {
+              msg_id: meta.msg_id,
+              reason: "DLQ send failed"
+            });
+            Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+              level: "error"
+            });
+          }
+          return false;
+        }
+
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
         const circuitTripped = org
           ? await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope)
@@ -1050,6 +1276,25 @@ export async function processEnvelope(
           Sentry.captureException(e, scope);
         }
 
+        // Check retry count - if >= 5, send to DLQ instead of requeuing
+        const currentRetryCount = envelope.retry_count ?? 0;
+        if (currentRetryCount >= 5) {
+          const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+          if (dlqSuccess) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope);
+          } else {
+            console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+            scope.setContext("dlq_archive_skipped", {
+              msg_id: meta.msg_id,
+              reason: "DLQ send failed"
+            });
+            Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+              level: "error"
+            });
+          }
+          return false;
+        }
+
         // Check if we should trip the circuit breaker due to error threshold (8 hours)
         const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
@@ -1084,6 +1329,25 @@ export async function processEnvelope(
         },
         scope
       );
+
+      // Check retry count - if >= 5, send to DLQ instead of requeuing
+      const currentRetryCount = envelope.retry_count ?? 0;
+      if (currentRetryCount >= 5) {
+        const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        if (dlqSuccess) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+        } else {
+          console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+          scope.setContext("dlq_archive_skipped", {
+            msg_id: meta.msg_id,
+            reason: "DLQ send failed"
+          });
+          Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, {
+            level: "error"
+          });
+        }
+        return false;
+      }
 
       // For any error, requeue with 2-minute delay to prevent immediate retry
       scope.setContext("async_error", {

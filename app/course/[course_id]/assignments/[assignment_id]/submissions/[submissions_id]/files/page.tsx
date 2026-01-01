@@ -555,7 +555,9 @@ function ArtifactCheckPopover({
       .filter((check) => check.is_annotation && check.annotation_target === "artifact")
       .map((check) => check.rubric_criteria_id);
 
-    return rubricCriteria.filter((criteria) => annotationChecks.includes(criteria.id));
+    return rubricCriteria
+      .filter((criteria) => annotationChecks.includes(criteria.id))
+      .sort((a, b) => a.ordinal - b.ordinal);
   }, [rubricCriteria, rubricChecks]);
 
   const criteriaOptions: RubricCriteriaSelectGroupOption[] = useMemo(() => {
@@ -570,6 +572,7 @@ function ArtifactCheckPopover({
           (check) =>
             check.is_annotation && check.annotation_target === "artifact" && check.rubric_criteria_id === criteria.id
         )
+        .sort((a, b) => a.ordinal - b.ordinal)
         .map((check) => {
           const option: RubricCheckSelectOption = {
             label: check.name,

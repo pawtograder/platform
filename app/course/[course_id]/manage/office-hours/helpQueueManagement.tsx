@@ -13,6 +13,7 @@ import { useDelete } from "@refinedev/core";
 import { BsPencil, BsPlus, BsTrash } from "react-icons/bs";
 import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
+import DiscordChannelLink from "@/components/discord/discord-channel-link";
 
 /**
  * Component for managing help queues in a course.
@@ -158,6 +159,13 @@ export default function HelpQueueManagement() {
                 </Box>
 
                 <HStack spaceX={2}>
+                  <DiscordChannelLink
+                    channelType="office_hours"
+                    resourceId={queue.id}
+                    size="sm"
+                    variant="outline"
+                    tooltipText="Open Discord Channel"
+                  />
                   <Button size="sm" variant="outline" onClick={() => editModal.openModal(queue)}>
                     <Icon as={BsPencil} />
                     Edit

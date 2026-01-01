@@ -101,6 +101,166 @@ export async function createClassSection({
   }
   return sectionData;
 }
+
+export async function createClassWithSISSections({
+  class_id,
+  class_section_crns,
+  lab_section_crns
+}: {
+  class_id: number;
+  class_section_crns: number[];
+  lab_section_crns: number[];
+}): Promise<{
+  classSections: Array<{ id: number; sis_crn: number; name: string }>;
+  labSections: Array<{ id: number; sis_crn: number; name: string }>;
+}> {
+  const classSections: Array<{ id: number; sis_crn: number; name: string }> = [];
+  const labSections: Array<{ id: number; sis_crn: number; name: string }> = [];
+
+  for (const crn of class_section_crns) {
+    const { data, error } = await supabase
+      .from("class_sections")
+      .insert({
+        class_id,
+        name: `SIS Class Section ${crn}`,
+        sis_crn: crn
+      })
+      .select("id, sis_crn, name")
+      .single();
+    if (error) throw new Error(`Failed to create SIS class section ${crn}: ${error.message}`);
+    classSections.push({ id: data.id, sis_crn: data.sis_crn!, name: data.name });
+  }
+
+  for (const crn of lab_section_crns) {
+    const { data, error } = await supabase
+      .from("lab_sections")
+      .insert({
+        class_id,
+        name: `SIS Lab Section ${crn}`,
+        sis_crn: crn
+      })
+      .select("id, sis_crn, name")
+      .single();
+    if (error) throw new Error(`Failed to create SIS lab section ${crn}: ${error.message}`);
+    labSections.push({ id: data.id, sis_crn: data.sis_crn!, name: data.name });
+  }
+
+  return { classSections, labSections };
+}
+
+export type SimulatedSISRosterEntry = {
+  sis_user_id: number;
+  name?: string;
+  role: "student" | "grader" | "instructor";
+  class_section_crn?: number | null;
+  lab_section_crn?: number | null;
+};
+
+export type SISSyncEnrollmentResult = {
+  success: boolean;
+  class_id: number;
+  expire_missing: boolean;
+  counts: {
+    invitations_created: number;
+    invitations_updated: number;
+    invitations_expired: number;
+    invitations_reactivated: number;
+    enrollments_created: number;
+    enrollments_updated: number;
+    enrollments_disabled: number;
+    enrollments_reenabled: number;
+    enrollments_adopted: number;
+  };
+};
+
+export async function simulateSISSync({
+  class_id,
+  roster,
+  expire_missing = true,
+  section_updates
+}: {
+  class_id: number;
+  roster: SimulatedSISRosterEntry[];
+  expire_missing?: boolean;
+  section_updates?: Array<{
+    section_type: "class" | "lab";
+    sis_crn: number;
+    meeting_location?: string | null;
+    meeting_times?: string | null;
+    campus?: string | null;
+    day_of_week?: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | null;
+    start_time?: string | null;
+    end_time?: string | null;
+  }>;
+}): Promise<SISSyncEnrollmentResult> {
+  const { data, error } = await supabase.rpc("sis_sync_enrollment", {
+    p_class_id: class_id,
+    p_roster_data: roster,
+    p_sync_options: {
+      expire_missing,
+      section_updates: section_updates ?? []
+    }
+  });
+
+  if (error) throw new Error(`sis_sync_enrollment failed: ${error.message}`);
+  if (!data) throw new Error("sis_sync_enrollment returned null");
+  return data as SISSyncEnrollmentResult;
+}
+
+export async function getEnrollmentState(
+  class_id: number,
+  sis_user_id: number
+): Promise<{
+  user?: { user_id: string; sis_user_id: number | null };
+  user_role?: {
+    id: number;
+    role: "student" | "grader" | "instructor" | "admin";
+    disabled: boolean;
+    canvas_id: number | null;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+    sis_sync_opt_out?: boolean;
+  } | null;
+  invitation?: {
+    id: number;
+    status: string;
+    role: string;
+    sis_managed: boolean;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  } | null;
+}> {
+  const { data: user } = await supabase
+    .from("users")
+    .select("user_id, sis_user_id")
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+
+  const { data: invitation } = await supabase
+    .from("invitations")
+    .select("id, status, role, sis_managed, class_section_id, lab_section_id")
+    .eq("class_id", class_id)
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+
+  let user_role = null;
+  if (user?.user_id) {
+    const { data: ur } = await supabase
+      .from("user_roles")
+      .select("id, role, disabled, canvas_id, class_section_id, lab_section_id, sis_sync_opt_out")
+      .eq("class_id", class_id)
+      .eq("user_id", user.user_id)
+      .maybeSingle();
+    user_role = ur ?? null;
+  }
+
+  return { user: user ?? undefined, user_role, invitation: invitation ?? null };
+}
+
+export async function setUserSisId(user_id: string, sis_user_id: number) {
+  const { error } = await supabase.from("users").update({ sis_user_id }).eq("user_id", user_id);
+  if (error) throw new Error(`Failed to set users.sis_user_id=${sis_user_id} for user_id=${user_id}: ${error.message}`);
+}
 export async function updateClassSettings({
   class_id,
   start_date,
@@ -126,7 +286,7 @@ export async function updateClassSettings({
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  const userSupabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -149,6 +309,38 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
   }
 
   return data.session.access_token;
+}
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// Helper function to create a Supabase client authenticated as a specific user
+export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
+  // Create a separate Supabase client for the user (using anon key)
+  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+
+  // Generate magic link using admin client
+  const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
+    email: testingUser.email,
+    type: "magiclink"
+  });
+
+  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
+  }
+
+  // Verify the OTP to get a session
+  const { data, error } = await userSupabase.auth.verifyOtp({
+    token_hash: magicLinkData.properties.hashed_token,
+    type: "magiclink"
+  });
+
+  if (error || !data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  }
+
+  await userSupabase.auth.setSession(data.session);
+
+  return userSupabase;
 }
 
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
@@ -859,6 +1051,7 @@ let labSectionIdx = 1;
 export async function createLabSectionWithStudents({
   class_id,
   lab_leader,
+  lab_leaders,
   day_of_week,
   students,
   start_time,
@@ -866,7 +1059,8 @@ export async function createLabSectionWithStudents({
   name
 }: {
   class_id?: number;
-  lab_leader: TestingUser;
+  lab_leader?: TestingUser; // Deprecated, use lab_leaders instead
+  lab_leaders?: TestingUser[];
   day_of_week: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
   students: TestingUser[];
   start_time?: string;
@@ -875,10 +1069,16 @@ export async function createLabSectionWithStudents({
 }) {
   const lab_section_name = name ?? `Lab #${labSectionIdx} (${day_of_week})`;
   labSectionIdx++;
+
+  // Support both old lab_leader and new lab_leaders for backwards compatibility
+  const leaders = lab_leaders || (lab_leader ? [lab_leader] : []);
+  if (leaders.length === 0) {
+    throw new Error("At least one lab leader is required");
+  }
+
   const { data: labSectionData, error: labSectionError } = await supabase
     .from("lab_sections")
     .insert({
-      lab_leader_id: lab_leader.private_profile_id,
       name: lab_section_name,
       day_of_week: day_of_week,
       class_id: class_id || 1,
@@ -891,6 +1091,21 @@ export async function createLabSectionWithStudents({
     throw new Error(`Failed to create lab section: ${labSectionError.message}`);
   }
   const lab_section_id = labSectionData.id;
+
+  // Insert lab section leaders into junction table
+  if (leaders.length > 0) {
+    const { error: leadersError } = await supabase.from("lab_section_leaders").insert(
+      leaders.map((leader) => ({
+        lab_section_id: lab_section_id,
+        profile_id: leader.private_profile_id,
+        class_id: class_id || 1
+      }))
+    );
+    if (leadersError) {
+      throw new Error(`Failed to create lab section leaders: ${leadersError.message}`);
+    }
+  }
+
   for (const student of students) {
     await supabase
       .from("user_roles")
@@ -910,6 +1125,7 @@ export async function insertOfficeHoursQueue({ class_id, name }: { class_id: num
       name: name,
       description: "This is a test office hours queue for E2E testing",
       depth: 1,
+      available: true,
       queue_type: "video"
     })
     .select("id")
@@ -929,7 +1145,10 @@ export async function insertAssignment({
   allow_not_graded_submissions,
   class_id,
   rateLimitManager,
-  name
+  name,
+  regrade_deadline,
+  release_date,
+  grader_pseudonymous_mode
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -937,6 +1156,9 @@ export async function insertAssignment({
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
+  regrade_deadline?: string | null;
+  release_date?: string;
+  grader_pseudonymous_mode?: boolean;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -970,12 +1192,14 @@ export async function insertAssignment({
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,
-      release_date: addDays(new Date(), -1).toUTCString(),
+      release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
       slug: `assignment-${currentAssignmentIdx}`,
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
-      self_review_setting_id: self_review_setting_id
+      self_review_setting_id: self_review_setting_id,
+      regrade_deadline: regrade_deadline,
+      grader_pseudonymous_mode: grader_pseudonymous_mode || false
     })
     .select("id")
     .single();

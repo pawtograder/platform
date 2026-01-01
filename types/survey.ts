@@ -1,0 +1,37 @@
+import type { Tables } from "@/utils/supabase/SupabaseTypes";
+
+type DbSurvey = Tables<"surveys">;
+type DbSurveyResponse = Tables<"survey_responses">;
+type DbSurveyAssignee = Tables<"survey_assignments">;
+
+export type ResponseData = DbSurveyResponse["response"];
+
+export type SurveyResponse = DbSurveyResponse;
+
+export type SurveyResponseWithProfile = SurveyResponse & {
+  profiles: {
+    id: string;
+    name: string | null;
+    sis_user_id?: string | null;
+  };
+};
+
+export type Survey = DbSurvey;
+
+export type SurveyWithResponse = Survey & {
+  response_status: "not_started" | "in_progress" | "completed";
+  submitted_at?: string | null;
+  is_submitted?: boolean;
+};
+
+export type SurveyWithCounts = Survey & {
+  response_count: number;
+  submitted_count: number;
+  assigned_student_count: number;
+};
+
+export type SurveyAssignee = DbSurveyAssignee;
+
+export type SurveyWithAssignees = Survey & {
+  assignees: SurveyAssignee[];
+};

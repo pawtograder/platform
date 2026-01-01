@@ -39,13 +39,12 @@ test.beforeAll(async () => {
       useMagicLink: true
     }
   ]);
-  // Create 10 lab sections
+  // Create 20 lab sections
   const daysOfWeek = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   for (let i = 0; i < 20; i++) {
-    const { error: labSectionError } = await supabase
+    const { data: labSectionData, error: labSectionError } = await supabase
       .from("lab_sections")
       .insert({
-        lab_leader_id: instructor1!.private_profile_id,
         name: `<Lab Section ${i + 1}>`,
         day_of_week: daysOfWeek[i % daysOfWeek.length] as DayOfWeek,
         class_id: course.id,
@@ -56,6 +55,15 @@ test.beforeAll(async () => {
       .single();
     if (labSectionError) {
       throw new Error(`Failed to create lab section: ${labSectionError.message}`);
+    }
+    // Insert lab section leader
+    const { error: leaderError } = await supabase.from("lab_section_leaders").insert({
+      lab_section_id: labSectionData.id,
+      profile_id: instructor1!.private_profile_id,
+      class_id: course.id
+    });
+    if (leaderError) {
+      throw new Error(`Failed to create lab section leader: ${leaderError.message}`);
     }
   }
 });
@@ -81,17 +89,12 @@ test.describe("Lab Sections Page", () => {
     // Create a lab section
     await page.getByRole("button", { name: "Create Lab Section" }).click();
     await page.getByPlaceholder("e.g., Lab Section A").fill(labSectionName);
-    await page.waitForFunction(
-      (profileId) => {
-        const select = document.querySelector('select[name="lab_leader_id"]');
-        if (!select) return false;
-        const option = select.querySelector(`option[value="${profileId}"]`);
-        return option !== null;
-      },
-      instructor2!.private_profile_id,
-      { timeout: 10000 }
-    );
-    await page.locator('select[name="lab_leader_id"]').selectOption(instructor2!.private_profile_id);
+    // Wait for the multi-select to be available and select instructor2
+    await page.waitForSelector('[role="combobox"]', { timeout: 10000 });
+    await page.locator('[role="combobox"]').click();
+    await page
+      .getByText((instructor2!.private_profile_name || "Lab Sections Instructor 2") + " (instructor)", { exact: true })
+      .click();
     await page.getByPlaceholder("Optional description").fill(labSectionDescription);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.locator(`text=${labSectionName}`).first()).toBeVisible();
