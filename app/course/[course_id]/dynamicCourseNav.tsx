@@ -1,7 +1,6 @@
 "use client";
 
 import { TimeZoneModal } from "@/components/TimeZoneModal";
-import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import {
   DrawerBackdrop,
@@ -16,7 +15,6 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import Image from "next/image";
@@ -223,34 +221,6 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
   );
 }
 
-function TimeZoneIndicator() {
-  const { mode, timeZone, courseTimeZone, browserTimeZone } = useTimeZone();
-
-  // Only show indicator if timezones differ
-  if (courseTimeZone === browserTimeZone) {
-    return null;
-  }
-
-  const getTimeZoneAbbr = (tz: string) => {
-    try {
-      const now = new Date();
-      const formatter = new Intl.DateTimeFormat("en", {
-        timeZone: tz,
-        timeZoneName: "short"
-      });
-      const parts = formatter.formatToParts(now);
-      return parts.find((part) => part.type === "timeZoneName")?.value || tz;
-    } catch {
-      return tz;
-    }
-  };
-
-  return (
-    <Alert status="info" w={{ base: "100%", md: "fit-content" }} size="sm">
-      Showing times in {mode === "course" ? "course" : "your local"} time zone ({getTimeZoneAbbr(timeZone)})
-    </Alert>
-  );
-}
 
 export default function DynamicCourseNav() {
   const pathname = usePathname();
@@ -399,7 +369,6 @@ export default function DynamicCourseNav() {
             </HStack>
           </Box>
 
-          <TimeZoneIndicator />
           <TimeZoneModal />
         </VStack>
       </Box>
@@ -483,7 +452,6 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <TimeZoneIndicator />
           <UserMenu />
         </Flex>
       </Box>

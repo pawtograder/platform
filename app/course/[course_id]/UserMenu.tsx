@@ -910,9 +910,51 @@ function ConnectionStatusIndicator() {
     </Tooltip>
   );
 }
+
+function TimeZoneIndicator() {
+  const { mode, timeZone, courseTimeZone, browserTimeZone, openModal } = useTimeZone();
+
+  // Only show indicator if timezones differ
+  if (courseTimeZone === browserTimeZone) {
+    return null;
+  }
+
+  const getTimeZoneAbbr = (tz: string) => {
+    try {
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat("en", {
+        timeZone: tz,
+        timeZoneName: "short"
+      });
+      const parts = formatter.formatToParts(now);
+      return parts.find((part) => part.type === "timeZoneName")?.value || tz;
+    } catch {
+      return tz;
+    }
+  };
+
+  return (
+    <Button
+      variant="outline"
+      colorPalette={mode === "course" ? "red" : "green"}
+      size="xs"
+      fontSize="xs"
+      onClick={openModal}
+    >
+      <HStack gap={1}>
+        <FiClock size={12} />
+        <Text>
+          {mode === "course" ? "course" : "local"} time ({getTimeZoneAbbr(timeZone)})
+        </Text>
+      </HStack>
+    </Button>
+  );
+}
+
 export default function UserMenu() {
   return (
     <HStack minWidth={0}>
+      <TimeZoneIndicator />
       <ConnectionStatusIndicator />
       <SupportMenu />
       <ColorModeButton colorPalette="gray" variant="outline" />

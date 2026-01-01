@@ -12,6 +12,7 @@ interface TimeZoneContextType {
   browserTimeZone: string;
   showModal: boolean;
   dismissModal: () => void;
+  openModal: () => void;
 }
 
 const TimeZoneContext = createContext<TimeZoneContextType | undefined>(undefined);
@@ -52,8 +53,11 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
 
   const dismissModal = () => {
     setShowModal(false);
-    // If they dismiss without choosing, default to course timezone
-    setMode("course");
+    // Don't reset the mode - let the user's selection (if any) persist
+  };
+
+  const openModal = () => {
+    setShowModal(true);
   };
 
   // Get the active timezone based on current mode
@@ -68,7 +72,8 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
         courseTimeZone,
         browserTimeZone,
         showModal,
-        dismissModal
+        dismissModal,
+        openModal
       }}
     >
       {children}
