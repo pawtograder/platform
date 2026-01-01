@@ -221,7 +221,6 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
   );
 }
 
-
 export default function DynamicCourseNav() {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
