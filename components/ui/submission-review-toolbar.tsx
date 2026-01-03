@@ -46,8 +46,6 @@ import {
   useSetActiveSubmissionReviewId,
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
-import { formatDueDateInTimezone } from "@/lib/utils";
-import { formatDate } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
 import PersonName from "./person-name";
@@ -513,7 +511,7 @@ function ReviewAssignmentActions() {
           <Text>
             {rubric.name} completed on{" "}
             <span data-visual-test="blackout">
-              {formatDate(activeReviewAssignment.completed_at, "MM/dd/yyyy hh:mm a")}
+              <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" />
             </span>{" "}
             by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
           </Text>
@@ -530,7 +528,7 @@ function ReviewAssignmentActions() {
             Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} is required on this
             submission by{" "}
             <span data-visual-test="blackout">
-              {formatDueDateInTimezone(activeReviewAssignment.due_date, time_zone || "America/New_York", false, true)}.
+              <TimeZoneAwareDate date={activeReviewAssignment.due_date} format="MMM d, h:mm a" />.
             </span>
           </Text>
           {!ignoreAssignedReview && (

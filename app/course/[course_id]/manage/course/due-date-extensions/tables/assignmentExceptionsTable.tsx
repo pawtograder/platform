@@ -10,7 +10,6 @@ import useModalManager from "@/hooks/useModalManager";
 import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, Table, Text, VStack } from "@chakra-ui/react";
-import { formatInTimeZone } from "date-fns-tz";
 import { useMemo } from "react";
 import { FaPlus, FaTrash } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
@@ -111,7 +110,7 @@ export default function AssignmentExceptionsTable({
           <Heading size="sm">{assignment.title || `Assignment #${assignment.id}`}</Heading>
           <Text fontSize="sm" color="fg.muted">
             {exceptions?.length || 0} exceptions, normal due date:{" "}
-            {formatInTimeZone(assignment.due_date, course.time_zone || "America/New_York", "MMM d h:mm aaa")}
+            <TimeZoneAwareDate date={assignment.due_date} format="MMM d, h:mm a" />
             {assignment.minutes_due_after_lab !== null &&
               ` (auto-calculated for students as ${assignment.minutes_due_after_lab} minutes after lab)`}
           </Text>

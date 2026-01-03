@@ -1,8 +1,8 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Box, Table, Text, Badge, HStack, IconButton, Button } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
-import { formatInTimeZone } from "date-fns-tz";
 import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
 import { useCallback, useState, useMemo } from "react";
@@ -120,13 +120,6 @@ export default function PollsTable({ courseId }: PollsTableProps) {
     }
   }, []);
 
-  const formatDate = (dateString: string) => {
-    try {
-      return formatInTimeZone(new Date(dateString), timezone, "MMM d, yyyy 'at' h:mm a");
-    } catch {
-      return dateString;
-    }
-  };
 
   return (
     <>
@@ -180,7 +173,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                 <Table.Cell>{getStatusBadge(poll.is_live)}</Table.Cell>
                 <Table.Cell>
                   <Text fontSize="xs" color="fg.muted">
-                    {formatDate(poll.created_at)}
+                    <TimeZoneAwareDate date={poll.created_at} format="MMM d, yyyy, h:mm a" />
                   </Text>
                 </Table.Cell>
                 <Table.Cell>

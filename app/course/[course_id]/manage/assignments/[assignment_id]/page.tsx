@@ -1,9 +1,9 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 import { useCourseController } from "@/hooks/useCourseController";
@@ -31,17 +31,21 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Released</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  {assignment.release_date
-                    ? formatInTimeZone(new TZDate(assignment.release_date), timeZone || "America/New_York", "Pp")
-                    : "N/A"}
+                  {assignment.release_date ? (
+                    <TimeZoneAwareDate date={assignment.release_date} format="Pp" />
+                  ) : (
+                    "N/A"
+                  )}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  {assignment.due_date
-                    ? formatInTimeZone(new TZDate(assignment.due_date), timeZone || "America/New_York", "Pp")
-                    : "N/A"}
+                  {assignment.due_date ? (
+                    <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
+                  ) : (
+                    "N/A"
+                  )}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>

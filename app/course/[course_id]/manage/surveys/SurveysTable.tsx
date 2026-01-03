@@ -1,8 +1,8 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Box, Table, Text, Badge, Icon } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
-import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
 import { Button } from "@/components/ui/button";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
@@ -401,13 +401,17 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                   </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
-                  <Text color="fg">{formatInTimeZone(new TZDate(survey.created_at), timezone, "MMM d, yyyy")}</Text>
+                  <Text color="fg">
+                    <TimeZoneAwareDate date={new TZDate(survey.created_at, timezone)} format="MMM d" />
+                  </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
                   <Text color={survey.due_date ? "fg" : "fg.muted"}>
-                    {survey.due_date
-                      ? formatInTimeZone(new TZDate(survey.due_date), timezone, "MMM d, yyyy h:mm a")
-                      : "—"}
+                    {survey.due_date ? (
+                      <TimeZoneAwareDate date={new TZDate(survey.due_date, timezone)} format="MMM d, h:mm a" />
+                    ) : (
+                      "—"
+                    )}
                   </Text>
                 </Table.Cell>
                 <Table.Cell pr={3}>

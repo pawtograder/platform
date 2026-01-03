@@ -18,7 +18,6 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { format } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { CalendarAccordionTrigger } from "@/components/calendar/calendar-accordion-trigger";
@@ -378,9 +377,11 @@ export default async function StudentDashboard({
                       <DataListItem>
                         <DataListItemLabel>Due</DataListItemLabel>
                         <DataListItemValue>
-                          {survey.due_date
-                            ? formatInTimeZone(new TZDate(survey.due_date), "America/New_York", "Pp")
-                            : "No due date"}
+                          {survey.due_date ? (
+                            <TimeZoneAwareDate date={survey.due_date} format="Pp" />
+                          ) : (
+                            "No due date"
+                          )}
                         </DataListItemValue>
                       </DataListItem>
 
@@ -388,7 +389,7 @@ export default async function StudentDashboard({
                         <DataListItem>
                           <DataListItemLabel>Submitted</DataListItemLabel>
                           <DataListItemValue>
-                            {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "Pp")}
+                            <TimeZoneAwareDate date={response.submitted_at} format="Pp" />
                           </DataListItemValue>
                         </DataListItem>
                       )}

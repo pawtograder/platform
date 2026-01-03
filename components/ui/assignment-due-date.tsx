@@ -1,6 +1,7 @@
 "use client";
 
 import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
@@ -12,7 +13,6 @@ import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { addHours, isAfter } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
 import { Alert } from "./alert";
 import { Button } from "./button";
@@ -197,13 +197,8 @@ export function AssignmentDueDate({
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
         <Text minWidth={0} data-visual-test="blackout">
-          {formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa")}
+          <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" />
         </Text>
-        {showTimeZone && (
-          <Text fontSize="sm" flexShrink={0}>
-            ({time_zone})
-          </Text>
-        )}
         {hoursExtended > 0 && (
           <Text>
             ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
@@ -237,13 +232,11 @@ export function SelfReviewDueDate({
   return (
     <HStack gap={1}>
       <Text>
-        {formatInTimeZone(
-          new TZDate(addHours(dueDate, assignment.self_review_deadline_offset ?? 0)),
-          time_zone || "America/New_York",
-          "MMM d h:mm aaa"
-        )}
+        <TimeZoneAwareDate
+          date={addHours(dueDate, assignment.self_review_deadline_offset ?? 0)}
+          format="MMM d, h:mm a"
+        />
       </Text>
-      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
     </HStack>
   );
 }

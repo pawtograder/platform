@@ -482,7 +482,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         cell: function render({ getValue }) {
           const dueDate = getValue<string>();
           return dueDate ? (
-            <TimeZoneAwareDate date={new TZDate(dueDate, course.classes.time_zone ?? "America/New_York")} format="Pp" />
+            <TimeZoneAwareDate date={dueDate} format="Pp" />
           ) : (
             "N/A"
           );
