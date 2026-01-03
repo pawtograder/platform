@@ -11,7 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type FilterType = "all" | "not_started" | "completed";
 type SurveyResponse = Database["public"]["Tables"]["survey_responses"]["Row"];
@@ -283,12 +283,12 @@ export default function StudentSurveysPage() {
                       <VStack align="start" gap={1}>
                         {survey.due_date && (
                           <Text color="fg" fontSize="sm" fontWeight="medium">
-                            Due: <TimeZoneAwareDate date={survey.due_date} format="MMM d, yyyy, h:mm a" />
+                            Due: <TimeZoneAwareDate date={survey.due_date} format="full" />
                           </Text>
                         )}
                         {survey.submitted_at && (
                           <Text color="fg" fontSize="sm" opacity={0.7}>
-                            Submitted: <TimeZoneAwareDate date={survey.submitted_at} format="MMM d, yyyy, h:mm a" />
+                            Submitted: <TimeZoneAwareDate date={survey.submitted_at} format="full" />
                           </Text>
                         )}
                       </VStack>
