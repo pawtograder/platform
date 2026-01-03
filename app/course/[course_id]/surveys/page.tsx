@@ -1,17 +1,17 @@
 "use client";
 
-import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { Box, Heading, Text, VStack, HStack, Badge, Button } from "@chakra-ui/react";
-import { createClient } from "@/utils/supabase/client";
-import { useParams } from "next/navigation";
-import { useEffect, useState, useMemo } from "react";
-import { toaster } from "@/components/ui/toaster";
-import Link from "@/components/ui/link";
-import { SurveyWithResponse } from "@/types/survey";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import Link from "@/components/ui/link";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useCourse, usePublishedSurveys } from "@/hooks/useCourseController";
+import { usePublishedSurveys } from "@/hooks/useCourseController";
+import { SurveyWithResponse } from "@/types/survey";
+import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 type FilterType = "all" | "not_started" | "completed";
 type SurveyResponse = Database["public"]["Tables"]["survey_responses"]["Row"];
@@ -25,7 +25,6 @@ export default function StudentSurveysPage() {
   // Get private_profile_id from ClassProfileProvider (already available via course layout)
   const { private_profile_id } = useClassProfiles();
   const isStudent = useIsStudent();
-  const course = useCourse();
 
   // Use the hook for realtime survey updates
   const { surveys: publishedSurveys, isLoading: surveysLoading } = usePublishedSurveys();
@@ -155,7 +154,6 @@ export default function StudentSurveysPage() {
     },
     [statusColors]
   );
-
 
   // Filter options for student view
   const filterOptions = useMemo(

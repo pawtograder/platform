@@ -19,16 +19,15 @@ import {
 } from "@chakra-ui/react";
 import { format } from "date-fns";
 
-import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { CalendarAccordionTrigger } from "@/components/calendar/calendar-accordion-trigger";
+import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { TZDate } from "@date-fns/tz";
 import { headers } from "next/headers";
 import Link from "next/link";
 import RegradeRequestsTable from "./RegradeRequestsTable";
-import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 
 export default async function StudentDashboard({
   course_id,
@@ -377,11 +376,7 @@ export default async function StudentDashboard({
                       <DataListItem>
                         <DataListItemLabel>Due</DataListItemLabel>
                         <DataListItemValue>
-                          {survey.due_date ? (
-                            <TimeZoneAwareDate date={survey.due_date} format="Pp" />
-                          ) : (
-                            "No due date"
-                          )}
+                          {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="Pp" /> : "No due date"}
                         </DataListItemValue>
                       </DataListItem>
 

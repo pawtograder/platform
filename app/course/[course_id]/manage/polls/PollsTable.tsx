@@ -1,16 +1,16 @@
 "use client";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { Box, Table, Text, Badge, HStack, IconButton, Button } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
-import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
+import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
-import { useCallback, useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { HiOutlineDotsHorizontal } from "react-icons/hi";
-import { FaTrash } from "react-icons/fa";
-import { useLivePolls, useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useCourseController, useLivePolls } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Badge, Box, Button, HStack, IconButton, Table, Text } from "@chakra-ui/react";
+import { useRouter } from "next/navigation";
+import { useCallback, useMemo, useState } from "react";
+import { FaTrash } from "react-icons/fa";
+import { HiOutlineDotsHorizontal } from "react-icons/hi";
 
 type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
 
@@ -23,9 +23,7 @@ type PollsTableProps = {
 export default function PollsTable({ courseId }: PollsTableProps) {
   const router = useRouter();
   const polls = useLivePolls();
-  const course = useCourse();
   const { livePolls } = useCourseController();
-  const timezone = course?.time_zone || "America/New_York";
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   const filteredPolls = useMemo(() => {
@@ -119,7 +117,6 @@ export default function PollsTable({ courseId }: PollsTableProps) {
       });
     }
   }, []);
-
 
   return (
     <>

@@ -29,7 +29,6 @@ import {
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -482,7 +481,6 @@ function ReviewAssignmentActions() {
   const setIgnoreAssignedReview = useSetIgnoreAssignedReview();
 
   const rubric = useRubricWithParts(activeReviewAssignment?.rubric_id);
-  const { time_zone } = useCourse();
   const rubricPartsAdvice = useMemo(() => {
     return assignedRubricParts
       .map((part) => rubric?.rubric_parts?.find((p) => p.id === part.rubric_part_id)?.name)

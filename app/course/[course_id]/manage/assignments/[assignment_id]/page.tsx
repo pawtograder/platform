@@ -2,11 +2,10 @@
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
+import { useCourseController } from "@/hooks/useCourseController";
 import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
 import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
-import { useCourseController } from "@/hooks/useCourseController";
 
 export default function AssignmentHome() {
   const controller = useAssignmentController();
@@ -19,9 +18,6 @@ export default function AssignmentHome() {
     return <div>Assignment not found</div>;
   }
 
-  // Get the time zone - need to safely access the classes property
-  const timeZone = course.time_zone;
-
   return (
     <Box>
       <Box>
@@ -31,21 +27,13 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Released</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  {assignment.release_date ? (
-                    <TimeZoneAwareDate date={assignment.release_date} format="Pp" />
-                  ) : (
-                    "N/A"
-                  )}
+                  {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  {assignment.due_date ? (
-                    <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
-                  ) : (
-                    "N/A"
-                  )}
+                  {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>

@@ -63,7 +63,7 @@ function SelfReviewNoticeInner({
   activeSubmission?: Submission;
 }) {
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, time_zone } = useAssignmentDueDate(assignment, {
+  const { dueDate } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: enrollment.private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
   });

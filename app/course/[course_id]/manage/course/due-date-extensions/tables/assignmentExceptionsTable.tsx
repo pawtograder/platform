@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
@@ -37,7 +37,6 @@ export default function AssignmentExceptionsTable({
   studentFilter,
   tokenFilter
 }: AssignmentExceptionsTableProps) {
-  const course = useCourse();
   const { assignmentDueDateExceptions } = useCourseController();
   // // Load assignment groups with their members for this assignment
   const assignmentGroups = useAssignmentGroupsWithMembers(assignment.id);

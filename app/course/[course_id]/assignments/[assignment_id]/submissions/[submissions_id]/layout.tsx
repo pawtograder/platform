@@ -8,6 +8,7 @@ import {
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
@@ -44,7 +45,6 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
@@ -767,7 +767,6 @@ function RubricView() {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const scrollRootRef = useRef<HTMLDivElement>(null);
-  const course = useCourse();
 
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const rubric = useRubricById(reviewAssignment?.rubric_id);

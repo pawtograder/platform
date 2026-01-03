@@ -175,7 +175,6 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 export function AssignmentDueDate({
   assignment,
   showLateTokenButton = false,
-  showTimeZone = false,
   showDue = false
 }: {
   assignment: Assignment;
@@ -185,7 +184,7 @@ export function AssignmentDueDate({
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, {
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
   });
@@ -211,15 +210,14 @@ export function AssignmentDueDate({
 }
 
 export function SelfReviewDueDate({
-  assignment,
-  showTimeZone = false
+  assignment
 }: {
   assignment: AssignmentsForStudentDashboard;
   showTimeZone?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(
+  const { dueDate, originalDueDate } = useAssignmentDueDate(
     { id: assignment.id, due_date: assignment.due_date!, minutes_due_after_lab: assignment.minutes_due_after_lab },
     {
       studentPrivateProfileId: private_profile_id,

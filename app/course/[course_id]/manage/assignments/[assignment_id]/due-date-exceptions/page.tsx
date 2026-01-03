@@ -64,7 +64,6 @@ function AdjustDueDateDialogContent({
     studentPrivateProfileId: student_id,
     assignmentGroupId: group?.id
   });
-  const { time_zone } = useCourse();
   const originalDueDate = new TZDate(assignment.due_date!);
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
   const { assignmentDueDateExceptions } = useCourseController();
@@ -668,11 +667,7 @@ export default function DueDateExceptions() {
           </Heading>
           <Text mb={2}>
             <strong>Original Assignment Due Date:</strong>{" "}
-            {originalDueDate ? (
-              <TimeZoneAwareDate date={originalDueDate} format="MMM d, h:mm a" />
-            ) : (
-              "No due date"
-            )}
+            {originalDueDate ? <TimeZoneAwareDate date={originalDueDate} format="MMM d, h:mm a" /> : "No due date"}
           </Text>
           {hasLabScheduling && (
             <Text mb={2} color="fg.info">
