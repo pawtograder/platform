@@ -1,39 +1,38 @@
 "use client";
 
-import {
-  DialogRoot,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogBody,
-  DialogCloseTrigger,
-  DialogFooter
-} from "@/components/ui/dialog";
+import { SurveyPreviewModal } from "@/components/survey-preview-modal";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import {
-  Box,
-  Input,
-  VStack,
-  HStack,
-  Text,
-  Badge,
-  createListCollection,
-  Textarea,
-  Fieldset,
-  Icon
-} from "@chakra-ui/react";
-import { SelectRoot, SelectTrigger, SelectValueText, SelectContent, SelectItem } from "@/components/ui/select";
-import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
+import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
+import { SelectContent, SelectItem, SelectRoot, SelectTrigger, SelectValueText } from "@/components/ui/select";
 import { toaster } from "@/components/ui/toaster";
-import { useCallback, useEffect, useState, useMemo } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { useRouter } from "next/navigation";
-import { SurveyPreviewModal } from "@/components/survey-preview-modal";
-import { formatInTimeZone } from "date-fns-tz";
-import { TZDate } from "@date-fns/tz";
-import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { createClient } from "@/utils/supabase/client";
+import {
+  Badge,
+  Box,
+  createListCollection,
+  Fieldset,
+  HStack,
+  Icon,
+  Input,
+  Text,
+  Textarea,
+  VStack
+} from "@chakra-ui/react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { HiOutlineDotsHorizontal } from "react-icons/hi";
 
 type SurveyTemplate = {
   id: string;
@@ -306,14 +305,6 @@ export function SurveyTemplateLibraryModal({
     }
   }, [deleteConfirmTemplate, fetchTemplates]);
 
-  const formatDate = (dateString: string) => {
-    try {
-      return formatInTimeZone(new TZDate(dateString), "America/New_York", "MMM d, yyyy");
-    } catch {
-      return new Date(dateString).toLocaleDateString();
-    }
-  };
-
   const isOwner = useCallback(
     (template: SurveyTemplate) => {
       // Check if the template's creator (private_profile_id) matches any of my roles' private_profile_id
@@ -505,7 +496,7 @@ export function SurveyTemplateLibraryModal({
                       {/* Creator and Date */}
                       <VStack align="start" gap={1}>
                         <Text fontSize="xs" color="fg.default" opacity={0.7}>
-                          Last modified: {formatDate(template.updated_at)}
+                          Last modified: <TimeZoneAwareDate date={template.updated_at} format="dateOnly" />
                         </Text>
                       </VStack>
 

@@ -1,10 +1,10 @@
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Course, EmailBatches, Emails } from "@/utils/supabase/DatabaseTypes";
-import { Button, Card, Collapsible, Flex, Separator, Box, Heading } from "@chakra-ui/react";
+import { Box, Button, Card, Collapsible, Flex, Heading, Separator } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { memo, useState } from "react";
 import { UserRoleWithUserDetails } from "./page";
-import { formatInTimeZone } from "date-fns-tz";
-import { TZDate } from "@date-fns/tz";
 
 export default function HistoryPage({ course, userRoles }: { course?: Course; userRoles?: UserRoleWithUserDetails[] }) {
   const [displayNumber, setDisplayNumber] = useState<number>(25);
@@ -68,12 +68,10 @@ export const EmailHistoryCard = memo(function EmailHistoryCard({
         <Collapsible.Trigger>
           <Card.Title>
             {group.emails.length} emails sent{" "}
-            {formatInTimeZone(
-              new TZDate(group.created_at, course?.time_zone ?? "America/New_York"),
-              course?.time_zone || "America/New_York",
-              "MMM d h:mm aaa"
-            )}{" "}
-            ({course?.time_zone})
+            <TimeZoneAwareDate
+              date={new TZDate(group.created_at, course?.time_zone ?? "America/New_York")}
+              format="MMM d, h:mm a"
+            />
           </Card.Title>
         </Collapsible.Trigger>
         <Collapsible.Content>
