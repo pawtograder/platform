@@ -21,10 +21,10 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
-import { useParams } from "next/navigation";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -481,11 +481,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorKey: "due_date",
         cell: function render({ getValue }) {
           const dueDate = getValue<string>();
-          return dueDate ? (
-            <TimeZoneAwareDate date={dueDate} format="Pp" />
-          ) : (
-            "N/A"
-          );
+          return dueDate ? <TimeZoneAwareDate date={dueDate} format="Pp" /> : "N/A";
         }
       },
       {
