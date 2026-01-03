@@ -1019,14 +1019,4 @@ export type StudentDeadlineExtension = GetResult<
 >;
 
 // Assignment Leaderboard Types
-export type AssignmentLeaderboardEntry = {
-  id: number;
-  created_at: string;
-  updated_at: string;
-  assignment_id: number;
-  class_id: number;
-  public_profile_id: string;
-  autograder_score: number;
-  max_score: number;
-  submission_id: number | null;
-};
+export type AssignmentLeaderboardEntry = Database["public"]["Tables"]["assignment_leaderboard"]["Row"];

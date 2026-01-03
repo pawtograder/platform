@@ -132,7 +132,8 @@ test.describe("Assignment Leaderboard", () => {
     await expect(page.getByText("🏆 Leaderboard")).toBeVisible({ timeout: 10000 });
 
     // The current user should see a "You" badge
-    const youBadge = page.getByText("You");
+    const leaderboardTable = page.locator("table").filter({ hasText: "Rank" });
+    const youBadge = leaderboardTable.getByText("You");
     await expect(youBadge).toBeVisible();
 
     // The first place should show gold medal emoji
@@ -211,7 +212,8 @@ test.describe("Assignment Leaderboard", () => {
 
     // Student 3 currently has lowest score (70)
     // The "You" badge should be visible for student 3
-    await expect(page.getByText("You")).toBeVisible();
+    const leaderboardTable = page.locator("table").filter({ hasText: "Rank" });
+    await expect(leaderboardTable.getByText("You")).toBeVisible();
 
     // Create a new submission with a higher score for student 3
     await insertSubmissionWithScore(student3!.private_profile_id, assignment!.id, course.id, 99, 100);
