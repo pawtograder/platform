@@ -620,6 +620,71 @@ export type Database = {
           }
         ];
       };
+      assignment_leaderboard: {
+        Row: {
+          id: number;
+          created_at: string;
+          updated_at: string;
+          assignment_id: number;
+          class_id: number;
+          public_profile_id: string;
+          autograder_score: number;
+          max_score: number;
+          submission_id: number | null;
+        };
+        Insert: {
+          id?: number;
+          created_at?: string;
+          updated_at?: string;
+          assignment_id: number;
+          class_id: number;
+          public_profile_id: string;
+          autograder_score?: number;
+          max_score?: number;
+          submission_id?: number | null;
+        };
+        Update: {
+          id?: number;
+          created_at?: string;
+          updated_at?: string;
+          assignment_id?: number;
+          class_id?: number;
+          public_profile_id?: string;
+          autograder_score?: number;
+          max_score?: number;
+          submission_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignment_leaderboard_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_leaderboard_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_leaderboard_public_profile_id_fkey";
+            columns: ["public_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_leaderboard_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_handout_commits: {
         Row: {
           assignment_id: number;

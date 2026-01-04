@@ -51,6 +51,7 @@ const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
   "discussion_thread_likes",
   "assignments",
   "assignment_due_date_exceptions",
+  "assignment_leaderboard",
   "discussion_thread_read_status",
   "discussion_thread_watchers",
   "discussion_threads",
@@ -167,7 +168,10 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   // Survey related tables
   surveys: ["staff"], // Survey metadata (staff-only management)
   survey_responses: ["staff"], // Response data only to staff
-  survey_assignments: ["staff"] // Assignment data only to staff
+  survey_assignments: ["staff"], // Assignment data only to staff
+
+  // Leaderboard table - broadcasts to all class members
+  assignment_leaderboard: ["staff", "students"]
 };
 
 /**
