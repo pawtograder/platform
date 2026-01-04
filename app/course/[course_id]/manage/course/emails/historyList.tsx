@@ -1,7 +1,6 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Course, EmailBatches, Emails } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Card, Collapsible, Flex, Heading, Separator } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { memo, useState } from "react";
 import { UserRoleWithUserDetails } from "./page";
@@ -67,11 +66,7 @@ export const EmailHistoryCard = memo(function EmailHistoryCard({
       <Collapsible.Root>
         <Collapsible.Trigger>
           <Card.Title>
-            {group.emails.length} emails sent{" "}
-            <TimeZoneAwareDate
-              date={new TZDate(group.created_at, course?.time_zone ?? "America/New_York")}
-              format="MMM d, h:mm a"
-            />
+            {group.emails.length} emails sent <TimeZoneAwareDate date={group.created_at} format="MMM d, h:mm a" />
           </Card.Title>
         </Collapsible.Trigger>
         <Collapsible.Content>

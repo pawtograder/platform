@@ -1,19 +1,18 @@
 "use client";
 
-import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { Box, Table, Text, Badge, Icon } from "@chakra-ui/react";
-import Link from "@/components/ui/link";
-import { TZDate } from "@date-fns/tz";
-import { Button } from "@/components/ui/button";
-import { HiOutlineDotsHorizontal } from "react-icons/hi";
-import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
-import { toaster } from "@/components/ui/toaster";
-import { useTrackEvent } from "@/hooks/useTrackEvent";
-import { useCallback, useState, useMemo } from "react";
-import { useIsInstructor, useIsGrader } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { Button } from "@/components/ui/button";
+import Link from "@/components/ui/link";
+import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
+import { toaster } from "@/components/ui/toaster";
+import { useIsGrader, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useTrackEvent } from "@/hooks/useTrackEvent";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
+import { Badge, Box, Icon, Table, Text } from "@chakra-ui/react";
+import { useCallback, useMemo, useState } from "react";
+import { HiOutlineDotsHorizontal } from "react-icons/hi";
 
 type FilterType = "all" | "closed" | "active" | "draft";
 
@@ -23,12 +22,13 @@ type SurveysTableProps = {
   timezone: string;
 };
 
-export default function SurveysTable({ surveys, courseId, timezone }: SurveysTableProps) {
+export default function SurveysTable({ surveys, courseId, timezone: _timezone }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
   const controller = useCourseController();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
   const isGrader = useIsGrader();
+  void _timezone;
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -402,16 +402,12 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                 </Table.Cell>
                 <Table.Cell py={4}>
                   <Text color="fg">
-                    <TimeZoneAwareDate date={new TZDate(survey.created_at, timezone)} format="MMM d" />
+                    <TimeZoneAwareDate date={survey.created_at} format="MMM d" />
                   </Text>
                 </Table.Cell>
                 <Table.Cell py={4}>
                   <Text color={survey.due_date ? "fg" : "fg.muted"}>
-                    {survey.due_date ? (
-                      <TimeZoneAwareDate date={new TZDate(survey.due_date, timezone)} format="MMM d, h:mm a" />
-                    ) : (
-                      "—"
-                    )}
+                    {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="MMM d, h:mm a" /> : "—"}
                   </Text>
                 </Table.Cell>
                 <Table.Cell pr={3}>

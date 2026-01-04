@@ -14,7 +14,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
-import { useTimeZone } from "@/lib/TimeZoneProvider";
+import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -36,7 +36,7 @@ import { FiClock } from "react-icons/fi";
 
 import { useInvalidate, useOne } from "@refinedev/core";
 import { useParams, useSearchParams } from "next/navigation";
-import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Dispatch, SetStateAction, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { FaGithub } from "react-icons/fa";
 import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
@@ -648,53 +648,53 @@ const NotificationPreferencesMenu = () => {
 const TimeZonePreferencesMenu = () => {
   const { courseTimeZone } = useTimeZone();
   const browserTimeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
-  try {
-    // Only show if timezones differ
-    if (courseTimeZone === browserTimeZone) {
-      return null;
-    }
-
-    return (
-      <Dialog.Root size="md" placement="center">
-        <Dialog.Trigger asChild>
-          <Button
-            variant="ghost"
-            colorPalette="gray"
-            width="100%"
-            justifyContent="flex-start"
-            textAlign="left"
-            size="sm"
-            py={0}
-          >
-            <FiClock size={16} />
-            Time Zone Settings
-          </Button>
-        </Dialog.Trigger>
-        <Portal>
-          <Dialog.Backdrop />
-          <Dialog.Positioner>
-            <Dialog.Content>
-              <Dialog.Header>
-                <Dialog.Title>Time Zone Settings</Dialog.Title>
-              </Dialog.Header>
-              <Dialog.Body>
-                <TimeZoneSelector />
-              </Dialog.Body>
-              <Dialog.Footer>
-                <Dialog.ActionTrigger asChild>
-                  <Button variant="outline">Close</Button>
-                </Dialog.ActionTrigger>
-              </Dialog.Footer>
-            </Dialog.Content>
-          </Dialog.Positioner>
-        </Portal>
-      </Dialog.Root>
-    );
-  } catch (error) {
-    console.error("TimeZonePreferencesMenu error:", error);
-    // TimeZone provider not available, don't render
+  // Only show if timezones differ
+  if (courseTimeZone === browserTimeZone) {
     return null;
   }
+
+  return (
+    <Dialog.Root size="md" placement="center">
+      <Dialog.Trigger asChild>
+        <Button
+          variant="ghost"
+          colorPalette="gray"
+          width="100%"
+          justifyContent="flex-start"
+          textAlign="left"
+          size="sm"
+          py={0}
+        >
+          <FiClock size={16} />
+          Time Zone Settings
+        </Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content>
+            <Dialog.Header>
+              <Dialog.Title>Time Zone Settings</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <TimeZoneSelector />
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline">Close</Button>
+              </Dialog.ActionTrigger>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+};
+
+const SafeTimeZonePreferencesMenu = () => {
+  const ctx = useContext(TimeZoneContext);
+  if (!ctx) return null;
+  return <TimeZonePreferencesMenu />;
 };
 
 function UserSettingsMenu() {
@@ -755,7 +755,7 @@ function UserSettingsMenu() {
                 </HStack>
                 <ProfileChangesMenu />
                 <NotificationPreferencesMenu />
-                <TimeZonePreferencesMenu />
+                <SafeTimeZonePreferencesMenu />
 
                 <Button
                   variant="ghost"
@@ -944,7 +944,7 @@ function TimeZoneIndicator() {
       <HStack gap={1}>
         <FiClock size={12} />
         <Text>
-          {mode === "course" ? "course" : "local"} time ({getTimeZoneAbbr(timeZone)})
+          {mode === "course" ? "course" : "local"} time zone ({getTimeZoneAbbr(timeZone)})
         </Text>
       </HStack>
     </Button>

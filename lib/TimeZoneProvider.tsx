@@ -15,7 +15,7 @@ interface TimeZoneContextType {
   openModal: () => void;
 }
 
-const TimeZoneContext = createContext<TimeZoneContextType | undefined>(undefined);
+export const TimeZoneContext = createContext<TimeZoneContextType | undefined>(undefined);
 
 const COOKIE_NAME = "pawtograder-timezone-pref";
 
@@ -24,15 +24,23 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
   const [showModal, setShowModal] = useState(false);
   const [isClient, setIsClient] = useState(false);
 
-  // Detect browser time zone (only on client)
-  const browserTimeZone = isClient ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
+  // Detect browser time zone (client-only) via state to avoid hydration mismatch
+  const [browserTimeZone, setBrowserTimeZone] = useState("UTC");
 
   useEffect(() => {
+    // Client-only: mark as client and detect actual browser timezone once
     setIsClient(true);
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) setBrowserTimeZone(tz);
+    } catch {
+      // noop: keep UTC fallback
+    }
   }, []);
 
   useEffect(() => {
-    if (!isClient) return;
+    // Only run preference check once real browser timezone is known on client
+    if (!isClient || browserTimeZone === "UTC") return;
 
     // Check for existing preference in localStorage
     const saved = localStorage.getItem(COOKIE_NAME);

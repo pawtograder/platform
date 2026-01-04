@@ -11,8 +11,7 @@ export function TimeZoneAwareDate({
   date: string | Date | TZDate;
   format?: "full" | "compact" | "dateOnly" | "timeOnly" | "Pp" | "MMM d, h:mm a" | "MMM d";
 }) {
-  const timeZoneContext = useTimeZone();
-  const timeZone = timeZoneContext?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { timeZone } = useTimeZone();
 
   // Memoize the formatting to address performance concerns
   const formattedDate = useMemo(() => {

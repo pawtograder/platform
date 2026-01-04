@@ -2,7 +2,6 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Button, HStack, Table } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
 import NextLink from "next/link";
 import SyncStaffTeamButton from "./syncStaffTeamButton";
 
@@ -56,14 +55,10 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
                 <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
               </Table.Cell>
               <Table.Cell>
-                {assignment.release_date ? (
-                  <TimeZoneAwareDate date={new TZDate(assignment.release_date)} format="Pp" />
-                ) : (
-                  "N/A"
-                )}
+                {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
               </Table.Cell>
               <Table.Cell>
-                {assignment.due_date ? <TimeZoneAwareDate date={new TZDate(assignment.due_date)} format="Pp" /> : "N/A"}
+                {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
               </Table.Cell>
               <Table.Cell>
                 <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/regrade-requests`}>

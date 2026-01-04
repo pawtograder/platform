@@ -170,7 +170,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                 <Table.Cell>{getStatusBadge(poll.is_live)}</Table.Cell>
                 <Table.Cell>
                   <Text fontSize="xs" color="fg.muted">
-                    <TimeZoneAwareDate date={poll.created_at} format="MMM d, yyyy, h:mm a" />
+                    <TimeZoneAwareDate date={poll.created_at} format="full" />
                   </Text>
                 </Table.Cell>
                 <Table.Cell>
