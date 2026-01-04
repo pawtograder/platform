@@ -44,7 +44,6 @@ async function insertSubmissionWithScore(
   if (error) {
     throw new Error(`Failed to update grader_results: ${error.message}`);
   }
-
   return submission;
 }
 
