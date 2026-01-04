@@ -36,10 +36,14 @@ async function insertSubmissionWithScore(
   });
 
   // Update the grader_results with a specific score
-  await supabase
+  const { error } = await supabase
     .from("grader_results")
     .update({ score, max_score: maxScore })
     .eq("submission_id", submission.submission_id);
+  
+  if (error) {
+    throw new Error(`Failed to update grader_results: ${error.message}`);
+  }
 
   return submission;
 }
