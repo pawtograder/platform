@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
@@ -54,14 +55,6 @@ export default function ClassManagementTable({ classes: initialClasses }: ClassM
 
   const handleClassUpdated = (updatedClass: Class) => {
     setClasses(classes.map((c) => (c.id === updatedClass.id ? updatedClass : c)));
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric"
-    });
   };
 
   return (
@@ -126,7 +119,9 @@ export default function ClassManagementTable({ classes: initialClasses }: ClassM
                         {class_.archived ? "Archived" : "Active"}
                       </Badge>
                     </Table.Cell>
-                    <Table.Cell>{formatDate(class_.created_at)}</Table.Cell>
+                    <Table.Cell>
+                      <TimeZoneAwareDate date={class_.created_at} format="dateOnly" />
+                    </Table.Cell>
                     <Table.Cell>
                       <MenuRoot>
                         <MenuTrigger asChild>
