@@ -17,7 +17,7 @@ interface TimeZoneContextType {
 
 export const TimeZoneContext = createContext<TimeZoneContextType | undefined>(undefined);
 
-const COOKIE_NAME = "pawtograder-timezone-pref";
+const STORAGE_KEY = "pawtograder-timezone-pref";
 
 export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone: string; children: React.ReactNode }) {
   const [mode, setModeState] = useState<TimeZoneMode>("course");
@@ -43,7 +43,7 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
     if (!isClient || browserTimeZone === "UTC") return;
 
     // Check for existing preference in localStorage
-    const saved = localStorage.getItem(COOKIE_NAME);
+    const saved = localStorage.getItem(STORAGE_KEY);
     if (saved === "course" || saved === "browser") {
       setModeState(saved);
     } else if (browserTimeZone !== courseTimeZone) {
@@ -55,7 +55,7 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
   const setMode = (newMode: TimeZoneMode) => {
     setModeState(newMode);
     if (isClient) {
-      localStorage.setItem(COOKIE_NAME, newMode);
+      localStorage.setItem(STORAGE_KEY, newMode);
     }
   };
 
@@ -63,7 +63,7 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
     setShowModal(false);
     // Save the current mode when dismissing (whether user changed it or kept the default)
     if (isClient) {
-      localStorage.setItem(COOKIE_NAME, mode);
+      localStorage.setItem(STORAGE_KEY, mode);
     }
   };
 
