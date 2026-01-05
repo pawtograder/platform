@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS public.assignment_leaderboard (
     -- Submission metadata
     submission_id BIGINT REFERENCES public.submissions(id) ON DELETE SET NULL,
     -- Unique constraint: one entry per student per assignment (using public_profile_id)
-    CONSTRAINT unique_student_assignment UNIQUE (assignment_id, public_profile_id)
+    CONSTRAINT unique_student_assignment UNIQUE (assignment_id, public_profile_id),
+    CONSTRAINT check_score_non_negative CHECK (autograder_score >= 0),
+    CONSTRAINT check_score_bounds CHECK (autograder_score <= max_score),
+    CONSTRAINT check_max_score_positive CHECK (max_score > 0)
 );
 
 -- Create indexes for efficient queries
@@ -32,6 +35,10 @@ CREATE POLICY "Users can view leaderboard in their class"
 ON public.assignment_leaderboard
 FOR SELECT
 USING (
+    -- Allow anonymous users to view all leaderboard entries
+    auth.uid() IS NULL
+    OR
+    -- Authenticated users can only view leaderboard for their classes
     EXISTS (
         SELECT 1 FROM public.user_roles ur
         WHERE ur.user_id = auth.uid()
@@ -164,14 +171,17 @@ AS $function$
 DECLARE
     v_user_role RECORD;
     v_grader_result RECORD;
+    v_assignment RECORD;
 BEGIN
     -- Only react if is_active changed
     IF OLD.is_active IS DISTINCT FROM NEW.is_active THEN
         IF NEW.is_active = TRUE THEN
             -- Submission became active - update leaderboard with its score
-            SELECT * INTO v_grader_result
-            FROM public.grader_results
-            WHERE submission_id = NEW.id
+            SELECT gr.*, a.autograder_points
+            INTO v_grader_result
+            FROM public.grader_results gr
+            INNER JOIN public.assignments a ON a.id = NEW.assignment_id
+            WHERE gr.submission_id = NEW.id
             LIMIT 1;
 
             IF FOUND THEN
@@ -198,7 +208,7 @@ BEGIN
                             NEW.class_id,
                             v_user_role.public_profile_id,
                             v_grader_result.score,
-                            COALESCE(v_grader_result.max_score, 100),
+                            COALESCE(v_grader_result.max_score, v_grader_result.autograder_points, 100),
                             NEW.id,
                             NOW()
                         )
@@ -231,7 +241,7 @@ BEGIN
                             NEW.class_id,
                             v_user_role.public_profile_id,
                             v_grader_result.score,
-                            COALESCE(v_grader_result.max_score, 100),
+                            COALESCE(v_grader_result.max_score, v_grader_result.autograder_points, 100),
                             NEW.id,
                             NOW()
                         )
