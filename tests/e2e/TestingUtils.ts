@@ -385,7 +385,10 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
   }
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
-  await page.goto("/");
+  // Removed: await page.goto("/");
+  // Navigating to "/" before auth causes failures with middleware that requires authentication for /course routes.
+  // The middleware redirects unauthenticated users to /sign-in, but tests expect to be on course pages.
+  // Instead, authenticate first via magic link, then navigate to the course page.
   await signInWithMagicLinkAndRetry(page, testingUser);
 
   if (course) {
