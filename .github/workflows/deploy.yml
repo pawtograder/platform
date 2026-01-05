@@ -47,27 +47,6 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
-      - name: Wait for deployment to be accessible
-        run: |
-          echo "Checking if ${BASE_URL} is accessible..."
-          MAX_ATTEMPTS=30
-          ATTEMPT=0
-          
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            if curl --fail --silent --show-error --max-time 10 "${BASE_URL}" > /dev/null 2>&1; then
-              echo "✅ Deployment is accessible at ${BASE_URL}"
-              exit 0
-            fi
-            
-            ATTEMPT=$((ATTEMPT + 1))
-            echo "⏳ Attempt $ATTEMPT/$MAX_ATTEMPTS - Deployment not yet accessible, waiting 10 seconds..."
-            sleep 10
-          done
-          
-          echo "❌ Deployment at ${BASE_URL} is not accessible after $MAX_ATTEMPTS attempts"
-          exit 1
-        env:
-          BASE_URL: ${{ steps.deploy.outputs.app_url }}
       - name: Run Playwright tests
         env:
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
