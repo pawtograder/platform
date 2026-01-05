@@ -361,18 +361,18 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 
     // Navigate using relative URL - Playwright will prepend the configured baseURL
     // This avoids DNS resolution issues with dynamic preview environment hostnames
-    await page.goto(magicLink, { 
+    await page.goto(magicLink, {
       waitUntil: "networkidle",
-      timeout: 30000 
+      timeout: 30000
     });
-    
+
     // Click the magic link sign-in button
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
     await page.waitForLoadState("networkidle");
 
     const currentUrl = page.url();
     const isSuccessful = currentUrl.includes("/course");
-    
+
     // Check to see if we got the magic link expired notice
     if (!isSuccessful) {
       // Magic link expired, retry if we have retries remaining
@@ -390,9 +390,12 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
   } catch (error) {
     const errorMessage = (error as Error).message;
     console.error(`Sign in error: ${errorMessage}`);
-    
+
     // Retry on DNS resolution errors or sign-in failures
-    if (retriesRemaining > 0 && (errorMessage.includes("Failed to sign in") || errorMessage.includes("Error resolving"))) {
+    if (
+      retriesRemaining > 0 &&
+      (errorMessage.includes("Failed to sign in") || errorMessage.includes("Error resolving"))
+    ) {
       console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
