@@ -22,6 +22,7 @@
     "client-local": "npx supabase gen types typescript --local --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
     "rubric-schema": "npx typescript-json-schema --required --noExtraProps tsconfig.json YmlRubricType > public/RubricSchema.json",
     "seed": "npx tsx scripts/SeedDB.ts",
+    "seed:course-assignments": "npx tsx scripts/SeedCourseAssignments.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "lint": "next lint && prettier --check .",
     "format": "prettier --write ."
