@@ -35,10 +35,7 @@ CREATE POLICY "Users can view leaderboard in their class"
 ON public.assignment_leaderboard
 FOR SELECT
 USING (
-    -- Allow anonymous users to view all leaderboard entries
-    auth.uid() IS NULL
-    OR
-    -- Authenticated users can only view leaderboard for their classes
+    -- Only authenticated class members can view leaderboard
     EXISTS (
         SELECT 1 FROM public.user_roles ur
         WHERE ur.user_id = auth.uid()
@@ -48,7 +45,6 @@ USING (
 
 -- Grant permissions
 GRANT SELECT ON public.assignment_leaderboard TO authenticated;
-GRANT SELECT ON public.assignment_leaderboard TO anon;
 
 -- Function to update leaderboard when grader_results change
 CREATE OR REPLACE FUNCTION public.update_assignment_leaderboard()
@@ -171,7 +167,6 @@ AS $function$
 DECLARE
     v_user_role RECORD;
     v_grader_result RECORD;
-    v_assignment RECORD;
 BEGIN
     -- Only react if is_active changed
     IF OLD.is_active IS DISTINCT FROM NEW.is_active THEN
