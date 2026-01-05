@@ -35,7 +35,10 @@ CREATE POLICY "Users can view leaderboard in their class"
 ON public.assignment_leaderboard
 FOR SELECT
 USING (
-    -- Only authenticated class members can view leaderboard
+    -- Allow anonymous users to view all leaderboard entries
+    auth.uid() IS NULL
+    OR
+    -- Authenticated users can only view leaderboard for their classes
     EXISTS (
         SELECT 1 FROM public.user_roles ur
         WHERE ur.user_id = auth.uid()
