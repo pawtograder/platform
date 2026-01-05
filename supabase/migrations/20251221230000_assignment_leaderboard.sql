@@ -48,6 +48,7 @@ USING (
 
 -- Grant permissions
 GRANT SELECT ON public.assignment_leaderboard TO authenticated;
+GRANT SELECT ON public.assignment_leaderboard TO anon;
 
 -- Function to update leaderboard when grader_results change
 CREATE OR REPLACE FUNCTION public.update_assignment_leaderboard()
