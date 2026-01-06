@@ -102,7 +102,7 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
         assignment_id: topic.assignment_id?.toString() || "",
         icon: topic.icon ?? "",
         default_follow: topic.default_follow ?? false,
-        discord_channel_id: (topic as DiscussionTopic & { discord_channel_id?: string | null }).discord_channel_id || ""
+        discord_channel_id: topic.discord_channel_id || ""
       });
     }
   }, [isOpen, topic, reset]);

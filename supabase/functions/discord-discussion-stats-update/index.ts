@@ -32,11 +32,6 @@ interface DiscussionTopic {
   discord_channel_id: string | null;
 }
 
-interface AuthorProfile {
-  id: string;
-  name: string | null;
-}
-
 // Build Discord embed for a discussion thread
 function buildThreadEmbed(
   thread: DiscussionThread,
@@ -120,144 +115,164 @@ async function runStatsUpdate(
 
   const stats = { processed: 0, updated: 0, errors: 0 };
 
-  // Get all Discord messages for discussion threads
-  const { data: discordMessages, error: messagesError } = await supabase
-    .from("discord_messages")
-    .select("discord_message_id, discord_channel_id, resource_id, class_id")
-    .eq("resource_type", "discussion_thread")
-    .limit(500);
+  // Process messages in batches using offset-based pagination
+  const batchSize = 500;
+  let offset = 0;
+  let hasMore = true;
 
-  if (messagesError) {
-    console.error("[discord-discussion-stats-update] Error fetching discord messages:", messagesError);
-    scope.setContext("messages_error", { error: messagesError.message });
-    throw messagesError;
-  }
+  while (hasMore) {
+    // Fetch batch with offset-based pagination
+    const { data: discordMessages, error: messagesError } = await supabase
+      .from("discord_messages")
+      .select("id, discord_message_id, discord_channel_id, resource_id, class_id")
+      .eq("resource_type", "discussion_thread")
+      .order("id", { ascending: true })
+      .range(offset, offset + batchSize - 1);
 
-  if (!discordMessages || discordMessages.length === 0) {
-    console.log("[discord-discussion-stats-update] No discussion threads with Discord messages found");
-    return stats;
-  }
+    if (messagesError) {
+      console.error("[discord-discussion-stats-update] Error fetching discord messages:", messagesError);
+      scope.setContext("messages_error", { error: messagesError.message });
+      throw messagesError;
+    }
 
-  console.log(`[discord-discussion-stats-update] Found ${discordMessages.length} Discord messages to update`);
+    if (!discordMessages || discordMessages.length === 0) {
+      console.log("[discord-discussion-stats-update] No more Discord messages to process");
+      hasMore = false;
+      break;
+    }
 
-  // Get all thread IDs
-  const threadIds = discordMessages.map((m) => m.resource_id);
+    console.log(`[discord-discussion-stats-update] Processing batch of ${discordMessages.length} Discord messages`);
 
-  // Fetch all threads in one query
-  const { data: threads, error: threadsError } = await supabase
-    .from("discussion_threads")
-    .select(
-      "id, class_id, topic_id, subject, body, is_question, answer, author, likes_count, children_count, created_at"
-    )
-    .in("id", threadIds)
-    .is("root", null); // Only root threads
+    // Get all thread IDs
+    const threadIds = discordMessages.map((m) => m.resource_id);
 
-  if (threadsError) {
-    console.error("[discord-discussion-stats-update] Error fetching threads:", threadsError);
-    scope.setContext("threads_error", { error: threadsError.message });
-    throw threadsError;
-  }
+    // Fetch all threads in one query
+    // Note: No need to filter for root threads since only root threads get posted to Discord
+    // (the trigger only fires for threads where root = id)
+    const { data: threads, error: threadsError } = await supabase
+      .from("discussion_threads")
+      .select(
+        "id, class_id, topic_id, subject, body, is_question, answer, author, likes_count, children_count, created_at"
+      )
+      .in("id", threadIds);
 
-  if (!threads || threads.length === 0) {
-    console.log("[discord-discussion-stats-update] No matching threads found");
-    return stats;
-  }
+    if (threadsError) {
+      console.error("[discord-discussion-stats-update] Error fetching threads:", threadsError);
+      scope.setContext("threads_error", { error: threadsError.message });
+      throw threadsError;
+    }
 
-  // Create thread map for quick lookup
-  const threadMap = new Map<number, DiscussionThread>();
-  for (const thread of threads) {
-    threadMap.set(thread.id, thread as DiscussionThread);
-  }
-
-  // Get all unique topic IDs
-  const topicIds = [...new Set(threads.map((t) => t.topic_id))];
-
-  // Fetch all topics
-  const { data: topics, error: topicsError } = await supabase
-    .from("discussion_topics")
-    .select("id, topic, discord_channel_id")
-    .in("id", topicIds);
-
-  if (topicsError) {
-    console.error("[discord-discussion-stats-update] Error fetching topics:", topicsError);
-    scope.setContext("topics_error", { error: topicsError.message });
-    throw topicsError;
-  }
-
-  // Create topic map for quick lookup
-  const topicMap = new Map<number, DiscussionTopic>();
-  for (const topic of topics || []) {
-    topicMap.set(topic.id, topic as DiscussionTopic);
-  }
-
-  // Get all unique author IDs
-  const authorIds = [...new Set(threads.map((t) => t.author))];
-
-  // Fetch all author profiles
-  const { data: authors, error: authorsError } = await supabase.from("profiles").select("id, name").in("id", authorIds);
-
-  if (authorsError) {
-    console.error("[discord-discussion-stats-update] Error fetching authors:", authorsError);
-    // Don't fail, just use "Anonymous" for all
-  }
-
-  // Create author map for quick lookup
-  const authorMap = new Map<string, string>();
-  for (const author of authors || []) {
-    authorMap.set(author.id, author.name || "Anonymous");
-  }
-
-  // Process each Discord message
-  for (const msg of discordMessages) {
-    stats.processed++;
-
-    const thread = threadMap.get(msg.resource_id);
-    if (!thread) {
-      console.warn(`[discord-discussion-stats-update] Thread ${msg.resource_id} not found, skipping`);
+    if (!threads || threads.length === 0) {
+      console.log("[discord-discussion-stats-update] No matching threads found in this batch");
+      // Move to next batch
+      offset += batchSize;
+      hasMore = discordMessages.length === batchSize;
       continue;
     }
 
-    const topic = topicMap.get(thread.topic_id);
-    if (!topic || !topic.discord_channel_id) {
-      console.warn(
-        `[discord-discussion-stats-update] Topic ${thread.topic_id} not found or not linked to Discord, skipping`
-      );
-      continue;
+    // Create thread map for quick lookup
+    const threadMap = new Map<number, DiscussionThread>();
+    for (const thread of threads) {
+      threadMap.set(thread.id, thread as DiscussionThread);
     }
 
-    const authorName = authorMap.get(thread.author) || "Anonymous";
+    // Get all unique topic IDs
+    const topicIds = [...new Set(threads.map((t) => t.topic_id))];
 
-    try {
-      // Build the updated embed
-      const { content, embeds } = buildThreadEmbed(thread, topic, authorName);
+    // Fetch all topics
+    const { data: topics, error: topicsError } = await supabase
+      .from("discussion_topics")
+      .select("id, topic, discord_channel_id")
+      .in("id", topicIds);
 
-      // Enqueue update message
-      const { error: queueError } = await supabase.schema("pgmq_public").rpc("send", {
-        queue_name: "discord_async_calls",
-        message: {
-          method: "update_message",
-          args: {
-            channel_id: msg.discord_channel_id,
-            message_id: msg.discord_message_id,
-            content,
-            embeds
-          },
-          class_id: thread.class_id,
-          resource_type: "discussion_thread",
-          resource_id: thread.id
-        } as unknown as Json
-      });
+    if (topicsError) {
+      console.error("[discord-discussion-stats-update] Error fetching topics:", topicsError);
+      scope.setContext("topics_error", { error: topicsError.message });
+      throw topicsError;
+    }
 
-      if (queueError) {
-        console.error(`[discord-discussion-stats-update] Error queuing update for thread ${thread.id}:`, queueError);
-        stats.errors++;
-      } else {
-        stats.updated++;
+    // Create topic map for quick lookup
+    const topicMap = new Map<number, DiscussionTopic>();
+    for (const topic of topics || []) {
+      topicMap.set(topic.id, topic);
+    }
+
+    // Get all unique author IDs
+    const authorIds = [...new Set(threads.map((t) => t.author))];
+
+    // Fetch all author profiles
+    const { data: authors, error: authorsError } = await supabase
+      .from("profiles")
+      .select("id, name")
+      .in("id", authorIds);
+
+    if (authorsError) {
+      console.error("[discord-discussion-stats-update] Error fetching authors:", authorsError);
+      // Don't fail, just use "Anonymous" for all
+    }
+
+    // Create author map for quick lookup
+    const authorMap = new Map<string, string>();
+    for (const author of authors || []) {
+      authorMap.set(author.id, author.name || "Anonymous");
+    }
+
+    // Process each Discord message in the batch
+    for (const msg of discordMessages) {
+      stats.processed++;
+
+      const thread = threadMap.get(msg.resource_id);
+      if (!thread) {
+        console.warn(`[discord-discussion-stats-update] Thread ${msg.resource_id} not found, skipping`);
+        continue;
       }
-    } catch (err) {
-      console.error(`[discord-discussion-stats-update] Error processing thread ${thread.id}:`, err);
-      stats.errors++;
+
+      const topic = topicMap.get(thread.topic_id);
+      if (!topic || !topic.discord_channel_id) {
+        console.warn(
+          `[discord-discussion-stats-update] Topic ${thread.topic_id} not found or not linked to Discord, skipping`
+        );
+        continue;
+      }
+
+      const authorName = authorMap.get(thread.author) || "Anonymous";
+
+      try {
+        // Build the updated embed
+        const { content, embeds } = buildThreadEmbed(thread, topic, authorName);
+
+        // Enqueue update message
+        const { error: queueError } = await supabase.schema("pgmq_public").rpc("send", {
+          queue_name: "discord_async_calls",
+          message: {
+            method: "update_message",
+            args: {
+              channel_id: msg.discord_channel_id,
+              message_id: msg.discord_message_id,
+              content,
+              embeds
+            },
+            class_id: thread.class_id,
+            resource_type: "discussion_thread",
+            resource_id: thread.id
+          } as unknown as Json
+        });
+
+        if (queueError) {
+          console.error(`[discord-discussion-stats-update] Error queuing update for thread ${thread.id}:`, queueError);
+          stats.errors++;
+        } else {
+          stats.updated++;
+        }
+      } catch (err) {
+        console.error(`[discord-discussion-stats-update] Error processing thread ${thread.id}:`, err);
+        stats.errors++;
+      }
     }
+
+    // Move to next batch
+    offset += batchSize;
+    hasMore = discordMessages.length === batchSize;
   }
 
   console.log(

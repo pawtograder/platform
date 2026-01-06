@@ -60,7 +60,7 @@ BEGIN
   INTO v_thread
   FROM public.discussion_threads dt
   WHERE dt.id = p_thread_id
-    AND dt.root IS NULL  -- Only root threads
+    AND dt.root = dt.id  -- Root threads have root = id (not NULL)
     AND dt.draft = false; -- Only published threads
 
   IF NOT FOUND THEN
@@ -190,7 +190,7 @@ BEGIN
   INTO v_existing_message_id
   FROM public.discord_messages dm
   WHERE dm.class_id = v_thread.class_id
-    AND dm.resource_type = 'discussion_thread'
+    AND dm.resource_type::text = 'discussion_thread'
     AND dm.resource_id = p_thread_id;
 
   IF v_existing_message_id IS NOT NULL THEN
@@ -240,7 +240,8 @@ CREATE OR REPLACE FUNCTION public.discussion_thread_discord_insert_trigger()
 AS $function$
 BEGIN
   -- Only trigger for root threads (not replies) that are not drafts
-  IF NEW.root IS NULL AND NEW.draft = false THEN
+  -- Root threads have root = id
+  IF NEW.root = NEW.id AND NEW.draft = false THEN
     PERFORM public.enqueue_discord_discussion_thread_message(NEW.id, 'created');
   END IF;
   RETURN NEW;
@@ -262,7 +263,8 @@ CREATE OR REPLACE FUNCTION public.discussion_thread_discord_answer_trigger()
 AS $function$
 BEGIN
   -- Only trigger for root threads when answer status changes
-  IF NEW.root IS NULL AND OLD.answer IS DISTINCT FROM NEW.answer THEN
+  -- Root threads have root = id
+  IF NEW.root = NEW.id AND OLD.answer IS DISTINCT FROM NEW.answer THEN
     IF NEW.answer IS NOT NULL THEN
       PERFORM public.enqueue_discord_discussion_thread_message(NEW.id, 'answered');
     ELSE
@@ -290,7 +292,8 @@ CREATE OR REPLACE FUNCTION public.discussion_thread_discord_publish_trigger()
 AS $function$
 BEGIN
   -- Trigger when a root thread goes from draft to published
-  IF NEW.root IS NULL AND OLD.draft = true AND NEW.draft = false THEN
+  -- Root threads have root = id
+  IF NEW.root = NEW.id AND OLD.draft = true AND NEW.draft = false THEN
     PERFORM public.enqueue_discord_discussion_thread_message(NEW.id, 'created');
   END IF;
   RETURN NEW;

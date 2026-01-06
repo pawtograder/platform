@@ -420,7 +420,7 @@ export default function DiscussionTopicsPage() {
               return (
                 <DraggableTopicItem
                   key={topic.id}
-                  topic={topic as DiscussionTopic & { discord_channel_id?: string | null }}
+                  topic={topic}
                   linkedAssignment={linkedAssignment ?? null}
                   threadCount={threadCount}
                   hasThreads={hasThreads}
