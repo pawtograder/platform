@@ -9,8 +9,6 @@ export function TimeZoneSelector() {
   const { mode, setMode, courseTimeZone } = useTimeZone();
   const browserTimeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
-  
-
   return (
     <VStack alignItems="flex-start" gap={4}>
       <Text fontSize="sm" color="fg.muted">

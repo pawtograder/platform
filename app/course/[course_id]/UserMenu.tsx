@@ -918,8 +918,6 @@ function TimeZoneIndicator() {
     return null;
   }
 
-  
-
   return (
     <Button
       variant="outline"
