@@ -343,7 +343,7 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
-async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 5) {
   try {
     // Generate magic link on-demand for authentication
     const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -378,6 +378,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       // Magic link expired, retry if we have retries remaining
       if (retriesRemaining > 0) {
         console.log(`Magic link authentication unsuccessful, retrying... (${retriesRemaining} retries remaining)`);
+        await new Promise(res => setTimeout(res, 1000)); // 1 second delay
         return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
       } else {
         throw new Error("Magic link expired and no retries remaining");
