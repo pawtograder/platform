@@ -29,7 +29,10 @@ export default function NotificationPreferencesPanel({
   const hasDiscordLinked = !!discordIdentity;
 
   const [preferences, setPreferences] = useState<
-    NotificationPreferences & { discussion_notification?: "immediate" | "digest" | "disabled" }
+    NotificationPreferences & {
+      discussion_notification?: "immediate" | "digest" | "disabled";
+      discussion_discord_notification?: "all" | "followed_only" | "none";
+    }
   >({
     /*
      * The table definition requires these fields, so we provide harmless defaults
@@ -42,6 +45,7 @@ export default function NotificationPreferencesPanel({
     help_request_creation_notification: "all",
     regrade_request_notification: "all",
     discussion_notification: "immediate",
+    discussion_discord_notification: "all",
     updated_at: new Date().toISOString()
   });
 
@@ -87,6 +91,7 @@ export default function NotificationPreferencesPanel({
             help_request_creation_notification: preferences.help_request_creation_notification,
             regrade_request_notification: preferences.regrade_request_notification,
             discussion_notification: preferences.discussion_notification || "immediate",
+            discussion_discord_notification: preferences.discussion_discord_notification || "all",
             updated_at: new Date().toISOString()
           }
         });
@@ -99,7 +104,8 @@ export default function NotificationPreferencesPanel({
             class_id: classId,
             help_request_creation_notification: preferences.help_request_creation_notification,
             regrade_request_notification: preferences.regrade_request_notification,
-            discussion_notification: preferences.discussion_notification || "immediate"
+            discussion_notification: preferences.discussion_notification || "immediate",
+            discussion_discord_notification: preferences.discussion_discord_notification || "all"
           }
         });
       }
@@ -128,6 +134,7 @@ export default function NotificationPreferencesPanel({
     if (existingPreferences?.data?.[0]) {
       const data = existingPreferences.data[0] as NotificationPreferences & {
         discussion_notification?: "immediate" | "digest" | "disabled";
+        discussion_discord_notification?: "all" | "followed_only" | "none";
       };
       setPreferences({
         ...data,
@@ -137,7 +144,9 @@ export default function NotificationPreferencesPanel({
         discussion_notification:
           !initialAppliedRef.current && initialDiscussionNotification
             ? initialDiscussionNotification
-            : data.discussion_notification || "immediate"
+            : data.discussion_notification || "immediate",
+        // Ensure discussion_discord_notification has a default
+        discussion_discord_notification: data.discussion_discord_notification || "all"
       });
       // Mark initial values as applied after first load
       if (!initialAppliedRef.current && initialDiscussionNotification) {
@@ -259,6 +268,31 @@ export default function NotificationPreferencesPanel({
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                 </Field>
+                {hasDiscordLinked && (
+                  <Field
+                    label="Discussion Discord Notifications"
+                    helperText="Control Discord notifications for new discussion threads posted to Discord-linked topics."
+                  >
+                    <NativeSelect.Root>
+                      <NativeSelect.Field
+                        value={preferences.discussion_discord_notification || "all"}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          setPreferences((prev) => ({
+                            ...prev,
+                            discussion_discord_notification: e.target.value as "all" | "followed_only" | "none"
+                          }));
+                        }}
+                      >
+                        <option value="all">All: See Discord messages for all new discussion threads.</option>
+                        <option value="followed_only">
+                          Followed only: Only see Discord messages for topics you follow.
+                        </option>
+                        <option value="none">None: Don&apos;t show me Discord notifications for discussions.</option>
+                      </NativeSelect.Field>
+                    </NativeSelect.Root>
+                  </Field>
+                )}
               </>
             )}
           </Stack>

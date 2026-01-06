@@ -642,6 +642,9 @@ export async function processEnvelope(
               } catch (e) {
                 console.error(`[processEnvelope] Error fetching regrade request for deep link:`, e);
               }
+            } else if (envelope.resource_type === "discussion_thread") {
+              // Discussion thread URL: /course/{class_id}/discussion/{thread_id}
+              deepLinkUrl = `https://${appUrl}/course/${envelope.class_id}/discussion/${envelope.resource_id}`;
             }
 
             // Add URL to the first embed if it exists
@@ -847,6 +850,9 @@ export async function processEnvelope(
               } catch (e) {
                 console.error(`[processEnvelope] Error fetching regrade request for deep link:`, e);
               }
+            } else if (resourceType === "discussion_thread") {
+              // Discussion thread URL: /course/{class_id}/discussion/{thread_id}
+              deepLinkUrl = `https://${appUrl}/course/${classId}/discussion/${resourceId}`;
             }
 
             // Add URL to the first embed if it exists

@@ -3,11 +3,11 @@
 import { TopicIconPicker, TopicIconPickerValue } from "@/components/discussion/TopicIconPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
+import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea, Box } from "@chakra-ui/react";
 import { Controller, useForm } from "react-hook-form";
 import { useEffect } from "react";
-import { BsX } from "react-icons/bs";
-import { useCourseController, useAssignments } from "@/hooks/useCourseController";
+import { BsX, BsDiscord } from "react-icons/bs";
+import { useCourseController, useCourse, useAssignments } from "@/hooks/useCourseController";
 import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 
@@ -44,6 +44,8 @@ type TopicFormData = {
   icon: string;
   /** Whether students should follow by default */
   default_follow: boolean;
+  /** Optional Discord channel ID to link the topic to a Discord channel */
+  discord_channel_id: string;
 };
 
 /**
@@ -74,7 +76,11 @@ type EditTopicModalProps = {
  */
 export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: EditTopicModalProps) {
   const controller = useCourseController();
+  const course = useCourse();
   const assignments = useAssignments();
+
+  // Check if Discord is configured for this class
+  const isDiscordConfigured = !!course?.discord_server_id;
 
   const {
     register,
@@ -95,7 +101,8 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
         color: topic.color,
         assignment_id: topic.assignment_id?.toString() || "",
         icon: topic.icon ?? "",
-        default_follow: topic.default_follow ?? false
+        default_follow: topic.default_follow ?? false,
+        discord_channel_id: (topic as DiscussionTopic & { discord_channel_id?: string | null }).discord_channel_id || ""
       });
     }
   }, [isOpen, topic, reset]);
@@ -122,7 +129,8 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
         color: data.color,
         assignment_id: data.assignment_id ? Number(data.assignment_id) : null,
         icon: data.icon ? data.icon : null,
-        default_follow: data.default_follow
+        default_follow: data.default_follow,
+        discord_channel_id: data.discord_channel_id?.trim() || null
       });
 
       toaster.success({
@@ -241,6 +249,24 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
                     Optionally link this topic to a specific assignment for better organization
                   </Field.HelperText>
                 </Field.Root>
+
+                {isDiscordConfigured && (
+                  <Box borderWidth="1px" borderRadius="md" p={4} borderColor="border.emphasized">
+                    <HStack mb={2} gap={2}>
+                      <Icon as={BsDiscord} color="purple.500" />
+                      <Text fontWeight="medium">Discord Integration</Text>
+                    </HStack>
+                    <Field.Root>
+                      <Field.Label>Discord Channel ID (Optional)</Field.Label>
+                      <Input {...register("discord_channel_id")} placeholder="e.g., 1234567890123456789" />
+                      <Field.HelperText>
+                        Link this topic to a Discord channel. New threads will be posted to the linked channel.
+                        Right-click a channel in Discord → Copy Channel ID (requires Developer Mode). Leave empty to
+                        unlink.
+                      </Field.HelperText>
+                    </Field.Root>
+                  </Box>
+                )}
               </Stack>
             </form>
           </Dialog.Body>

@@ -4,11 +4,11 @@ This script creates placeholder assignments and gradebook columns in Pawtograder
 
 ## What It Creates
 
-| Type | Source | Release Date | Due Date |
-|------|--------|--------------|----------|
-| **Homework** | `config.assignments` | `assignedDate` at 00:00 | `dueDate` at `dueTime` |
-| **Labs** | `config.labs` | Monday 00:00 of lab week | Friday 23:59 of lab week |
-| **Participation** | `config.lectures` | N/A (gradebook column only) | N/A |
+| Type              | Source               | Release Date                | Due Date                 |
+| ----------------- | -------------------- | --------------------------- | ------------------------ |
+| **Homework**      | `config.assignments` | `assignedDate` at 00:00     | `dueDate` at `dueTime`   |
+| **Labs**          | `config.labs`        | Monday 00:00 of lab week    | Friday 23:59 of lab week |
+| **Participation** | `config.lectures`    | N/A (gradebook column only) | N/A                      |
 
 - **Homework and Labs** are created as assignments with release and due dates
 - **Participation** is created as gradebook columns (not assignments) for manual grade entry
@@ -27,20 +27,20 @@ npm run seed:course-assignments -- [options]
 
 ### Required Options
 
-| Option | Description |
-|--------|-------------|
+| Option            | Description                                        |
+| ----------------- | -------------------------------------------------- |
 | `--class-id <id>` | The Pawtograder class ID to create assignments for |
 
 ### Optional Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-c, --config <path>` | Path to course config file | `course.config.json` |
-| `--participation-points <n>` | Points for each participation column | `5` |
-| `--lab-points <n>` | Points for each lab assignment | `10` |
-| `-s, --skip <id>` | Skip creating a specific item (repeatable) | — |
-| `--dry-run` | Preview without creating anything | — |
-| `-h, --help` | Show help message | — |
+| Option                       | Description                                | Default              |
+| ---------------------------- | ------------------------------------------ | -------------------- |
+| `-c, --config <path>`        | Path to course config file                 | `course.config.json` |
+| `--participation-points <n>` | Points for each participation column       | `5`                  |
+| `--lab-points <n>`           | Points for each lab assignment             | `10`                 |
+| `-s, --skip <id>`            | Skip creating a specific item (repeatable) | —                    |
+| `--dry-run`                  | Preview without creating anything          | —                    |
+| `-h, --help`                 | Show help message                          | —                    |
 
 ## Examples
 
@@ -90,11 +90,11 @@ npm run seed:course-assignments -- --class-id 123 --config /path/to/other-course
 
 The `--skip` flag uses different ID formats depending on the item type:
 
-| Type | ID Source | Examples |
-|------|-----------|----------|
-| Homework | `assignments[].id` in config | `cyb1`, `team-form`, `cyb2` |
-| Labs | `labs[].id` without `-mon`/`-tue` suffix | `lab1`, `lab2`, `lab3` |
-| Participation | `lectures[].lectureId` in config | `l1-intro`, `l2-data-in-jvm` |
+| Type          | ID Source                                | Examples                     |
+| ------------- | ---------------------------------------- | ---------------------------- |
+| Homework      | `assignments[].id` in config             | `cyb1`, `team-form`, `cyb2`  |
+| Labs          | `labs[].id` without `-mon`/`-tue` suffix | `lab1`, `lab2`, `lab3`       |
+| Participation | `lectures[].lectureId` in config         | `l1-intro`, `l2-data-in-jvm` |
 
 ## Course Config File Format
 
@@ -154,6 +154,7 @@ All dates are converted to/from the timezone specified in the config file. Relea
 ### Minimal Assignments
 
 Created assignments are minimal placeholders with:
+
 - No autograder or handgrader
 - No rubric
 - Self-review disabled
@@ -177,5 +178,3 @@ Check that the config file path is correct. Use an absolute path or ensure the r
 1. Check if they already exist (the script skips duplicates)
 2. Verify the item isn't in the `--skip` list
 3. Use `--dry-run` to see what would be created
-
-

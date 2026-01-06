@@ -161,10 +161,10 @@ export type DiscordAsyncEnvelope = {
   // For message tracking
   discord_message_id?: string; // For update_message, the message ID to update
   discord_channel_id?: string; // For send_message, store the channel ID
-  resource_type?: "help_request" | "regrade_request"; // For tracking in discord_messages table
+  resource_type?: "help_request" | "regrade_request" | "discussion_thread"; // For tracking in discord_messages table
   resource_id?: number; // For tracking in discord_messages table
   // For channel tracking (create_channel method)
-  channel_type?: "general" | "assignment" | "lab" | "office_hours" | "regrades" | "scheduling" | "operations"; // For tracking in discord_channels table
+  channel_type?: "general" | "assignment" | "lab" | "office_hours" | "regrades" | "scheduling" | "operations" | "forum"; // For tracking in discord_channels table
   // For role tracking (create_role method)
   role_type?: "student" | "grader" | "instructor"; // For tracking in discord_roles table
   // For email link generation (help requests)

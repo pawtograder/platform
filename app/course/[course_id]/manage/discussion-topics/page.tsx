@@ -27,9 +27,11 @@ import {
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { useMemo } from "react";
-import { BsChatDots, BsGripVertical, BsLink45Deg, BsPencil, BsPlus, BsTrash } from "react-icons/bs";
+import { BsChatDots, BsDiscord, BsGripVertical, BsLink45Deg, BsPencil, BsPlus, BsTrash } from "react-icons/bs";
 import CreateTopicModal from "./modals/createTopicModal";
 import EditTopicModal from "./modals/editTopicModal";
+import { useCourse } from "@/hooks/useCourseController";
+import { getDiscordChannelUrl } from "@/lib/discordUtils";
 
 /**
  * Draggable and droppable topic item component.
@@ -40,13 +42,15 @@ function DraggableTopicItem({
   linkedAssignment,
   threadCount,
   hasThreads,
+  discordServerId,
   onEdit,
   onDelete
 }: {
-  topic: DiscussionTopic;
+  topic: DiscussionTopic & { discord_channel_id?: string | null };
   linkedAssignment: string | null | undefined;
   threadCount: number;
   hasThreads: boolean;
+  discordServerId: string | null;
   onEdit: (topic: DiscussionTopic) => void;
   onDelete: (topicId: number) => void;
 }) {
@@ -127,6 +131,22 @@ function DraggableTopicItem({
                 {threadCount} thread{threadCount === 1 ? "" : "s"}
               </Badge>
             )}
+            {topic.discord_channel_id && discordServerId && (
+              <Tooltip content="This topic is linked to a Discord channel. New threads will be posted there.">
+                <Badge
+                  variant="subtle"
+                  colorPalette="purple"
+                  cursor="pointer"
+                  onClick={() => {
+                    const url = getDiscordChannelUrl(discordServerId, topic.discord_channel_id!);
+                    window.open(url, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  <Icon as={BsDiscord} mr={1} />
+                  Discord Linked
+                </Badge>
+              </Tooltip>
+            )}
           </Flex>
 
           <Text color="fg.muted" fontSize="sm">
@@ -187,8 +207,9 @@ export default function DiscussionTopicsPage() {
   const createModal = useModalManager();
   const editModal = useModalManager<DiscussionTopic>();
 
-  // Get topics, assignments, and threads from the course controller
+  // Get topics, assignments, threads, and course from the course controller
   const controller = useCourseController();
+  const course = useCourse();
   const topics = useDiscussionTopics();
   const assignments = useAssignments();
   const threads = useDiscussionThreadTeasers();
@@ -399,10 +420,11 @@ export default function DiscussionTopicsPage() {
               return (
                 <DraggableTopicItem
                   key={topic.id}
-                  topic={topic}
+                  topic={topic as DiscussionTopic & { discord_channel_id?: string | null }}
                   linkedAssignment={linkedAssignment ?? null}
                   threadCount={threadCount}
                   hasThreads={hasThreads}
+                  discordServerId={course?.discord_server_id ?? null}
                   onEdit={(topic) => editModal.openModal(topic)}
                   onDelete={handleDeleteTopic}
                 />
