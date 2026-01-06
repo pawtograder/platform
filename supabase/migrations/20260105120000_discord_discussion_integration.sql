@@ -67,11 +67,6 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Skip instructors_only threads (staff-only discussions shouldn't go to Discord)
-  IF v_thread.instructors_only THEN
-    RETURN;
-  END IF;
-
   -- Get topic details including discord_channel_id
   SELECT 
     dtp.id,
