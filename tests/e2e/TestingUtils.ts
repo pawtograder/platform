@@ -378,7 +378,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       // Magic link expired, retry if we have retries remaining
       if (retriesRemaining > 0) {
         console.log(`Magic link authentication unsuccessful, retrying... (${retriesRemaining} retries remaining)`);
-        await new Promise(res => setTimeout(res, 1000)); // 1 second delay
+        await new Promise((res) => setTimeout(res, 1000)); // 1 second delay
         return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
       } else {
         throw new Error("Magic link expired and no retries remaining");
