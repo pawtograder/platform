@@ -1,6 +1,7 @@
 "use client";
 
 import { useTimeZone } from "@/lib/TimeZoneProvider";
+import { getTimeZoneAbbr } from "@/lib/timezoneUtils";
 import { HStack, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 
@@ -8,19 +9,7 @@ export function TimeZoneSelector() {
   const { mode, setMode, courseTimeZone } = useTimeZone();
   const browserTimeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
-  const getTimeZoneAbbr = (tz: string) => {
-    try {
-      const now = new Date();
-      const formatter = new Intl.DateTimeFormat("en", {
-        timeZone: tz,
-        timeZoneName: "short"
-      });
-      const parts = formatter.formatToParts(now);
-      return parts.find((part) => part.type === "timeZoneName")?.value || tz;
-    } catch {
-      return tz;
-    }
-  };
+  
 
   return (
     <VStack alignItems="flex-start" gap={4}>

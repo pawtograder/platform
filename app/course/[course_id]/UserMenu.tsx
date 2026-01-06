@@ -15,6 +15,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
+import { getTimeZoneAbbr } from "@/lib/timezoneUtils";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -100,8 +101,6 @@ function SupportMenu() {
         timeoutRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy build number:", err);
-      // Show user-friendly error notification
       toaster.error({
         title: "Failed to copy build number",
         description: err instanceof Error ? err.message : "An unknown error occurred"
@@ -919,19 +918,7 @@ function TimeZoneIndicator() {
     return null;
   }
 
-  const getTimeZoneAbbr = (tz: string) => {
-    try {
-      const now = new Date();
-      const formatter = new Intl.DateTimeFormat("en", {
-        timeZone: tz,
-        timeZoneName: "short"
-      });
-      const parts = formatter.formatToParts(now);
-      return parts.find((part) => part.type === "timeZoneName")?.value || tz;
-    } catch {
-      return tz;
-    }
-  };
+  
 
   return (
     <Button
