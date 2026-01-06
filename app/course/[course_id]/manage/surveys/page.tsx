@@ -1,9 +1,9 @@
-import { Container } from "@chakra-ui/react";
+import type { Survey } from "@/types/survey";
 import { createClient } from "@/utils/supabase/server";
-import SurveysTable from "./SurveysTable";
+import { Container } from "@chakra-ui/react";
 import EmptySurveysState from "./EmptySurveysState";
 import SurveysHeader from "./SurveysHeader";
-import type { Survey } from "@/types/survey";
+import SurveysTable from "./SurveysTable";
 
 type ManageSurveysPageProps = {
   params: Promise<{ course_id: string }>;
@@ -12,11 +12,6 @@ type ManageSurveysPageProps = {
 export default async function ManageSurveysPage({ params }: ManageSurveysPageProps) {
   const { course_id } = await params;
   const supabase = await createClient();
-
-  // Fetch class data for timezone
-  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
-
-  const timezone = classData?.time_zone || "America/New_York";
 
   // Fetch surveys for this course (excluding soft-deleted)
   const { data: surveys, error } = await supabase
