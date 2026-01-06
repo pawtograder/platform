@@ -60,7 +60,7 @@ BEGIN
   INTO v_thread
   FROM public.discussion_threads dt
   WHERE dt.id = p_thread_id
-    AND dt.root = dt.id  -- Root threads have root = id (not NULL)
+    AND dt.parent IS NULL  -- Root threads have no parent
     AND dt.draft = false; -- Only published threads
 
   IF NOT FOUND THEN
@@ -235,8 +235,8 @@ CREATE OR REPLACE FUNCTION public.discussion_thread_discord_insert_trigger()
 AS $function$
 BEGIN
   -- Only trigger for root threads (not replies) that are not drafts
-  -- Root threads have root = id
-  IF NEW.root = NEW.id AND NEW.draft = false THEN
+  -- Root threads have parent IS NULL (root field is set later by notification trigger)
+  IF NEW.parent IS NULL AND NEW.draft = false THEN
     PERFORM public.enqueue_discord_discussion_thread_message(NEW.id, 'created');
   END IF;
   RETURN NEW;
@@ -258,8 +258,8 @@ CREATE OR REPLACE FUNCTION public.discussion_thread_discord_answer_trigger()
 AS $function$
 BEGIN
   -- Only trigger for root threads when answer status changes
-  -- Root threads have root = id
-  IF NEW.root = NEW.id AND OLD.answer IS DISTINCT FROM NEW.answer THEN
+  -- Root threads have parent IS NULL
+  IF NEW.parent IS NULL AND OLD.answer IS DISTINCT FROM NEW.answer THEN
     IF NEW.answer IS NOT NULL THEN
       PERFORM public.enqueue_discord_discussion_thread_message(NEW.id, 'answered');
     ELSE
@@ -287,8 +287,8 @@ CREATE OR REPLACE FUNCTION public.discussion_thread_discord_publish_trigger()
 AS $function$
 BEGIN
   -- Trigger when a root thread goes from draft to published
-  -- Root threads have root = id
-  IF NEW.root = NEW.id AND OLD.draft = true AND NEW.draft = false THEN
+  -- Root threads have parent IS NULL
+  IF NEW.parent IS NULL AND OLD.draft = true AND NEW.draft = false THEN
     PERFORM public.enqueue_discord_discussion_thread_message(NEW.id, 'created');
   END IF;
   RETURN NEW;
