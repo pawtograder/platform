@@ -166,7 +166,6 @@ function AuditTable() {
         cell: (props) => {
           return (
             <Text>
-              {" "}
               <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
             </Text>
           );

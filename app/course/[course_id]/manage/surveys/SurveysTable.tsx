@@ -19,16 +19,14 @@ type FilterType = "all" | "closed" | "active" | "draft";
 type SurveysTableProps = {
   surveys: SurveyWithCounts[];
   courseId: string;
-  timezone: string;
 };
 
-export default function SurveysTable({ surveys, courseId, timezone: _timezone }: SurveysTableProps) {
+export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
   const controller = useCourseController();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
   const isGrader = useIsGrader();
-  void _timezone;
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -153,11 +151,6 @@ export default function SurveysTable({ surveys, courseId, timezone: _timezone }:
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
         }
 
-        console.log("updating survey status", survey.id, {
-          status: validationErrors ? "draft" : "published",
-          validation_errors: validationErrors
-        });
-        console.log(controller.surveys.rows);
         // Update survey status using TableController - auto-refreshes UI via realtime
         await controller.surveys.update(survey.id, {
           status: validationErrors ? "draft" : "published",

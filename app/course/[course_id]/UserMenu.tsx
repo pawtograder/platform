@@ -944,17 +944,24 @@ function TimeZoneIndicator() {
       <HStack gap={1}>
         <FiClock size={12} />
         <Text>
-          {mode === "course" ? "course" : "local"} time zone ({getTimeZoneAbbr(timeZone)})
+          {mode === "course" ? "Course" : "Local"} Time Zone ({getTimeZoneAbbr(timeZone)})
         </Text>
       </HStack>
     </Button>
   );
 }
 
+// Render TimeZoneIndicator only when a TimeZoneProvider is present
+function SafeTimeZoneIndicator() {
+  const ctx = useContext(TimeZoneContext);
+  if (!ctx) return null;
+  return <TimeZoneIndicator />;
+}
+
 export default function UserMenu() {
   return (
     <HStack minWidth={0}>
-      <TimeZoneIndicator />
+      <SafeTimeZoneIndicator />
       <ConnectionStatusIndicator />
       <SupportMenu />
       <ColorModeButton colorPalette="gray" variant="outline" />

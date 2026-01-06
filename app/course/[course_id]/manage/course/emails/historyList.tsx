@@ -54,8 +54,7 @@ export default function HistoryPage({ course, userRoles }: { course?: Course; us
 
 export const EmailHistoryCard = memo(function EmailHistoryCard({
   userRoles,
-  group,
-  course
+  group
 }: {
   userRoles?: UserRoleWithUserDetails[];
   group: EmailBatches & { emails: Emails[] };

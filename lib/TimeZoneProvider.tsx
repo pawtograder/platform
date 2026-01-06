@@ -23,9 +23,10 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
   const [mode, setModeState] = useState<TimeZoneMode>("course");
   const [showModal, setShowModal] = useState(false);
   const [isClient, setIsClient] = useState(false);
-
+  const [isTimeZoneDetected, setIsTimeZoneDetected] = useState(false);
   // Detect browser time zone (client-only) via state to avoid hydration mismatch
-  const [browserTimeZone, setBrowserTimeZone] = useState("UTC");
+  // Initialize to "UTC" and use a separate detection flag to handle real UTC correctly
+  const [browserTimeZone, setBrowserTimeZone] = useState<string>("UTC");
 
   useEffect(() => {
     // Client-only: mark as client and detect actual browser timezone once
@@ -33,14 +34,16 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (tz) setBrowserTimeZone(tz);
+      setIsTimeZoneDetected(true);
     } catch {
-      // noop: keep UTC fallback
+      // Keep UTC fallback and mark as detected
+      setIsTimeZoneDetected(true);
     }
   }, []);
 
   useEffect(() => {
     // Only run preference check once real browser timezone is known on client
-    if (!isClient || browserTimeZone === "UTC") return;
+    if (!isClient || !isTimeZoneDetected) return;
 
     // Check for existing preference in localStorage
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -50,7 +53,7 @@ export function TimeZoneProvider({ courseTimeZone, children }: { courseTimeZone:
       // Only show modal if timezones differ and no preference is saved
       setShowModal(true);
     }
-  }, [courseTimeZone, browserTimeZone, isClient]);
+  }, [courseTimeZone, browserTimeZone, isClient, isTimeZoneDetected]);
 
   const setMode = (newMode: TimeZoneMode) => {
     setModeState(newMode);

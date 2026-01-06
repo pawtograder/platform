@@ -81,7 +81,7 @@ export default async function ManageSurveysPage({ params }: ManageSurveysPagePro
     <Container py={8} maxW="1200px" my={2}>
       <SurveysHeader courseId={course_id} />
 
-      <SurveysTable surveys={surveysWithCounts} courseId={course_id} timezone={timezone} />
+      <SurveysTable surveys={surveysWithCounts} courseId={course_id} />
     </Container>
   );
 }
