@@ -394,7 +394,7 @@ export async function getGuildMember(
 export async function createGuildInvite(
   guildId: string,
   maxAge: number = 604800, // 7 days default
-  maxUses: number = 1,
+  maxUses: number = 5,
   scope?: Sentry.Scope
 ): Promise<{ code: string; url: string }> {
   // Find a channel to create invite in (prefer text channels)

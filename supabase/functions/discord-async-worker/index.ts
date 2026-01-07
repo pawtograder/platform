@@ -1054,7 +1054,7 @@ export async function processEnvelope(
           if (!member) {
             // User is not in the guild - create an invite link
             console.log(`[processEnvelope] User ${args.user_id} not in guild ${args.guild_id}, creating invite`);
-            const invite = await discord.createGuildInvite(args.guild_id, 604800, 1, scope); // 7 days, 1 use
+            const invite = await discord.createGuildInvite(args.guild_id, 604800, 5, scope); // 7 days, 5 uses
 
             console.log(`[processEnvelope] Created invite for user ${args.user_id}: ${invite.url}`);
             scope.setContext("discord_invite_created", {
