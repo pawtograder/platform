@@ -73,15 +73,9 @@ const nextConfig: NextConfig = {
               reuseExistingChunk: true,
               enforce: true
             },
-            // Fallback vendors cacheGroup for remaining node_modules
-            // Lower priority ensures specific cacheGroups above take precedence
-            vendors: {
-              name: "vendors",
-              test: /[\\/]node_modules[\\/]/,
-              priority: 5,
-              reuseExistingChunk: true,
-              enforce: true
-            }
+            // Note: Removed fallback vendors cacheGroup - it interfered with Next.js's
+            // CSS extraction and caused CSS files to be loaded as JavaScript.
+            // Let Next.js handle remaining node_modules chunking automatically.
           }
         }
       };
