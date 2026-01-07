@@ -56,7 +56,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
-    trace: "on" //"on-first-retry"
+    trace: "on", //"on-first-retry"
+    
+    /* Force light mode to prevent SSR/CSR theme mismatches */
+    colorScheme: "light"
   },
   expect: {
     timeout: 20_000

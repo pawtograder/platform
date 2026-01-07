@@ -343,7 +343,7 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
-async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 5) {
   try {
     // Generate magic link on-demand for authentication
     const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -356,32 +356,55 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 
     const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
 
-    // Use magic link for login
-    await page.goto(magicLink);
-    await page.getByRole("button", { name: "Sign in with magic link" }).click();
-    await page.waitForLoadState("networkidle");
+    // Use magic link for login - use domcontentloaded to avoid waiting too long
+    await page.goto(magicLink, { waitUntil: "domcontentloaded" });
+    
+    // Check if we're already redirected to /course (successful auth)
+    if (page.url().includes("/course")) {
+      return; // Already signed in successfully
+    }
+    
+    // Otherwise click the button
+    const button = page.getByRole("button", { name: "Sign in with magic link" });
+    if (await button.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await button.click();
+      await page.waitForLoadState("networkidle");
+    }
 
     const currentUrl = page.url();
     const isSuccessful = currentUrl.includes("/course");
-    // Check to see if we got the magic link expired notice
+    
+    // Check if we got an error in the URL
+    const hasError = currentUrl.includes("error=");
+    
     if (!isSuccessful) {
-      // Magic link expired, retry if we have retries remaining
-      if (retriesRemaining > 0) {
+      if (hasError && retriesRemaining > 0) {
+        // Magic link expired or invalid, retry with a fresh link
+        console.log(`Magic link expired/invalid, retrying... (${retriesRemaining} retries remaining)`);
+        await page.waitForTimeout(500); // Brief pause before retry
+        return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
+      } else if (retriesRemaining > 0) {
+        console.log(`Sign in not successful, retrying... (${retriesRemaining} retries remaining)`);
         return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
       } else {
-        throw new Error("Magic link expired and no retries remaining");
+        throw new Error("Magic link expired/invalid and no retries remaining");
       }
     }
-
-    if (!isSuccessful) {
-      throw new Error("Failed to sign in - neither success nor expired state detected");
-    }
   } catch (error) {
-    if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
-      console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
+    const errorMessage = (error as Error).message;
+    
+    // Don't retry on fatal errors
+    if (errorMessage.includes("closed") || errorMessage.includes("disposed")) {
+      throw error;
+    }
+    
+    if (retriesRemaining > 0) {
+      console.log(`Sign in failed: ${errorMessage}, retrying... (${retriesRemaining} retries remaining)`);
+      await page.waitForTimeout(500); // Brief pause before retry
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
-    throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
+    
+    throw new Error(`Failed to sign in with magic link: ${errorMessage}`);
   }
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
@@ -389,8 +412,11 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
   await signInWithMagicLinkAndRetry(page, testingUser);
 
   if (course) {
-    await page.waitForLoadState("networkidle");
-    await page.goto(`/course/${course.id}`);
+    // Wait for URL to be stable at /course
+    await page.waitForURL("**/course", { waitUntil: "load", timeout: 10000 });
+    await page.waitForTimeout(500); // Give WebKit extra time to settle
+    
+    await page.goto(`/course/${course.id}`, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
   }
 }
