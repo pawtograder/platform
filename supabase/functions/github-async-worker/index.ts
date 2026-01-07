@@ -1375,8 +1375,9 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
     sleep_seconds: 60,
-    n: 4
+    n: 100
   });
+  console.log("result", result);
 
   if (result.error) {
     Sentry.captureException(result.error, scope);
@@ -1423,7 +1424,7 @@ export async function runBatchHandler() {
     }
   }
 }
-
+runBatchHandler();
 Deno.serve((req) => {
   const secret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");

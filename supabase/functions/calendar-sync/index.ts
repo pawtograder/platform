@@ -38,22 +38,6 @@ interface ClassWithCalendar {
   time_zone: string;
 }
 
-interface CalendarEvent {
-  id: number;
-  class_id: number;
-  calendar_type: string;
-  uid: string;
-  title: string;
-  description: string | null;
-  start_time: string;
-  end_time: string;
-  location: string | null;
-  queue_name: string | null;
-  organizer_name: string | null;
-  start_announced_at: string | null;
-  end_announced_at: string | null;
-  change_announced_at: string | null;
-}
 
 // Parse event title to extract name and queue
 // Format: "Jonathan Bell (Queue1)" or "Jonathan Bell"
@@ -985,305 +969,130 @@ async function syncCalendar(
 
   console.log(`[syncCalendar] Parsed ${parsedEvents.length} events from ICS (including expanded recurrences)`);
 
-  // Get existing events from database (higher limit to account for recurring events)
-  // Only fetch events that haven't ended more than 30 days ago to avoid processing old data
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  // Convert parsed events to JSON for RPC call
+  const parsedEventsJson = parsedEvents.map((e) => ({
+    uid: e.uid,
+    title: e.title,
+    description: e.description || null,
+    start_time: e.start_time,
+    end_time: e.end_time,
+    location: e.location || null,
+    queue_name: e.queue_name || null,
+    organizer_name: e.organizer_name || null,
+    raw_ics_data: e.raw_ics_data
+  }));
 
-  const { data: existingEvents } = await supabase
-    .from("calendar_events")
-    .select("*")
-    .eq("class_id", classData.id)
-    .eq("calendar_type", calendarType)
-    .gte("end_time", thirtyDaysAgo.toISOString())
-    .limit(5000);
+  // Call RPC to sync events
+  const { data: syncResult, error: rpcError } = await supabase.rpc("sync_calendar_events" as never, {
+    p_class_id: classData.id,
+    p_calendar_type: calendarType,
+    p_parsed_events: parsedEventsJson as unknown as Json,
+    p_has_discord_server: !!classData.discord_server_id
+  } as never);
 
-  const existingByUid = new Map<string, CalendarEvent>();
-  for (const event of existingEvents || []) {
-    existingByUid.set(event.uid, event as CalendarEvent);
-  }
-
-  const parsedByUid = new Map<string, ParsedEvent>();
-  for (const event of parsedEvents) {
-    parsedByUid.set(event.uid, event);
-  }
-
-  // Find events to add, update, and delete
-  const toAdd: ParsedEvent[] = [];
-  const toUpdate: {
-    existing: CalendarEvent;
-    parsed: ParsedEvent;
-    titleChanged: boolean;
-    startChanged: boolean;
-    endChanged: boolean;
-    locationChanged: boolean;
-    descriptionChanged: boolean;
-  }[] = [];
-  const toDelete: CalendarEvent[] = [];
-
-  // Helper to compare timestamps (handles format differences)
-  const sameTime = (a: string, b: string): boolean => {
-    return new Date(a).getTime() === new Date(b).getTime();
-  };
-
-  // Check for new and updated events
-  for (const [uid, parsed] of parsedByUid) {
-    const existing = existingByUid.get(uid);
-    if (!existing) {
-      toAdd.push(parsed);
-    } else {
-      // Check if event has changed (compare dates by value, not string format)
-      const titleChanged = existing.title !== parsed.title;
-      const startChanged = !sameTime(existing.start_time, parsed.start_time);
-      const endChanged = !sameTime(existing.end_time, parsed.end_time);
-      const locationChanged = existing.location !== (parsed.location || null);
-      const descriptionChanged = existing.description !== (parsed.description || null);
-
-      if (titleChanged || startChanged || endChanged || locationChanged || descriptionChanged) {
-        toUpdate.push({
-          existing,
-          parsed,
-          // Track what changed for smarter announcement logic
-          titleChanged,
-          startChanged,
-          endChanged,
-          locationChanged,
-          descriptionChanged
-        } as {
-          existing: CalendarEvent;
-          parsed: ParsedEvent;
-          titleChanged: boolean;
-          startChanged: boolean;
-          endChanged: boolean;
-          locationChanged: boolean;
-          descriptionChanged: boolean;
-        });
-      }
-    }
-  }
-
-  // Check for deleted events
-  for (const [uid, existing] of existingByUid) {
-    if (!parsedByUid.has(uid)) {
-      toDelete.push(existing);
-    }
-  }
-
-  console.log(`[syncCalendar] Changes: ${toAdd.length} add, ${toUpdate.length} update, ${toDelete.length} delete`);
-
-  // Track mutation errors to prevent marking sync as successful if any fail
-  let hadMutationError = false;
-  const mutationErrors: string[] = [];
-
-  // Current time for determining past/future events
-  const now = new Date();
-  const nowIso = now.toISOString();
-
-  // Group events by base UID to handle recurring series as batches
-  const additionsByBaseUid = groupEventsByBaseUid(toAdd);
-  const updatesByBaseUid = groupEventsByBaseUid(toUpdate.map((u) => ({ ...u.parsed, _update: u })));
-  const deletionsByBaseUid = groupEventsByBaseUid(toDelete);
-
-  // Process additions - batch insert and batch announce recurring series
-  if (toAdd.length > 0) {
-    // For recurring series (>1 event with same base UID), we'll send a batch announcement
-    // and pre-mark change_announced_at so the RPC doesn't announce them individually
-    const seriesAnnouncedUids = new Set<string>();
-
-    // Send batch announcements for recurring series
-    if (classData.discord_server_id) {
-      for (const [baseUid, events] of additionsByBaseUid) {
-        // Filter to only future events for announcements
-        const futureEvents = events.filter((e) => new Date(e.end_time) > now);
-        if (futureEvents.length > 1) {
-          // This is a recurring series - send batch announcement
-          await enqueueRecurringSeriesAnnouncement(supabase, classData.id, futureEvents, "added");
-          // Mark all events in this series to skip individual announcements
-          for (const e of events) {
-            seriesAnnouncedUids.add(e.uid);
-          }
-          console.log(
-            `[syncCalendar] Sent batch announcement for recurring series ${baseUid} (${futureEvents.length} future events)`
-          );
-        }
-      }
-    }
-
-    // Batch insert all events
-    const { error: insertError } = await supabase.from("calendar_events").insert(
-      toAdd.map((e) => {
-        const startTime = new Date(e.start_time);
-        const endTime = new Date(e.end_time);
-        const startAlreadyPast = startTime <= now;
-        const endAlreadyPast = endTime <= now;
-
-        // Mark as announced if: past event OR part of a recurring series that was batch-announced
-        const skipChangeAnnouncement = endAlreadyPast || seriesAnnouncedUids.has(e.uid);
-
-        return {
-          class_id: classData.id,
-          calendar_type: calendarType,
-          uid: e.uid,
-          title: e.title,
-          description: e.description || null,
-          start_time: e.start_time,
-          end_time: e.end_time,
-          location: e.location || null,
-          queue_name: e.queue_name || null,
-          organizer_name: e.organizer_name || null,
-          raw_ics_data: e.raw_ics_data as unknown as Json,
-          change_announced_at: skipChangeAnnouncement ? nowIso : null,
-          start_announced_at: startAlreadyPast ? nowIso : null,
-          end_announced_at: endAlreadyPast ? nowIso : null
-        };
-      })
-    );
-
-    if (insertError) {
-      hadMutationError = true;
-      const errorMsg = `Failed to insert ${toAdd.length} event(s): ${insertError.message}`;
-      mutationErrors.push(errorMsg);
-      console.error(`[syncCalendar] ${errorMsg}`, insertError);
-      scope.setContext("insert_error", { error: insertError.message });
-    }
-  }
-
-  // Process updates - batch update and batch announce recurring series
-  if (toUpdate.length > 0) {
-    const seriesAnnouncedUids = new Set<string>();
-
-    // Send batch announcements for recurring series updates
-    if (classData.discord_server_id) {
-      for (const [baseUid, updates] of updatesByBaseUid) {
-        const futureUpdates = updates.filter((u) => new Date(u._update.parsed.end_time) > now);
-        if (futureUpdates.length > 1) {
-          // Determine what changed across the series
-          const firstUpdate = futureUpdates[0]._update;
-          const changes: string[] = [];
-          if (firstUpdate.locationChanged) changes.push("📍 Location changed");
-          if (firstUpdate.titleChanged) changes.push("📝 Title changed");
-          if (firstUpdate.startChanged || firstUpdate.endChanged) changes.push("⏰ Time changed");
-
-          const parsedEvents = futureUpdates.map((u) => u._update.parsed);
-          await enqueueRecurringSeriesAnnouncement(
-            supabase,
-            classData.id,
-            parsedEvents,
-            "changed",
-            changes.length > 0 ? changes.join("\n") : undefined
-          );
-
-          for (const u of updates) {
-            seriesAnnouncedUids.add(u.uid);
-          }
-          console.log(`[syncCalendar] Sent batch update announcement for recurring series ${baseUid}`);
-        }
-      }
-    }
-
-    // Perform updates
-    for (const { existing, parsed, startChanged, endChanged } of toUpdate) {
-      const parsedEndTime = new Date(parsed.end_time);
-      const parsedStartTime = new Date(parsed.start_time);
-      const eventAlreadyEnded = parsedEndTime <= now;
-      const eventAlreadyStarted = parsedStartTime <= now;
-
-      // Skip individual announcement if part of batch-announced series
-      const skipChangeAnnouncement = eventAlreadyEnded || seriesAnnouncedUids.has(parsed.uid);
-
-      const { error: updateError } = await supabase
-        .from("calendar_events")
-        .update({
-          title: parsed.title,
-          description: parsed.description || null,
-          start_time: parsed.start_time,
-          end_time: parsed.end_time,
-          location: parsed.location || null,
-          queue_name: parsed.queue_name || null,
-          organizer_name: parsed.organizer_name || null,
-          raw_ics_data: parsed.raw_ics_data as unknown as Json,
-          change_announced_at: skipChangeAnnouncement ? nowIso : null,
-          start_announced_at: startChanged && !eventAlreadyStarted ? null : existing.start_announced_at,
-          end_announced_at: endChanged && !eventAlreadyEnded ? null : existing.end_announced_at
-        })
-        .eq("id", existing.id);
-
-      if (updateError) {
-        hadMutationError = true;
-        const errorMsg = `Failed to update event ${existing.id} (${existing.uid}): ${updateError.message}`;
-        mutationErrors.push(errorMsg);
-        console.error(`[syncCalendar] ${errorMsg}`, updateError);
-      }
-    }
-  }
-
-  // Process deletions - batch announce and batch delete recurring series
-  if (toDelete.length > 0) {
-    const announcedBaseUids = new Set<string>();
-
-    // Send batch announcements for recurring series deletions
-    if (classData.discord_server_id) {
-      for (const [baseUid, events] of deletionsByBaseUid) {
-        const futureEvents = events.filter((e) => new Date(e.end_time) > now);
-        if (futureEvents.length > 1) {
-          // Convert CalendarEvent to ParsedEvent format for the announcement
-          const parsedEvents: ParsedEvent[] = futureEvents.map((e) => ({
-            uid: e.uid,
-            title: e.title,
-            description: e.description || undefined,
-            start_time: e.start_time,
-            end_time: e.end_time,
-            location: e.location || undefined,
-            queue_name: e.queue_name || undefined,
-            organizer_name: e.organizer_name || undefined,
-            raw_ics_data: {}
-          }));
-          await enqueueRecurringSeriesAnnouncement(supabase, classData.id, parsedEvents, "removed");
-          announcedBaseUids.add(baseUid);
-          console.log(`[syncCalendar] Sent batch deletion announcement for recurring series ${baseUid}`);
-        } else if (futureEvents.length === 1) {
-          // Single future event - announce individually
-          const event = futureEvents[0];
-          await enqueueCalendarChangeAnnouncement(
-            supabase,
-            classData.id,
-            event.title,
-            "removed",
-            event.start_time,
-            event.end_time
-          );
-        }
-        // Past events don't need deletion announcements
-      }
-    }
-
-    // Batch delete all events
-    const deleteIds = toDelete.map((e) => e.id);
-    const { error: deleteError } = await supabase.from("calendar_events").delete().in("id", deleteIds);
-
-    if (deleteError) {
-      hadMutationError = true;
-      const errorMsg = `Failed to delete ${toDelete.length} event(s): ${deleteError.message}`;
-      mutationErrors.push(errorMsg);
-      console.error(`[syncCalendar] ${errorMsg}`, deleteError);
-    }
-  }
-
-  // Update sync state - only advance hash/etag if no mutation errors occurred
-  if (hadMutationError) {
-    // Mutation errors occurred - record error but don't advance hash/etag
-    // This ensures we retry processing the same content on next sync
-    const syncErrorMsg = mutationErrors.join("; ");
-    console.error(
-      `[syncCalendar] Sync completed with errors for ${calendarType} class ${classData.id}: ${syncErrorMsg}`
-    );
+  if (rpcError) {
+    const syncErrorMsg = `RPC error: ${rpcError.message}`;
+    console.error(`[syncCalendar] ${syncErrorMsg}`, rpcError);
+    scope.setContext("rpc_error", { error: rpcError.message });
     await supabase.from("calendar_sync_state").upsert(
       {
         class_id: classData.id,
         calendar_type: calendarType,
         last_sync_at: new Date().toISOString(),
         sync_error: syncErrorMsg
-        // Note: last_etag and last_hash are NOT updated, so we'll retry with same content
+      },
+      { onConflict: "class_id,calendar_type" }
+    );
+    return;
+  }
+
+  const result = syncResult as {
+    success: boolean;
+    added: number;
+    updated: number;
+    deleted: number;
+    errors: string[];
+    error_count: number;
+  };
+
+  console.log(
+    `[syncCalendar] RPC result: ${result.added} added, ${result.updated} updated, ${result.deleted} deleted, ${result.error_count} errors`
+  );
+
+  // Handle announcements for new/changed events (recurring series batch announcements)
+  // Note: Individual announcements are handled by process_calendar_announcements RPC
+  if (classData.discord_server_id && (result.added > 0 || result.updated > 0)) {
+    const now = new Date();
+
+    // Get all events that need change announcements (not past, not already announced)
+    const { data: eventsNeedingAnnouncement } = await supabase
+      .from("calendar_events")
+      .select("*")
+      .eq("class_id", classData.id)
+      .eq("calendar_type", calendarType)
+      .is("change_announced_at", null)
+      .gt("end_time", now.toISOString())
+      .order("start_time", { ascending: true })
+      .limit(1000);
+
+    if (eventsNeedingAnnouncement && eventsNeedingAnnouncement.length > 0) {
+      // Group by base UID for batch announcements
+      const eventsByBaseUid = groupEventsByBaseUid(
+        eventsNeedingAnnouncement.map((e) => ({
+          uid: e.uid,
+          title: e.title,
+          description: e.description || undefined,
+          start_time: e.start_time,
+          end_time: e.end_time,
+          location: e.location || undefined,
+          queue_name: e.queue_name || undefined,
+          organizer_name: e.organizer_name || undefined,
+          raw_ics_data: {}
+        }))
+      );
+
+      const seriesAnnouncedUids = new Set<string>();
+      for (const [baseUid, events] of eventsByBaseUid) {
+        if (events.length > 1) {
+          // Recurring series - send batch announcement
+          // Determine if this is a new series or changed series by checking if events were just added
+          // For simplicity, treat all as "added" - the RPC will have marked updated events appropriately
+          await enqueueRecurringSeriesAnnouncement(supabase, classData.id, events, "added");
+          for (const e of events) {
+            seriesAnnouncedUids.add(e.uid);
+          }
+          console.log(
+            `[syncCalendar] Sent batch announcement for recurring series ${baseUid} (${events.length} events)`
+          );
+        }
+      }
+
+      // Mark batch-announced events as announced
+      if (seriesAnnouncedUids.size > 0) {
+        const { error: updateError } = await supabase
+          .from("calendar_events")
+          .update({ change_announced_at: now.toISOString() })
+          .eq("class_id", classData.id)
+          .eq("calendar_type", calendarType)
+          .in("uid", Array.from(seriesAnnouncedUids));
+
+        if (updateError) {
+          console.error(`[syncCalendar] Failed to mark batch-announced events: ${updateError.message}`);
+        }
+      }
+    }
+  }
+
+  // Update sync state - only advance hash/etag if no errors occurred
+  if (!result.success || result.error_count > 0) {
+    const syncErrorMsg = result.errors.length > 0 ? result.errors.join("; ") : "Unknown error";
+    console.error(`[syncCalendar] Sync completed with errors for ${calendarType} class ${classData.id}: ${syncErrorMsg}`);
+    await supabase.from("calendar_sync_state").upsert(
+      {
+        class_id: classData.id,
+        calendar_type: calendarType,
+        last_sync_at: new Date().toISOString(),
+        sync_error: syncErrorMsg
       },
       { onConflict: "class_id,calendar_type" }
     );
@@ -1329,7 +1138,8 @@ async function processAnnouncements(supabase: SupabaseClient<Database>, scope: S
 }
 
 // Enqueue calendar change announcement for a single event or series
-async function enqueueCalendarChangeAnnouncement(
+// Currently unused - individual announcements handled by process_calendar_announcements RPC
+async function _enqueueCalendarChangeAnnouncement(
   supabase: SupabaseClient<Database>,
   classId: number,
   eventTitle: string,
