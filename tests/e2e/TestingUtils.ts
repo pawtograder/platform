@@ -358,12 +358,12 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 
     // Use magic link for login - use domcontentloaded to avoid waiting too long
     await page.goto(magicLink, { waitUntil: "domcontentloaded" });
-    
+
     // Check if we're already redirected to /course (successful auth)
     if (page.url().includes("/course")) {
       return; // Already signed in successfully
     }
-    
+
     // Otherwise click the button
     const button = page.getByRole("button", { name: "Sign in with magic link" });
     if (await button.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -373,10 +373,10 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 
     const currentUrl = page.url();
     const isSuccessful = currentUrl.includes("/course");
-    
+
     // Check if we got an error in the URL
     const hasError = currentUrl.includes("error=");
-    
+
     if (!isSuccessful) {
       if (hasError && retriesRemaining > 0) {
         // Magic link expired or invalid, retry with a fresh link
@@ -392,18 +392,18 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     }
   } catch (error) {
     const errorMessage = (error as Error).message;
-    
+
     // Don't retry on fatal errors
     if (errorMessage.includes("closed") || errorMessage.includes("disposed")) {
       throw error;
     }
-    
+
     if (retriesRemaining > 0) {
       console.log(`Sign in failed: ${errorMessage}, retrying... (${retriesRemaining} retries remaining)`);
       await page.waitForTimeout(500); // Brief pause before retry
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
-    
+
     throw new Error(`Failed to sign in with magic link: ${errorMessage}`);
   }
 }
@@ -415,7 +415,7 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     // Wait for URL to be stable at /course
     await page.waitForURL("**/course", { waitUntil: "load", timeout: 10000 });
     await page.waitForTimeout(500); // Give WebKit extra time to settle
-    
+
     await page.goto(`/course/${course.id}`, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
   }
