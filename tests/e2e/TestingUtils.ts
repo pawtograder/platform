@@ -343,7 +343,7 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
-async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 5) {
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
     const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -356,21 +356,17 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 
     const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
 
+    // Use magic link for login
     await page.goto(magicLink);
-
-    // Click the magic link sign-in button
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
     await page.waitForLoadState("networkidle");
 
     const currentUrl = page.url();
     const isSuccessful = currentUrl.includes("/course");
-
     // Check to see if we got the magic link expired notice
     if (!isSuccessful) {
       // Magic link expired, retry if we have retries remaining
       if (retriesRemaining > 0) {
-        console.log(`Magic link authentication unsuccessful, retrying... (${retriesRemaining} retries remaining)`);
-        await new Promise((res) => setTimeout(res, 1000)); // 1 second delay
         return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
       } else {
         throw new Error("Magic link expired and no retries remaining");
@@ -381,18 +377,11 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       throw new Error("Failed to sign in - neither success nor expired state detected");
     }
   } catch (error) {
-    const errorMessage = (error as Error).message;
-    console.error(`Sign in error: ${errorMessage}`);
-
-    // Retry on DNS resolution errors or sign-in failures
-    if (
-      retriesRemaining > 0 &&
-      (errorMessage.includes("Failed to sign in") || errorMessage.includes("Error resolving"))
-    ) {
+    if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
       console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
-    throw new Error(`Failed to sign in with magic link: ${errorMessage}`);
+    throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
   }
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
