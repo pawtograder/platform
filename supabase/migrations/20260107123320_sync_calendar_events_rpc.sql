@@ -34,6 +34,7 @@ DECLARE
   v_series_announced_uids text[] := '{}';
   v_base_uid text;
   v_recurring_groups jsonb := '{}'::jsonb;
+  v_row_count integer;
 BEGIN
   -- Extract all UIDs from parsed events
   FOR v_event IN SELECT * FROM jsonb_array_elements(p_parsed_events)
@@ -80,8 +81,11 @@ BEGIN
       v_to_add := array_append(v_to_add, v_event);
     ELSE
       -- Existing event - check if it changed
-      v_start_changed := (v_existing_event.start_time::text) != (v_event->>'start_time');
-      v_end_changed := (v_existing_event.end_time::text) != (v_event->>'end_time');
+      -- Parse JSON timestamps and compare as actual timestamptz values (not text!)
+      v_start_time := (v_event->>'start_time')::timestamptz;
+      v_end_time := (v_event->>'end_time')::timestamptz;
+      v_start_changed := v_existing_event.start_time != v_start_time;
+      v_end_changed := v_existing_event.end_time != v_end_time;
       
       IF (v_existing_event.title != (v_event->>'title'))
          OR (COALESCE(v_existing_event.description, '') != COALESCE(v_event->>'description', ''))
@@ -154,7 +158,8 @@ BEGIN
       )
       ON CONFLICT (class_id, calendar_type, uid) DO NOTHING;  -- Handle race conditions
       
-      v_added_count := v_added_count + 1;
+      GET DIAGNOSTICS v_row_count = ROW_COUNT;
+      v_added_count := v_added_count + v_row_count;
     EXCEPTION WHEN OTHERS THEN
       v_error_count := v_error_count + 1;
       v_errors := array_append(v_errors, format('Failed to insert event %s: %s', v_event->>'uid', SQLERRM));
@@ -196,7 +201,8 @@ BEGIN
         END
       WHERE id = (v_event->>'id')::bigint;
       
-      v_updated_count := v_updated_count + 1;
+      GET DIAGNOSTICS v_row_count = ROW_COUNT;
+      v_updated_count := v_updated_count + v_row_count;
     EXCEPTION WHEN OTHERS THEN
       v_error_count := v_error_count + 1;
       v_errors := array_append(v_errors, format('Failed to update event %s: %s', v_event->'event'->>'uid', SQLERRM));
@@ -209,7 +215,7 @@ BEGIN
       DELETE FROM public.calendar_events
       WHERE id = ANY(v_to_delete);
       
-      v_deleted_count := array_length(v_to_delete, 1);
+      GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
     EXCEPTION WHEN OTHERS THEN
       v_error_count := v_error_count + 1;
       v_errors := array_append(v_errors, format('Failed to delete events: %s', SQLERRM));

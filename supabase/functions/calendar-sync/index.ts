@@ -38,7 +38,6 @@ interface ClassWithCalendar {
   time_zone: string;
 }
 
-
 // Parse event title to extract name and queue
 // Format: "Jonathan Bell (Queue1)" or "Jonathan Bell"
 function parseEventTitle(title: string): { name: string; queue?: string } {
@@ -983,12 +982,15 @@ async function syncCalendar(
   }));
 
   // Call RPC to sync events
-  const { data: syncResult, error: rpcError } = await supabase.rpc("sync_calendar_events" as never, {
-    p_class_id: classData.id,
-    p_calendar_type: calendarType,
-    p_parsed_events: parsedEventsJson as unknown as Json,
-    p_has_discord_server: !!classData.discord_server_id
-  } as never);
+  const { data: syncResult, error: rpcError } = await supabase.rpc(
+    "sync_calendar_events" as never,
+    {
+      p_class_id: classData.id,
+      p_calendar_type: calendarType,
+      p_parsed_events: parsedEventsJson as unknown as Json,
+      p_has_discord_server: !!classData.discord_server_id
+    } as never
+  );
 
   if (rpcError) {
     const syncErrorMsg = `RPC error: ${rpcError.message}`;
@@ -1019,9 +1021,11 @@ async function syncCalendar(
     `[syncCalendar] RPC result: ${result.added} added, ${result.updated} updated, ${result.deleted} deleted, ${result.error_count} errors`
   );
 
-  // Handle announcements for new/changed events (recurring series batch announcements)
+  // Handle batch announcements for recurring series (new/changed events)
   // Note: Individual announcements are handled by process_calendar_announcements RPC
+  // Only query for announcements if we actually added or updated events
   if (classData.discord_server_id && (result.added > 0 || result.updated > 0)) {
+    console.log(`[syncCalendar] Checking for batch announcements (${result.added} added, ${result.updated} updated)`);
     const now = new Date();
 
     // Get all events that need change announcements (not past, not already announced)
@@ -1086,7 +1090,9 @@ async function syncCalendar(
   // Update sync state - only advance hash/etag if no errors occurred
   if (!result.success || result.error_count > 0) {
     const syncErrorMsg = result.errors.length > 0 ? result.errors.join("; ") : "Unknown error";
-    console.error(`[syncCalendar] Sync completed with errors for ${calendarType} class ${classData.id}: ${syncErrorMsg}`);
+    console.error(
+      `[syncCalendar] Sync completed with errors for ${calendarType} class ${classData.id}: ${syncErrorMsg}`
+    );
     await supabase.from("calendar_sync_state").upsert(
       {
         class_id: classData.id,
