@@ -1,12 +1,12 @@
 "use client";
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
 import { useAssignmentDueDate, useAssignmentGroupForUser } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { addHours, differenceInMinutes } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
@@ -63,7 +63,7 @@ function SelfReviewNoticeInner({
   activeSubmission?: Submission;
 }) {
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, time_zone } = useAssignmentDueDate(assignment, {
+  const { dueDate } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: enrollment.private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
   });
@@ -95,7 +95,7 @@ function SelfReviewNoticeInner({
             <FaExclamationTriangle />
             <Heading size="md">Self Review Now Due</Heading>
             <Text fontSize="sm" color="fg.muted">
-              Due by {formatInTimeZone(evalDeadline, time_zone || "America/New_York", "MMM d h:mm aaa")} ({time_zone})
+              Due by <TimeZoneAwareDate date={evalDeadline} format="MMM d, h:mm a" />
             </Text>
           </Flex>
           <Flex

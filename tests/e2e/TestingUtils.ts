@@ -393,6 +393,13 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     await page.goto(`/course/${course.id}`);
     await page.waitForLoadState("networkidle");
   }
+  // If there is a "Choose timezone" dialog, select "Use course time zone" and close it
+  const timezoneDialogTitle = page.getByText("Choose Your Time Zone Preference");
+  if (await timezoneDialogTitle.isVisible()) {
+    const dialog = await page.getByRole("dialog", { name: "Choose Your Time Zone" });
+    await dialog.getByText("Use course time zone").click();
+    await dialog.getByText("Close").click();
+  }
 }
 
 const userIdx = {
