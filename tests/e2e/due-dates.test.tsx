@@ -173,10 +173,10 @@ const expectedLabAssignmentDueDate =
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);
 
 function getDueDateString(date: Date) {
-  return formatInTimeZone(date, "America/New_York", "MMM d h:mm aaa");
+  return formatInTimeZone(date, "America/New_York", "MMM d, h:mm a zzz");
 }
 function getDueDateShortString(date: Date) {
-  return formatInTimeZone(date, "America/New_York", "MM/dd/yyyy, h:mm a");
+  return formatInTimeZone(date, "America/New_York", "MM/dd/yyyy, h:mm a zzz");
 }
 test.describe("Assignment due dates", () => {
   test("Lab-section and non-lab-section assignment due dates are calculated correctly on the course landing page and on the assignments page", async ({
