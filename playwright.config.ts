@@ -57,7 +57,7 @@ export default defineConfig({
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: "on", //"on-first-retry"
-    
+
     /* Force light mode to prevent SSR/CSR theme mismatches */
     colorScheme: "light"
   },
