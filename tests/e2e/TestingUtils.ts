@@ -354,17 +354,9 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
 
-    // Construct relative URL path for magic link authentication
-    // This ensures Playwright uses the baseURL configuration from playwright.config.ts
-    // which is set via the BASE_URL environment variable in CI/CD
     const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
 
-    // Navigate using relative URL - Playwright will prepend the configured baseURL
-    // This avoids DNS resolution issues with dynamic preview environment hostnames
-    await page.goto(magicLink, {
-      waitUntil: "networkidle",
-      timeout: 30000
-    });
+    await page.goto(magicLink);
 
     // Click the magic link sign-in button
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
@@ -404,10 +396,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
   }
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
-  // Removed: await page.goto("/");
-  // Navigating to "/" before auth causes failures with middleware that requires authentication for /course routes.
-  // The middleware redirects unauthenticated users to /sign-in, but tests expect to be on course pages.
-  // Instead, authenticate first via magic link, then navigate to the course page.
+  await page.goto("/");
   await signInWithMagicLinkAndRetry(page, testingUser);
 
   if (course) {
