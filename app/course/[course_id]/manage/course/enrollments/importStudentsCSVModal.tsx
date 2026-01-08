@@ -386,8 +386,7 @@ const ImportStudentsCSVModal = () => {
 
       const typedResult = result as BulkImportResult;
 
-      const totalSuccess =
-        typedResult.enrolled_directly + typedResult.invitations_created + typedResult.reactivated;
+      const totalSuccess = typedResult.enrolled_directly + typedResult.invitations_created + typedResult.reactivated;
       const totalErrors = typedResult.errors?.length || 0;
 
       if (totalSuccess > 0) {
@@ -489,11 +488,7 @@ const ImportStudentsCSVModal = () => {
                   {/* Notification option */}
                   {usersToProcess.length > 0 && (
                     <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input
-                        type="checkbox"
-                        checked={notifyOnAdd}
-                        onChange={(e) => setNotifyOnAdd(e.target.checked)}
-                      />
+                      <input type="checkbox" checked={notifyOnAdd} onChange={(e) => setNotifyOnAdd(e.target.checked)} />
                       Notify users they were added to this course
                     </label>
                   )}
@@ -577,7 +572,8 @@ const ImportStudentsCSVModal = () => {
                       >
                         {usersToReactivate.map((user) => {
                           const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
-                          const key = importMode === "sis_id" ? `reactivate_${user.sis_id}` : `reactivate_${user.email}`;
+                          const key =
+                            importMode === "sis_id" ? `reactivate_${user.sis_id}` : `reactivate_${user.email}`;
                           return (
                             <Text as="li" key={key} fontSize="sm">
                               {user.name} ({identifier}) - {user.role}
@@ -621,9 +617,7 @@ const ImportStudentsCSVModal = () => {
                   {usersToProcess.length === 0 && usersToSkip.length > 0 && (
                     <Text>All users already have pending invitations.</Text>
                   )}
-                  {previewUsers.length === 0 && (
-                    <Text>No users found in the CSV to process.</Text>
-                  )}
+                  {previewUsers.length === 0 && <Text>No users found in the CSV to process.</Text>}
                 </VStack>
               ) : (
                 <VStack gap={4}>
