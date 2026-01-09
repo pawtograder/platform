@@ -62,7 +62,7 @@ const getStatusColor = (status: string) => {
  */
 function StudentName({ profileId, fallbackCreatedBy }: { profileId: string; fallbackCreatedBy?: string }) {
   const profile = useUserProfile(profileId);
-  const fallbackProfile = fallbackCreatedBy ? useUserProfile(fallbackCreatedBy) : null;
+  const fallbackProfile = useUserProfile(fallbackCreatedBy);
   return <>{profile?.name || fallbackProfile?.name || "Unknown Student"}</>;
 }
 
