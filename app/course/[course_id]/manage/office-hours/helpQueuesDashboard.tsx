@@ -134,7 +134,7 @@ export default function HelpQueuesDashboard() {
   };
 
   return (
-    <Stack spaceY="4">
+    <Stack spaceY="4" height="100%" overflowY="auto">
       {/* Connection Status Indicator */}
       {!isConnected && (
         <Alert status="warning" title="Real-time updates disconnected">

@@ -1,15 +1,27 @@
 "use client";
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
-import { useAllStudentProfiles, useCourseController, useIsDroppedStudent } from "@/hooks/useCourseController";
+import {
+  useAllStudentProfiles,
+  useCourseController,
+  useIsDroppedStudent,
+  useLabSections,
+  useUserRolesWithProfiles
+} from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { useTableControllerTableValues, useTableControllerValueById } from "@/lib/TableController";
-import type { Assignment } from "@/utils/supabase/DatabaseTypes";
+import {
+  useTableControllerTableValues,
+  useTableControllerValueById,
+  useListTableControllerValues
+} from "@/lib/TableController";
+import type { Assignment, LabSection } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Card, HStack, Heading, Separator, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FaChalkboardTeacher, FaUsers } from "react-icons/fa";
+import { MdOutlineScience } from "react-icons/md";
 
 type HelpRequest = {
   id: number;
@@ -83,7 +95,8 @@ function AdjustDueDateCell({ assignmentId, studentId }: { assignmentId: number; 
 export default function StudentPage() {
   const { course_id, student_id } = useParams();
   const router = useRouter();
-  const { client, gradebookColumns } = useCourseController();
+  const controller = useCourseController();
+  const { client, gradebookColumns } = controller;
   const [studentSummary, setStudentSummary] = useState<StudentSummary | null>(null);
   const columns = useTableControllerTableValues(gradebookColumns);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -92,6 +105,75 @@ export default function StudentPage() {
   );
   const isDroppedStudent = useIsDroppedStudent(student_id as string);
   const allStudents = useAllStudentProfiles();
+  const labSections = useLabSections();
+  const userRoles = useUserRolesWithProfiles();
+  const profiles = useTableControllerTableValues(controller.profiles);
+
+  // Get student's lab section
+  const studentLabSection = useMemo(() => {
+    const studentRole = userRoles.find(
+      (role) => role.private_profile_id === student_id || role.public_profile_id === student_id
+    );
+    if (!studentRole?.lab_section_id) return null;
+    return labSections.find((section) => section.id === studentRole.lab_section_id) || null;
+  }, [userRoles, labSections, student_id]);
+
+  // Get lab section leaders
+  const labSectionLeadersFilter = useCallback(
+    (leader: { lab_section_id: number }) => leader.lab_section_id === studentLabSection?.id,
+    [studentLabSection?.id]
+  );
+  const sectionLeaders = useListTableControllerValues(controller.labSectionLeaders, labSectionLeadersFilter);
+
+  // Create a map from profile_id to profile name
+  const profileIdToName = useMemo(() => {
+    const map = new Map<string, string>();
+    profiles.forEach((profile) => {
+      if (profile.name) {
+        map.set(profile.id, profile.name);
+      }
+    });
+    return map;
+  }, [profiles]);
+
+  // Get leader names
+  const leaderNames = useMemo(() => {
+    return sectionLeaders
+      .map((leader) => profileIdToName.get(leader.profile_id))
+      .filter((name): name is string => name !== null && name !== undefined);
+  }, [sectionLeaders, profileIdToName]);
+
+  // Count students in the lab section
+  const studentCount = useMemo(() => {
+    if (!studentLabSection) return 0;
+    return userRoles.filter(
+      (role) => role.role === "student" && !role.disabled && role.lab_section_id === studentLabSection.id
+    ).length;
+  }, [userRoles, studentLabSection]);
+
+  // Helper to format schedule
+  const formatSchedule = (section: LabSection) => {
+    const day = section.day_of_week ? section.day_of_week.charAt(0).toUpperCase() + section.day_of_week.slice(1) : "";
+    const startTime = section.start_time
+      ? new Date(`2000-01-01T${section.start_time}`).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        })
+      : "";
+    const endTime = section.end_time
+      ? new Date(`2000-01-01T${section.end_time}`).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        })
+      : "";
+
+    if (day && startTime) {
+      return `${day} ${startTime}${endTime ? ` - ${endTime}` : ""}`;
+    }
+    return "";
+  };
   useEffect(() => {
     if (!client) return;
     let mounted = true;
@@ -171,6 +253,43 @@ export default function StudentPage() {
           />
         </Box>
       </HStack>
+
+      {/* Lab Section Card */}
+      {studentLabSection && (
+        <Card.Root size="sm" variant="subtle">
+          <Card.Body p={3}>
+            <HStack gap={2} mb={2}>
+              <MdOutlineScience />
+              <Text fontWeight="medium" fontSize="sm">
+                Lab Section
+              </Text>
+            </HStack>
+            <VStack align="start" gap={1}>
+              <Text fontWeight="medium" fontSize="sm">
+                {studentLabSection.name}
+              </Text>
+              <Text fontSize="xs" color="fg.muted">
+                {formatSchedule(studentLabSection)}
+                {studentLabSection.meeting_location && ` • ${studentLabSection.meeting_location}`}
+              </Text>
+              {leaderNames.length > 0 && (
+                <HStack gap={1}>
+                  <FaChalkboardTeacher size={12} />
+                  <Text fontSize="xs" color="fg.muted">
+                    {leaderNames.join(", ")}
+                  </Text>
+                </HStack>
+              )}
+              <HStack gap={1}>
+                <FaUsers size={12} />
+                <Text fontSize="xs" color="fg.muted">
+                  {studentCount} student{studentCount !== 1 ? "s" : ""}
+                </Text>
+              </HStack>
+            </VStack>
+          </Card.Body>
+        </Card.Root>
+      )}
 
       <Card.Root>
         <Card.Header>

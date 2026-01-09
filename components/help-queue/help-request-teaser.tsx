@@ -15,6 +15,7 @@ interface MessageData {
   students?: string[];
   queue?: HelpQueue;
   isVideoLive?: boolean;
+  created_by?: string;
 }
 
 interface Props {
@@ -37,7 +38,7 @@ const getQueueIcon = (type: string) => {
 };
 
 export const HelpRequestTeaser = (props: Props) => {
-  const { updatedAt, message, students = [], queue, isVideoLive = false } = props.data;
+  const { updatedAt, message, students = [], queue, isVideoLive = false, created_by } = props.data;
   const { selected } = props;
 
   // Get user profiles for up to 3 students (unconditionally)
@@ -45,9 +46,12 @@ export const HelpRequestTeaser = (props: Props) => {
   const student2Profile = useUserProfile(students[1] || "");
   const student3Profile = useUserProfile(students[2] || "");
 
+  // Get creator profile when there are no students
+  const creatorProfile = useUserProfile(created_by || "");
+
   const renderStudentsDisplay = () => {
     if (students.length === 0) {
-      return <Text fontWeight="medium">Unknown Student</Text>;
+      return <Text fontWeight="medium">{creatorProfile?.name || "Unknown Student"}</Text>;
     }
 
     if (students.length === 1) {
@@ -76,7 +80,8 @@ export const HelpRequestTeaser = (props: Props) => {
     if (students.length === 0) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Fallback>?</Avatar.Fallback>
+          <Avatar.Image src={(creatorProfile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Fallback>{(creatorProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
     }

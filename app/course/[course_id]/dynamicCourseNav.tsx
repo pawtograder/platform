@@ -134,9 +134,9 @@ const LinkItems = (courseID: number) => [
       },
       {
         name: "Lab Sections",
-        instructors_only: true,
+        instructors_or_graders_only: true,
         icon: MdOutlineScience,
-        target: `/course/${courseID}/manage/course/lab-sections`
+        target: `/course/${courseID}/manage/course/lab-roster`
       },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       {
@@ -340,7 +340,11 @@ export default function DynamicCourseNav() {
                           <Menu.Positioner>
                             <Menu.Content>
                               {link.submenu
-                                .filter((submenu) => !submenu.instructors_only || isInstructor)
+                                .filter(
+                                  (submenu) =>
+                                    (!submenu.instructors_only || isInstructor) &&
+                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
+                                )
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
                                     <NextLink href={submenu.target || "#"}>
@@ -433,7 +437,11 @@ export default function DynamicCourseNav() {
                           <Menu.Positioner>
                             <Menu.Content>
                               {link.submenu
-                                .filter((submenu) => !submenu.instructors_only || isInstructor)
+                                .filter(
+                                  (submenu) =>
+                                    (!submenu.instructors_only || isInstructor) &&
+                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
+                                )
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
                                     <NextLink href={submenu.target || "#"}>

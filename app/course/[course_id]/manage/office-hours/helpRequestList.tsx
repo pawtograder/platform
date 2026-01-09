@@ -176,7 +176,8 @@ export default function HelpRequestList() {
                         isAssigned: request.assignee === private_profile_id,
                         students: request.students,
                         queue: request.queue,
-                        isVideoLive: request.is_video_live
+                        isVideoLive: request.is_video_live,
+                        created_by: request.created_by ?? undefined
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -208,7 +209,8 @@ export default function HelpRequestList() {
                         isAssigned: false,
                         students: request.students,
                         queue: request.queue,
-                        isVideoLive: request.is_video_live
+                        isVideoLive: request.is_video_live,
+                        created_by: request.created_by ?? undefined
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -241,7 +243,8 @@ export default function HelpRequestList() {
                         isAssigned: request.assignee === private_profile_id,
                         students: request.students,
                         queue: request.queue,
-                        isVideoLive: request.is_video_live
+                        isVideoLive: request.is_video_live,
+                        created_by: request.created_by ?? undefined
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -274,7 +277,8 @@ export default function HelpRequestList() {
                         isAssigned: request.assignee === private_profile_id,
                         students: request.students,
                         queue: request.queue,
-                        isVideoLive: request.is_video_live
+                        isVideoLive: request.is_video_live,
+                        created_by: request.created_by ?? undefined
                       }}
                       selected={activeRequestID === request.id}
                     />
