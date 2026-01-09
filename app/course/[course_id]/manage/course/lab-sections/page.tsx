@@ -28,7 +28,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { format } from "date-fns";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaCalendar, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
@@ -656,11 +656,14 @@ type LabSectionRow = LabSection & {
 function LabSectionsTable() {
   const controller = useCourseController();
   const supabase = createClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const sectionsReady = useIsTableControllerReady(controller.labSections);
   const meetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
   const [isDeleting, setIsDeleting] = useState(false);
   const [labSectionLeadersMap, setLabSectionLeadersMap] = useState<Map<number, string[]>>(new Map());
   const [leadersRefreshKey, setLeadersRefreshKey] = useState(0);
+  const [highlightedSectionId, setHighlightedSectionId] = useState<number | null>(null);
 
   const {
     isOpen: isCreateModalOpen,
@@ -997,6 +1000,47 @@ function LabSectionsTable() {
     }
   });
 
+  // Handle URL parameter for selecting a lab section (must be after tableData and table are defined)
+  useEffect(() => {
+    const selectParam = searchParams.get("select");
+    if (selectParam && tableData.length > 0) {
+      const sectionId = Number.parseInt(selectParam, 10);
+      if (!Number.isNaN(sectionId) && labSections.some((s) => s.id === sectionId)) {
+        setHighlightedSectionId(sectionId);
+
+        // Find the row index and navigate to the correct page if needed
+        const rowIndex = tableData.findIndex((row) => row.id === sectionId);
+        if (rowIndex >= 0) {
+          const pageSize = table.getState().pagination.pageSize;
+          const targetPage = Math.floor(rowIndex / pageSize);
+          const currentPage = table.getState().pagination.pageIndex;
+
+          if (targetPage !== currentPage) {
+            table.setPageIndex(targetPage);
+          }
+        }
+
+        // Scroll to the row after a short delay to ensure it's rendered
+        setTimeout(() => {
+          const rowElement = document.getElementById(`lab-section-row-${sectionId}`);
+          if (rowElement) {
+            rowElement.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }, 300);
+
+        // Remove the query parameter after a delay
+        setTimeout(() => {
+          const params = new URLSearchParams(searchParams.toString());
+          params.delete("select");
+          const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
+          router.replace(newUrl);
+          // Remove highlight after animation
+          setTimeout(() => setHighlightedSectionId(null), 2000);
+        }, 1000);
+      }
+    }
+  }, [searchParams, labSections, tableData, table, router]);
+
   if (!sectionsReady || !meetingsReady) {
     return (
       <VStack gap={4} mt={4}>
@@ -1095,15 +1139,23 @@ function LabSectionsTable() {
                   ))}
                 </Table.Header>
                 <Table.Body>
-                  {table.getRowModel().rows.map((row) => (
-                    <Table.Row key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <Table.Cell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </Table.Cell>
-                      ))}
-                    </Table.Row>
-                  ))}
+                  {table.getRowModel().rows.map((row) => {
+                    const isHighlighted = highlightedSectionId === row.original.id;
+                    return (
+                      <Table.Row
+                        key={row.id}
+                        id={`lab-section-row-${row.original.id}`}
+                        bg={isHighlighted ? "blue.50" : undefined}
+                        transition="background-color 0.3s"
+                      >
+                        {row.getVisibleCells().map((cell) => (
+                          <Table.Cell key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </Table.Cell>
+                        ))}
+                      </Table.Row>
+                    );
+                  })}
                 </Table.Body>
               </Table.Root>
             </Box>

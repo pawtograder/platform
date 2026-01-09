@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
-import { useTableControllerTableValues } from "@/lib/TableController";
+import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
 import { LabSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Accordion,
@@ -30,7 +30,7 @@ import {
   getSortedRowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaChalkboardTeacher, FaCog, FaFileExport, FaUsers } from "react-icons/fa";
 import { MdOutlineScience } from "react-icons/md";
@@ -84,6 +84,8 @@ function sortLabSections(a: LabSection, b: LabSection): number {
 
 export default function LabRosterPage() {
   const { course_id } = useParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const controller = useCourseController();
   const { private_profile_id } = useClassProfiles();
   const isInstructor = useIsInstructor();
@@ -91,6 +93,7 @@ export default function LabRosterPage() {
   const userRoles = useUserRolesWithProfiles();
   const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
   const profiles = useTableControllerTableValues(controller.profiles);
+  const labSectionLeadersReady = useIsTableControllerReady(controller.labSectionLeaders);
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [isOtherSectionsOpen, setIsOtherSectionsOpen] = useState(false);
@@ -115,9 +118,34 @@ export default function LabRosterPage() {
     return labSections.filter((section) => !mySectionIds.has(section.id)).sort(sortLabSections);
   }, [labSections, mySectionIds]);
 
+  // Handle URL parameter for selecting a lab section
+  useEffect(() => {
+    const selectParam = searchParams.get("select");
+    if (selectParam && labSections.length > 0) {
+      const sectionId = Number.parseInt(selectParam, 10);
+      if (!Number.isNaN(sectionId) && labSections.some((s) => s.id === sectionId)) {
+        setSelectedSectionId(sectionId);
+        // If the section is in "other sections", open that accordion
+        if (otherSections.some((s) => s.id === sectionId)) {
+          setIsOtherSectionsOpen(true);
+        }
+        setIsInitialized(true);
+
+        // Remove the query parameter after a delay
+        setTimeout(() => {
+          const params = new URLSearchParams(searchParams.toString());
+          params.delete("select");
+          const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
+          router.replace(newUrl);
+        }, 100);
+        return;
+      }
+    }
+  }, [searchParams, labSections, otherSections, router]);
+
   // Initialize selection to first section in list, and accordion state
   useEffect(() => {
-    if (!isInitialized && labSections.length > 0 && labSectionLeaders.length >= 0) {
+    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady) {
       // If user has no sections, expand other sections accordion by default
       if (mySections.length === 0) {
         setIsOtherSectionsOpen(true);
@@ -132,7 +160,7 @@ export default function LabRosterPage() {
 
       setIsInitialized(true);
     }
-  }, [labSections, labSectionLeaders, mySections, otherSections, isInitialized]);
+  }, [labSections, labSectionLeadersReady, mySections, otherSections, isInitialized]);
 
   // Create a map from section ID to section name
   const sectionIdToName = useMemo(() => {
