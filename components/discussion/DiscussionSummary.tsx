@@ -1,7 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { Badge, Box, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
-import Link from "next/link";
+import Link from "@/components/ui/link";
 import { DiscussionPinnedHeader } from "./DiscussionPinnedHeader";
 import { DiscussionStatusIndicator } from "./DiscussionStatusIndicator";
 import { TopicIcon } from "./TopicIcon";

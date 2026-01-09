@@ -1127,34 +1127,72 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (hash) return;
 
-    const targetElement = selectedFileId
-      ? document.querySelector(`[data-file-id="${selectedFileId}"]`)
-      : selectedArtifactId
-        ? document.querySelector(`[data-artifact-id="${selectedArtifactId}"]`)
-        : null;
+    // Determine which selector to use based on which ID is set (using !== null to handle 0 correctly)
+    const selector =
+      selectedFileId !== null
+        ? `[data-file-id="${selectedFileId}"]`
+        : selectedArtifactId !== null
+          ? `[data-artifact-id="${selectedArtifactId}"]`
+          : null;
 
-    if (targetElement instanceof HTMLElement) {
-      // Wait for content to fully render, then scroll to the very top
-      const scrollToTop = () => {
-        const container = getScrollableAncestor(targetElement);
-        if (container) {
-          // Scroll container so element is at the top
-          const containerRect = container.getBoundingClientRect();
-          const elRect = targetElement.getBoundingClientRect();
-          const scrollTop = container.scrollTop + (elRect.top - containerRect.top);
-          container.scrollTo({ top: scrollTop, behavior: "auto" });
-        } else {
-          // Scroll window so element is at the top
-          const elTop = targetElement.getBoundingClientRect().top + window.scrollY;
-          window.scrollTo({ top: elTop, behavior: "auto" });
-        }
-      };
+    if (!selector) return; // No valid ID to scroll to
 
-      // Use requestAnimationFrame and a small delay to ensure content is rendered
-      requestAnimationFrame(() => {
-        setTimeout(scrollToTop, 50);
-      });
-    }
+    // Scroll function that finds the element and scrolls to it
+    const scrollToTop = (element: HTMLElement) => {
+      const container = getScrollableAncestor(element);
+      if (container) {
+        // Scroll container so element is at the top
+        const containerRect = container.getBoundingClientRect();
+        const elRect = element.getBoundingClientRect();
+        const scrollTop = container.scrollTop + (elRect.top - containerRect.top);
+        container.scrollTo({ top: scrollTop, behavior: "auto" });
+      } else {
+        // Scroll window so element is at the top
+        const elTop = element.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({ top: elTop, behavior: "auto" });
+      }
+    };
+
+    // Retry logic to handle cases where element isn't rendered yet
+    let attempts = 0;
+    const maxAttempts = 60; // up to ~3s at 50ms intervals
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let rafId: number | null = null;
+    let scrollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryScroll = () => {
+      const targetElement = document.querySelector(selector);
+      if (targetElement instanceof HTMLElement) {
+        // Element found, scroll to it
+        rafId = requestAnimationFrame(() => {
+          scrollTimeoutId = setTimeout(() => {
+            scrollToTop(targetElement);
+          }, 50);
+        });
+        return;
+      }
+
+      // Element not found yet, retry if we haven't exceeded max attempts
+      if (attempts++ < maxAttempts) {
+        timeoutId = setTimeout(tryScroll, 50);
+      }
+    };
+
+    // Start the retry loop
+    tryScroll();
+
+    // Cleanup function
+    return () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      if (scrollTimeoutId !== null) {
+        clearTimeout(scrollTimeoutId);
+      }
+    };
   }, [isSwitching, selectedFileId, selectedArtifactId, getScrollableAncestor]);
 
   // After switching to a new file, wait for content to render and then scroll to the hash exactly once per file+hash

@@ -145,7 +145,8 @@ export default function LabRosterPage() {
 
   // Initialize selection to first section in list, and accordion state
   useEffect(() => {
-    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady) {
+    // Wait for lab sections to be loaded, leader data to be ready, and controller to exist
+    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady && controller.labSectionLeaders != null) {
       // If user has no sections, expand other sections accordion by default
       if (mySections.length === 0) {
         setIsOtherSectionsOpen(true);
@@ -160,7 +161,7 @@ export default function LabRosterPage() {
 
       setIsInitialized(true);
     }
-  }, [labSections, labSectionLeadersReady, mySections, otherSections, isInitialized]);
+  }, [labSections, labSectionLeadersReady, controller.labSectionLeaders, mySections, otherSections, isInitialized]);
 
   // Create a map from section ID to section name
   const sectionIdToName = useMemo(() => {
