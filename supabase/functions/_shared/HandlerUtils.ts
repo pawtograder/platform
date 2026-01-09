@@ -59,6 +59,17 @@ export function tagApiCall(
   scope?.setTag("api_operation", operation);
   if (resource) scope?.setTag("api_resource", resource);
 }
+/**
+ * Check if the request is authenticated with the service role key.
+ * This allows scripts and internal services to call edge functions without user context.
+ */
+export function isServiceRoleRequest(authHeader: string | null): boolean {
+  if (!authHeader) return false;
+  const token = authHeader.replace("Bearer ", "");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  return token === serviceRoleKey;
+}
+
 export async function assertUserIsInstructor(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -96,6 +107,30 @@ export async function assertUserIsInstructor(courseId: number, authHeader: strin
     throw new SecurityError("User is not an instructor for this course");
   }
   return { supabase, enrollment };
+}
+
+/**
+ * Assert that the user is an instructor OR the request is from service role.
+ * Use this for functions that need to be callable both by instructors in the UI
+ * and by admin scripts using the service role key.
+ */
+export async function assertUserIsInstructorOrServiceRole(courseId: number, authHeader: string | null) {
+  if (!authHeader) {
+    throw new SecurityError("Authorization header required");
+  }
+
+  // Allow service role requests (for scripts and internal services)
+  if (isServiceRoleRequest(authHeader)) {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    return { supabase: adminSupabase, enrollment: null, isServiceRole: true };
+  }
+
+  // Otherwise, check for instructor role
+  const result = await assertUserIsInstructor(courseId, authHeader);
+  return { ...result, isServiceRole: false };
 }
 export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {

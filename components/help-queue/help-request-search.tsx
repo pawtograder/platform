@@ -60,9 +60,10 @@ const getStatusColor = (status: string) => {
 /**
  * Simple component to display student name from profile ID
  */
-function StudentName({ profileId }: { profileId: string }) {
+function StudentName({ profileId, fallbackCreatedBy }: { profileId: string; fallbackCreatedBy?: string }) {
   const profile = useUserProfile(profileId);
-  return <>{profile?.name || "Unknown Student"}</>;
+  const fallbackProfile = fallbackCreatedBy ? useUserProfile(fallbackCreatedBy) : null;
+  return <>{profile?.name || fallbackProfile?.name || "Unknown Student"}</>;
 }
 
 export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchProps) {
@@ -404,7 +405,11 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
                   <HStack gap="3" align="flex-start">
                     <Avatar.Root size="sm" flexShrink={0}>
                       <Avatar.Fallback>
-                        {primaryStudent ? <StudentName profileId={primaryStudent} /> : "?"}
+                        {primaryStudent ? (
+                          <StudentName profileId={primaryStudent} fallbackCreatedBy={request.created_by || undefined} />
+                        ) : (
+                          "?"
+                        )}
                       </Avatar.Fallback>
                     </Avatar.Root>
                     <Stack gap="1" flex="1" minW={0}>
@@ -428,7 +433,9 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
                         </Text>
                       </HStack>
                       <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
-                        {primaryStudent && <StudentName profileId={primaryStudent} />}
+                        {primaryStudent && (
+                          <StudentName profileId={primaryStudent} fallbackCreatedBy={request.created_by || undefined} />
+                        )}
                         {request.students.length > 1 && ` + ${request.students.length - 1} others`}
                       </Text>
                       <Text fontSize="xs" color="fg.muted" lineClamp={2}>

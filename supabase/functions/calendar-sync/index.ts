@@ -60,7 +60,8 @@ function getBaseUid(uid: string): string {
 }
 
 // Group events by their base UID (recurring events share the same base)
-function groupEventsByBaseUid<T extends { uid: string }>(events: T[]): Map<string, T[]> {
+// Currently unused - kept for potential future use if Discord notifications are re-enabled
+function _groupEventsByBaseUid<T extends { uid: string }>(events: T[]): Map<string, T[]> {
   const groups = new Map<string, T[]>();
   for (const event of events) {
     const baseUid = getBaseUid(event.uid);
@@ -1021,71 +1022,8 @@ async function syncCalendar(
     `[syncCalendar] RPC result: ${result.added} added, ${result.updated} updated, ${result.deleted} deleted, ${result.error_count} errors`
   );
 
-  // Handle batch announcements for recurring series (new/changed events)
-  // Note: Individual announcements are handled by process_calendar_announcements RPC
-  // Only query for announcements if we actually added or updated events
-  if (classData.discord_server_id && (result.added > 0 || result.updated > 0)) {
-    console.log(`[syncCalendar] Checking for batch announcements (${result.added} added, ${result.updated} updated)`);
-    const now = new Date();
-
-    // Get all events that need change announcements (not past, not already announced)
-    const { data: eventsNeedingAnnouncement } = await supabase
-      .from("calendar_events")
-      .select("*")
-      .eq("class_id", classData.id)
-      .eq("calendar_type", calendarType)
-      .is("change_announced_at", null)
-      .gt("end_time", now.toISOString())
-      .order("start_time", { ascending: true })
-      .limit(1000);
-
-    if (eventsNeedingAnnouncement && eventsNeedingAnnouncement.length > 0) {
-      // Group by base UID for batch announcements
-      const eventsByBaseUid = groupEventsByBaseUid(
-        eventsNeedingAnnouncement.map((e) => ({
-          uid: e.uid,
-          title: e.title,
-          description: e.description || undefined,
-          start_time: e.start_time,
-          end_time: e.end_time,
-          location: e.location || undefined,
-          queue_name: e.queue_name || undefined,
-          organizer_name: e.organizer_name || undefined,
-          raw_ics_data: {}
-        }))
-      );
-
-      const seriesAnnouncedUids = new Set<string>();
-      for (const [baseUid, events] of eventsByBaseUid) {
-        if (events.length > 1) {
-          // Recurring series - send batch announcement
-          // Determine if this is a new series or changed series by checking if events were just added
-          // For simplicity, treat all as "added" - the RPC will have marked updated events appropriately
-          await enqueueRecurringSeriesAnnouncement(supabase, classData.id, events, "added");
-          for (const e of events) {
-            seriesAnnouncedUids.add(e.uid);
-          }
-          console.log(
-            `[syncCalendar] Sent batch announcement for recurring series ${baseUid} (${events.length} events)`
-          );
-        }
-      }
-
-      // Mark batch-announced events as announced
-      if (seriesAnnouncedUids.size > 0) {
-        const { error: updateError } = await supabase
-          .from("calendar_events")
-          .update({ change_announced_at: now.toISOString() })
-          .eq("class_id", classData.id)
-          .eq("calendar_type", calendarType)
-          .in("uid", Array.from(seriesAnnouncedUids));
-
-        if (updateError) {
-          console.error(`[syncCalendar] Failed to mark batch-announced events: ${updateError.message}`);
-        }
-      }
-    }
-  }
+  // Note: All announcement marking is now handled by the optimized process_calendar_announcements RPC
+  // which processes all eligible events without LIMIT caps, eliminating the need for redundant queries here
 
   // Update sync state - only advance hash/etag if no errors occurred
   if (!result.success || result.error_count > 0) {
@@ -1213,7 +1151,8 @@ async function _enqueueCalendarChangeAnnouncement(
 }
 
 // Enqueue announcement for a recurring series (batch announcement)
-async function enqueueRecurringSeriesAnnouncement(
+// Currently unused - kept for potential future use if Discord notifications are re-enabled
+async function _enqueueRecurringSeriesAnnouncement(
   supabase: SupabaseClient<Database>,
   classId: number,
   events: ParsedEvent[],
