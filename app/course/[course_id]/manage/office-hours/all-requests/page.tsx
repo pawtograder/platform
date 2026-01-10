@@ -198,7 +198,7 @@ export default function AllRequestsPage() {
                 />
                 <Box overflowY="auto" minH={0} flex="1">
                   {/* Open Requests Section - Always show */}
-                  <Box px="4" py="2" bg="blue.50" borderBottomWidth="1px" borderColor="border.muted">
+                  <Box px="4" py="2" bg="bg.info" borderBottomWidth="1px" borderColor="border.muted">
                     <HStack gap="2" align="center">
                       <Text fontWeight="semibold" fontSize="sm" textTransform="uppercase" color="blue.700">
                         Open Requests
@@ -238,9 +238,9 @@ export default function AllRequestsPage() {
                   {/* Resolved Requests Section */}
                   {resolvedRequests.length > 0 && (
                     <>
-                      <Box px="4" py="2" bg="gray.50" borderBottomWidth="1px" borderColor="border.muted">
+                      <Box px="4" py="2" bg="bg.muted" borderBottomWidth="1px" borderColor="border.muted">
                         <HStack gap="2" align="center">
-                          <Text fontWeight="semibold" fontSize="sm" textTransform="uppercase" color="gray.700">
+                          <Text fontWeight="semibold" fontSize="sm" textTransform="uppercase" color="bg.emphasized">
                             Resolved Requests
                           </Text>
                           <Badge colorPalette="gray" variant="solid" size="sm">

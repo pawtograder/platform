@@ -271,9 +271,9 @@ export function HelpRequestSidebar({
         )}
 
         {/* Open Requests Section - Always show */}
-        <Box px="4" py="2" bg="blue.50" borderBottomWidth="1px" borderColor="border.muted">
+        <Box px="4" py="2" bg="bg.info" borderBottomWidth="1px" borderColor="border.emphasized">
           <HStack gap="2" align="center">
-            <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="blue.700">
+            <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="fg.info">
               Open
             </Text>
             <Badge colorPalette="blue" variant="solid" size="sm">
@@ -326,9 +326,9 @@ export function HelpRequestSidebar({
         {/* Resolved Requests Section */}
         {resolvedRequests.length > 0 && (
           <>
-            <Box px="4" py="2" bg="gray.50" borderBottomWidth="1px" borderColor="border.muted">
+            <Box px="4" py="2" bg="bg.subtle" borderBottomWidth="1px" borderColor="border.muted">
               <HStack gap="2" align="center">
-                <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="gray.700">
+                <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="fg.emphasized">
                   Resolved
                 </Text>
                 <Badge colorPalette="gray" variant="solid" size="sm">
@@ -345,7 +345,7 @@ export function HelpRequestSidebar({
                 <Box
                   key={request.id}
                   borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
-                  borderLeftColor={isAssignedToMe ? "green.500" : "transparent"}
+                  borderLeftColor={isAssignedToMe ? "bg.info" : "transparent"}
                   position="relative"
                 >
                   <RequestRow

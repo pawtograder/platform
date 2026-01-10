@@ -46,6 +46,8 @@ type TopicFormData = {
   default_follow: boolean;
   /** Optional Discord channel ID to link the topic to a Discord channel */
   discord_channel_id: string;
+  /** Whether to show this topic in the office hours pre-help browser */
+  show_in_office_hours: boolean;
 };
 
 /**
@@ -95,7 +97,8 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
       assignment_id: "",
       icon: "",
       default_follow: false,
-      discord_channel_id: ""
+      discord_channel_id: "",
+      show_in_office_hours: false
     }
   });
 
@@ -132,7 +135,8 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
         icon: data.icon ? data.icon : null,
         default_follow: data.default_follow,
         ordinal: nextOrdinal,
-        discord_channel_id: data.discord_channel_id?.trim() || null
+        discord_channel_id: data.discord_channel_id?.trim() || null,
+        show_in_office_hours: data.show_in_office_hours || false
       });
 
       toaster.success({
@@ -227,6 +231,23 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
                       <Field.HelperText>
                         <Text color="fg.muted" fontSize="sm">
                           If enabled, students will automatically follow this topic (they can unfollow later).
+                        </Text>
+                      </Field.HelperText>
+                    </Field.Root>
+                  )}
+                />
+
+                <Controller
+                  control={control}
+                  name="show_in_office_hours"
+                  render={({ field }) => (
+                    <Field.Root>
+                      <Switch checked={!!field.value} onCheckedChange={(e) => field.onChange(e.checked)}>
+                        Show in Office Hours pre-help browser
+                      </Switch>
+                      <Field.HelperText>
+                        <Text color="fg.muted" fontSize="sm">
+                          If enabled, recent posts from this topic will appear when students are creating help requests.
                         </Text>
                       </Field.HelperText>
                     </Field.Root>
