@@ -240,7 +240,7 @@ export default function AllRequestsPage() {
                     <>
                       <Box px="4" py="2" bg="bg.muted" borderBottomWidth="1px" borderColor="border.muted">
                         <HStack gap="2" align="center">
-                          <Text fontWeight="semibold" fontSize="sm" textTransform="uppercase" color="bg.emphasized">
+                          <Text fontWeight="semibold" fontSize="sm" textTransform="uppercase" color="fg.muted">
                             Resolved Requests
                           </Text>
                           <Badge colorPalette="gray" variant="solid" size="sm">

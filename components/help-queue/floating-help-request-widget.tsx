@@ -3,9 +3,10 @@
 import { RealtimeChat } from "@/components/realtime-chat";
 import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
+import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { Badge, Box, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp } from "react-icons/bs";
 export function FloatingHelpRequestWidget() {
   const activeRequest = useActiveHelpRequest();
@@ -13,6 +14,15 @@ export function FloatingHelpRequestWidget() {
   const { course_id } = useParams();
   const [isExpanded, setIsExpanded] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);
+  const allHelpRequestStudents = useHelpRequestStudents();
+
+  // Compute student IDs for the active request
+  const helpRequestStudentIds = useMemo(() => {
+    if (!activeRequest) return [];
+    return allHelpRequestStudents
+      .filter((student) => student.help_request_id === activeRequest.request.id)
+      .map((student) => student.profile_id);
+  }, [activeRequest, allHelpRequestStudents]);
 
   const handleNavigateToRequest = useCallback(() => {
     if (activeRequest) {
@@ -192,7 +202,11 @@ export function FloatingHelpRequestWidget() {
                 </HStack>
               </Flex>
               <Box h="400px" overflow="hidden">
-                <RealtimeChat request_id={activeRequest.request.id} helpRequestStudentIds={[]} readOnly={false} />
+                <RealtimeChat
+                  request_id={activeRequest.request.id}
+                  helpRequestStudentIds={helpRequestStudentIds}
+                  readOnly={false}
+                />
               </Box>
             </Stack>
           )}

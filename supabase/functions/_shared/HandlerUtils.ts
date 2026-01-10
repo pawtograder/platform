@@ -205,7 +205,6 @@ export async function wrapRequestHandler(
   const scope = new Sentry.Scope();
   scope.setTag("URL", req.url);
   scope.setTag("Method", req.method);
-  scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
   try {
     let data = await handler(req, scope);
     if (!data) {

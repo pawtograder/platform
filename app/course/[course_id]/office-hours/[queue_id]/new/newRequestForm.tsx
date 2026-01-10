@@ -70,6 +70,7 @@ export default function HelpRequestForm() {
     watch,
     reset,
     setError,
+    clearErrors,
     formState: { errors, isSubmitting },
     handleSubmit
   } = useForm<HelpRequest & { file_references?: HelpRequestFormFileReference[] }>({
@@ -326,11 +327,11 @@ export default function HelpRequestForm() {
           typeof errorMessage === "string" &&
           errorMessage.includes("not currently staffed")
         ) {
-          setValue("help_queue", selectedHelpQueue, { shouldValidate: true });
+          clearErrors("help_queue");
         }
       }
     }
-  }, [selectedHelpQueue, helpQueues, queueIdsWithActiveStaff, setError, setValue, errors.help_queue]);
+  }, [selectedHelpQueue, helpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
@@ -720,7 +721,7 @@ export default function HelpRequestForm() {
                           typeof errorMessage === "string" &&
                           errorMessage.includes("not currently staffed")
                         ) {
-                          setError("help_queue", { type: "manual", message: undefined });
+                          clearErrors("help_queue");
                         }
                       }
                     }}
@@ -793,7 +794,8 @@ export default function HelpRequestForm() {
                         value={
                           field.value
                             ? ({
-                                label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
+                                label:
+                                  templates.find((t: HelpRequestTemplate) => t.id === field.value)?.name || "Unknown",
                                 value: field.value.toString()
                               } as SelectOption)
                             : null
@@ -1118,12 +1120,15 @@ export default function HelpRequestForm() {
                       )}
                       value={
                         field.value
-                          ? ({
-                              label:
-                                userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
-                                  "..." || "",
-                              value: field.value.toString()
-                            } as SelectOption)
+                          ? (() => {
+                              const request = userPreviousRequests.find((r) => r.id === field.value)?.request;
+                              const computedLabel =
+                                request && request.length > 60 ? request.substring(0, 60) + "..." : request || "";
+                              return {
+                                label: computedLabel,
+                                value: field.value.toString()
+                              } as SelectOption;
+                            })()
                           : null
                       }
                       onChange={(option: SelectOption | null) => {

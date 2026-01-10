@@ -1020,23 +1020,35 @@ function LabSectionsTable() {
           }
         }
 
-        // Scroll to the row after a short delay to ensure it's rendered
-        setTimeout(() => {
+        // Store timeout IDs for cleanup
+        const scrollTimeout = setTimeout(() => {
           const rowElement = document.getElementById(`lab-section-row-${sectionId}`);
           if (rowElement) {
             rowElement.scrollIntoView({ behavior: "smooth", block: "center" });
           }
         }, 300);
 
+        // Use a ref to track the nested timeout since it's created inside a callback
+        const removeHighlightTimeoutRef = { current: null as NodeJS.Timeout | null };
+
         // Remove the query parameter after a delay
-        setTimeout(() => {
+        const removeParamTimeout = setTimeout(() => {
           const params = new URLSearchParams(searchParams.toString());
           params.delete("select");
           const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
           router.replace(newUrl);
           // Remove highlight after animation
-          setTimeout(() => setHighlightedSectionId(null), 2000);
+          removeHighlightTimeoutRef.current = setTimeout(() => setHighlightedSectionId(null), 2000);
         }, 1000);
+
+        // Cleanup function to clear all timeouts
+        return () => {
+          clearTimeout(scrollTimeout);
+          clearTimeout(removeParamTimeout);
+          if (removeHighlightTimeoutRef.current) {
+            clearTimeout(removeHighlightTimeoutRef.current);
+          }
+        };
       }
     }
   }, [searchParams, labSections, tableData, table, router]);
@@ -1145,7 +1157,7 @@ function LabSectionsTable() {
                       <Table.Row
                         key={row.id}
                         id={`lab-section-row-${row.original.id}`}
-                        bg={isHighlighted ? "blue.50" : undefined}
+                        bg={isHighlighted ? "bg.info" : undefined}
                         transition="background-color 0.3s"
                       >
                         {row.getVisibleCells().map((cell) => (
