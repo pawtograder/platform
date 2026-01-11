@@ -412,7 +412,7 @@ function ManageMeetingsModal({
 
   const sectionMeetings = labSectionMeetings
     .filter((meeting) => meeting.lab_section_id === labSection.id)
-    .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
+    .sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
 
   const handleToggleCancelled = async (meeting: LabSectionMeeting) => {
     setIsLoading(true);
@@ -755,10 +755,12 @@ function LabSectionsTable() {
   const getUpcomingMeetings = useCallback(
     (labSectionId: number) => {
       const meetings = labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSectionId);
-      const now = new Date();
+      // Get today's date as YYYY-MM-DD string for date-only comparison
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
       return meetings
-        .filter((meeting) => new Date(meeting.meeting_date) >= now && !meeting.cancelled)
-        .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
+        .filter((meeting) => meeting.meeting_date >= todayStr && !meeting.cancelled)
+        .sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
     },
     [labSectionMeetings]
   );

@@ -23,6 +23,8 @@
     "rubric-schema": "npx typescript-json-schema --required --noExtraProps tsconfig.json YmlRubricType > public/RubricSchema.json",
     "seed": "npx tsx scripts/SeedDB.ts",
     "seed:course-assignments": "npx tsx scripts/SeedCourseAssignments.ts",
+    "audit:student-repos": "npx tsx scripts/AuditStudentRepos.ts",
+    "grade:reflections": "npx tsx scripts/GradeReflections.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "lint": "next lint && prettier --check .",
     "format": "prettier --write ."

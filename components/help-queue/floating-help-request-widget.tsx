@@ -34,6 +34,18 @@ export function FloatingHelpRequestWidget() {
     setIsExpanded((prev) => !prev);
   }, []);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        if (e.key === " ") {
+          e.preventDefault();
+        }
+        handleToggleExpand();
+      }
+    },
+    [handleToggleExpand]
+  );
+
   if (!activeRequest) {
     return null;
   }
@@ -63,7 +75,10 @@ export function FloatingHelpRequestWidget() {
               gap={3}
               p={4}
               cursor="pointer"
+              role="button"
+              tabIndex={0}
               onClick={handleToggleExpand}
+              onKeyDown={handleKeyDown}
               _hover={{ bg: "bg.subtle" }}
               borderLeftWidth={unreadCount > 0 ? "4px" : "0"}
               borderLeftColor={unreadCount > 0 ? "red.500" : "transparent"}
