@@ -3,9 +3,15 @@
 import { Button } from "@/components/ui/button";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useCourseController, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import {
+  useAssignments,
+  useCourseController,
+  useLabSections,
+  useUserRolesWithProfiles
+} from "@/hooks/useCourseController";
 import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
-import { LabSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, LabSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/client";
 import {
   Accordion,
   Alert,
@@ -41,6 +47,14 @@ import Link from "next/link";
 type StudentWithSection = UserRoleWithPrivateProfileAndUser & {
   labSectionName: string;
 };
+
+type LabSubmissionData = {
+  submissionCount: number;
+  score: number | null;
+  submissionId: number | null;
+};
+
+type StudentLabData = Map<string, Map<number, LabSubmissionData>>; // studentId -> assignmentId -> data
 
 // Helper function to get day of week order (Monday = 0, Tuesday = 1, ..., Sunday = 6)
 function getDayOrder(day: string | null): number {
@@ -94,10 +108,13 @@ export default function LabRosterPage() {
   const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
   const profiles = useTableControllerTableValues(controller.profiles);
   const labSectionLeadersReady = useIsTableControllerReady(controller.labSectionLeaders);
+  const allAssignments = useAssignments();
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [isOtherSectionsOpen, setIsOtherSectionsOpen] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [showAllLabs, setShowAllLabs] = useState(false);
+  const [labSubmissionData, setLabSubmissionData] = useState<StudentLabData>(new Map());
 
   // Determine which sections the current user leads
   const mySectionIds = useMemo(() => {
@@ -240,9 +257,87 @@ export default function LabRosterPage() {
     });
   }, [otherSections, userRoles, sectionIdToLeaderNames]);
 
+  // Get released lab assignments (filtered and sorted by release_date DESC)
+  const releasedLabAssignments = useMemo(() => {
+    const now = new Date();
+    return allAssignments
+      .filter(
+        (assignment) =>
+          (assignment.minutes_due_after_lab !== null || assignment.slug?.startsWith("lab")) &&
+          (assignment.release_date === null || new Date(assignment.release_date) <= now) &&
+          assignment.archived_at === null
+      )
+      .sort((a, b) => {
+        // Sort by release_date descending (newest first)
+        // If release_date is null, treat as very old (put at end)
+        const dateA = a.release_date ? new Date(a.release_date).getTime() : 0;
+        const dateB = b.release_date ? new Date(b.release_date).getTime() : 0;
+        return dateB - dateA;
+      });
+  }, [allAssignments]);
+
+  // Get visible lab assignments (2 newest by default, or all if expanded)
+  const visibleLabAssignments = useMemo(() => {
+    return showAllLabs ? releasedLabAssignments : releasedLabAssignments.slice(0, 2);
+  }, [releasedLabAssignments, showAllLabs]);
+
+  // Fetch submission data for lab assignments
+  useEffect(() => {
+    if (visibleLabAssignments.length === 0 || studentsInSelectedSection.length === 0) {
+      setLabSubmissionData(new Map());
+      return;
+    }
+    let cleanedUp = false;
+
+    const fetchSubmissionData = async () => {
+      const supabase = createClient();
+      const assignmentIds = visibleLabAssignments.map((a) => a.id);
+      const studentIds = studentsInSelectedSection.map((s) => s.private_profile_id);
+
+      const { data, error } = await supabase
+        .from("submissions_agg")
+        .select("assignment_id, profile_id, submissioncount, score, id")
+        .in("assignment_id", assignmentIds)
+        .in("profile_id", studentIds);
+
+      if (error || cleanedUp) {
+        return;
+      }
+
+      // Build map: studentId -> assignmentId -> {submissionCount, score}
+      const dataMap: StudentLabData = new Map();
+
+      for (const student of studentsInSelectedSection) {
+        dataMap.set(student.private_profile_id, new Map());
+      }
+
+      if (data) {
+        for (const row of data) {
+          if (row.assignment_id && row.profile_id) {
+            const studentMap = dataMap.get(row.profile_id);
+            if (studentMap) {
+              studentMap.set(row.assignment_id, {
+                submissionCount: row.submissioncount || 0,
+                score: row.score ?? null,
+                submissionId: row.id ?? null
+              });
+            }
+          }
+        }
+      }
+
+      setLabSubmissionData(dataMap);
+    };
+
+    fetchSubmissionData();
+    return () => {
+      cleanedUp = true;
+    };
+  }, [visibleLabAssignments, studentsInSelectedSection]);
+
   // Table columns
-  const columns = useMemo<ColumnDef<StudentWithSection>[]>(
-    () => [
+  const columns = useMemo<ColumnDef<StudentWithSection>[]>(() => {
+    const baseColumns: ColumnDef<StudentWithSection>[] = [
       {
         id: "name",
         header: "Name",
@@ -276,9 +371,129 @@ export default function LabRosterPage() {
           return <Text color={username ? undefined : "fg.muted"}>{username || "N/A"}</Text>;
         }
       }
-    ],
-    [course_id]
-  );
+    ];
+
+    // Add lab assignment columns dynamically with grouping
+    const labColumns: ColumnDef<StudentWithSection>[] = visibleLabAssignments.map((assignment) => {
+      return {
+        id: `lab_group_${assignment.id}`,
+        header: () => (
+          <Box
+            textAlign="center"
+            borderWidth="1px"
+            borderColor="border.muted"
+            borderBottomWidth="0px"
+            px={2}
+            py={1}
+          >
+            <Text fontWeight="bold">{assignment.title}</Text>
+          </Box>
+        ),
+        columns: [
+          {
+            id: `lab_${assignment.id}_submissions`,
+            header: ({ column }) => (
+              <Box
+                textAlign="center"
+                borderLeftWidth="1px"
+                borderRightWidth="1px"
+                borderBottomWidth="1px"
+                borderColor="border.muted"
+                cursor="pointer"
+                onClick={column.getToggleSortingHandler()}
+              >
+                <Text fontSize="xs" color="fg.muted" userSelect="none">
+                  Submissions
+                  {{
+                    asc: " 🔼",
+                    desc: " 🔽"
+                  }[column.getIsSorted() as string] ?? ""}
+                </Text>
+              </Box>
+            ),
+            enableSorting: true,
+            accessorFn: (row) => {
+              const studentData = labSubmissionData.get(row.private_profile_id);
+              const assignmentData = studentData?.get(assignment.id);
+              return assignmentData?.submissionCount ?? 0;
+            },
+            cell: ({ row }) => {
+              const studentData = labSubmissionData.get(row.original.private_profile_id);
+              const assignmentData = studentData?.get(assignment.id);
+              const count = assignmentData?.submissionCount ?? 0;
+              return (
+                <Box
+                  textAlign="center"
+                  borderColor="border.muted"
+                >
+                  <Text>{count}</Text>
+                </Box>
+              );
+            }
+          },
+          {
+            id: `lab_${assignment.id}_score`,
+            header: ({ column }) => (
+              <Box
+                textAlign="center"
+                borderColor="border.muted"
+                cursor="pointer"
+                onClick={column.getToggleSortingHandler()}
+              >
+                <Text fontSize="xs" color="fg.muted" userSelect="none">
+                  Score
+                  {{
+                    asc: " 🔼",
+                    desc: " 🔽"
+                  }[column.getIsSorted() as string] ?? ""}
+                </Text>
+              </Box>
+            ),
+            enableSorting: true,
+            accessorFn: (row) => {
+              const studentData = labSubmissionData.get(row.private_profile_id);
+              const assignmentData = studentData?.get(assignment.id);
+              // Return a number for proper sorting (null scores should sort last)
+              return assignmentData?.score ?? -Infinity;
+            },
+            cell: ({ row }) => {
+              const studentData = labSubmissionData.get(row.original.private_profile_id);
+              const assignmentData = studentData?.get(assignment.id);
+              const score = assignmentData?.score;
+              const submissionId = assignmentData?.submissionId;
+              const hasSubmission = submissionId !== null && submissionId !== undefined;
+
+              const boxContent = (
+                <Box
+                  textAlign="center"
+                  borderRightWidth="1px"
+                  borderBottomWidth="1px"
+                  borderColor="border.muted"
+                  px={2}
+                  py={1}
+                >
+                  {hasSubmission ? (
+                    <Link
+                      href={`/course/${course_id}/assignments/${assignment.id}/submissions/${submissionId}`}
+                      style={{ textDecoration: "none", color: "inherit" }}
+                    >
+                      <Text _hover={{ textDecoration: "underline" }}>{score !== null ? score : "—"}</Text>
+                    </Link>
+                  ) : (
+                    <Text>{score !== null ? score : "—"}</Text>
+                  )}
+                </Box>
+              );
+
+              return boxContent;
+            }
+          }
+        ]
+      };
+    });
+
+    return [...baseColumns, ...labColumns];
+  }, [course_id, visibleLabAssignments, labSubmissionData]);
 
   // CSV Export function
   const exportToCSV = useCallback(() => {
@@ -290,14 +505,32 @@ export default function LabRosterPage() {
       return;
     }
 
+    // Build headers: base columns + lab assignment columns
     const headers = ["Lab Section", "Name", "Email", "GitHub Username"];
+    for (const assignment of visibleLabAssignments) {
+      headers.push(`${assignment.title} - NumSubmissions`, `${assignment.title} - Score`);
+    }
 
-    const csvData = studentsInSelectedSection.map((student) => [
-      student.labSectionName,
-      student.profiles?.name || "N/A",
-      student.users?.email || "N/A",
-      student.users?.github_username || "N/A"
-    ]);
+    const csvData = studentsInSelectedSection.map((student) => {
+      const row = [
+        student.labSectionName,
+        student.profiles?.name || "N/A",
+        student.users?.email || "N/A",
+        student.users?.github_username || "N/A"
+      ];
+
+      // Add lab assignment data
+      for (const assignment of visibleLabAssignments) {
+        const studentData = labSubmissionData.get(student.private_profile_id);
+        const assignmentData = studentData?.get(assignment.id);
+        row.push(String(assignmentData?.submissionCount ?? 0));
+        row.push(
+          assignmentData?.score !== null && assignmentData?.score !== undefined ? String(assignmentData.score) : ""
+        );
+      }
+
+      return row;
+    });
 
     const csvContent = [
       headers.join(","),
@@ -320,24 +553,24 @@ export default function LabRosterPage() {
       title: "Export successful",
       description: `Exported ${studentsInSelectedSection.length} students to CSV.`
     });
-  }, [studentsInSelectedSection, selectedSection]);
+  }, [studentsInSelectedSection, selectedSection, visibleLabAssignments, labSubmissionData]);
 
   // Helper to format schedule
   const formatSchedule = (section: LabSection) => {
     const day = section.day_of_week ? section.day_of_week.charAt(0).toUpperCase() + section.day_of_week.slice(1) : "";
     const startTime = section.start_time
       ? new Date(`2000-01-01T${section.start_time}`).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true
-        })
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      })
       : "";
     const endTime = section.end_time
       ? new Date(`2000-01-01T${section.end_time}`).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true
-        })
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      })
       : "";
 
     if (day && startTime) {
@@ -537,6 +770,9 @@ export default function LabRosterPage() {
             students={studentsInSelectedSection}
             columns={columns}
             labSections={labSections}
+            releasedLabAssignments={releasedLabAssignments}
+            showAllLabs={showAllLabs}
+            onToggleShowAllLabs={() => setShowAllLabs(!showAllLabs)}
           />
         )}
       </VStack>
@@ -549,12 +785,18 @@ function SectionTable({
   sectionName,
   students,
   columns,
-  labSections
+  labSections,
+  releasedLabAssignments,
+  showAllLabs,
+  onToggleShowAllLabs
 }: {
   sectionName: string;
   students: StudentWithSection[];
   columns: ColumnDef<StudentWithSection>[];
   labSections: LabSection[];
+  releasedLabAssignments: Assignment[];
+  showAllLabs: boolean;
+  onToggleShowAllLabs: () => void;
 }) {
   const section = labSections.find((s) => s.name === sectionName);
 
@@ -573,17 +815,17 @@ function SectionTable({
     const day = sec.day_of_week ? sec.day_of_week.charAt(0).toUpperCase() + sec.day_of_week.slice(1) : "";
     const startTime = sec.start_time
       ? new Date(`2000-01-01T${sec.start_time}`).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true
-        })
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      })
       : "";
     const endTime = sec.end_time
       ? new Date(`2000-01-01T${sec.end_time}`).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true
-        })
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      })
       : "";
 
     if (day && startTime) {
@@ -608,9 +850,18 @@ function SectionTable({
               </Text>
             )}
           </VStack>
-          <Text color="fg.muted" fontSize="sm">
-            {students.length} student{students.length !== 1 ? "s" : ""}
-          </Text>
+          <HStack gap={4}>
+            {releasedLabAssignments.length > 2 && (
+              <Button size="sm" variant="ghost" onClick={onToggleShowAllLabs}>
+                {showAllLabs
+                  ? `Show fewer (${releasedLabAssignments.length} labs)`
+                  : `Show all ${releasedLabAssignments.length} labs`}
+              </Button>
+            )}
+            <Text color="fg.muted" fontSize="sm">
+              {students.length} student{students.length !== 1 ? "s" : ""}
+            </Text>
+          </HStack>
         </HStack>
       </Box>
 
@@ -619,17 +870,28 @@ function SectionTable({
         <Table.Header>
           {table.getHeaderGroups().map((headerGroup) => (
             <Table.Row key={headerGroup.id} bg="bg.muted">
-              {headerGroup.headers.map((header) => (
-                <Table.ColumnHeader key={header.id}>
-                  <Text cursor="pointer" onClick={header.column.getToggleSortingHandler()} userSelect="none">
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    {{
-                      asc: " 🔼",
-                      desc: " 🔽"
-                    }[header.column.getIsSorted() as string] ?? ""}
-                  </Text>
-                </Table.ColumnHeader>
-              ))}
+              {headerGroup.headers.map((header) => {
+                // For grouped columns, use colSpan from tanstack table
+                const colSpan = header.colSpan > 1 ? header.colSpan : undefined;
+                return (
+                  <Table.ColumnHeader key={header.id} colSpan={colSpan}>
+                    {header.isPlaceholder ? null : (
+                      <Text
+                        cursor={header.column.getCanSort() ? "pointer" : "default"}
+                        onClick={header.column.getToggleSortingHandler()}
+                        userSelect="none"
+                      >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.column.getCanSort() &&
+                          ({
+                            asc: " 🔼",
+                            desc: " 🔽"
+                          }[header.column.getIsSorted() as string] ?? "")}
+                      </Text>
+                    )}
+                  </Table.ColumnHeader>
+                );
+              })}
             </Table.Row>
           ))}
         </Table.Header>
