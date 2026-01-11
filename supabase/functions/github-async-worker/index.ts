@@ -994,7 +994,6 @@ export async function processEnvelope(
         return true;
       }
       case "sync_repo_to_handout": {
-        console.log("HIIIIII========================");
         const { repository_id, repository_full_name, template_repo, from_sha, to_sha } =
           envelope.args as SyncRepoToHandoutArgs;
 

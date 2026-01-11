@@ -27,7 +27,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { format } from "date-fns";
+import { format, parse } from "date-fns";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -472,7 +472,7 @@ function ManageMeetingsModal({
                         <Table.Row key={meeting.id}>
                           <Table.Cell>
                             <Text fontWeight="medium">
-                              {format(new Date(meeting.meeting_date), "EEEE, MMM d, yyyy")}
+                              {format(parse(meeting.meeting_date, "yyyy-MM-dd", new Date()), "EEEE, MMM d, yyyy")}
                             </Text>
                           </Table.Cell>
                           <Table.Cell>
@@ -926,7 +926,7 @@ function LabSectionsTable() {
             <VStack gap={1} align="start">
               {upcomingMeetings.slice(0, 3).map((meeting) => (
                 <Text key={meeting.id} fontSize="sm">
-                  {format(new Date(meeting.meeting_date), "MMM d, yyyy")}
+                  {format(parse(meeting.meeting_date, "yyyy-MM-dd", new Date()), "MMM d, yyyy")}
                 </Text>
               ))}
               {upcomingMeetings.length > 3 && (
@@ -1022,13 +1022,74 @@ function LabSectionsTable() {
           }
         }
 
-        // Store timeout IDs for cleanup
-        const scrollTimeout = setTimeout(() => {
-          const rowElement = document.getElementById(`lab-section-row-${sectionId}`);
+        // Use MutationObserver to wait for the row element to be rendered
+        const rowId = `lab-section-row-${sectionId}`;
+        let observer: MutationObserver | null = null;
+        let scrollTimeout: NodeJS.Timeout | null = null;
+        const rafIds: number[] = [];
+
+        const attemptScroll = () => {
+          const rowElement = document.getElementById(rowId);
           if (rowElement) {
             rowElement.scrollIntoView({ behavior: "smooth", block: "center" });
+            if (observer) {
+              observer.disconnect();
+              observer = null;
+            }
+            // Cancel any pending animation frames
+            rafIds.forEach((id) => cancelAnimationFrame(id));
+            rafIds.length = 0;
+            return true;
           }
-        }, 300);
+          return false;
+        };
+
+        const setupScrollObserver = () => {
+          // Try immediately in case element already exists
+          if (attemptScroll()) {
+            return;
+          }
+
+          // Wait for next animation frame to ensure DOM has updated after pagination change
+          const firstRafId = requestAnimationFrame(() => {
+            const secondRafId = requestAnimationFrame(() => {
+              // Try again after render cycle
+              if (attemptScroll()) {
+                return;
+              }
+
+              // Set up MutationObserver to watch for the element to appear
+              observer = new MutationObserver(() => {
+                if (attemptScroll()) {
+                  // Element found and scrolled, observer will be cleaned up in attemptScroll
+                }
+              });
+
+              // Observe the table container for changes
+              const tableContainer = document.querySelector('[role="table"]')?.parentElement;
+              if (tableContainer) {
+                observer.observe(tableContainer, {
+                  childList: true,
+                  subtree: true
+                });
+              }
+
+              // Fallback timeout in case MutationObserver doesn't catch it
+              scrollTimeout = setTimeout(() => {
+                attemptScroll();
+                if (observer) {
+                  observer.disconnect();
+                  observer = null;
+                }
+              }, 1000);
+            });
+            rafIds.push(secondRafId);
+          });
+          rafIds.push(firstRafId);
+        };
+
+        // Setup scroll observer (waits for render if page changed)
+        setupScrollObserver();
 
         // Use a ref to track the nested timeout since it's created inside a callback
         const removeHighlightTimeoutRef = { current: null as NodeJS.Timeout | null };
@@ -1037,15 +1098,23 @@ function LabSectionsTable() {
         const removeParamTimeout = setTimeout(() => {
           const params = new URLSearchParams(searchParams.toString());
           params.delete("select");
-          const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
+          // Standardize URL format: always use pathname + query string format
+          const queryString = params.toString();
+          const newUrl = `${window.location.pathname}${queryString ? `?${queryString}` : ""}`;
           router.replace(newUrl);
           // Remove highlight after animation
           removeHighlightTimeoutRef.current = setTimeout(() => setHighlightedSectionId(null), 2000);
         }, 1000);
 
-        // Cleanup function to clear all timeouts
+        // Cleanup function to clear all timeouts, observers, and animation frames
         return () => {
-          clearTimeout(scrollTimeout);
+          if (scrollTimeout) {
+            clearTimeout(scrollTimeout);
+          }
+          if (observer) {
+            observer.disconnect();
+          }
+          rafIds.forEach((id) => cancelAnimationFrame(id));
           clearTimeout(removeParamTimeout);
           if (removeHighlightTimeoutRef.current) {
             clearTimeout(removeHighlightTimeoutRef.current);

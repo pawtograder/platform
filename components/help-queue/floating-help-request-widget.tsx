@@ -216,7 +216,7 @@ export function FloatingHelpRequestWidget() {
                   </IconButton>
                 </HStack>
               </Flex>
-              <Box h="400px" overflow="hidden">
+              <Box h={{ base: "60vh", md: "400px" }} maxH="400px" overflow="hidden">
                 <RealtimeChat
                   request_id={activeRequest.request.id}
                   helpRequestStudentIds={helpRequestStudentIds}
