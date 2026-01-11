@@ -1,15 +1,17 @@
 "use client";
 
 import { Box } from "@chakra-ui/react";
-import { usePathname } from "next/navigation";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
 interface NavigationProgressContextType {
   isNavigating: boolean;
+  startNavigation: () => void;
 }
 
 const NavigationProgressContext = createContext<NavigationProgressContextType>({
-  isNavigating: false
+  isNavigating: false,
+  startNavigation: () => {}
 });
 
 export function useNavigationProgress() {
@@ -74,15 +76,46 @@ function NavigationProgressBar() {
 export function NavigationProgressProvider({ children }: { children: React.ReactNode }) {
   const [isNavigating, setIsNavigating] = useState(false);
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [previousPathname, setPreviousPathname] = useState(pathname);
+  const [previousSearchParams, setPreviousSearchParams] = useState(searchParams.toString());
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Detect when navigation completes (pathname changes)
-  useEffect(() => {
-    if (pathname !== previousPathname) {
-      setIsNavigating(false);
-      setPreviousPathname(pathname);
+  // Helper to clear navigation state
+  const clearNavigation = () => {
+    setIsNavigating(false);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
-  }, [pathname, previousPathname]);
+  };
+
+  // Helper to start navigation with timeout fallback
+  const startNavigation = () => {
+    setIsNavigating(true);
+    // Clear any existing timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    // Set a timeout to reset loading state if navigation doesn't complete
+    timeoutRef.current = setTimeout(() => {
+      setIsNavigating(false);
+      timeoutRef.current = null;
+    }, 5000); // 5 second fallback
+  };
+
+  // Detect when navigation completes (pathname OR searchParams changes)
+  useEffect(() => {
+    const searchParamsString = searchParams.toString();
+    const pathnameChanged = pathname !== previousPathname;
+    const searchParamsChanged = searchParamsString !== previousSearchParams;
+
+    if (pathnameChanged || searchParamsChanged) {
+      clearNavigation();
+      setPreviousPathname(pathname);
+      setPreviousSearchParams(searchParamsString);
+    }
+  }, [pathname, searchParams, previousPathname, previousSearchParams]);
 
   // Event delegation to catch all link clicks
   useEffect(() => {
@@ -104,26 +137,50 @@ export function NavigationProgressProvider({ children }: { children: React.React
           const url = new URL(href, window.location.origin);
           const currentUrl = new URL(window.location.href);
 
-          // Only trigger for internal navigation within the same origin
-          if (url.origin === currentUrl.origin && url.pathname !== currentUrl.pathname) {
-            setIsNavigating(true);
+          // Trigger for internal navigation (pathname or search params change)
+          if (url.origin === currentUrl.origin) {
+            const pathnameChanged = url.pathname !== currentUrl.pathname;
+            const searchParamsChanged = url.search !== currentUrl.search;
+            if (pathnameChanged || searchParamsChanged) {
+              startNavigation();
+            }
           }
         } catch {
           // If href is relative, check if it's different from current pathname
-          if (href.startsWith("/") && href !== pathname) {
-            setIsNavigating(true);
+          if (href.startsWith("/")) {
+            const [path, search] = href.split("?");
+            const pathnameChanged = path !== pathname;
+            const searchParamsChanged = search !== undefined && search !== searchParams.toString();
+            if (pathnameChanged || searchParamsChanged) {
+              startNavigation();
+            }
           }
         }
       }
     };
 
+    // Listen for browser back/forward navigation
+    const handlePopState = () => {
+      clearNavigation();
+    };
+
     document.addEventListener("click", handleClick, true);
+    window.addEventListener("popstate", handlePopState);
+
     return () => {
       document.removeEventListener("click", handleClick, true);
+      window.removeEventListener("popstate", handlePopState);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
     };
-  }, [pathname]);
+  }, [pathname, searchParams]);
 
-  return <NavigationProgressContext.Provider value={{ isNavigating }}>{children}</NavigationProgressContext.Provider>;
+  return (
+    <NavigationProgressContext.Provider value={{ isNavigating, startNavigation }}>
+      {children}
+    </NavigationProgressContext.Provider>
+  );
 }
 
 export { NavigationProgressBar };

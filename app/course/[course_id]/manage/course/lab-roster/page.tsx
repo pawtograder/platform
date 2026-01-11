@@ -378,14 +378,7 @@ export default function LabRosterPage() {
       return {
         id: `lab_group_${assignment.id}`,
         header: () => (
-          <Box
-            textAlign="center"
-            borderWidth="1px"
-            borderColor="border.muted"
-            borderBottomWidth="0px"
-            px={2}
-            py={1}
-          >
+          <Box textAlign="center" borderWidth="1px" borderColor="border.muted" borderBottomWidth="0px" px={2} py={1}>
             <Text fontWeight="bold">{assignment.title}</Text>
           </Box>
         ),
@@ -422,10 +415,7 @@ export default function LabRosterPage() {
               const assignmentData = studentData?.get(assignment.id);
               const count = assignmentData?.submissionCount ?? 0;
               return (
-                <Box
-                  textAlign="center"
-                  borderColor="border.muted"
-                >
+                <Box textAlign="center" borderColor="border.muted">
                   <Text>{count}</Text>
                 </Box>
               );
@@ -560,17 +550,17 @@ export default function LabRosterPage() {
     const day = section.day_of_week ? section.day_of_week.charAt(0).toUpperCase() + section.day_of_week.slice(1) : "";
     const startTime = section.start_time
       ? new Date(`2000-01-01T${section.start_time}`).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true
-      })
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        })
       : "";
     const endTime = section.end_time
       ? new Date(`2000-01-01T${section.end_time}`).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true
-      })
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        })
       : "";
 
     if (day && startTime) {
@@ -815,17 +805,17 @@ function SectionTable({
     const day = sec.day_of_week ? sec.day_of_week.charAt(0).toUpperCase() + sec.day_of_week.slice(1) : "";
     const startTime = sec.start_time
       ? new Date(`2000-01-01T${sec.start_time}`).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true
-      })
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        })
       : "";
     const endTime = sec.end_time
       ? new Date(`2000-01-01T${sec.end_time}`).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true
-      })
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        })
       : "";
 
     if (day && startTime) {
@@ -886,7 +876,8 @@ function SectionTable({
                           ({
                             asc: " 🔼",
                             desc: " 🔽"
-                          }[header.column.getIsSorted() as string] ?? "")}
+                          }[header.column.getIsSorted() as string] ??
+                            "")}
                       </Text>
                     )}
                   </Table.ColumnHeader>
