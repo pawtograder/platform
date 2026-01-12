@@ -15,6 +15,7 @@ interface MessageData {
   students?: string[];
   queue?: HelpQueue;
   isVideoLive?: boolean;
+  created_by?: string;
 }
 
 interface Props {
@@ -37,24 +38,30 @@ const getQueueIcon = (type: string) => {
 };
 
 export const HelpRequestTeaser = (props: Props) => {
-  const { updatedAt, message, students = [], queue, isVideoLive = false } = props.data;
+  const { updatedAt, message, students = [], queue, isVideoLive = false, created_by } = props.data;
   const { selected } = props;
 
+  // Use created_by as fallback when students array is empty
+  const effectiveStudents = students.length > 0 ? students : created_by ? [created_by] : [];
+
   // Get user profiles for up to 3 students (unconditionally)
-  const student1Profile = useUserProfile(students[0] || "");
-  const student2Profile = useUserProfile(students[1] || "");
-  const student3Profile = useUserProfile(students[2] || "");
+  const student1Profile = useUserProfile(effectiveStudents[0] || "");
+  const student2Profile = useUserProfile(effectiveStudents[1] || "");
+  const student3Profile = useUserProfile(effectiveStudents[2] || "");
+
+  // Get creator profile as fallback
+  const creatorProfile = useUserProfile(created_by || "");
 
   const renderStudentsDisplay = () => {
-    if (students.length === 0) {
-      return <Text fontWeight="medium">Unknown Student</Text>;
+    if (effectiveStudents.length === 0) {
+      return <Text fontWeight="medium">{creatorProfile?.name || "Unknown Student"}</Text>;
     }
 
-    if (students.length === 1) {
-      return <Text fontWeight="medium">{student1Profile?.name || "Unknown Student"}</Text>;
+    if (effectiveStudents.length === 1) {
+      return <Text fontWeight="medium">{student1Profile?.name || creatorProfile?.name || "Unknown Student"}</Text>;
     }
 
-    if (students.length === 2) {
+    if (effectiveStudents.length === 2) {
       return (
         <Text fontWeight="medium">
           {student1Profile?.name || "Unknown"} & {student2Profile?.name || "Unknown"}
@@ -65,7 +72,7 @@ export const HelpRequestTeaser = (props: Props) => {
     return (
       <HStack spaceX={1}>
         <Text fontWeight="medium">
-          {student1Profile?.name || "Unknown"} + {students.length - 1} others
+          {student1Profile?.name || "Unknown"} + {effectiveStudents.length - 1} others
         </Text>
         <Icon as={BsPeople} fontSize="sm" color="fg.muted" />
       </HStack>
@@ -73,37 +80,39 @@ export const HelpRequestTeaser = (props: Props) => {
   };
 
   const renderStudentsAvatars = () => {
-    if (students.length === 0) {
+    if (effectiveStudents.length === 0) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Fallback>?</Avatar.Fallback>
+          <Avatar.Image src={(creatorProfile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Fallback>{(creatorProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
     }
 
-    if (students.length === 1) {
+    if (effectiveStudents.length === 1) {
+      const displayProfile = student1Profile || creatorProfile;
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} />
-          <Avatar.Fallback>{(student1Profile?.name || "?").charAt(0)}</Avatar.Fallback>
+          <Avatar.Image src={(displayProfile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Fallback>{(displayProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
     }
 
-    const maxAvatars = Math.min(3, students.length);
+    const maxAvatars = Math.min(3, effectiveStudents.length);
     const avatars = [
       {
-        id: students[0],
+        id: effectiveStudents[0],
         name: student1Profile?.name,
         avatar_url: student1Profile?.avatar_url as string | undefined
       },
       {
-        id: students[1],
+        id: effectiveStudents[1],
         name: student2Profile?.name,
         avatar_url: student2Profile?.avatar_url as string | undefined
       },
       {
-        id: students[2],
+        id: effectiveStudents[2],
         name: student3Profile?.name,
         avatar_url: student3Profile?.avatar_url as string | undefined
       }

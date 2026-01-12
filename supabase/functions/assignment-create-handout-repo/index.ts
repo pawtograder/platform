@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
-import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
@@ -13,7 +13,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "assignment-create-handout-repo");
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
-  await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
+
+  // Allow both instructor users and service role (for admin scripts)
+  await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,

@@ -362,6 +362,8 @@ export async function getChangedFiles(
  * Create a branch and commit changes to a target repository
  * For text files with patches, applies the patch to the content at baseSha
  * For binary files or files with full content, uses the provided content
+ * @param templateRepo - Optional template repo name for fallback when patch fails
+ * @param templateSha - Optional template SHA to fetch content from when patch fails
  */
 export async function createBranchAndCommit(
   repoFullName: string,
@@ -369,7 +371,9 @@ export async function createBranchAndCommit(
   baseSha: string,
   files: FileChange[],
   commitMessage: string,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  templateRepo?: string,
+  templateSha?: string
 ): Promise<void> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
@@ -463,13 +467,77 @@ export async function createBranchAndCommit(
           }
           patchedContent = result;
         } catch (patchError) {
+          // Add diagnostic information
+          const patchPreview = file.patch ? file.patch.substring(0, 200) : "no patch";
+          const baseContentPreview = baseContent.substring(0, 200);
           scope?.addBreadcrumb({
-            message: `Failed to apply patch to ${file.path}: ${patchError}`,
+            message: `Failed to apply patch to ${file.path}`,
             category: "patch",
-            level: "error"
+            level: "error",
+            data: {
+              error: String(patchError),
+              baseContentLength: baseContent.length,
+              patchLength: file.patch?.length || 0,
+              patchPreview,
+              baseContentPreview
+            }
           });
           console.error(`Failed to apply patch to ${file.path}:`, patchError);
-          throw patchError;
+          console.error(`Base content length: ${baseContent.length}, Patch length: ${file.patch?.length || 0}`);
+          console.error(`Patch preview: ${patchPreview}`);
+          console.error(`Base content preview: ${baseContentPreview}`);
+
+          // Fallback: fetch full content from template repo if available
+          if (templateRepo && templateSha) {
+            scope?.addBreadcrumb({
+              message: `Attempting fallback: fetching full content from template repo for ${file.path}`,
+              category: "patch",
+              level: "info"
+            });
+
+            try {
+              const templateOctokit = await github.getOctoKit(templateRepo, scope);
+              if (templateOctokit) {
+                const [templateOwner, templateRepoName] = templateRepo.split("/");
+                const { data: templateFileData } = await templateOctokit.request(
+                  "GET /repos/{owner}/{repo}/contents/{path}",
+                  {
+                    owner: templateOwner,
+                    repo: templateRepoName,
+                    path: file.path,
+                    ref: templateSha
+                  }
+                );
+
+                if ("content" in templateFileData && templateFileData.content) {
+                  // Use the full content from template repo
+                  patchedContent = atob(templateFileData.content);
+                  scope?.addBreadcrumb({
+                    message: `Successfully fetched full content from template repo for ${file.path}`,
+                    category: "patch",
+                    level: "info"
+                  });
+                } else {
+                  throw new Error("Template file content not available");
+                }
+              } else {
+                throw new Error("Could not get octokit for template repo");
+              }
+            } catch (fallbackError) {
+              scope?.addBreadcrumb({
+                message: `Fallback failed for ${file.path}: ${fallbackError}`,
+                category: "patch",
+                level: "error"
+              });
+              console.error(`Fallback failed for ${file.path}:`, fallbackError);
+              throw new Error(
+                `Patch application failed and fallback failed: ${patchError}. Fallback error: ${fallbackError}`
+              );
+            }
+          } else {
+            // No fallback available, throw original error
+            throw patchError;
+          }
         }
 
         // Create blob with patched content
@@ -694,7 +762,16 @@ changes from the template repository.
 Changed files:
 ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
-        await createBranchAndCommit(repositoryFullName, branchName, syncedRepoSha, changedFiles, commitMessage, scope);
+        await createBranchAndCommit(
+          repositoryFullName,
+          branchName,
+          syncedRepoSha,
+          changedFiles,
+          commitMessage,
+          scope,
+          templateRepo,
+          toSha
+        );
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;

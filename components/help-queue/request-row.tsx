@@ -35,9 +35,11 @@ interface RequestRowProps {
 }
 
 export function RequestRow({ request, href, selected, queue, students = [], variant = "default" }: RequestRowProps) {
-  const student1Profile = useUserProfile(students[0] || null);
-  const student2Profile = useUserProfile(students[1] || null);
-  const student3Profile = useUserProfile(students[2] || null);
+  // Use created_by as fallback when students array is empty
+  const effectiveStudents = students.length > 0 ? students : request.created_by ? [request.created_by] : [];
+  const student1Profile = useUserProfile(effectiveStudents[0] || null);
+  const student2Profile = useUserProfile(effectiveStudents[1] || null);
+  const student3Profile = useUserProfile(effectiveStudents[2] || null);
   const assigneeProfile = useUserProfile(request.assignee || null);
 
   const statusColor = useMemo(() => {
@@ -54,7 +56,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
   }, [request.status]);
 
   const renderStudentsDisplay = () => {
-    if (students.length === 0) {
+    if (effectiveStudents.length === 0) {
       return (
         <Text fontWeight="medium" fontSize="sm">
           Unknown Student
@@ -62,7 +64,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       );
     }
 
-    if (students.length === 1) {
+    if (effectiveStudents.length === 1) {
       return (
         <Text fontWeight="medium" fontSize="sm">
           {student1Profile?.name || "Unknown Student"}
@@ -70,7 +72,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       );
     }
 
-    if (students.length === 2) {
+    if (effectiveStudents.length === 2) {
       return (
         <Text fontWeight="medium" fontSize="sm">
           {student1Profile?.name || "Unknown"} & {student2Profile?.name || "Unknown"}
@@ -80,13 +82,13 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
 
     return (
       <Text fontWeight="medium" fontSize="sm">
-        {student1Profile?.name || "Unknown"} + {students.length - 1} others
+        {student1Profile?.name || "Unknown"} + {effectiveStudents.length - 1} others
       </Text>
     );
   };
 
   const renderStudentsAvatars = () => {
-    if (students.length === 0) {
+    if (effectiveStudents.length === 0) {
       return (
         <Avatar.Root size="sm">
           <Avatar.Fallback>?</Avatar.Fallback>
@@ -94,7 +96,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       );
     }
 
-    if (students.length === 1) {
+    if (effectiveStudents.length === 1) {
       return (
         <Avatar.Root size="sm">
           <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} />
@@ -103,20 +105,20 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       );
     }
 
-    const maxAvatars = Math.min(3, students.length);
+    const maxAvatars = Math.min(3, effectiveStudents.length);
     const avatars = [
       {
-        id: students[0],
+        id: effectiveStudents[0],
         name: student1Profile?.name,
         avatar_url: student1Profile?.avatar_url as string | undefined
       },
       {
-        id: students[1],
+        id: effectiveStudents[1],
         name: student2Profile?.name,
         avatar_url: student2Profile?.avatar_url as string | undefined
       },
       {
-        id: students[2],
+        id: effectiveStudents[2],
         name: student3Profile?.name,
         avatar_url: student3Profile?.avatar_url as string | undefined
       }

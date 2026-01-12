@@ -59,6 +59,11 @@ export function PostRow({
 
   const isUnread = readStatus === null || readStatus?.read_at === null;
   const hasUnreadReplies = !isUnread && numReadDescendants < (thread?.children_count ?? 0);
+  const unreadRepliesCount = useMemo(() => {
+    if (!thread?.children_count) return 0;
+    const unread = thread.children_count - numReadDescendants;
+    return Math.max(0, unread);
+  }, [thread?.children_count, numReadDescendants]);
 
   const statusIndicator = isUnread ? (
     <Icon as={FaCircle} color="blue.500" boxSize="2" />
@@ -146,6 +151,11 @@ export function PostRow({
                 <Stack spaceY="0.5" flex="1" minW={0}>
                   <HStack gap="1.5" minW={0} wrap="wrap">
                     {thread.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="2.5" />}
+                    {showTopicBadge && topic && (
+                      <Badge colorPalette={topic.color} variant="subtle" flexShrink={0}>
+                        {topic.topic}
+                      </Badge>
+                    )}
                     <Text fontWeight="semibold" fontSize="sm" truncate>
                       {thread.subject}
                     </Text>
@@ -163,7 +173,14 @@ export function PostRow({
                     <Text>•</Text>
                     <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
                     <Text>•</Text>
-                    <Text>{thread.children_count ?? 0} replies</Text>
+                    <Text>
+                      {thread.children_count ?? 0} replies
+                      {unreadRepliesCount > 0 && (
+                        <Text as="span" color="blue.500" fontWeight="semibold" ml={1}>
+                          ({unreadRepliesCount} new)
+                        </Text>
+                      )}
+                    </Text>
                     <Text>•</Text>
                     <Text>{thread.likes_count ?? 0} likes</Text>
                   </HStack>
@@ -224,7 +241,14 @@ export function PostRow({
                 {userProfile?.name ?? ""}
               </Text>
               <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
-              <Text>{thread.children_count ?? 0} replies</Text>
+              <Text>
+                {thread.children_count ?? 0} replies
+                {unreadRepliesCount > 0 && (
+                  <Text as="span" color="blue.500" fontWeight="semibold" ml={1}>
+                    ({unreadRepliesCount} new)
+                  </Text>
+                )}
+              </Text>
               <Text>{thread.likes_count ?? 0} likes</Text>
             </HStack>
           </Stack>

@@ -2537,9 +2537,11 @@ export type Database = {
           created_at: string;
           default_follow: boolean;
           description: string;
+          discord_channel_id: string | null;
           icon: string | null;
           id: number;
           ordinal: number;
+          show_in_office_hours: boolean;
           topic: string;
           updated_at: string;
         };
@@ -2550,9 +2552,11 @@ export type Database = {
           created_at?: string;
           default_follow?: boolean;
           description: string;
+          discord_channel_id?: string | null;
           icon?: string | null;
           id?: number;
           ordinal?: number;
+          show_in_office_hours?: boolean;
           topic: string;
           updated_at?: string;
         };
@@ -2563,9 +2567,11 @@ export type Database = {
           created_at?: string;
           default_follow?: boolean;
           description?: string;
+          discord_channel_id?: string | null;
           icon?: string | null;
           id?: number;
           ordinal?: number;
+          show_in_office_hours?: boolean;
           topic?: string;
           updated_at?: string;
         };
@@ -5249,6 +5255,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          discussion_discord_notification: Database["public"]["Enums"]["discussion_discord_notification_type"];
           discussion_notification: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id: number;
@@ -5259,6 +5266,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          discussion_discord_notification?: Database["public"]["Enums"]["discussion_discord_notification_type"];
           discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
@@ -5269,6 +5277,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          discussion_discord_notification?: Database["public"]["Enums"]["discussion_discord_notification_type"];
           discussion_notification?: Database["public"]["Enums"]["discussion_notification_type"];
           help_request_creation_notification?: Database["public"]["Enums"]["help_request_creation_notification"];
           id?: number;
@@ -10262,6 +10271,15 @@ export type Database = {
         };
         Returns: Json;
       };
+      bulk_csv_import_enrollment: {
+        Args: {
+          p_class_id: number;
+          p_enrollment_data: Json;
+          p_import_mode: string;
+          p_notify?: boolean;
+        };
+        Returns: Json;
+      };
       calculate_effective_due_date: {
         Args: { assignment_id_param: number; student_profile_id_param: string };
         Returns: string;
@@ -10528,6 +10546,10 @@ export type Database = {
           p_guild_id?: string;
           p_resource_id?: number;
         };
+        Returns: undefined;
+      };
+      enqueue_discord_discussion_thread_message: {
+        Args: { p_action?: string; p_thread_id: number };
         Returns: undefined;
       };
       enqueue_discord_help_request_message: {
@@ -11085,12 +11107,25 @@ export type Database = {
         Args: { _submission_id: number };
         Returns: boolean;
       };
+      sync_calendar_events: {
+        Args: {
+          p_calendar_type: string;
+          p_class_id: number;
+          p_has_discord_server?: boolean;
+          p_parsed_events: Json;
+        };
+        Returns: Json;
+      };
       sync_existing_users_after_roles_created: {
         Args: { p_class_id: number };
         Returns: undefined;
       };
       sync_lab_section_meetings: {
         Args: { lab_section_id_param: number };
+        Returns: undefined;
+      };
+      sync_repo_permissions_for_student: {
+        Args: { p_class_id: number; p_user_id: string };
         Returns: undefined;
       };
       sync_staff_github_team: {
@@ -11214,8 +11249,10 @@ export type Database = {
         | "office_hours"
         | "regrades"
         | "scheduling"
-        | "operations";
-      discord_resource_type: "help_request" | "regrade_request";
+        | "operations"
+        | "forum";
+      discord_resource_type: "help_request" | "regrade_request" | "discussion_thread";
+      discussion_discord_notification_type: "all" | "followed_only" | "none";
       discussion_notification_type: "immediate" | "digest" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
@@ -11380,8 +11417,18 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
-      discord_channel_type: ["general", "assignment", "lab", "office_hours", "regrades", "scheduling", "operations"],
-      discord_resource_type: ["help_request", "regrade_request"],
+      discord_channel_type: [
+        "general",
+        "assignment",
+        "lab",
+        "office_hours",
+        "regrades",
+        "scheduling",
+        "operations",
+        "forum"
+      ],
+      discord_resource_type: ["help_request", "regrade_request", "discussion_thread"],
+      discussion_discord_notification_type: ["all", "followed_only", "none"],
       discussion_notification_type: ["immediate", "digest", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
