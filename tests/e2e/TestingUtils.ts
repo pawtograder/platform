@@ -1,11 +1,13 @@
 import { createAdminClient } from "@/utils/supabase/client";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import { Page } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
-import { createClient } from "@supabase/supabase-js";
 dotenv.config({ path: ".env.local" });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
@@ -29,6 +31,36 @@ export type TestingUser = {
   password: string;
 };
 
+export function formatDateForTest(
+  date: string | Date | TZDate,
+  timeZone: string = "America/New_York",
+  format: "full" | "compact" | "dateOnly" | "timeOnly" | "Pp" | "MMM d, h:mm a" | "MMM d" = "MMM d, h:mm a"
+): string {
+  let d: Date;
+  if (date instanceof TZDate || date instanceof Date) {
+    d = date;
+  } else {
+    d = new Date(date);
+  }
+
+  switch (format) {
+    case "compact":
+      return formatInTimeZone(d, timeZone, "M/d/yyyy, h:mm:ss a zzz");
+    case "dateOnly":
+      return formatInTimeZone(d, timeZone, "MMM d, yyyy (zzz)");
+    case "timeOnly":
+      return formatInTimeZone(d, timeZone, "h:mm a zzz");
+    case "Pp":
+      return formatInTimeZone(d, timeZone, "MM/dd/yyyy, h:mm a zzz");
+    case "MMM d, h:mm a":
+      return formatInTimeZone(d, timeZone, "MMM d, h:mm a zzz");
+    case "MMM d":
+      return formatInTimeZone(d, timeZone, "MMM d (zzz)");
+    case "full":
+    default:
+      return formatInTimeZone(d, timeZone, "MMM d, yyyy, h:mm a zzz");
+  }
+}
 export async function createClass({
   name,
   rateLimitManager

@@ -1,16 +1,16 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { test, expect } from "../global-setup";
 import { addDays, addHours, previousMonday } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
+import { expect, test } from "../global-setup";
 import {
   createClass,
   createLabSectionWithStudents,
   createUsersInClass,
+  formatDateForTest,
   insertAssignment,
   loginAsUser,
-  TestingUser,
-  supabase
+  supabase,
+  TestingUser
 } from "./TestingUtils";
 
 let course: Course;
@@ -172,11 +172,8 @@ const expectedLabAssignmentDueDate =
   labAssignmentDueDate.getDay() === 1 ? labAssignmentDueDate : previousMonday(labAssignmentDueDate);
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);
 
-function getDueDateString(date: Date) {
-  return formatInTimeZone(date, "America/New_York", "MMM d, h:mm a zzz");
-}
 function getDueDateShortString(date: Date) {
-  return formatInTimeZone(date, "America/New_York", "MM/dd/yyyy, h:mm a zzz");
+  return formatDateForTest(date, "America/New_York", "Pp");
 }
 test.describe("Assignment due dates", () => {
   test("Lab-section and non-lab-section assignment due dates are calculated correctly on the course landing page and on the assignments page", async ({
@@ -203,17 +200,17 @@ test.describe("Assignment due dates", () => {
 
     const row = page.getByRole("row").filter({ has: cell });
     await expect(
-      row.getByText(getDueDateString(new TZDate(testAssignment!.due_date, "America/New_York")))
+      row.getByText(formatDateForTest(new TZDate(testAssignment!.due_date, "America/New_York")))
     ).toBeVisible();
 
     const labRow = page.getByRole("row").filter({ has: page.getByText(testLabAssignment!.title) });
     await expect(
-      labRow.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
+      labRow.getByText(formatDateForTest(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
     ).toBeVisible();
 
     const groupRow = page.getByRole("row").filter({ has: page.getByText(testGroupAssignment!.title) });
     await expect(
-      groupRow.getByText(getDueDateString(new TZDate(testGroupAssignment!.due_date, "America/New_York")))
+      groupRow.getByText(formatDateForTest(new TZDate(testGroupAssignment!.due_date, "America/New_York")))
     ).toBeVisible();
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
@@ -230,13 +227,13 @@ test.describe("Assignment due dates", () => {
     // Wait for the assignment detail page to fully load and the due date component to render
     await expect(page.locator("text=/Due:/")).toBeVisible({ timeout: 10000 });
     await expect(
-      page.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
+      page.getByText(formatDateForTest(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
     ).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
     await expect(
-      page.getByText(getDueDateString(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
+      page.getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
 
     //Test with the non-lab section assignment
@@ -244,12 +241,12 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("link", { name: testAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
-    await expect(page.getByText(getDueDateString(new TZDate(assignmentDueDate, "America/New_York")))).toBeVisible();
+    await expect(page.getByText(formatDateForTest(new TZDate(assignmentDueDate, "America/New_York")))).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
     await expect(
-      page.getByText(getDueDateString(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
+      page.getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
 
     //Test with the group assignment
@@ -258,13 +255,13 @@ test.describe("Assignment due dates", () => {
 
     await expect(page.getByText("This is a test group assignment for E2E testing")).toBeVisible();
     await expect(
-      page.getByText(getDueDateString(new TZDate(groupAssignmentDueDate, "America/New_York")))
+      page.getByText(formatDateForTest(new TZDate(groupAssignmentDueDate, "America/New_York")))
     ).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
     await expect(
-      page.getByText(getDueDateString(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
+      page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
   });
 });
