@@ -9,6 +9,7 @@ import DynamicCourseNav from "./dynamicCourseNav";
 import { getCourse, getUserRolesForCourse, fetchCourseControllerData } from "@/lib/ssrUtils";
 import { headers } from "next/headers";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
+import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -59,6 +60,7 @@ const ProtectedLayout = async ({
             <Box pt="0" ml="0" mr="0">
               {children}
             </Box>
+            <FloatingHelpRequestWidget />
           </OfficeHoursControllerProvider>
         </CourseControllerProvider>
       </NavigationProgressProvider>

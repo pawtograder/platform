@@ -1293,14 +1293,17 @@ export async function syncRepoPermissions(
       permission: "maintain"
     });
   }
-  const desiredUsersNotInOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
-  console.log(`${org}/${repo} desired users not in org: ${desiredUsersNotInOrg.join(", ")}`);
+  const desiredUsersNotInCachedOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
+  console.log(`${org}/${repo} desired users not in cached org members: ${desiredUsersNotInCachedOrg.join(", ")}`);
   //The API for PUT /repos/{owner}/{repo}/collaborators/{username} REQUIRES the username, can't be user id.
   //So, if a student changes their username, we won't be able to sync their repo permissions here because
   //we have the old username on file. But, we can find those becuase they won't be in the org members list.
 
-  // Update usernames for users who may have changed their GitHub username
-  if (desiredUsersNotInOrg.length > 0) {
+  // For users not in cached org members, verify their membership individually with fresh API calls.
+  // This handles the race condition where a user joins the org after the cache was populated.
+  const verifiedOrgMembers = new Set(allOrgMembers?.map((u) => u.toLowerCase()) || []);
+
+  if (desiredUsersNotInCachedOrg.length > 0) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -1311,26 +1314,67 @@ export async function syncRepoPermissions(
       maxConcurrent: 20
     });
 
-    // Use Promise.all with the limiter to update usernames in parallel
-    const updateResults = await Promise.all(
-      desiredUsersNotInOrg.map((oldUsername) =>
-        limiter.schedule(() => updateGitHubUsernameForUser(oldUsername, octokit, adminSupabase, scope))
+    // For each user not in cached org, check if they're actually in the org now (fresh API call)
+    // and also handle potential username changes
+    const verificationResults = await Promise.all(
+      desiredUsersNotInCachedOrg.map((username) =>
+        limiter.schedule(async () => {
+          // First, try to verify current membership with fresh API call
+          try {
+            await octokit.request("GET /orgs/{org}/members/{username}", {
+              org,
+              username
+            });
+            // User IS in org - they were just not in the stale cache
+            scope?.addBreadcrumb({
+              category: "github",
+              message: `${username} verified as org member (was not in cache)`,
+              level: "info"
+            });
+            return { username, isInOrg: true, newUsername: null };
+          } catch (membershipError: unknown) {
+            const err = membershipError as { status?: number };
+            if (err.status === 404 || err.status === 302) {
+              // User is NOT in org - might be a username change
+              const result = await updateGitHubUsernameForUser(username, octokit, adminSupabase, scope);
+              if (result.newUsername) {
+                // Username changed - verify new username is in org
+                try {
+                  await octokit.request("GET /orgs/{org}/members/{username}", {
+                    org,
+                    username: result.newUsername
+                  });
+                  return { username, isInOrg: true, newUsername: result.newUsername };
+                } catch {
+                  return { username, isInOrg: false, newUsername: result.newUsername };
+                }
+              }
+              return { username, isInOrg: false, newUsername: null };
+            }
+            throw membershipError;
+          }
+        })
       )
     );
 
-    // Update our local githubUsernames array to use those new names
-    for (const { oldUsername, newUsername } of updateResults) {
+    // Update githubUsernames array with new usernames and track verified members
+    for (const { username, isInOrg, newUsername } of verificationResults) {
       if (newUsername) {
-        const index = githubUsernames.indexOf(oldUsername);
+        const index = githubUsernames.indexOf(username);
         if (index !== -1) {
           githubUsernames[index] = newUsername;
         }
+        if (isInOrg) {
+          verifiedOrgMembers.add(newUsername.toLowerCase());
+        }
+      } else if (isInOrg) {
+        verifiedOrgMembers.add(username.toLowerCase());
       }
     }
   }
 
   const newAccess = githubUsernames.filter(
-    (u) => !existingUsernames.includes(u) && allOrgMembers?.includes(u) // && !existingInvitations.some((i) => i.invitee?.login === u)
+    (u) => !existingUsernames.includes(u) && verifiedOrgMembers.has(u.toLowerCase())
   );
   const removeAccess = existingUsernames.filter(
     (u) =>

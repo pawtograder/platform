@@ -642,6 +642,9 @@ export async function processEnvelope(
               } catch (e) {
                 console.error(`[processEnvelope] Error fetching regrade request for deep link:`, e);
               }
+            } else if (envelope.resource_type === "discussion_thread") {
+              // Discussion thread URL: /course/{class_id}/discussion/{thread_id}
+              deepLinkUrl = `https://${appUrl}/course/${envelope.class_id}/discussion/${envelope.resource_id}`;
             }
 
             // Add URL to the first embed if it exists
@@ -847,6 +850,9 @@ export async function processEnvelope(
               } catch (e) {
                 console.error(`[processEnvelope] Error fetching regrade request for deep link:`, e);
               }
+            } else if (resourceType === "discussion_thread") {
+              // Discussion thread URL: /course/{class_id}/discussion/{thread_id}
+              deepLinkUrl = `https://${appUrl}/course/${classId}/discussion/${resourceId}`;
             }
 
             // Add URL to the first embed if it exists
@@ -1048,7 +1054,7 @@ export async function processEnvelope(
           if (!member) {
             // User is not in the guild - create an invite link
             console.log(`[processEnvelope] User ${args.user_id} not in guild ${args.guild_id}, creating invite`);
-            const invite = await discord.createGuildInvite(args.guild_id, 604800, 1, scope); // 7 days, 1 use
+            const invite = await discord.createGuildInvite(args.guild_id, 604800, 5, scope); // 7 days, 5 uses
 
             console.log(`[processEnvelope] Created invite for user ${args.user_id}: ${invite.url}`);
             scope.setContext("discord_invite_created", {

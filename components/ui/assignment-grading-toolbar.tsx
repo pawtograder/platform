@@ -9,6 +9,7 @@ import { Select } from "chakra-react-select";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { FaArrowLeft, FaArrowRight, FaChartBar, FaCheckCircle, FaClock } from "react-icons/fa";
+import { useNavigationProgress } from "@/components/ui/navigation-progress";
 
 interface SubmissionSelectOption {
   // value represents the submission id (submission-centric selection)
@@ -150,6 +151,7 @@ function SubmissionSelector() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { groups, selectedOption, placeholder } = useGroupedSubmissionData();
+  const { startNavigation } = useNavigationProgress();
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionOption | null) => {
@@ -161,10 +163,11 @@ function SubmissionSelector() {
         params.delete("selected_review_id");
         const qs = params.toString();
         const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${qs ? `?${qs}` : ""}`;
+        startNavigation();
         router.push(url);
       }
     },
-    [course_id, assignment_id, router, searchParams]
+    [course_id, assignment_id, router, searchParams, startNavigation]
   );
 
   if (groups.length === 0) {
@@ -206,6 +209,7 @@ export default function AssignmentGradingToolbar() {
   const searchParams = useSearchParams();
   const myReviewAssignments = useMyReviewAssignments();
   const isInReviewMode = myReviewAssignments.length > 0;
+  const { startNavigation } = useNavigationProgress();
 
   // Group review assignments by submission id
   const reviewAssignmentsBySubmission = useMemo(() => {
@@ -308,10 +312,11 @@ export default function AssignmentGradingToolbar() {
         }
         const qs = params.toString();
         const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.submissionId}/files${qs ? `?${qs}` : ""}`;
+        startNavigation();
         router.push(url);
       }
     },
-    [course_id, assignment_id, router, searchParams]
+    [course_id, assignment_id, router, searchParams, startNavigation]
   );
 
   if (!isInReviewMode) {

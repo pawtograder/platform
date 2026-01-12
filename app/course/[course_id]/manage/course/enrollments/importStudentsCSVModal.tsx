@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState, createContext, useContext, ReactNode } from "react";
+import { useCallback, useState } from "react";
 import { Input, VStack, Text, Dialog, Portal, Box, Icon } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -9,7 +9,6 @@ import { useParams } from "next/navigation";
 import { useInvalidate } from "@refinedev/core";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
-import { enrollmentAdd, invitationCreate } from "@/lib/edgeFunctions";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { FaFileImport } from "react-icons/fa";
 type AppRole = Database["public"]["Enums"]["app_role"];
@@ -35,58 +34,28 @@ type FormValues = {
   csvFile: FileList;
 };
 
-// Context for managing SIS user mapping
-interface SISUserContextType {
-  sisUserMap: Map<number, string>;
-  setSisUserMap: (map: Map<number, string>) => void;
-  clearSisUserMap: () => void;
-}
-
-const SISUserContext = createContext<SISUserContextType | undefined>(undefined);
-
-const SISUserProvider = ({ children }: { children: ReactNode }) => {
-  const [sisUserMap, setSisUserMapState] = useState<Map<number, string>>(new Map());
-
-  const setSisUserMap = useCallback((map: Map<number, string>) => {
-    setSisUserMapState(map);
-  }, []);
-
-  const clearSisUserMap = useCallback(() => {
-    setSisUserMapState(new Map());
-  }, []);
-
-  return (
-    <SISUserContext.Provider value={{ sisUserMap, setSisUserMap, clearSisUserMap }}>{children}</SISUserContext.Provider>
-  );
+type PreviewUser = {
+  email?: string;
+  name: string;
+  role: AppRole;
+  sis_id?: number;
+  sis_sync_opt_out?: boolean;
+  action: "enroll" | "invite" | "reactivate" | "skip_pending_invitation";
 };
 
-const useSISUserContext = () => {
-  const context = useContext(SISUserContext);
-  if (context === undefined) {
-    throw new Error("useSISUserContext must be used within a SISUserProvider");
-  }
-  return context;
-};
-
-const ImportStudentsCSVModalContent = () => {
+const ImportStudentsCSVModal = () => {
   const { course_id } = useParams<{ course_id: string }>();
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirmingImport, setIsConfirmingImport] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
-  const [usersToPreviewAdd, setUsersToPreviewAdd] = useState<
-    Array<{ email?: string; name: string; role: AppRole; sis_id?: number; sis_sync_opt_out?: boolean }>
-  >([]);
+  const [previewUsers, setPreviewUsers] = useState<PreviewUser[]>([]);
   const [notifyOnAdd, setNotifyOnAdd] = useState<boolean>(false);
-  const [usersToPreviewIgnore, setUsersToPreviewIgnore] = useState<
-    Array<{ email?: string; name: string; role: AppRole; sis_id?: number; sis_sync_opt_out?: boolean }>
-  >([]);
   const [importMode, setImportMode] = useState<"email" | "sis_id" | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const onClose = useCallback(() => setIsOpen(false), []);
 
   const invalidate = useInvalidate();
   const supabase = createClient();
-  const { sisUserMap, setSisUserMap, clearSisUserMap } = useSISUserContext();
 
   const {
     register,
@@ -97,10 +66,8 @@ const ImportStudentsCSVModalContent = () => {
 
   const handlePreviewBack = () => {
     setIsPreviewMode(false);
-    setUsersToPreviewAdd([]);
-    setUsersToPreviewIgnore([]);
+    setPreviewUsers([]);
     setImportMode(null);
-    clearSisUserMap();
     reset();
   };
 
@@ -213,14 +180,18 @@ const ImportStudentsCSVModalContent = () => {
           return;
         }
 
-        // Fetch existing users and create preview lists
-        let existingUserIdentifiers: (string | number)[] = [];
+        // Determine action for each user based on their current state
+        const usersWithActions: PreviewUser[] = [];
 
         if (detectedMode === "email") {
+          // Email mode: check existing enrollments
+          const emails = processedUsers.map((u) => u.email).filter((e): e is string => !!e);
+
           const { data: existingEnrollmentsData, error: existingEnrollmentsError } = await supabase
             .from("user_roles")
-            .select("users ( email )")
+            .select("users!inner( email )")
             .eq("class_id", Number(course_id))
+            .in("users.email", emails)
             .limit(1000);
 
           if (existingEnrollmentsError) {
@@ -233,13 +204,23 @@ const ImportStudentsCSVModalContent = () => {
             return;
           }
 
-          existingUserIdentifiers =
-            (existingEnrollmentsData?.map((er) => er.users?.email).filter((email) => !!email) as string[]) || [];
+          const enrolledEmails = new Set(
+            (existingEnrollmentsData || []).map((er) => er.users?.email?.toLowerCase()).filter((e): e is string => !!e)
+          );
+
+          processedUsers.forEach((user) => {
+            const emailLower = user.email?.toLowerCase();
+            if (emailLower && enrolledEmails.has(emailLower)) {
+              usersWithActions.push({ ...user, name: user.name!, action: "reactivate" });
+            } else {
+              usersWithActions.push({ ...user, name: user.name!, action: "enroll" });
+            }
+          });
         } else {
-          // SIS ID mode - check for existing users and their enrollment status
+          // SIS ID mode: check users, enrollments, and invitations
           const sisIds = processedUsers.map((user) => user.sis_id).filter((id): id is number => !!id);
 
-          // First, get all users with these SIS IDs
+          // Get existing users with these SIS IDs
           const { data: existingUsers, error: existingUsersError } = await supabase
             .from("users")
             .select("user_id, sis_user_id")
@@ -262,13 +243,13 @@ const ImportStudentsCSVModalContent = () => {
               .map((user) => [user.sis_user_id!, user.user_id])
           );
 
-          // Check which existing users are already enrolled in this class
+          // Check which existing users are already enrolled
           const existingUserIds = Array.from(existingUserMap.values());
           const { data: existingEnrollments, error: enrollmentError } = await supabase
             .from("user_roles")
             .select("user_id")
             .eq("class_id", Number(course_id))
-            .in("user_id", existingUserIds)
+            .in("user_id", existingUserIds.length > 0 ? existingUserIds : ["00000000-0000-0000-0000-000000000000"])
             .limit(1000);
 
           if (enrollmentError) {
@@ -283,7 +264,7 @@ const ImportStudentsCSVModalContent = () => {
 
           const enrolledUserIds = new Set((existingEnrollments || []).map((e) => e.user_id));
 
-          // Check for pending invitations for existing users
+          // Check for pending invitations
           const { data: pendingInvitations, error: invitationError } = await supabase
             .from("invitations")
             .select("sis_user_id")
@@ -304,53 +285,28 @@ const ImportStudentsCSVModalContent = () => {
 
           const pendingInvitationSisIds = new Set((pendingInvitations || []).map((inv) => inv.sis_user_id));
 
-          // Build list of SIS IDs that should be ignored (already enrolled or have pending invitations)
-          existingUserIdentifiers = [];
+          // Categorize each user
+          processedUsers.forEach((user) => {
+            const sisId = user.sis_id!;
+            const existingUserId = existingUserMap.get(sisId);
 
-          // Add SIS IDs for users who are already enrolled or have pending invitations
-          for (const [sisId, userId] of existingUserMap) {
-            if (enrolledUserIds.has(userId) || pendingInvitationSisIds.has(sisId)) {
-              existingUserIdentifiers.push(sisId);
+            if (existingUserId && enrolledUserIds.has(existingUserId)) {
+              // Already enrolled → reactivate
+              usersWithActions.push({ ...user, name: user.name!, action: "reactivate" });
+            } else if (pendingInvitationSisIds.has(sisId)) {
+              // Has pending invitation → skip
+              usersWithActions.push({ ...user, name: user.name!, action: "skip_pending_invitation" });
+            } else if (existingUserId) {
+              // User exists but not enrolled → enroll directly
+              usersWithActions.push({ ...user, name: user.name!, action: "enroll" });
+            } else {
+              // User doesn't exist → create invitation
+              usersWithActions.push({ ...user, name: user.name!, action: "invite" });
             }
-          }
-
-          // Add pending invitation SIS IDs for users that don't exist in the system yet
-          for (const sisId of pendingInvitationSisIds) {
-            if (!existingUserMap.has(sisId)) {
-              existingUserIdentifiers.push(sisId);
-            }
-          }
-
-          // Store the user mapping for later use in enrollment
-          setSisUserMap(existingUserMap);
+          });
         }
 
-        const toAdd: Array<{
-          email?: string;
-          name: string;
-          role: AppRole;
-          sis_id?: number;
-          sis_sync_opt_out?: boolean;
-        }> = [];
-        const toIgnore: Array<{
-          email?: string;
-          name: string;
-          role: AppRole;
-          sis_id?: number;
-          sis_sync_opt_out?: boolean;
-        }> = [];
-
-        processedUsers.forEach((user) => {
-          const identifier = detectedMode === "sis_id" ? user.sis_id : user.email;
-          if (identifier && existingUserIdentifiers.includes(identifier)) {
-            toIgnore.push(user);
-          } else {
-            toAdd.push(user);
-          }
-        });
-
-        setUsersToPreviewAdd(toAdd);
-        setUsersToPreviewIgnore(toIgnore);
+        setPreviewUsers(usersWithActions);
         setIsPreviewMode(true);
       } catch (error) {
         toaster.create({
@@ -372,169 +328,120 @@ const ImportStudentsCSVModalContent = () => {
   };
 
   const handleConfirmImport = async () => {
-    if (usersToPreviewAdd.length === 0) {
+    // Filter to only users that will be processed (not skip_pending_invitation)
+    const usersToProcess = previewUsers.filter((u) => u.action !== "skip_pending_invitation");
+
+    if (usersToProcess.length === 0) {
       toaster.create({
-        title: "No new users to import",
-        description: "There are no new users to enroll.",
+        title: "No users to import",
+        description: "All users already have pending invitations.",
         type: "info"
       });
       setIsPreviewMode(false);
       reset();
-      onClose(); // Or just go back to preview selection? For now, close.
+      onClose();
       return;
     }
 
     setIsConfirmingImport(true);
     try {
-      const results = await Promise.allSettled(
-        usersToPreviewAdd.map(async (user) => {
-          try {
-            if (importMode === "sis_id") {
-              const existingUserId = sisUserMap.get(user.sis_id!);
+      // Prepare enrollment data for RPC
+      const enrollmentData = usersToProcess.map((user) => ({
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        sis_id: user.sis_id,
+        sis_sync_opt_out: user.sis_sync_opt_out ?? false
+      }));
 
-              if (existingUserId) {
-                // User exists in system but not enrolled in class - use RPC function to create enrollment
-                const { error: enrollError } = await supabase.rpc("create_user_role_for_existing_user", {
-                  p_user_id: existingUserId,
-                  p_class_id: Number(course_id),
-                  p_role: user.role as Database["public"]["Enums"]["app_role"],
-                  p_name: user.name,
-                  p_sis_id: user.sis_id
-                });
+      // Call the bulk import RPC
+      // Note: Type assertion needed until migration is applied and types are regenerated
+      type BulkImportResult = {
+        enrolled_directly: number;
+        invitations_created: number;
+        reactivated: number;
+        errors: Array<{ identifier: string | number; error: string }>;
+      };
 
-                if (enrollError) {
-                  console.error("RPC Error details:", enrollError);
-                  toaster.create({
-                    title: "Enrollment Error",
-                    description: `Failed to enroll ${user.name} (SIS ID: ${user.sis_id}): ${enrollError.message}`,
-                    type: "error",
-                    duration: 8000
-                  });
-                  throw new Error(`RPC Error for ${user.name}: ${enrollError.message}`);
-                }
-
-                if (user.sis_sync_opt_out === true) {
-                  const { error: optOutErr } = await supabase
-                    .from("user_roles")
-                    .update({ sis_sync_opt_out: true })
-                    .eq("class_id", Number(course_id))
-                    .eq("user_id", existingUserId);
-                  if (optOutErr) {
-                    throw new Error(`Failed to set sis_sync_opt_out for ${user.name}: ${optOutErr.message}`);
-                  }
-                }
-              } else {
-                // User doesn't exist in system - create invitation
-                await invitationCreate(
-                  {
-                    courseId: Number(course_id),
-                    invitations: [
-                      {
-                        sis_user_id: user.sis_id!,
-                        role: user.role as "instructor" | "grader" | "student",
-                        name: user.name
-                      }
-                    ]
-                  },
-                  supabase
-                );
-              }
-              return { identifier: user.sis_id, name: user.name, status: "fulfilled" };
-            } else {
-              // Use enrollment for email imports
-              await enrollmentAdd(
-                {
-                  courseId: Number(course_id),
-                  email: user.email!,
-                  name: user.name!,
-                  role: user.role,
-                  notify: notifyOnAdd
-                },
-                supabase
-              );
-
-              if (user.sis_sync_opt_out === true) {
-                // Best-effort: set override if the user is now enrolled (email import can also create an invitation)
-                const { data: userRow, error: userErr } = await supabase
-                  .from("users")
-                  .select("user_id")
-                  .eq("email", user.email!)
-                  .maybeSingle();
-                if (userErr) throw new Error(`Failed to look up user by email for opt-out: ${userErr.message}`);
-                if (userRow?.user_id) {
-                  const { error: optOutErr } = await supabase
-                    .from("user_roles")
-                    .update({ sis_sync_opt_out: true })
-                    .eq("class_id", Number(course_id))
-                    .eq("user_id", userRow.user_id);
-                  if (optOutErr) {
-                    throw new Error(`Failed to set sis_sync_opt_out for ${user.name}: ${optOutErr.message}`);
-                  }
-                }
-              }
-              return { identifier: user.email, name: user.name, status: "fulfilled" };
-            }
-          } catch (error) {
-            return {
-              identifier: importMode === "sis_id" ? user.sis_id : user.email,
-              name: user.name,
-              status: "rejected",
-              reason: error instanceof Error ? error.message : "Unknown error"
-            };
-          }
-        })
-      );
-
-      const successfulEnrollments = results.filter((r) => r.status === "fulfilled").length;
-      const failedEnrollments = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
-
-      if (successfulEnrollments > 0) {
-        let description = `Successfully enrolled ${successfulEnrollments} out of ${usersToPreviewAdd.length} selected new users.`;
-        if (failedEnrollments.length > 0) {
-          description += ` ${failedEnrollments.length} failed.`;
-          const firstFewFailedReasons = failedEnrollments
-            .slice(0, 3)
-            .map((f) => `(${f.reason?.toString().substring(0, 100) || "Unknown reason"})`)
-            .join(", ");
-          description += ` Reasons: ${firstFewFailedReasons}`;
-          if (failedEnrollments.length > 3) description += ` and ${failedEnrollments.length - 3} more...`;
+      const { data: result, error: rpcError } = (await supabase.rpc(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        "bulk_csv_import_enrollment" as any,
+        {
+          p_class_id: Number(course_id),
+          p_import_mode: importMode,
+          p_enrollment_data: enrollmentData,
+          p_notify: notifyOnAdd
         }
+      )) as { data: BulkImportResult | null; error: { message: string } | null };
+
+      if (rpcError) {
         toaster.create({
-          title: "Import Confirmed",
-          description: description,
-          type: successfulEnrollments === usersToPreviewAdd.length ? "success" : "warning",
-          duration: failedEnrollments.length > 0 ? 10000 : 5000 // Longer duration if there are errors
+          title: "Import Error",
+          description: rpcError.message,
+          type: "error",
+          duration: 10000
         });
+        return;
+      }
+
+      const typedResult = result as BulkImportResult;
+
+      const totalSuccess = typedResult.enrolled_directly + typedResult.invitations_created + typedResult.reactivated;
+      const totalErrors = typedResult.errors?.length || 0;
+
+      if (totalSuccess > 0) {
+        const parts: string[] = [];
+        if (typedResult.enrolled_directly > 0) {
+          parts.push(`${typedResult.enrolled_directly} enrolled`);
+        }
+        if (typedResult.invitations_created > 0) {
+          parts.push(`${typedResult.invitations_created} invitations created`);
+        }
+        if (typedResult.reactivated > 0) {
+          parts.push(`${typedResult.reactivated} reactivated`);
+        }
+
+        let description = parts.join(", ") + ".";
+
+        if (totalErrors > 0) {
+          const errorSummary = typedResult.errors
+            .slice(0, 3)
+            .map((e) => `${e.identifier}: ${e.error.substring(0, 50)}`)
+            .join("; ");
+          description += ` ${totalErrors} failed: ${errorSummary}`;
+          if (totalErrors > 3) description += ` and ${totalErrors - 3} more...`;
+        }
+
+        toaster.create({
+          title: "Import Complete",
+          description,
+          type: totalErrors === 0 ? "success" : "warning",
+          duration: totalErrors > 0 ? 10000 : 5000
+        });
+
         invalidate({ resource: "user_roles", invalidates: ["all"] });
         invalidate({ resource: "profiles", invalidates: ["all"] });
-      } else {
-        if (usersToPreviewAdd.length > 0) {
-          // All attempted users failed
-          let description = `Failed to enroll all ${failedEnrollments.length} selected new email(s).`;
-          const firstFewFailedReasons = failedEnrollments
-            .slice(0, 3)
-            .map((f) => `(${f.reason?.toString().substring(0, 100) || "Unknown reason"})`)
-            .join(", ");
-          description += ` Reasons: ${firstFewFailedReasons}`;
-          if (failedEnrollments.length > 3) description += ` and ${failedEnrollments.length - 3} more...`;
-
-          toaster.create({
-            title: "Import Failed",
-            description: description,
-            type: "error",
-            duration: 10000 // Longer duration for detailed errors
-          });
-        }
+        invalidate({ resource: "invitations", invalidates: ["all"] });
+      } else if (totalErrors > 0) {
+        const errorSummary = typedResult.errors
+          .slice(0, 3)
+          .map((e) => `${e.identifier}: ${e.error.substring(0, 50)}`)
+          .join("; ");
+        toaster.create({
+          title: "Import Failed",
+          description: `All ${totalErrors} users failed: ${errorSummary}`,
+          type: "error",
+          duration: 10000
+        });
       }
     } catch (error) {
       toaster.create({
-        title: "Error During Final Import",
+        title: "Error During Import",
         description: error instanceof Error ? error.message : "An unexpected error occurred.",
         type: "error"
       });
     } finally {
       setIsConfirmingImport(false);
-      clearSisUserMap();
       reset();
       onClose();
     }
@@ -543,12 +450,17 @@ const ImportStudentsCSVModalContent = () => {
   const handleClose = () => {
     reset();
     setIsPreviewMode(false);
-    setUsersToPreviewAdd([]);
-    setUsersToPreviewIgnore([]);
+    setPreviewUsers([]);
     setImportMode(null);
-    clearSisUserMap();
     onClose();
   };
+
+  // Categorize preview users for display
+  const usersToEnroll = previewUsers.filter((u) => u.action === "enroll");
+  const usersToInvite = previewUsers.filter((u) => u.action === "invite");
+  const usersToReactivate = previewUsers.filter((u) => u.action === "reactivate");
+  const usersToSkip = previewUsers.filter((u) => u.action === "skip_pending_invitation");
+  const usersToProcess = previewUsers.filter((u) => u.action !== "skip_pending_invitation");
 
   return (
     <Dialog.Root
@@ -573,125 +485,139 @@ const ImportStudentsCSVModalContent = () => {
             <Dialog.Body>
               {isPreviewMode ? (
                 <VStack gap={4} align="stretch">
-                  {usersToPreviewAdd.length > 0 && (
-                    <Box>
-                      <Text fontWeight="bold" mb={2}>
-                        Users to be added ({usersToPreviewAdd.length}):
-                      </Text>
-                      {importMode === "email" && (
-                        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                          <input
-                            type="checkbox"
-                            checked={notifyOnAdd}
-                            onChange={(e) => setNotifyOnAdd(e.target.checked)}
-                          />
-                          Notify users they were added to this course
-                        </label>
-                      )}
-                      <VStack
-                        as="ul"
-                        listStyleType="none"
-                        gap={1}
-                        maxHeight="150px"
-                        overflowY="auto"
-                        borderWidth="1px"
-                        borderRadius="md"
-                        p={2}
-                      >
-                        {usersToPreviewAdd.map(
-                          (user: {
-                            email?: string;
-                            name: string;
-                            role: AppRole;
-                            sis_id?: number;
-                            sis_sync_opt_out?: boolean;
-                          }) => {
-                            const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
-                            const key = importMode === "sis_id" ? `sis_${user.sis_id}` : user.email!;
-
-                            let actionText = "";
-                            let actionColor = "blue.600";
-
-                            if (importMode === "sis_id") {
-                              const existingUserId = sisUserMap.get(user.sis_id!);
-                              if (existingUserId) {
-                                actionText = " → Will be enrolled directly";
-                                actionColor = "green.600";
-                              } else {
-                                actionText = " → Will receive invitation";
-                                actionColor = "blue.600";
-                              }
-                            } else {
-                              actionText = " → Will be enrolled directly";
-                              actionColor = "green.600";
-                            }
-
-                            return (
-                              <Text as="li" key={key}>
-                                {user.name} ({identifier}) - Role: {user.role}
-                                {user.sis_sync_opt_out ? (
-                                  <Text as="span" color="orange.600" fontWeight="medium">
-                                    {" "}
-                                    (SIS sync override)
-                                  </Text>
-                                ) : null}
-                                <Text as="span" color={actionColor} fontWeight="medium">
-                                  {actionText}
-                                </Text>
-                              </Text>
-                            );
-                          }
-                        )}
-                      </VStack>
-                    </Box>
+                  {/* Notification option */}
+                  {usersToProcess.length > 0 && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input type="checkbox" checked={notifyOnAdd} onChange={(e) => setNotifyOnAdd(e.target.checked)} />
+                      Notify users they were added to this course
+                    </label>
                   )}
-                  {usersToPreviewIgnore.length > 0 && (
+
+                  {/* Users to be enrolled directly */}
+                  {usersToEnroll.length > 0 && (
                     <Box>
-                      <Text fontWeight="bold" mb={2}>
-                        Users already enrolled or invited (will be ignored - {usersToPreviewIgnore.length}):
+                      <Text fontWeight="bold" mb={2} color="green.600">
+                        Will be enrolled directly ({usersToEnroll.length}):
                       </Text>
                       <VStack
                         as="ul"
                         listStyleType="none"
                         gap={1}
-                        maxHeight="150px"
+                        maxHeight="120px"
                         overflowY="auto"
                         borderWidth="1px"
                         borderRadius="md"
                         p={2}
                       >
-                        {usersToPreviewIgnore.map(
-                          (user: {
-                            email?: string;
-                            name: string;
-                            role: AppRole;
-                            sis_id?: number;
-                            sis_sync_opt_out?: boolean;
-                          }) => {
-                            const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
-                            const key = importMode === "sis_id" ? `sis_ignore_${user.sis_id}` : `ignore_${user.email}`;
-                            return (
-                              <Text as="li" key={key}>
-                                {user.name} ({identifier}) - Role: {user.role}
-                                {user.sis_sync_opt_out ? (
-                                  <Text as="span" color="orange.600" fontWeight="medium">
-                                    {" "}
-                                    (SIS sync override)
-                                  </Text>
-                                ) : null}
-                              </Text>
-                            );
-                          }
-                        )}
+                        {usersToEnroll.map((user) => {
+                          const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
+                          const key = importMode === "sis_id" ? `enroll_${user.sis_id}` : `enroll_${user.email}`;
+                          return (
+                            <Text as="li" key={key} fontSize="sm">
+                              {user.name} ({identifier}) - {user.role}
+                            </Text>
+                          );
+                        })}
                       </VStack>
                     </Box>
                   )}
-                  {usersToPreviewAdd.length === 0 && usersToPreviewIgnore.length > 0 && (
-                    <Text>All users in the CSV are already enrolled in this course or have pending invitations.</Text>
+
+                  {/* Users to receive invitations (SIS ID mode only) */}
+                  {usersToInvite.length > 0 && (
+                    <Box>
+                      <Text fontWeight="bold" mb={2} color="blue.600">
+                        Will receive invitation ({usersToInvite.length}):
+                      </Text>
+                      <VStack
+                        as="ul"
+                        listStyleType="none"
+                        gap={1}
+                        maxHeight="120px"
+                        overflowY="auto"
+                        borderWidth="1px"
+                        borderRadius="md"
+                        p={2}
+                      >
+                        {usersToInvite.map((user) => {
+                          const key = `invite_${user.sis_id}`;
+                          return (
+                            <Text as="li" key={key} fontSize="sm">
+                              {user.name} (SIS ID: {user.sis_id}) - {user.role}
+                            </Text>
+                          );
+                        })}
+                      </VStack>
+                    </Box>
                   )}
-                  {usersToPreviewAdd.length === 0 && usersToPreviewIgnore.length === 0 && (
-                    <Text>No users found in the CSV to process after filtering.</Text> // Should be caught earlier, but as a fallback
+
+                  {/* Users to be reactivated */}
+                  {usersToReactivate.length > 0 && (
+                    <Box>
+                      <Text fontWeight="bold" mb={2} color="orange.600">
+                        Already enrolled - will be reactivated ({usersToReactivate.length}):
+                      </Text>
+                      <Text fontSize="xs" color="fg.subtle" mb={2}>
+                        These users are already enrolled. They will be marked as manually managed (exempt from SIS sync)
+                        and reactivated if disabled.
+                      </Text>
+                      <VStack
+                        as="ul"
+                        listStyleType="none"
+                        gap={1}
+                        maxHeight="120px"
+                        overflowY="auto"
+                        borderWidth="1px"
+                        borderRadius="md"
+                        p={2}
+                      >
+                        {usersToReactivate.map((user) => {
+                          const identifier = importMode === "sis_id" ? `SIS ID: ${user.sis_id}` : user.email;
+                          const key =
+                            importMode === "sis_id" ? `reactivate_${user.sis_id}` : `reactivate_${user.email}`;
+                          return (
+                            <Text as="li" key={key} fontSize="sm">
+                              {user.name} ({identifier}) - {user.role}
+                            </Text>
+                          );
+                        })}
+                      </VStack>
+                    </Box>
                   )}
+
+                  {/* Users with pending invitations - will be skipped */}
+                  {usersToSkip.length > 0 && (
+                    <Box>
+                      <Text fontWeight="bold" mb={2} color="gray.500">
+                        Already have pending invitation - will be skipped ({usersToSkip.length}):
+                      </Text>
+                      <VStack
+                        as="ul"
+                        listStyleType="none"
+                        gap={1}
+                        maxHeight="100px"
+                        overflowY="auto"
+                        borderWidth="1px"
+                        borderRadius="md"
+                        p={2}
+                        opacity={0.7}
+                      >
+                        {usersToSkip.map((user) => {
+                          const key = `skip_${user.sis_id}`;
+                          return (
+                            <Text as="li" key={key} fontSize="sm">
+                              {user.name} (SIS ID: {user.sis_id}) - {user.role}
+                            </Text>
+                          );
+                        })}
+                      </VStack>
+                    </Box>
+                  )}
+
+                  {/* No actionable users */}
+                  {usersToProcess.length === 0 && usersToSkip.length > 0 && (
+                    <Text>All users already have pending invitations.</Text>
+                  )}
+                  {previewUsers.length === 0 && <Text>No users found in the CSV to process.</Text>}
                 </VStack>
               ) : (
                 <VStack gap={4}>
@@ -769,9 +695,9 @@ const ImportStudentsCSVModalContent = () => {
                     colorPalette="green"
                     onClick={handleConfirmImport}
                     loading={isConfirmingImport}
-                    disabled={isConfirmingImport || usersToPreviewAdd.length === 0}
+                    disabled={isConfirmingImport || usersToProcess.length === 0}
                   >
-                    Confirm Import ({usersToPreviewAdd.length})
+                    Confirm Import ({usersToProcess.length})
                   </Button>
                 </>
               ) : (
@@ -800,15 +726,6 @@ const ImportStudentsCSVModalContent = () => {
         </Dialog.Positioner>
       </Portal>
     </Dialog.Root>
-  );
-};
-
-// Wrapper component with provider
-const ImportStudentsCSVModal = () => {
-  return (
-    <SISUserProvider>
-      <ImportStudentsCSVModalContent />
-    </SISUserProvider>
   );
 };
 
