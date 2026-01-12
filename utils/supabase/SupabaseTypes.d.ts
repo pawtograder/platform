@@ -967,105 +967,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260109: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260110: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260111: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260112: {
         Row: {
           class_id: number;
@@ -1199,6 +1100,105 @@ export type Database = {
         Relationships: [];
       };
       audit_20260116: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260117: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260118: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260119: {
         Row: {
           class_id: number;
           created_at: string;
@@ -6160,6 +6160,7 @@ export type Database = {
           description: string | null;
           id: number;
           is_additive: boolean;
+          is_deduction_only: boolean;
           max_checks_per_submission: number | null;
           min_checks_per_submission: number | null;
           name: string;
@@ -6176,6 +6177,7 @@ export type Database = {
           description?: string | null;
           id?: number;
           is_additive: boolean;
+          is_deduction_only?: boolean;
           max_checks_per_submission?: number | null;
           min_checks_per_submission?: number | null;
           name: string;
@@ -6192,6 +6194,7 @@ export type Database = {
           description?: string | null;
           id?: number;
           is_additive?: boolean;
+          is_deduction_only?: boolean;
           max_checks_per_submission?: number | null;
           min_checks_per_submission?: number | null;
           name?: string;
@@ -11120,19 +11123,6 @@ export type Database = {
       sync_lab_section_meetings: {
         Args: { lab_section_id_param: number };
         Returns: undefined;
-      };
-      sync_repo_permissions_for_active_assignments: {
-        Args: { p_days_past_deadline?: number };
-        Returns: {
-          assignment_id: number;
-          assignment_slug: string;
-          class_slug: string;
-          repos_queued: number;
-        }[];
-      };
-      sync_repo_permissions_for_assignment: {
-        Args: { p_assignment_id: number };
-        Returns: number;
       };
       sync_repo_permissions_for_student: {
         Args: { p_class_id: number; p_user_id: string };
