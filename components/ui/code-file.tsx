@@ -1,3 +1,4 @@
+"use client";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   useGraderPseudonymousMode,
@@ -26,39 +27,51 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
-// Dynamic import of starry-night to reduce build memory usage
-// Note: The actual loading happens in useEffect, but we need to avoid static import
-// Derive the type from a type-level import expression to avoid isolatedModules issues
-type StarryNightModule = typeof import("@wooorm/starry-night");
-type StarryNightHighlighter = Awaited<ReturnType<StarryNightModule["createStarryNight"]>>;
+import { useColorMode } from "@/components/ui/color-mode";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import { Element, ElementContent, Properties, Root, RootContent } from "hast";
-import { toJsxRuntime } from "hast-util-to-jsx-runtime";
+import dynamic from "next/dynamic";
 import {
   createContext,
-  Dispatch,
-  SetStateAction,
   useCallback,
   useContext,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
-  type ComponentType
+  forwardRef
 } from "react";
-import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
-import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { FaCheckCircle, FaComments, FaEyeSlash, FaRegEyeSlash, FaTimesCircle, FaTimes } from "react-icons/fa";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
-import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+import { createPortal } from "react-dom";
+import type { Monaco } from "@monaco-editor/react";
+import type { editor } from "monaco-editor";
+import { MonacoRubricContextMenu, RubricContextMenuAction } from "./monaco-rubric-context-menu";
+import { AnnotationCommentDialog } from "./annotation-comment-dialog";
+import {
+  parseJavaFile,
+  buildSymbolIndex,
+  resolveType,
+  findReferences,
+  type SymbolIndex,
+  type JavaFileSymbols,
+  type JavaSymbol
+} from "@/lib/java-language-service";
+
+// Dynamic import of Monaco Editor to reduce build memory usage
+const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
+  ssr: false,
+  loading: () => <Skeleton />
+});
 
 export type RubricCheckSubOption = {
   label: string;
@@ -100,308 +113,1423 @@ function useCodeLineCommentContext() {
   return context;
 }
 
-export type LineActionPopupDynamicProps = {
-  lineNumber: number;
-  top: number;
-  left: number;
-  visible: boolean;
-  onClose?: () => void;
-  close: () => void;
-  mode: "marking" | "select";
+
+// Map file extensions to Monaco language IDs
+function getMonacoLanguage(fileName: string): string {
+  const extension = fileName.split(".").pop()?.toLowerCase() || "";
+  
+  const languageMap: Record<string, string> = {
+    // JavaScript/TypeScript
+    js: "javascript",
+    jsx: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    // Web
+    html: "html",
+    htm: "html",
+    css: "css",
+    scss: "scss",
+    sass: "sass",
+    less: "less",
+    xml: "xml",
+    svg: "xml",
+    vue: "vue",
+    svelte: "svelte",
+    // Programming languages
+    py: "python",
+    java: "java",
+    cpp: "cpp",
+    cxx: "cpp",
+    cc: "cpp",
+    c: "c",
+    h: "c",
+    hpp: "cpp",
+    cs: "csharp",
+    php: "php",
+    rb: "ruby",
+    go: "go",
+    rs: "rust",
+    kt: "kotlin",
+    swift: "swift",
+    scala: "scala",
+    clj: "clojure",
+    hs: "haskell",
+    ml: "ocaml",
+    fs: "fsharp",
+    elm: "elm",
+    dart: "dart",
+    lua: "lua",
+    perl: "perl",
+    pl: "perl",
+    r: "r",
+    m: "objective-c",
+    vb: "vb",
+    pas: "pascal",
+    ada: "ada",
+    asm: "asm",
+    s: "asm",
+    // Shell
+    sh: "shell",
+    bash: "shell",
+    zsh: "shell",
+    fish: "shell",
+    bat: "bat",
+    ps1: "powershell",
+    // Data
+    json: "json",
+    yaml: "yaml",
+    yml: "yaml",
+    toml: "toml",
+    ini: "ini",
+    cfg: "ini",
+    conf: "ini",
+    properties: "properties",
+    env: "shell",
+    // Documentation
+    md: "markdown",
+    rst: "restructuredtext",
+    tex: "latex",
+    // Database
+    sql: "sql",
+    cql: "sql",
+    // Config
+    dockerfile: "dockerfile",
+    makefile: "makefile",
+    cmake: "cmake",
+    gradle: "groovy",
+    // Other
+    diff: "diff",
+    patch: "diff",
+    log: "plaintext",
+    txt: "plaintext"
+  };
+
+  return languageMap[extension] || "plaintext";
+}
+
+export type CodeFileHandle = {
+  scrollToLine: (lineNumber: number) => void;
 };
 
-type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
-  file: SubmissionFile;
+export type CodeFileProps = {
+  file?: SubmissionFile;
+  files?: SubmissionFile[];
+  activeFileId?: number | null;
+  onFileSelect?: (fileId: number) => void;
+  openFileIds?: number[];
+  onFileClose?: (fileId: number) => void;
 };
 
-export default function CodeFile({ file }: { file: SubmissionFile }) {
-  const submission = useSubmission();
-  const submissionReview = useActiveSubmissionReview();
-  const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
+const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>(
+  ({ file: singleFile, files, activeFileId, onFileSelect, openFileIds, onFileClose }, ref) => {
+    const submission = useSubmission();
+    const submissionReview = useActiveSubmissionReview();
+    const showCommentsFeature = true;
+    const { colorMode } = useColorMode();
 
-  const [starryNight, setStarryNight] = useState<StarryNightHighlighter | undefined>(undefined);
-  const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
-    lineNumber: 0,
-    top: 0,
-    left: 0,
-    visible: false,
-    mode: "select",
-    close: () => {}
-  }));
+    // Support both single file (legacy) and multi-file (new) modes
+    const allFiles = useMemo(() => files || (singleFile ? [singleFile] : []), [files, singleFile]);
+    
+    // Determine which files are "open" (in tabs)
+    const openFiles = useMemo(() => {
+      if (openFileIds && openFileIds.length > 0) {
+        return allFiles.filter((f) => openFileIds.includes(f.id));
+      }
+      // Default: show all files if no openFileIds specified
+      return allFiles;
+    }, [allFiles, openFileIds]);
+    
+    const currentFileId = activeFileId ?? (singleFile?.id ?? allFiles[0]?.id);
+    const currentFile = useMemo(() => openFiles.find((f) => f.id === currentFileId) || openFiles[0], [openFiles, currentFileId]);
 
-  const [expanded, setExpanded] = useState<number[]>([]);
+    const submissionController = useSubmissionController();
+    const review = useActiveSubmissionReview();
+    const { private_profile_id, public_profile_id } = useClassProfiles();
+    const isGraderOrInstructor = useIsGraderOrInstructor();
+    const graderPseudonymousMode = useGraderPseudonymousMode();
+    const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
+    
+    // State for comment dialog
+    const [commentDialogState, setCommentDialogState] = useState<{
+      isOpen: boolean;
+      startLine: number;
+      endLine: number;
+      rubricCheck?: RubricCheck;
+      criteria?: RubricCriteria;
+      subOptionComment?: string;
+      subOptionPoints?: number;
+      savedScrollPosition?: { topVisibleLine?: number; scrollTop?: number; scrollLeft: number } | null;
+    }>({
+      isOpen: false,
+      startLine: 1,
+      endLine: 1
+    });
 
-  const onCommentsEnter = useCallback(
-    (newlyEnteredComments: SubmissionFileComment[]) => {
-      if (showCommentsFeature) {
-        setExpanded((currentExpanded) => {
-          const linesFromNewComments = newlyEnteredComments.map((comment) => comment.line);
-          const linesToAdd = linesFromNewComments.filter((line) => !currentExpanded.includes(line));
-          if (linesToAdd.length > 0) {
-            return [...currentExpanded, ...linesToAdd];
+    // State for pending scroll restoration
+    const [pendingScrollRestore, setPendingScrollRestore] = useState<{ topVisibleLine?: number; scrollTop?: number; scrollLeft: number } | null>(null);
+
+    // Save scroll position helper - saves the top visible line instead of absolute scroll
+    const saveScrollPosition = useCallback(() => {
+      const editor = editorRef.current;
+      if (editor) {
+        const visibleRanges = editor.getVisibleRanges();
+        if (visibleRanges && visibleRanges.length > 0) {
+          // Save the top visible line number - this is more stable when content changes
+          return {
+            topVisibleLine: visibleRanges[0].startLineNumber,
+            scrollLeft: editor.getScrollLeft()
+          };
+        }
+        // Fallback to scroll position if we can't get visible ranges
+        return {
+          scrollTop: editor.getScrollTop(),
+          scrollLeft: editor.getScrollLeft()
+        };
+      }
+      return null;
+    }, []);
+
+    // Restore scroll position helper - restores to show the same top line
+    const restoreScrollPosition = useCallback((position: { topVisibleLine?: number; scrollTop?: number; scrollLeft: number } | null) => {
+      if (!position) return;
+      const editor = editorRef.current;
+      if (editor) {
+        if (position.topVisibleLine) {
+          // Restore by revealing the same line at the top - this is more stable
+          editor.revealLineInTop(position.topVisibleLine);
+        } else if (position.scrollTop !== undefined) {
+          // Fallback to absolute scroll position
+          editor.setScrollTop(position.scrollTop);
+        }
+        editor.setScrollLeft(position.scrollLeft);
+      }
+    }, []);
+
+    // Handle context menu check selection
+    const handleSelectCheck = useCallback(
+      async (action: RubricContextMenuAction, startLine: number, endLine: number) => {
+        if (!action.check || !currentFile || !submission) return;
+
+        const check = action.check;
+        const criteria = action.criteria;
+        const subOption = action.subOption;
+
+        // Save scroll position before opening dialog
+        const savedScrollPosition = saveScrollPosition();
+        if (savedScrollPosition) {
+          setPendingScrollRestore(savedScrollPosition);
+        }
+
+        // If comment is required, show dialog immediately
+        if (check.is_comment_required) {
+          setCommentDialogState({
+            isOpen: true,
+            startLine,
+            endLine,
+            rubricCheck: check,
+            criteria,
+            subOptionComment: subOption?.label,
+            subOptionPoints: subOption?.points
+          });
+          return;
+        }
+
+        // If comment is not required, show dialog (this should only be called from "Apply with comment...")
+        setCommentDialogState({
+          isOpen: true,
+          startLine,
+          endLine,
+          rubricCheck: check,
+          criteria,
+          subOptionComment: subOption?.label,
+          subOptionPoints: subOption?.points
+        });
+      },
+      [currentFile, submission, saveScrollPosition]
+    );
+
+    // Handle immediate apply (without comment)
+    const handleImmediateApply = useCallback(
+      async (check: RubricCheck, criteria: RubricCriteria | undefined, startLine: number, endLine: number, subOption?: RubricCheckSubOption) => {
+        if (!currentFile || !submission || !submissionReview?.id) {
+          toaster.error({
+            title: "Error saving annotation",
+            description: "Submission review ID is missing, cannot save rubric annotation."
+          });
+          return;
+        }
+
+        // Save scroll position before creating comment
+        const savedPosition = saveScrollPosition();
+
+        const points = subOption?.points ?? check.points ?? null;
+        let comment = "";
+        if (subOption) {
+          comment = subOption.label;
+        }
+
+        const values = {
+          comment,
+          line: startLine,
+          rubric_check_id: check.id,
+          class_id: currentFile.class_id!,
+          submission_file_id: currentFile.id,
+          submission_id: submission.id,
+          author: authorProfileId!,
+          released: review?.released ?? true,
+          points,
+          submission_review_id: submissionReview.id,
+          eventually_visible: check.student_visibility !== "never",
+          regrade_request_id: null
+        };
+
+        try {
+          await submissionController.submission_file_comments.create(
+            values as Omit<
+              SubmissionFileComment,
+              "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by"
+            >
+          );
+          
+          // Set pending scroll restoration - will be restored when view zones update
+          if (savedPosition) {
+            setPendingScrollRestore(savedPosition);
           }
-          return currentExpanded; // Return current state if no change
+          
+          toaster.success({ title: "Annotation added" });
+        } catch (err) {
+          toaster.error({
+            title: "Error saving annotation",
+            description: err instanceof Error ? err.message : "Unknown error"
+          });
+        }
+      },
+      [currentFile, submission, submissionReview, authorProfileId, review, submissionController, saveScrollPosition]
+    );
+
+    // Handle immediate apply (without comment dialog) - wrapper for context menu
+    const handleImmediateApplyFromMenu = useCallback(
+      async (action: RubricContextMenuAction, startLine: number, endLine: number) => {
+        if (!action.check) return;
+        await handleImmediateApply(
+          action.check,
+          action.criteria,
+          startLine,
+          endLine,
+          action.subOption
+        );
+      },
+      [handleImmediateApply]
+    );
+
+    // Handle add comment action
+    const handleAddComment = useCallback((startLine: number, endLine: number) => {
+      // Save scroll position before opening dialog
+      const savedScrollPosition = saveScrollPosition();
+      if (savedScrollPosition) {
+        setPendingScrollRestore(savedScrollPosition);
+      }
+      setCommentDialogState({
+        isOpen: true,
+        startLine,
+        endLine
+      });
+    }, [saveScrollPosition]);
+
+    const [expanded, setExpanded] = useState<number[]>([]);
+    const [viewZoneNodes, setViewZoneNodes] = useState<Map<number, HTMLElement>>(new Map());
+    const viewZoneNodesRef = useRef<Map<number, HTMLElement>>(new Map());
+    const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+    const monacoRef = useRef<Monaco | null>(null);
+    const modelsRef = useRef<Map<number, editor.ITextModel>>(new Map());
+    const decorationsRef = useRef<Map<number, string[]>>(new Map());
+    const viewZonesRef = useRef<Map<number, string>>(new Map());
+    const viewZoneHeightsRef = useRef<Map<number, number>>(new Map());
+    const highlightDecorationRef = useRef<string | null>(null);
+    const symbolIndexRef = useRef<SymbolIndex | null>(null);
+    const fileSymbolsRef = useRef<Map<number, JavaFileSymbols>>(new Map());
+    const providerDisposablesRef = useRef<Array<{ dispose: () => void }>>([]);
+    
+    // Sync viewZoneNodes state to ref for use in callbacks
+    useEffect(() => {
+      viewZoneNodesRef.current = viewZoneNodes;
+    }, [viewZoneNodes]);
+    
+    // Track pending height updates to batch them
+    const pendingHeightUpdatesRef = useRef<Map<number, number>>(new Map());
+    const heightUpdateRafRef = useRef<number | null>(null);
+    const isScrollingRef = useRef(false);
+    
+    // Function to update a ViewZone height (debounced and batched)
+    const updateViewZoneHeight = useCallback((lineNumber: number, height: number) => {
+      if (!editorRef.current || isScrollingRef.current) {
+        // Queue update for after scroll
+        pendingHeightUpdatesRef.current.set(lineNumber, height);
+        return;
+      }
+      
+      const zoneId = viewZonesRef.current.get(lineNumber);
+      if (!zoneId) return;
+      
+      const currentHeight = viewZoneHeightsRef.current.get(lineNumber) || 0;
+      // Only update if height changed significantly (avoid unnecessary updates)
+      if (Math.abs(height - currentHeight) > 10) {
+        const domNode = viewZoneNodesRef.current.get(lineNumber);
+        if (!domNode) return;
+        
+        // Cancel any pending RAF
+        if (heightUpdateRafRef.current !== null) {
+          cancelAnimationFrame(heightUpdateRafRef.current);
+        }
+        
+        // Batch updates using requestAnimationFrame
+        heightUpdateRafRef.current = requestAnimationFrame(() => {
+          if (!editorRef.current) return;
+          
+          editorRef.current.changeViewZones((accessor) => {
+            try {
+              // Remove old zone and add new one with updated height
+              accessor.removeZone(zoneId);
+              const newZoneId = accessor.addZone({
+                afterLineNumber: lineNumber,
+                heightInPx: height,
+                domNode
+              });
+              viewZonesRef.current.set(lineNumber, newZoneId);
+              viewZoneHeightsRef.current.set(lineNumber, height);
+            } catch {
+              // Zone may have been removed
+            }
+          });
+          
+          heightUpdateRafRef.current = null;
         });
       }
-    },
-    [showCommentsFeature]
-  );
-
-  const _comments = useSubmissionFileComments({
-    file_id: file.id,
-    onEnter: onCommentsEnter
-  });
-  const comments = useMemo(() => {
-    return _comments.filter((comment) => expanded.includes(comment.line));
-  }, [_comments, expanded]);
-
-  useEffect(() => {
-    async function highlight() {
-      // Dynamic import to reduce build memory usage
-      const starryNightModule = await import("@wooorm/starry-night");
-      // Load CSS styles dynamically - ignore TypeScript error as this is a CSS import
-      // @ts-expect-error - CSS imports don't have TypeScript declarations
-      await import("@wooorm/starry-night/style/both").catch(() => {
-        // Ignore import errors for CSS - styles may already be loaded
-      });
-      const highlighter = await starryNightModule.createStarryNight(starryNightModule.common);
-      setStarryNight(highlighter);
-    }
-    highlight();
-  }, []);
-  if (!starryNight || !file) {
-    return <Skeleton />;
-  }
-  const tree = starryNight.highlight(file.contents, "source.java");
-  starryNightGutter(tree, setLineActionPopupProps);
-  const reactNode = toJsxRuntime(tree, {
-    Fragment,
-    jsx,
-    jsxs,
-    components: {
-      CodeLineComments: CodeLineComments,
-      LineNumber: LineNumber
-    } as Record<string, ComponentType<{ lineNumber: number }>>
-  });
-  const commentsCSS = showCommentsFeature
-    ? {
-        "& .source-code-line": {
-          cursor: "pointer",
-          display: "flex",
-          flexDirection: "row",
-          "&:hover": {
-            bg: "yellow.subtle",
-            width: "100%",
-            cursor: "cell"
+    }, []);
+    
+    // Handle scroll events to pause updates during scrolling
+    useEffect(() => {
+      if (!editorRef.current) return;
+      
+      let scrollTimeout: NodeJS.Timeout;
+      const handleScroll = () => {
+        isScrollingRef.current = true;
+        clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+          isScrollingRef.current = false;
+          // Process any pending updates after scroll ends
+          if (pendingHeightUpdatesRef.current.size > 0 && editorRef.current) {
+            pendingHeightUpdatesRef.current.forEach((height, lineNumber) => {
+              updateViewZoneHeight(lineNumber, height);
+            });
+            pendingHeightUpdatesRef.current.clear();
           }
-        },
-        "& .selected": {
-          bg: "yellow.subtle"
-        }
-      }
-    : {
-        "& .source-code-line": {
-          display: "flex",
-          flexDirection: "row"
+        }, 150);
+      };
+      
+      const editorDom = editorRef.current.getContainerDomNode();
+      editorDom.addEventListener("scroll", handleScroll, { passive: true });
+      
+      return () => {
+        editorDom.removeEventListener("scroll", handleScroll);
+        clearTimeout(scrollTimeout);
+        if (heightUpdateRafRef.current !== null) {
+          cancelAnimationFrame(heightUpdateRafRef.current);
         }
       };
-  return (
-    <Box
-      border="1px solid"
-      borderColor="border.emphasized"
-      p={0}
-      m={2}
-      w="100%"
-      css={{
-        ...commentsCSS,
-        "& .line-number": {
-          width: "40px",
-          textAlign: "right",
-          padding: "0 5px",
-          marginRight: "10px",
-          borderRight: "1px solid #ccc"
-        },
-        "& .source-code-line-container": {
-          width: "100%"
-        },
-        "& .source-code-line-content": {},
-        "& pre": {
-          whiteSpace: "pre-wrap",
-          wordWrap: "break-word"
-        }
-      }}
-    >
-      <Flex
-        w="100%"
-        bg="bg.subtle"
-        p={2}
-        borderBottom="1px solid"
-        borderColor="border.emphasized"
-        alignItems="center"
-        justifyContent="space-between"
-      >
-        <Text fontSize="xs" color="text.subtle">
-          {file.name}
-        </Text>
-        <HStack>
-          {showCommentsFeature && comments.length > 0 && (
-            <>
-              <Text fontSize="xs" color="text.subtle">
-                {comments.length} {comments.length === 1 ? "comment" : "comments"}
-              </Text>
+    }, [updateViewZoneHeight]);
 
-              <Tooltip
-                openDelay={300}
-                closeDelay={100}
-                content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
-              >
-                <Button
-                  variant={expanded.length > 0 ? "solid" : "outline"}
-                  size="xs"
-                  p={0}
-                  colorPalette="teal"
-                  onClick={() => {
-                    setExpanded((prev) => {
-                      if (prev.length === 0) {
-                        return comments.map((comment) => comment.line);
-                      }
-                      return [];
-                    });
-                  }}
-                >
-                  <Icon as={FaComments} m={0} />
-                </Button>
-              </Tooltip>
-            </>
-          )}
-        </HStack>
-      </Flex>
-      {/* Pass dynamic props from state, and other props directly */}
-      <LineActionPopup {...lineActionPopupProps} file={file} />
-      <CodeLineCommentContext.Provider
-        value={{
-          submission,
-          comments,
-          file,
-          expanded,
-          open: (line: number) => {
-            setExpanded((prev) => {
-              if (prev.includes(line)) {
-                return prev;
+    // Expose scrollToLine via imperative handle
+    useImperativeHandle(ref, () => ({
+      scrollToLine: (lineNumber: number) => {
+        if (editorRef.current && lineNumber > 0) {
+          editorRef.current.revealLineInCenter(lineNumber);
+          
+          // Add highlight decoration
+          if (monacoRef.current && editorRef.current) {
+            const model = editorRef.current.getModel();
+            if (model) {
+              const decorations = [
+                {
+                  range: new monacoRef.current.Range(lineNumber, 1, lineNumber, 1),
+                  options: {
+                    isWholeLine: true,
+                    className: "monaco-line-highlight",
+                    glyphMarginClassName: "monaco-line-highlight-glyph"
+                  }
+                }
+              ];
+              
+              // Remove previous highlight
+              if (highlightDecorationRef.current) {
+                editorRef.current.deltaDecorations([highlightDecorationRef.current], []);
               }
-              return [...prev, line];
+              
+              const decorationIds = editorRef.current.deltaDecorations([], decorations);
+              highlightDecorationRef.current = decorationIds[0];
+              
+              // Fade out after 2 seconds
+              setTimeout(() => {
+                if (editorRef.current && highlightDecorationRef.current) {
+                  editorRef.current.deltaDecorations([highlightDecorationRef.current], []);
+                  highlightDecorationRef.current = null;
+                }
+              }, 2000);
+            }
+          }
+        }
+      }
+    }));
+
+    const onCommentsEnter = useCallback(
+      (newlyEnteredComments: SubmissionFileComment[]) => {
+        if (showCommentsFeature && currentFile) {
+          setExpanded((currentExpanded) => {
+            const linesFromNewComments = newlyEnteredComments.map((comment) => comment.line);
+            const linesToAdd = linesFromNewComments.filter((line) => !currentExpanded.includes(line));
+            if (linesToAdd.length > 0) {
+              return [...currentExpanded, ...linesToAdd];
+            }
+            return currentExpanded;
+          });
+          
+        }
+      },
+      [showCommentsFeature, currentFile]
+    );
+
+    const _comments = useSubmissionFileComments({
+      file_id: currentFile?.id,
+      onEnter: onCommentsEnter
+    });
+    
+    // Comments are filtered by expanded state in the component that uses them
+
+    // Get all comments for current file (for glyph decorations)
+    const allFileComments = useMemo(() => {
+      if (!currentFile) return [];
+      return _comments.filter((comment) => comment.submission_file_id === currentFile.id);
+    }, [_comments, currentFile]);
+
+    // Group comments by line
+    const commentsByLine = useMemo(() => {
+      const grouped = new Map<number, SubmissionFileComment[]>();
+      allFileComments.forEach((comment) => {
+        const existing = grouped.get(comment.line) || [];
+        grouped.set(comment.line, [...existing, comment]);
+      });
+      return grouped;
+    }, [allFileComments]);
+
+    // Update glyph decorations when comments or expanded state changes
+    const updateGlyphDecorations = useCallback(
+      (editor: editor.IStandaloneCodeEditor, monaco: Monaco, commentsByLineMap: Map<number, SubmissionFileComment[]>) => {
+        if (!currentFile) return;
+
+        const fileId = currentFile.id;
+        const existingDecorations = decorationsRef.current.get(fileId) || [];
+        
+        const newDecorations: editor.IModelDeltaDecoration[] = [];
+        commentsByLineMap.forEach((lineComments, lineNumber) => {
+          if (lineComments.length > 0) {
+            newDecorations.push({
+              range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+              options: {
+                glyphMarginClassName: "monaco-comment-glyph",
+                glyphMarginHoverMessage: { value: `${lineComments.length} comment${lineComments.length > 1 ? "s" : ""}` },
+                minimap: {
+                  color: "#4A90E2",
+                  position: monaco.editor.MinimapPosition.Inline
+                }
+              }
             });
+          }
+        });
+
+        const decorationIds = editor.deltaDecorations(existingDecorations, newDecorations);
+        decorationsRef.current.set(fileId, decorationIds);
+      },
+      [currentFile]
+    );
+
+    // Update view zones for inline comments
+    const updateViewZones = useCallback(
+      (
+        editor: editor.IStandaloneCodeEditor,
+        monaco: Monaco,
+        commentsByLineMap: Map<number, SubmissionFileComment[]>,
+        expandedLines: number[],
+        file: SubmissionFile | undefined
+      ) => {
+        if (!file || !editorRef.current) return;
+
+        const fileId = file.id;
+        
+        // Remove all existing view zones for this file
+        const existingZoneIds = Array.from(viewZonesRef.current.entries())
+          .filter(([, zoneId]) => zoneId !== undefined)
+          .map(([lineNum, zoneId]) => ({ lineNum, zoneId: zoneId! }));
+        
+        editor.changeViewZones((accessor) => {
+          existingZoneIds.forEach(({ zoneId }) => {
+            try {
+              accessor.removeZone(zoneId);
+            } catch {
+              // Zone may have already been removed
+            }
+          });
+        });
+        
+        // Clear refs and state
+        viewZonesRef.current.clear();
+        viewZoneHeightsRef.current.clear();
+        viewZoneNodesRef.current.clear();
+        setViewZoneNodes(new Map());
+
+        // Add new view zones for expanded comments
+        const newViewZoneNodes = new Map<number, HTMLElement>();
+        expandedLines.forEach((lineNumber) => {
+          const lineComments = commentsByLineMap.get(lineNumber);
+          if (lineComments && lineComments.length > 0) {
+            editor.changeViewZones((accessor) => {
+              const domNode = document.createElement("div");
+              domNode.id = `comment-zone-${fileId}-${lineNumber}`;
+              domNode.style.width = "100%";
+              domNode.style.minHeight = "100px"; // Initial minimum height
+              newViewZoneNodes.set(lineNumber, domNode);
+
+              // Start with a reasonable initial height, will be updated after content renders
+              const initialHeight = 300;
+              const zoneId = accessor.addZone({
+                afterLineNumber: lineNumber,
+                heightInPx: initialHeight,
+                domNode
+              });
+              viewZonesRef.current.set(lineNumber, zoneId);
+              viewZoneHeightsRef.current.set(lineNumber, initialHeight);
+            });
+          }
+        });
+        viewZoneNodesRef.current = newViewZoneNodes;
+        setViewZoneNodes(newViewZoneNodes);
+      },
+      []
+    );
+
+    // Parse Java files and build symbol index
+    useEffect(() => {
+      const javaFiles = allFiles.filter((f) => f.name.endsWith(".java"));
+      if (javaFiles.length === 0) return;
+
+      const parsedSymbols: JavaFileSymbols[] = [];
+      for (const file of javaFiles) {
+        try {
+          const parsed = parseJavaFile(file.contents, file.id, file.name);
+          parsedSymbols.push(parsed);
+          fileSymbolsRef.current.set(file.id, parsed);
+        } catch (error) {
+          console.warn(`Failed to parse Java file ${file.name}:`, error);
+        }
+      }
+
+      if (parsedSymbols.length > 0) {
+        symbolIndexRef.current = buildSymbolIndex(parsedSymbols);
+      }
+    }, [allFiles]);
+
+    // Handle Monaco editor mount
+    const handleEditorDidMount = useCallback(
+      (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
+        editorRef.current = editor;
+        monacoRef.current = monaco;
+
+        // Create models for all files
+        allFiles.forEach((f) => {
+          if (!modelsRef.current.has(f.id)) {
+            const language = getMonacoLanguage(f.name);
+            const model = monaco.editor.createModel(f.contents, language, monaco.Uri.parse(`file:///${f.name}`));
+            modelsRef.current.set(f.id, model);
+          }
+        });
+
+        // Set initial model
+        if (currentFile) {
+          const model = modelsRef.current.get(currentFile.id);
+          if (model) {
+            editor.setModel(model);
+          }
+        }
+
+        // Clean up old providers
+        providerDisposablesRef.current.forEach((disposable) => disposable.dispose());
+        providerDisposablesRef.current = [];
+
+        // Register Java language providers if we have Java files
+        const hasJavaFiles = allFiles.some((f) => f.name.endsWith(".java"));
+        if (hasJavaFiles) {
+          // Register definition provider
+          const definitionProvider = monaco.languages.registerDefinitionProvider("java", {
+            provideDefinition: (model, position) => {
+              const word = model.getWordAtPosition(position);
+              if (!word || !symbolIndexRef.current) return { definitions: [] };
+
+              const fileName = model.uri.path.replace("file:///", "");
+              const currentFile = allFiles.find((f) => f.name === fileName);
+              if (!currentFile) return { definitions: [] };
+
+              const currentFileData = fileSymbolsRef.current.get(currentFile.id);
+              if (!currentFileData) return { definitions: [] };
+
+              // Try to resolve the type
+              const resolved = resolveType(word.word, currentFileData, symbolIndexRef.current);
+              if (resolved) {
+                const targetFile = allFiles.find((f) => f.id === resolved.fileId);
+                if (targetFile) {
+                  const targetModel = modelsRef.current.get(targetFile.id);
+                  if (targetModel) {
+                    return {
+                      definitions: [
+                        {
+                          uri: targetModel.uri,
+                          range: {
+                            startLineNumber: resolved.line,
+                            startColumn: resolved.column,
+                            endLineNumber: resolved.line,
+                            endColumn: resolved.column + resolved.name.length
+                          }
+                        }
+                      ]
+                    };
+                  }
+                }
+              }
+
+              // Fallback: find symbol by name
+              const symbols = symbolIndexRef.current.byName.get(word.word) || [];
+              if (symbols.length > 0) {
+                const symbol = symbols[0];
+                const targetFile = allFiles.find((f) => f.id === symbol.fileId);
+                if (targetFile) {
+                  const targetModel = modelsRef.current.get(targetFile.id);
+                  if (targetModel) {
+                    return {
+                      definitions: [
+                        {
+                          uri: targetModel.uri,
+                          range: {
+                            startLineNumber: symbol.line,
+                            startColumn: symbol.column,
+                            endLineNumber: symbol.line,
+                            endColumn: symbol.column + symbol.name.length
+                          }
+                        }
+                      ]
+                    };
+                  }
+                }
+              }
+
+              return { definitions: [] };
+            }
+          });
+          providerDisposablesRef.current.push(definitionProvider);
+
+          // Register reference provider
+          const referenceProvider = monaco.languages.registerReferenceProvider("java", {
+            provideReferences: (model, position) => {
+              const word = model.getWordAtPosition(position);
+              if (!word || !symbolIndexRef.current) return { references: [] };
+
+              const symbols = symbolIndexRef.current.byName.get(word.word) || [];
+              if (symbols.length === 0) return { references: [] };
+
+              const symbol = symbols[0];
+              const references = findReferences(
+                symbol,
+                symbolIndexRef.current,
+                allFiles.map((f) => ({ id: f.id, contents: f.contents }))
+              );
+
+              return {
+                references: references
+                  .map((ref) => {
+                    const targetFile = allFiles.find((f) => f.id === ref.fileId);
+                    if (!targetFile) return null;
+                    const targetModel = modelsRef.current.get(targetFile.id);
+                    if (!targetModel) return null;
+
+                    return {
+                      uri: targetModel.uri,
+                      range: {
+                        startLineNumber: ref.line,
+                        startColumn: ref.column,
+                        endLineNumber: ref.line,
+                        endColumn: ref.column + word.word.length
+                      }
+                    };
+                  })
+                  .filter((ref): ref is NonNullable<typeof ref> => ref !== null)
+              };
+            }
+          });
+          providerDisposablesRef.current.push(referenceProvider);
+
+          // Register document symbol provider for "Go to Symbol" (Cmd+Shift+O)
+          const documentSymbolProvider = monaco.languages.registerDocumentSymbolProvider("java", {
+            provideDocumentSymbols: (model) => {
+              // Early return if model or URI is invalid
+              if (!model || !model.uri) {
+                return [];
+              }
+
+              // Validate URI has required properties before proceeding
+              let uri = model.uri;
+              if (!uri || typeof uri.toString !== "function") {
+                return [];
+              }
+
+              // Ensure URI has a scheme property - Monaco requires this
+              // If scheme is missing, recreate URI with explicit scheme
+              if (uri.scheme === undefined || uri.scheme === null) {
+                try {
+                  const uriString = uri.toString();
+                  if (uriString && uriString.startsWith("file://")) {
+                    // Extract path and recreate URI with explicit scheme
+                    const path = uri.path || uri.fsPath || uriString.replace(/^file:\/\/\/+/, "");
+                    uri = monaco.Uri.parse(`file:///${path}`);
+                    // Verify new URI has scheme
+                    if (uri.scheme !== "file") {
+                      return [];
+                    }
+                  } else {
+                    return [];
+                  }
+                } catch {
+                  return [];
+                }
+              } else if (uri.scheme !== "file") {
+                return [];
+              }
+
+              try {
+                // Extract filename from URI - handle both path and fsPath
+                const uriPath = uri.path || uri.fsPath || uri.toString().replace(/^file:\/\/\/+/, "");
+                const fileName = uriPath.replace(/^\/+/, "").replace(/^file:\/\/\/+/, "");
+                
+                const currentFile = allFiles.find((f) => {
+                  // Try exact match first
+                  if (f.name === fileName) return true;
+                  // Try matching just the filename part
+                  const fileBaseName = f.name.split("/").pop();
+                  const uriBaseName = fileName.split("/").pop();
+                  return fileBaseName === uriBaseName;
+                });
+                
+                if (!currentFile) {
+                  return [];
+                }
+
+                const fileSymbols = fileSymbolsRef.current.get(currentFile.id);
+                if (!fileSymbols || !fileSymbols.symbols || !Array.isArray(fileSymbols.symbols)) {
+                  return [];
+                }
+
+                // Final check: ensure URI has scheme property before creating symbols
+                if (uri.scheme !== "file") {
+                  return [];
+                }
+
+                const symbols = fileSymbols.symbols
+                  .filter((symbol) => symbol && symbol.name && symbol.line)
+                  .map((symbol) => {
+                    try {
+                      const kindMap: Record<JavaSymbol["kind"], monaco.languages.SymbolKind> = {
+                        class: monaco.languages.SymbolKind.Class,
+                        interface: monaco.languages.SymbolKind.Interface,
+                        enum: monaco.languages.SymbolKind.Enum,
+                        method: monaco.languages.SymbolKind.Method,
+                        constructor: monaco.languages.SymbolKind.Constructor,
+                        field: monaco.languages.SymbolKind.Field
+                      };
+
+                      const kind = kindMap[symbol.kind] || monaco.languages.SymbolKind.Variable;
+                      const detail = symbol.returnType
+                        ? symbol.returnType
+                        : symbol.parameters && Array.isArray(symbol.parameters) && symbol.parameters.length > 0
+                          ? `(${symbol.parameters.join(", ")})`
+                          : undefined;
+
+                      // Critical: verify URI has scheme before creating location
+                      if (!uri || uri.scheme !== "file") {
+                        return null;
+                      }
+
+                      const location = {
+                        uri: uri,
+                        range: {
+                          startLineNumber: Math.max(1, symbol.line || 1),
+                          startColumn: Math.max(1, symbol.column || 1),
+                          endLineNumber: Math.max(1, symbol.line || 1),
+                          endColumn: Math.max(1, (symbol.column || 1) + (symbol.name?.length || 0))
+                        }
+                      };
+
+                      // Final validation: ensure location.uri.scheme exists
+                      if (!location.uri || !location.range || location.uri.scheme !== "file") {
+                        return null;
+                      }
+
+                      return {
+                        name: symbol.name || "",
+                        kind,
+                        location,
+                        detail,
+                        containerName: symbol.parent
+                      };
+                    } catch (err) {
+                      return null;
+                    }
+                  })
+                  .filter((s): s is NonNullable<typeof s> => s !== null);
+
+                return symbols;
+              } catch (error) {
+                return [];
+              }
+            }
+          });
+          providerDisposablesRef.current.push(documentSymbolProvider);
+        }
+
+        // Update decorations when comments change
+        updateGlyphDecorations(editor, monaco, commentsByLine);
+        updateViewZones(editor, monaco, commentsByLine, expanded, currentFile);
+
+        // Mouse down handler for glyph margin clicks (expand/collapse comments)
+        editor.onMouseDown((e) => {
+          const browserEvent = e.event.browserEvent;
+          
+          // Handle glyph margin clicks for expanding/collapsing comments
+          if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+            if (e.target.position) {
+              const lineNumber = e.target.position.lineNumber;
+              setExpanded((prev) => {
+                if (prev.includes(lineNumber)) {
+                  return prev.filter((l) => l !== lineNumber);
+                } else {
+                  return [...prev, lineNumber];
+                }
+              });
+            }
+          }
+        });
+      },
+      [allFiles, currentFile, commentsByLine, expanded, updateGlyphDecorations, updateViewZones]
+    );
+
+    // Update decorations and view zones when comments or expanded state changes
+    useEffect(() => {
+      if (editorRef.current && monacoRef.current && currentFile) {
+        updateGlyphDecorations(editorRef.current, monacoRef.current, commentsByLine);
+        updateViewZones(editorRef.current, monacoRef.current, commentsByLine, expanded, currentFile);
+      }
+    }, [commentsByLine, expanded, currentFile, updateGlyphDecorations, updateViewZones]);
+
+    // Restore scroll when view zones finish updating
+    useEffect(() => {
+      if (pendingScrollRestore && editorRef.current) {
+        // Use requestAnimationFrame to ensure DOM has updated
+        requestAnimationFrame(() => {
+          if (editorRef.current && pendingScrollRestore) {
+            restoreScrollPosition(pendingScrollRestore);
+            setPendingScrollRestore(null);
+          }
+        });
+      }
+    }, [commentsByLine, expanded, pendingScrollRestore, restoreScrollPosition]);
+
+    // Switch model when active file changes
+    useEffect(() => {
+      if (editorRef.current && currentFile) {
+        const model = modelsRef.current.get(currentFile.id);
+        if (model) {
+          editorRef.current.setModel(model);
+          // Update decorations for new file
+          if (monacoRef.current) {
+            updateGlyphDecorations(editorRef.current, monacoRef.current, commentsByLine);
+            updateViewZones(editorRef.current, monacoRef.current, commentsByLine, expanded, currentFile);
+          }
+        }
+      }
+    }, [currentFile, commentsByLine, expanded, updateGlyphDecorations, updateViewZones]);
+
+    // Cleanup models and providers on unmount
+    useEffect(() => {
+      const models = modelsRef.current;
+      const decorations = decorationsRef.current;
+      const viewZones = viewZonesRef.current;
+      const providerDisposables = providerDisposablesRef.current;
+      
+      return () => {
+        models.forEach((model) => model.dispose());
+        models.clear();
+        decorations.clear();
+        viewZones.clear();
+        setViewZoneNodes(new Map());
+        providerDisposables.forEach((disposable) => disposable.dispose());
+        providerDisposables.length = 0;
+      };
+    }, []);
+
+    // Handle editor before mount (worker setup)
+    const handleEditorWillMount = useCallback(() => {
+      if (typeof window !== "undefined") {
+        window.MonacoEnvironment = {
+          getWorker(_moduleId, label) {
+            switch (label) {
+              case "editorWorkerService":
+                return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
+              default:
+                throw new Error(`Unknown label ${label}`);
+            }
+          }
+        };
+      }
+    }, []);
+
+    const commentsForCurrentFile = useMemo(() => {
+      if (!currentFile) return [];
+      return allFileComments.filter((c) => expanded.includes(c.line));
+    }, [allFileComments, expanded, currentFile]);
+
+    if (!currentFile) {
+      return <Skeleton />;
+    }
+
+    return (
+      <Box
+        border="1px solid"
+        borderColor="border.emphasized"
+        p={0}
+        m={2}
+        w="100%"
+        css={{
+          "& .monaco-line-highlight": {
+            backgroundColor: "rgba(255, 235, 59, 0.3)",
+            transition: "opacity 2s ease-out"
           },
-          close: (line: number) => {
-            setExpanded((prev) => prev.filter((l) => l !== line));
-          },
-          showCommentsFeature,
-          submissionReviewId: submissionReview?.id
+          "& .monaco-comment-glyph": {
+            "&::before": {
+              content: '"💬"',
+              fontSize: "14px",
+              cursor: "pointer"
+            }
+          }
         }}
       >
-        <VStack
-          gap={0}
-          onClick={(ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            setLineActionPopupProps((prev) => {
-              prev.onClose?.();
-              return {
-                ...prev,
-                visible: false,
-                onClose: undefined
-              };
-            });
+        {/* Tab bar for multiple files */}
+        {openFiles.length > 1 && (
+          <Flex
+            w="100%"
+            bg="bg.subtle"
+            borderBottom="1px solid"
+            borderColor="border.emphasized"
+            alignItems="stretch"
+            overflowX="auto"
+            css={{
+              "&::-webkit-scrollbar": {
+                height: "6px"
+              },
+              "&::-webkit-scrollbar-track": {
+                background: "transparent"
+              },
+              "&::-webkit-scrollbar-thumb": {
+                background: "var(--chakra-colors-border-emphasized)",
+                borderRadius: "3px"
+              }
+            }}
+          >
+            {openFiles.map((f) => {
+              const fileComments = _comments.filter((c) => c.submission_file_id === f.id);
+              const isActive = f.id === currentFileId;
+              const fileName = f.name.split("/").pop() || f.name;
+              return (
+                <Flex
+                  key={f.id}
+                  bg={isActive ? "bg.default" : "bg.subtle"}
+                  borderRight="1px solid"
+                  borderColor="border.emphasized"
+                  alignItems="center"
+                  gap={1}
+                  px={3}
+                  py={2}
+                  cursor="pointer"
+                  _hover={{ bg: isActive ? "bg.default" : "bg.muted" }}
+                  onClick={() => {
+                    if (onFileSelect) {
+                      onFileSelect(f.id);
+                    }
+                  }}
+                  minW="fit-content"
+                  position="relative"
+                >
+                  <Text fontSize="sm" fontWeight={isActive ? "semibold" : "normal"} noOfLines={1} maxW="200px">
+                    {fileName}
+                  </Text>
+                  {fileComments.length > 0 && (
+                    <Badge colorPalette="blue" size="sm">
+                      {fileComments.length}
+                    </Badge>
+                  )}
+                  {onFileClose && openFiles.length > 1 && (
+                    <Icon
+                      as={FaTimes}
+                      boxSize={3}
+                      color="fg.muted"
+                      _hover={{ color: "fg.default" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onFileClose(f.id);
+                      }}
+                      ml={1}
+                      flexShrink={0}
+                    />
+                  )}
+                </Flex>
+              );
+            })}
+          </Flex>
+        )}
+
+        {/* File header */}
+        <Flex
+          w="100%"
+          bg="bg.subtle"
+          p={2}
+          borderBottom="1px solid"
+          borderColor="border.emphasized"
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Text fontSize="xs" color="text.subtle">
+            {currentFile.name}
+          </Text>
+          <HStack>
+            {showCommentsFeature && commentsForCurrentFile.length > 0 && (
+              <>
+                <Text fontSize="xs" color="text.subtle">
+                  {commentsForCurrentFile.length} {commentsForCurrentFile.length === 1 ? "comment" : "comments"}
+                </Text>
+                <Tooltip
+                  openDelay={300}
+                  closeDelay={100}
+                  content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
+                >
+                  <Button
+                    variant={expanded.length > 0 ? "solid" : "outline"}
+                    size="xs"
+                    p={0}
+                    colorPalette="teal"
+                    onClick={() => {
+                      setExpanded((prev) => {
+                        if (prev.length === 0) {
+                          return allFileComments.map((comment) => comment.line);
+                        }
+                        return [];
+                      });
+                    }}
+                  >
+                    <Icon as={FaComments} m={0} />
+                  </Button>
+                </Tooltip>
+              </>
+            )}
+          </HStack>
+        </Flex>
+
+        {/* Monaco Editor */}
+        <Box height="600px" width="100%">
+          <Editor
+            height="600px"
+            width="100%"
+            theme={colorMode === "dark" ? "vs-dark" : "vs"}
+            beforeMount={handleEditorWillMount}
+            onMount={handleEditorDidMount}
+            options={{
+              readOnly: true,
+              lineNumbers: "on",
+              glyphMargin: true,
+              minimap: { enabled: true },
+              scrollBeyondLastLine: false,
+              wordWrap: "on",
+              fontSize: 14,
+              tabSize: 2,
+              insertSpaces: true,
+              folding: true,
+              lineDecorationsWidth: 10,
+              lineNumbersMinChars: 3,
+              quickSuggestions: false,
+              links: true,
+              // Enable Cmd+Click for go to definition
+              gotoLocation: {
+                multiple: "peek"
+              }
+            }}
+          />
+        </Box>
+
+        {/* Monaco context menu for rubric annotations */}
+        {editorRef.current && monacoRef.current && currentFile && (
+          <MonacoRubricContextMenu
+            editor={editorRef.current}
+            monaco={monacoRef.current}
+            file={currentFile}
+            onSelectCheck={handleSelectCheck}
+            onImmediateApply={handleImmediateApplyFromMenu}
+            onAddComment={handleAddComment}
+          />
+        )}
+
+        {/* Comment dialog */}
+        {currentFile && commentDialogState.rubricCheck && (
+          <AnnotationCommentDialog
+            isOpen={commentDialogState.isOpen}
+            onClose={() => setCommentDialogState({ ...commentDialogState, isOpen: false })}
+            onImmediateApply={() => {
+              if (commentDialogState.rubricCheck && commentDialogState.criteria) {
+                handleImmediateApply(
+                  commentDialogState.rubricCheck,
+                  commentDialogState.criteria,
+                  commentDialogState.startLine,
+                  commentDialogState.endLine,
+                  commentDialogState.subOptionComment && commentDialogState.subOptionPoints
+                    ? {
+                        label: commentDialogState.subOptionComment,
+                        points: commentDialogState.subOptionPoints
+                      }
+                    : undefined
+                );
+              }
+            }}
+            submission={submission}
+            file={currentFile}
+            startLine={commentDialogState.startLine}
+            endLine={commentDialogState.endLine}
+            rubricCheck={commentDialogState.rubricCheck}
+            criteria={commentDialogState.criteria}
+            subOptionComment={commentDialogState.subOptionComment}
+            subOptionPoints={commentDialogState.subOptionPoints}
+            submissionReviewId={review?.id}
+            released={review?.released ?? true}
+          />
+        )}
+        {/* Comment dialog for plain comments (no rubric check) */}
+        {currentFile && !commentDialogState.rubricCheck && (
+          <AnnotationCommentDialog
+            isOpen={commentDialogState.isOpen}
+            onClose={() => setCommentDialogState({ ...commentDialogState, isOpen: false })}
+            submission={submission}
+            file={currentFile}
+            startLine={commentDialogState.startLine}
+            endLine={commentDialogState.endLine}
+            submissionReviewId={review?.id}
+            released={review?.released ?? true}
+          />
+        )}
+
+        {/* Context provider for comments */}
+        <CodeLineCommentContext.Provider
+          value={{
+            submission,
+            comments: allFileComments,
+            file: currentFile,
+            expanded,
+            open: (line: number) => {
+              setExpanded((prev) => {
+                if (prev.includes(line)) {
+                  return prev;
+                }
+                return [...prev, line];
+              });
+            },
+            close: (line: number) => {
+              setExpanded((prev) => prev.filter((l) => l !== line));
+            },
+            showCommentsFeature,
+            submissionReviewId: submissionReview?.id
           }}
         >
-          {reactNode}
-        </VStack>
-      </CodeLineCommentContext.Provider>
+          {/* Render comment view zones via portals - must be inside context provider */}
+          {Array.from(viewZoneNodes.entries()).map(([lineNumber, domNode]) => {
+            const lineComments = commentsByLine.get(lineNumber);
+            if (!lineComments || lineComments.length === 0) return null;
+            
+            return createPortal(
+              <CodeLineCommentsPortal
+                key={`${currentFile.id}-${lineNumber}`}
+                lineNumber={lineNumber}
+                comments={lineComments}
+                onHeightChange={(height) => updateViewZoneHeight(lineNumber, height)}
+              />,
+              domNode
+            );
+          })}
+        </CodeLineCommentContext.Provider>
+      </Box>
+    );
+  }
+);
+
+CodeFile.displayName = "CodeFile";
+
+// Portal component for rendering comments in view zones
+function CodeLineCommentsPortal({ 
+  lineNumber, 
+  comments,
+  onHeightChange 
+}: { 
+  lineNumber: number; 
+  comments: SubmissionFileComment[];
+  onHeightChange?: (height: number) => void;
+}) {
+  const {
+    submission,
+    showCommentsFeature,
+    file,
+    expanded,
+    submissionReviewId
+  } = useCodeLineCommentContext();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
+  const hasARegradeRequest = comments.some((comment) => comment.regrade_request_id !== null);
+  const [showReply, setShowReply] = useState(isReplyEnabled);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const commentsToDisplay = useMemo(() => {
+    const ret = comments.filter((comment) => {
+      if (!isGraderOrInstructor && submission.released !== null) {
+        return comment.eventually_visible === true;
+      }
+      return true;
+    });
+    ret.sort((a, b) => {
+      if (a.rubric_check_id && !b.rubric_check_id) return -1;
+      if (!a.rubric_check_id && b.rubric_check_id) return 1;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+    return ret;
+  }, [comments, isGraderOrInstructor, submission.released]);
+
+  // Update ViewZone height when content changes (debounced)
+  useEffect(() => {
+    if (!containerRef.current || !onHeightChange) return;
+    
+    let updateTimeout: NodeJS.Timeout;
+    let rafId: number | null = null;
+    
+    const updateHeight = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      
+      // Measure the actual content height
+      const height = container.scrollHeight;
+      onHeightChange(height + 20); // Add some padding
+    };
+
+    // Debounced update function
+    const debouncedUpdate = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      rafId = requestAnimationFrame(() => {
+        clearTimeout(updateTimeout);
+        updateTimeout = setTimeout(updateHeight, 100); // Debounce by 100ms
+        rafId = null;
+      });
+    };
+
+    // Initial update after render
+    const initialTimeout = setTimeout(updateHeight, 50);
+    
+    // Also update when content might change (resize observer with debouncing)
+    const resizeObserver = new ResizeObserver(() => {
+      debouncedUpdate();
+    });
+    
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+    
+    return () => {
+      clearTimeout(initialTimeout);
+      clearTimeout(updateTimeout);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      resizeObserver.disconnect();
+    };
+  }, [commentsToDisplay, showReply, onHeightChange]);
+
+  if (!submission || !file || !showCommentsFeature || commentsToDisplay.length === 0) {
+    return null;
+  }
+  if (!expanded.includes(lineNumber)) {
+    return null;
+  }
+
+  return (
+    <Box
+      ref={containerRef}
+      width="100%"
+      whiteSpace="normal"
+      position="relative"
+      m={0}
+      borderTop="1px solid"
+      borderBottom="1px solid"
+      borderColor="border.emphasized"
+      p={2}
+    >
+      <Box
+        position="relative"
+        maxW="xl"
+        fontFamily={"sans-serif"}
+        m={2}
+        borderWidth="1px"
+        borderColor="border.emphasized"
+        borderRadius="md"
+        p={2}
+        backgroundColor="bg"
+        boxShadow="sm"
+      >
+        {commentsToDisplay.map((comment) =>
+          comment.rubric_check_id ? (
+            <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
+          ) : (
+            <CodeLineComment key={comment.id} comment_id={comment.id} />
+          )
+        )}
+        {showReply && !hasARegradeRequest && (
+          <LineCommentForm
+            lineNumber={lineNumber}
+            submission={submission}
+            file={file}
+            submissionReviewId={submissionReviewId}
+          />
+        )}
+        {!showReply && !hasARegradeRequest && (
+          <Box display="flex" justifyContent="flex-end">
+            <Button colorPalette="green" onClick={() => setShowReply(true)}>
+              Add Comment
+            </Button>
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }
 
 /**
- * @param {Root} tree
- *   Tree.
- * @returns {undefined}
- *   Nothing.
- */
-export function starryNightGutter(
-  tree: Root,
-  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
-) {
-  const replacement: RootContent[] = [];
-  const search = /\r?\n|\r/g;
-  let index = -1;
-  let start = 0;
-  let startTextRemainder = "";
-  let lineNumber = 0;
-
-  while (++index < tree.children.length) {
-    const child = tree.children[index];
-
-    if (child.type === "text") {
-      let textStart = 0;
-      let match = search.exec(child.value);
-
-      while (match) {
-        // Nodes in this line.
-        const line = /** @type {Array<ElementContent>} */ tree.children.slice(start, index);
-
-        // Prepend text from a partial matched earlier text.
-        if (startTextRemainder) {
-          line.unshift({ type: "text", value: startTextRemainder });
-          startTextRemainder = "";
-        }
-
-        // Append text from this text.
-        if (match.index > textStart) {
-          line.push({
-            type: "text",
-            value: child.value.slice(textStart, match.index)
-          });
-        }
-
-        // Add a line, and the eol.
-        lineNumber += 1;
-        replacement.push(createLine(line as ElementContent[], lineNumber, setLineActionPopup), {
-          type: "text",
-          value: match[0]
-        });
-
-        start = index + 1;
-        textStart = match.index + match[0].length;
-        match = search.exec(child.value);
-      }
-
-      // If we matched, make sure to not drop the text after the last line ending.
-      if (start === index + 1) {
-        startTextRemainder = child.value.slice(textStart);
-      }
-    }
-  }
-
-  const line = /** @type {Array<ElementContent>} */ tree.children.slice(start);
-  // Prepend text from a partial matched earlier text.
-  if (startTextRemainder) {
-    line.unshift({ type: "text", value: startTextRemainder });
-    startTextRemainder = "";
-  }
-
-  if (line.length > 0) {
-    lineNumber += 1;
-    replacement.push(createLine(line as ElementContent[], lineNumber, setLineActionPopup));
-  }
-
-  // Replace children with new array.
-  tree.children = replacement;
-}
-
-/**
  * Displays a rubric-based annotation comment on a code line, including points, rubric details, author, and visibility status.
- *
- * Allows inline editing of the comment for graders and instructors. If the user is a student and the comment affects their score, provides a dialog to request a regrade, with special handling for group submissions. Shows relevant UI elements based on comment visibility, release status, and regrade request state.
  */
 function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
@@ -422,7 +1550,6 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const pointsText = rubricCriteria.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
   const hasPoints = comment?.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
 
-  // Determine if this comment will be visible to students
   const getStudentVisibilityInfo = () => {
     if (!rubricCheck.student_visibility || rubricCheck.student_visibility === "always") {
       return { isVisible: true, reason: "Always visible to students" };
@@ -440,11 +1567,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   };
 
   const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
-
-  // Check if student can create a regrade request
   const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
-
-  // Check if this is a group submission
 
   return (
     <Box role="region" aria-label={`Grading checks on line ${comment.line}`}>
@@ -518,7 +1641,6 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                   <Markdown>{comment.comment}</Markdown>
                 )}
               </Box>
-              {/* Regrade Request Button */}
               {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
             </VStack>
           </HStack>
@@ -529,12 +1651,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 }
 
 /**
- * Renders a single general comment on a code line, displaying the author's profile, flair, and comment content, with inline editing capabilities.
- *
- * If the comment or author profile is not yet loaded, displays a loading skeleton.
- *
- * @param comment_id - The ID of the comment to display.
- * @param submissionReviewId - Optional ID of the submission review, used for context.
+ * Renders a single general comment on a code line
  */
 function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
@@ -550,7 +1667,6 @@ function CodeLineComment({ comment_id }: { comment_id: number }) {
     return <Skeleton height="100px" width="100%" />;
   }
 
-  // Show real name in parentheses for staff when viewing pseudonymous profiles
   const realNameSuffix = isStaff && authorProfile?.real_name ? ` (${authorProfile.real_name})` : "";
 
   return (
@@ -655,676 +1771,5 @@ export function formatPoints(option: { check?: RubricCheck; criteria?: RubricCri
   return ``;
 }
 
-/**
- * Displays a popup for annotating a specific line in a code file with a rubric check or comment.
- *
- * Allows graders to select a rubric check (with optional sub-options), view criteria, and add an optional or required comment to the selected line. Enforces annotation limits per check and provides context-sensitive UI for marking or direct selection modes. Handles submission of new annotation comments, including points and visibility settings.
- */
-function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
-  const submissionController = useSubmissionController();
-  const submission = useSubmission();
-  const review = useActiveSubmissionReview();
-  const rubric = useRubricWithParts(review?.rubric_id);
-  const [selectOpen, setSelectOpen] = useState(true);
-  const { private_profile_id, public_profile_id } = useClassProfiles();
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const graderPseudonymousMode = useGraderPseudonymousMode();
-  // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
-  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
-  const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
-  const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
-  const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
-  const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
-  const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
-
-  useEffect(() => {
-    if (!selectedCheckOption) {
-      setSelectOpen(true);
-    }
-  }, [selectedCheckOption]);
-
-  // Get existing comments for this file to check max_annotations
-  const existingComments = useSubmissionFileComments({ file_id: file.id });
-  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
-  const rubricChecks = useRubricChecksByRubric(rubric?.id);
-
-  const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
-    // Only show criteria that have annotation checks
-    let criteriaWithAnnotationChecks: RubricCriteria[] = [];
-
-    if (rubricCriteria && rubricChecks) {
-      const annotationChecks = rubricChecks
-        .filter(
-          (check: RubricCheck) =>
-            check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-        )
-        .map((check: RubricCheck) => check.rubric_criteria_id);
-      // Using the effective rubric (either manually selected or default)
-      criteriaWithAnnotationChecks = rubricCriteria
-        .filter((criteria: RubricCriteria) => annotationChecks.includes(criteria.id))
-        .sort((a, b) => a.ordinal - b.ordinal);
-    }
-
-    const criteriaOptions: RubricCriteriaSelectGroupOption[] =
-      (criteriaWithAnnotationChecks?.map((criteria) => {
-        return {
-          label: criteria.name,
-          value: criteria.id.toString(),
-          criteria: criteria as RubricCriteria,
-          options: rubricChecks
-            ?.filter(
-              (check) =>
-                check.is_annotation &&
-                (check.annotation_target === "file" || check.annotation_target === null) &&
-                check.rubric_criteria_id === criteria.id
-            )
-            .sort((a, b) => a.ordinal - b.ordinal)
-            .map((check) => {
-              // Count existing annotations for this specific check
-              const existingAnnotationsForCheck = existingComments.filter(
-                (comment) => comment.rubric_check_id === check.id
-              ).length;
-
-              // Check if this option should be disabled due to max_annotations
-              const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
-
-              const option: RubricCheckSelectOption = {
-                label: check.name,
-                value: check.id.toString(),
-                check,
-                criteria: criteria as RubricCriteria,
-                options: [],
-                isDisabled
-              };
-              if (isRubricCheckDataWithOptions(check.data)) {
-                option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
-                  label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
-                  comment: subOption.label,
-                  index: index.toString(),
-                  value: index.toString(),
-                  points: subOption.points,
-                  check: option,
-                  isDisabled
-                }));
-              }
-              return option;
-            })
-        };
-      }) as RubricCriteriaSelectGroupOption[]) || [];
-
-    criteriaOptions.push({
-      label: "Leave a comment",
-      value: "comment",
-      options: [
-        {
-          label: "Leave a comment",
-          value: "comment"
-        }
-      ]
-    });
-
-    return criteriaOptions;
-  }, [existingComments, rubricCriteria, rubricChecks]);
-
-  useEffect(() => {
-    if (!visible) {
-      return; // Exit early if not visible
-    }
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (popupRef.current && !popupRef.current.contains(event.target as Node)) {
-        close();
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-
-    // Defer adding the listeners
-    const timerId = setTimeout(() => {
-      document.addEventListener("mousedown", handleClickOutside);
-      document.addEventListener("keydown", handleKeyDown);
-    }, 0);
-
-    return () => {
-      clearTimeout(timerId);
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [visible, close]);
-
-  useEffect(() => {
-    setSelectedCheckOption(null);
-    setSelectedSubOption(null);
-  }, [lineNumber]);
-  useEffect(() => {
-    // When the selected check changes, clear any previously selected sub-option
-    setSelectedSubOption(null);
-  }, [selectedCheckOption]);
-  useEffect(() => {
-    if (messageInputRef.current) {
-      messageInputRef.current.focus();
-    }
-  }, [selectedCheckOption]);
-  useEffect(() => {
-    if (selectRef.current && !selectedCheckOption) {
-      selectRef.current.focus();
-    }
-  }, [selectedCheckOption, lineNumber]);
-  useEffect(() => {
-    setCurrentMode(mode);
-  }, [mode]);
-  useEffect(() => {
-    if (!visible) {
-      // Reset transient popup state any time it is closed
-      setCurrentMode(mode);
-      setSelectedCheckOption(null);
-      setSelectedSubOption(null);
-      setSelectOpen(true);
-    }
-  }, [visible, mode]);
-  if (!visible) {
-    return null;
-  }
-  const numChecks = criteria.reduce((acc, curr) => acc + curr.options.length, 0);
-  if (currentMode === "marking" && numChecks > 1) {
-    return (
-      <RubricMarkingMenu
-        top={top}
-        left={left}
-        criteria={criteria}
-        setSelectedSubOption={setSelectedSubOption}
-        setSelectedCheckOption={setSelectedCheckOption}
-        setCurrentMode={setCurrentMode}
-      />
-    );
-  }
-  //Adjust top so that it is less likely to end up off of the screen
-  if (top + 250 > window.innerHeight && window.innerHeight > 250) {
-    top = top - 250;
-  }
-
-  const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
-    GroupHeading: (props) => {
-      return (
-        <chakraComponents.GroupHeading {...props}>
-          {props.data.criteria ? (
-            <>
-              Criteria: {props.data.label}
-              {props.data.criteria.total_points ? ` (${props.data.criteria.total_points} points total)` : ""}
-            </>
-          ) : (
-            <>
-              <Separator />
-            </>
-          )}
-        </chakraComponents.GroupHeading>
-      );
-    },
-    SingleValue: (props) => {
-      const points =
-        props.data.criteria &&
-        props.data.check?.points &&
-        "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
-      return (
-        <chakraComponents.SingleValue {...props}>
-          {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
-          {isRubricCheckDataWithOptions(props.data.check?.data)
-            ? `(Select an option)`
-            : points
-              ? `${points} points`
-              : ""}
-        </chakraComponents.SingleValue>
-      );
-    },
-    Option: (props) => {
-      const points =
-        props.data.criteria && props.data.check?.points
-          ? "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")"
-          : "";
-      return (
-        <chakraComponents.Option {...props}>
-          {props.data.label} {points}
-        </chakraComponents.Option>
-      );
-    }
-  };
-
-  return (
-    <Box
-      zIndex={1000}
-      top={top}
-      left={left}
-      position="fixed"
-      bg="bg.subtle"
-      w="md"
-      p={3}
-      border="1px solid"
-      borderColor="border.emphasized"
-      borderRadius="md"
-      boxShadow="lg"
-      ref={popupRef}
-    >
-      <VStack gap={2} align="stretch">
-        <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
-          Annotate line {lineNumber} with a check:
-        </Text>
-
-        <HStack>
-          <Select
-            aria-label="Select a rubric check or leave a comment"
-            ref={selectRef}
-            options={criteria}
-            menuIsOpen={selectOpen}
-            onMenuOpen={() => {
-              setSelectOpen(true);
-            }}
-            onMenuClose={() => {
-              setSelectOpen(false);
-            }}
-            escapeClearsValue={true}
-            components={components}
-            value={selectedCheckOption}
-            onChange={(e: RubricCheckSelectOption | null) => {
-              if (e) {
-                setSelectedCheckOption(e);
-              }
-            }}
-            placeholder="Select a rubric check or leave a comment..."
-            size="sm"
-          />
-          {selectedCheckOption && selectedCheckOption.check && (
-            <StudentVisibilityIndicator
-              check={selectedCheckOption.check}
-              isApplied={true}
-              isReleased={review?.released ?? true}
-            />
-          )}
-        </HStack>
-        {selectedCheckOption && (
-          <>
-            {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
-              <Select
-                options={selectedCheckOption.check.data.options.map(
-                  (option: RubricCheckSubOption, index: number) =>
-                    ({
-                      label: option.label,
-                      comment: option.label,
-                      value: index.toString(),
-                      index: index.toString(),
-                      points: option.points,
-                      check: selectedCheckOption
-                    }) as RubricCheckSubOptions
-                )}
-                value={selectedSubOption}
-                onChange={(e: RubricCheckSubOptions | null) => {
-                  setSelectedSubOption(e);
-                }}
-                placeholder="Select an option for this check..."
-                size="sm"
-              />
-            )}
-            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points ? (
-              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
-                {formatPoints({
-                  check: selectedCheckOption.check,
-                  criteria: selectedCheckOption.criteria,
-                  points: selectedCheckOption.check.points
-                })}
-              </Text>
-            ) : (
-              <></>
-            )}
-            {selectedSubOption && selectedCheckOption.check ? (
-              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
-                {formatPoints({
-                  check: selectedCheckOption.check,
-                  criteria: selectedCheckOption.criteria,
-                  points: selectedSubOption.points
-                })}
-              </Text>
-            ) : (
-              <></>
-            )}
-            <MessageInput
-              textAreaRef={messageInputRef}
-              enableGiphyPicker={true}
-              sendButtonText={selectedCheckOption.check ? "Add Check" : "Add Comment"}
-              placeholder={
-                !selectedCheckOption.check
-                  ? "Add a comment about this line and press enter to submit..."
-                  : selectedCheckOption.check.is_comment_required
-                    ? "Add a comment about this check and press enter to submit..."
-                    : "Optionally add a comment, or just press enter to submit..."
-              }
-              allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
-              defaultSingleLine={true}
-              sendMessage={async (message) => {
-                let points = selectedCheckOption.check?.points;
-                if (selectedSubOption !== null) {
-                  points = selectedSubOption.points;
-                }
-                let comment = message || "";
-                if (selectedSubOption) {
-                  comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
-                }
-                const submissionReviewId = review?.id;
-                if (!submissionReviewId && selectedCheckOption.check?.id) {
-                  toaster.error({
-                    title: "Error saving comment",
-                    description: "Submission review ID is missing, cannot save rubric annotation."
-                  });
-                  return;
-                }
-                const values = {
-                  comment,
-                  line: lineNumber,
-                  rubric_check_id: selectedCheckOption.check?.id ?? null,
-                  class_id: file.class_id,
-                  submission_file_id: file.id,
-                  submission_id: submission.id,
-                  // Use the determined author profile based on grader pseudonymous mode
-                  author: authorProfileId,
-                  released: review ? review.released : true,
-                  points: points ?? null,
-                  submission_review_id: submissionReviewId ?? null,
-                  eventually_visible: selectedCheckOption.check
-                    ? selectedCheckOption.check.student_visibility !== "never"
-                    : true,
-                  regrade_request_id: null
-                };
-                try {
-                  await submissionController.submission_file_comments.create(values);
-                  setCurrentMode(mode);
-                  close();
-                } catch (e) {
-                  toaster.error({
-                    title: "Error saving annotation",
-                    description: e instanceof Error ? e.message : "Unknown error"
-                  });
-                }
-              }}
-            />
-          </>
-        )}
-      </VStack>
-    </Box>
-  );
-}
-
-/**
- * Renders all comments and rubric annotations for a specific line of code, along with the reply form if allowed.
- *
- * Displays line-specific comments and rubric-based annotations, filtering visibility based on user role and submission release status. Disables the reply form and "Add Comment" button if any comment on the line has an active regrade request.
- *
- * @param lineNumber - The line number for which to display comments and annotations.
- */
-function CodeLineComments({ lineNumber }: { lineNumber: number }) {
-  const {
-    submission,
-    showCommentsFeature,
-    comments: allCommentsForFile,
-    file,
-    expanded,
-    submissionReviewId
-  } = useCodeLineCommentContext();
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
-  const hasARegradeRequest = allCommentsForFile.some((comment) => comment.regrade_request_id !== null);
-  const [showReply, setShowReply] = useState(isReplyEnabled);
-
-  const commentsToDisplay = useMemo(() => {
-    const ret = allCommentsForFile.filter((comment) => {
-      if (comment.line !== lineNumber) return false;
-      if (!isGraderOrInstructor && submission.released !== null) {
-        return comment.eventually_visible === true;
-      }
-      return true;
-    });
-    ret.sort((a, b) => {
-      if (a.rubric_check_id && !b.rubric_check_id) return -1;
-      if (!a.rubric_check_id && b.rubric_check_id) return 1;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-    return ret;
-  }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
-
-  if (!submission || !file || !showCommentsFeature || commentsToDisplay.length === 0) {
-    return null;
-  }
-  if (!expanded.includes(lineNumber)) {
-    return <></>;
-  }
-
-  return (
-    <Box
-      width="100%"
-      whiteSpace="normal"
-      position="relative"
-      m={0}
-      borderTop="1px solid"
-      borderBottom="1px solid"
-      borderColor="border.emphasized"
-    >
-      <Box position="absolute" left={0} w="40px" h="100%" borderRight="1px solid #ccc"></Box>
-      <Box
-        position="relative"
-        maxW="xl"
-        fontFamily={"sans-serif"}
-        m={2}
-        borderWidth="1px"
-        borderColor="border.emphasized"
-        borderRadius="md"
-        p={2}
-        backgroundColor="bg"
-        boxShadow="sm"
-      >
-        {commentsToDisplay.map((comment) =>
-          comment.rubric_check_id ? (
-            <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
-          ) : (
-            <CodeLineComment key={comment.id} comment_id={comment.id} />
-          )
-        )}
-        {showReply && !hasARegradeRequest && (
-          <LineCommentForm
-            lineNumber={lineNumber}
-            submission={submission}
-            file={file}
-            submissionReviewId={submissionReviewId}
-          />
-        )}
-        {!showReply && !hasARegradeRequest && (
-          <Box display="flex" justifyContent="flex-end">
-            <Button colorPalette="green" onClick={() => setShowReply(true)}>
-              Add Comment
-            </Button>
-          </Box>
-        )}
-      </Box>
-    </Box>
-  );
-}
-
-function LineNumber({ lineNumber }: { lineNumber: number }) {
-  const { comments, open } = useCodeLineCommentContext();
-  const hasComments = comments && comments.find((comment) => comment.line === lineNumber);
-  if (hasComments) {
-    return (
-      <Box className="line-number" position="relative">
-        {lineNumber}
-        <Badge
-          onClick={() => {
-            open(lineNumber);
-          }}
-          variant="solid"
-          colorPalette="blue"
-          position="absolute"
-          left={-5}
-          top={0}
-        >
-          <Icon as={FaRegComment} />
-        </Badge>
-      </Box>
-    );
-  }
-  return <div className="line-number">{lineNumber}</div>;
-}
-
-/**
- * @param {Array<ElementContent>} children
- * @param {number} line
- * @returns {Element}
- */
-function createLine(
-  children: ElementContent[],
-  line: number,
-  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
-): Element {
-  let mouseDownTime: number | null = null;
-  let hasMoved = false;
-  let popupShown = false;
-
-  return {
-    type: "element",
-    tagName: "div",
-    properties: {
-      className: "source-code-line-container"
-    } as Properties,
-    children: [
-      {
-        type: "element",
-        tagName: "pre",
-        properties: {
-          className: "source-code-line",
-          id: `L${line}`,
-          onClick: (ev: MouseEvent) => {
-            ev.stopPropagation();
-          },
-          onMouseDown: (ev: MouseEvent) => {
-            if (ev.button !== 0) {
-              return;
-            }
-            ev.preventDefault();
-            ev.stopPropagation();
-            mouseDownTime = Date.now();
-            hasMoved = false;
-            popupShown = false;
-
-            const checkShowPopup = () => {
-              if (!popupShown && mouseDownTime !== null) {
-                const timeHeld = Date.now() - mouseDownTime;
-                if (timeHeld >= 300 || hasMoved) {
-                  popupShown = true;
-                  setLineActionPopup((prev) => {
-                    if (line !== prev.lineNumber) {
-                      prev.onClose?.();
-                    }
-                    return {
-                      ...prev,
-                      lineNumber: line,
-                      top: ev.clientY,
-                      left: ev.clientX,
-                      visible: true,
-                      mode: "marking",
-                      close: () => {
-                        setLineActionPopup((prevClose) => ({
-                          ...prevClose,
-                          visible: false,
-                          onClose: prevClose.lineNumber === line && prevClose.visible ? undefined : prevClose.onClose
-                        }));
-                      },
-                      onClose: undefined
-                    };
-                  });
-                }
-              }
-            };
-
-            // Check immediately for movement
-            const handleMouseMove = () => {
-              if (!hasMoved && mouseDownTime !== null) {
-                hasMoved = true;
-                checkShowPopup();
-              }
-            };
-
-            // Set up movement listener
-            document.addEventListener("mousemove", handleMouseMove);
-
-            // Set up timer for 300ms check
-            const timer = setTimeout(checkShowPopup, 300);
-
-            // Clean up on mouse up
-            const handleMouseUp = () => {
-              mouseDownTime = null;
-              document.removeEventListener("mousemove", handleMouseMove);
-              clearTimeout(timer);
-              document.removeEventListener("mouseup", handleMouseUp);
-            };
-
-            document.addEventListener("mouseup", handleMouseUp);
-          },
-          onContextMenu: (ev: MouseEvent) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            const target = ev.currentTarget as HTMLElement;
-            target.classList.add("selected");
-            const closeAndCleanup = () => {
-              target.classList.remove("selected");
-              setLineActionPopup((prevClose) => ({
-                ...prevClose,
-                visible: false,
-                onClose: undefined
-              }));
-            };
-            setLineActionPopup((prev) => {
-              if (line !== prev.lineNumber) {
-                prev.onClose?.();
-              }
-              return {
-                ...prev,
-                lineNumber: line,
-                top: ev.clientY,
-                left: ev.clientX,
-                visible: true,
-                mode: "select",
-                close: closeAndCleanup,
-                onClose: () => {
-                  target.classList.remove("selected");
-                }
-              };
-            });
-          }
-        } as unknown as Properties,
-        children: [
-          {
-            type: "element",
-            tagName: "LineNumber",
-            properties: { lineNumber: line } as Properties,
-            children: []
-          },
-          {
-            type: "element",
-            tagName: "div",
-            properties: {
-              className: "source-code-line-content"
-            } as Properties,
-            children: children
-          }
-        ]
-      },
-      {
-        type: "element",
-        tagName: "CodeLineComments",
-        properties: { lineNumber: line } as Properties,
-        children: []
-      }
-    ]
-  };
-}
+export default CodeFile;

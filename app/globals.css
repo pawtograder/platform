@@ -14,3 +14,15 @@ select {
 [data-part="backdrop"][data-state="closed"] {
   pointer-events: none !important;
 }
+
+/* Monaco Editor line highlight for deep linking */
+.monaco-line-highlight {
+  background-color: rgba(255, 235, 59, 0.3) !important;
+  transition: opacity 2s ease-out;
+}
+
+.monaco-comment-glyph::before {
+  content: "💬";
+  font-size: 14px;
+  cursor: pointer;
+}

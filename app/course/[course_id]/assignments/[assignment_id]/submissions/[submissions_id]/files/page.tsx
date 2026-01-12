@@ -5,7 +5,8 @@ import CodeFile, {
   formatPoints,
   RubricCheckSelectOption,
   RubricCheckSubOptions,
-  RubricCriteriaSelectGroupOption
+  RubricCriteriaSelectGroupOption,
+  type CodeFileHandle
 } from "@/components/ui/code-file";
 import DownloadLink from "@/components/ui/download-link";
 import Link from "@/components/ui/link";
@@ -13,6 +14,9 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
+import { FileTreeSidebar } from "@/components/ui/file-tree";
+import { CommandPalette } from "@/components/ui/command-palette";
+import { parseJavaFile, type JavaFileSymbols } from "@/lib/java-language-service";
 import {
   PopoverArrow,
   PopoverBody,
@@ -81,6 +85,7 @@ import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-s
 import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 
 function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
@@ -960,7 +965,14 @@ export default function FilesView() {
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [selectedArtifactId, setSelectedArtifactId] = useState<number | null>(null);
   const [isSwitching, setIsSwitching] = useState<boolean>(false);
+  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [isResizing, setIsResizing] = useState(false);
+  const [openFileIds, setOpenFileIds] = useState<number[]>([]);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteMode, setCommandPaletteMode] = useState<"file" | "symbol">("file");
+  const [fileSymbols, setFileSymbols] = useState<Map<number, JavaFileSymbols>>(new Map());
   const scrolledTargetsRef = useRef<Set<string>>(new Set());
+  const codeFileRef = useRef<CodeFileHandle>(null);
 
   const updateUrl = useCallback((next: { fileId?: number | null; artifactId?: number | null; hash?: string }) => {
     if (typeof window === "undefined") return;
@@ -1012,6 +1024,19 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (!hash) return;
     const id = hash.startsWith("#") ? hash.slice(1) : hash;
+    
+    // Try Monaco editor first (for #L42 format)
+    if (id.startsWith("L") && codeFileRef.current) {
+      const lineNumber = parseInt(id.slice(1), 10);
+      if (!isNaN(lineNumber)) {
+        requestAnimationFrame(() => {
+          codeFileRef.current?.scrollToLine(lineNumber);
+        });
+        return;
+      }
+    }
+    
+    // Fallback to DOM element scrolling
     requestAnimationFrame(() => {
       const el = document.getElementById(id);
       if (el) preciseScrollTo(el);
@@ -1021,8 +1046,16 @@ export default function FilesView() {
   useEffect(() => {
     const fileIdParam = searchParams.get("file_id");
     const artifactIdParam = searchParams.get("artifact_id");
-    setSelectedFileId(fileIdParam ? Number(fileIdParam) : null);
+    const fileId = fileIdParam ? Number(fileIdParam) : null;
+    setSelectedFileId(fileId);
     setSelectedArtifactId(artifactIdParam ? Number(artifactIdParam) : null);
+    // Initialize open files with the selected file
+    if (fileId) {
+      setOpenFileIds((prev) => {
+        if (prev.includes(fileId)) return prev;
+        return [...prev, fileId];
+      });
+    }
     // Only run once on mount; subsequent changes are managed locally without navigation
   }, [searchParams]);
 
@@ -1067,8 +1100,38 @@ export default function FilesView() {
         setSelectedFileId(id);
         setSelectedArtifactId(null);
       }
+      // Add to open files if not already open
+      setOpenFileIds((prev) => {
+        if (prev.includes(id)) return prev;
+        return [...prev, id];
+      });
     },
     [updateUrl, selectedFileId, selectedArtifactId]
+  );
+
+  const handleCloseFile = useCallback(
+    (id: number) => {
+      setOpenFileIds((prev) => {
+        const newOpen = prev.filter((fid) => fid !== id);
+        // If closing the active file, switch to another open file or first file
+        if (id === selectedFileId && newOpen.length > 0) {
+          const nextFileId = newOpen[newOpen.length - 1];
+          updateUrl({ fileId: nextFileId });
+          setSelectedFileId(nextFileId);
+        } else if (newOpen.length === 0 && submissionData?.submission_files) {
+          // All tabs closed, select first file
+          const firstFileId = submissionData.submission_files[0]?.id;
+          if (firstFileId) {
+            updateUrl({ fileId: firstFileId });
+            setSelectedFileId(firstFileId);
+            setOpenFileIds([firstFileId]);
+            return [firstFileId];
+          }
+        }
+        return newOpen;
+      });
+    },
+    [selectedFileId, submissionData, updateUrl]
   );
 
   const handleSelectArtifact = useCallback(
@@ -1128,6 +1191,28 @@ export default function FilesView() {
     const key = `${selectedFileId}:${targetId}`;
     if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
 
+    // Try Monaco editor first (for #L42 format)
+    if (targetId.startsWith("L") && codeFileRef.current) {
+      const lineNumber = parseInt(targetId.slice(1), 10);
+      if (!isNaN(lineNumber)) {
+        let attempts = 0;
+        const maxAttempts = 60; // up to ~3s at 50ms
+        const tryScroll = () => {
+          if (codeFileRef.current) {
+            codeFileRef.current.scrollToLine(lineNumber);
+            scrolledTargetsRef.current.add(key);
+            return;
+          }
+          if (attempts++ < maxAttempts) {
+            setTimeout(tryScroll, 50);
+          }
+        };
+        tryScroll();
+        return;
+      }
+    }
+
+    // Fallback to DOM element scrolling
     let attempts = 0;
     const maxAttempts = 60; // up to ~3s at 50ms
     const tryScroll = () => {
@@ -1143,6 +1228,25 @@ export default function FilesView() {
     };
     tryScroll();
   }, [isSwitching, selectedFileId, preciseScrollTo]);
+
+  // Parse Java files for symbol outline
+  useEffect(() => {
+    if (!submissionData?.submission_files) return;
+
+    const javaFiles = submissionData.submission_files.filter((f) => f.name.endsWith(".java"));
+    const parsed = new Map<number, JavaFileSymbols>();
+
+    for (const file of javaFiles) {
+      try {
+        const symbols = parseJavaFile(file.contents, file.id, file.name);
+        parsed.set(file.id, symbols);
+      } catch (error) {
+        console.warn(`Failed to parse Java file ${file.name}:`, error);
+      }
+    }
+
+    setFileSymbols(parsed);
+  }, [submissionData?.submission_files]);
 
   // Briefly show a loading skeleton when switching files/artifacts
   useEffect(() => {
@@ -1161,36 +1265,202 @@ export default function FilesView() {
     return <NotFound />;
   }
 
+  // Handle sidebar resize
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = e.clientX;
+      if (newWidth >= 150 && newWidth <= 600) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const modKey = isMac ? e.metaKey : e.ctrlKey;
+
+      // Cmd/Ctrl+P - Quick open file
+      if (modKey && e.key === "p" && !e.shiftKey) {
+        e.preventDefault();
+        setCommandPaletteMode("file");
+        setIsCommandPaletteOpen(true);
+        return;
+      }
+
+      // Cmd/Ctrl+Shift+O - Go to symbol
+      if (modKey && e.shiftKey && e.key === "O") {
+        e.preventDefault();
+        setCommandPaletteMode("symbol");
+        setIsCommandPaletteOpen(true);
+        return;
+      }
+
+      // Cmd/Ctrl+Tab - Cycle through open tabs
+      if (modKey && e.key === "Tab" && !e.shiftKey && openFileIds.length > 1) {
+        e.preventDefault();
+        const currentIndex = openFileIds.findIndex((id) => id === selectedFileId);
+        const nextIndex = (currentIndex + 1) % openFileIds.length;
+        const nextFileId = openFileIds[nextIndex];
+        if (nextFileId) {
+          handleSelectFile(nextFileId);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+Shift+Tab - Cycle backwards
+      if (modKey && e.shiftKey && e.key === "Tab" && openFileIds.length > 1) {
+        e.preventDefault();
+        const currentIndex = openFileIds.findIndex((id) => id === selectedFileId);
+        const prevIndex = currentIndex === 0 ? openFileIds.length - 1 : currentIndex - 1;
+        const prevFileId = openFileIds[prevIndex];
+        if (prevFileId) {
+          handleSelectFile(prevFileId);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+W - Close current tab
+      if (modKey && e.key === "w" && selectedFileId && openFileIds.length > 1) {
+        e.preventDefault();
+        handleCloseFile(selectedFileId);
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [openFileIds, selectedFileId, handleSelectFile, handleCloseFile]);
+
+  const handleCommandPaletteSelectFile = useCallback(
+    (fileId: number) => {
+      handleSelectFile(fileId);
+      setIsCommandPaletteOpen(false);
+    },
+    [handleSelectFile]
+  );
+
+  const handleCommandPaletteSelectSymbol = useCallback(
+    (fileId: number, line: number) => {
+      handleSelectFile(fileId);
+      setIsCommandPaletteOpen(false);
+      // Scroll to line after a brief delay to ensure file is loaded
+      setTimeout(() => {
+        codeFileRef.current?.scrollToLine(line);
+      }, 100);
+    },
+    [handleSelectFile]
+  );
+
+  // Get symbols for current file when in symbol mode
+  const currentFileSymbols = useMemo(() => {
+    if (commandPaletteMode !== "symbol" || !selectedFileId) return [];
+    const symbols = fileSymbols.get(selectedFileId);
+    if (!symbols) return [];
+
+    return symbols.symbols.map((s) => ({
+      name: s.name,
+      fileId: symbols.fileId,
+      line: s.line,
+      kind: s.kind
+    }));
+  }, [commandPaletteMode, selectedFileId, fileSymbols]);
+
   return (
     <>
-      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
-        <Box w={"100%"} minW={"100%"}>
-          <FilePicker curFile={filePickerDisplayIndex} onSelect={handleSelectFile} />
+      {submission.submission_files && (
+        <CommandPalette
+          files={submission.submission_files}
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+          onSelectFile={handleCommandPaletteSelectFile}
+          mode={commandPaletteMode}
+          symbols={currentFileSymbols}
+          onSelectSymbol={handleCommandPaletteSelectSymbol}
+        />
+      )}
+      <Flex pt={{ base: "sm", md: "0" }} h="calc(100vh - 200px)" direction={{ base: "column", md: "row" }}>
+        {/* File Tree Sidebar */}
+        {submission.submission_files && submission.submission_files.length > 0 && (
+          <>
+            <Box
+              w={{ base: "100%", md: `${sidebarWidth}px` }}
+              h={{ base: "200px", md: "100%" }}
+              position="relative"
+              flexShrink={0}
+            >
+              <FileTreeSidebar
+                files={submission.submission_files}
+                activeFileId={selectedFileId}
+                onFileSelect={handleSelectFile}
+              />
+            </Box>
+            {/* Resize handle */}
+            <Box
+              w="4px"
+              h="100%"
+              cursor="col-resize"
+              bg="transparent"
+              _hover={{ bg: "border.emphasized" }}
+              onMouseDown={() => setIsResizing(true)}
+              display={{ base: "none", md: "block" }}
+              flexShrink={0}
+            />
+          </>
+        )}
+        {/* Main content area */}
+        <Flex flex={1} direction="column" minW={0} overflow="hidden">
+          {/* Artifact picker (if artifacts exist) */}
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
-            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
+            <Box mb={2}>
+              <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
+            </Box>
           )}
-        </Box>
-        <Separator orientation={{ base: "horizontal", md: "vertical" }} />
-        <Box w={"100%"}>
-          {isSwitching ? (
-            <Skeleton height="70vh" width="100%" />
-          ) : selectedArtifact && selectedArtifactId !== null ? (
-            selectedArtifact.data !== null ? (
-              <ArtifactWithComments
-                key={selectedArtifact.id}
-                artifact={selectedArtifact as SubmissionArtifact}
-                reviewAssignmentId={activeReviewAssignmentId}
-                submissionReviewId={finalActiveSubmissionReviewId}
+          {/* Editor/Viewer area */}
+          <Box flex={1} overflow="auto">
+            {isSwitching ? (
+              <Skeleton height="70vh" width="100%" />
+            ) : selectedArtifact && selectedArtifactId !== null ? (
+              selectedArtifact.data !== null ? (
+                <ArtifactWithComments
+                  key={selectedArtifact.id}
+                  artifact={selectedArtifact as SubmissionArtifact}
+                  reviewAssignmentId={activeReviewAssignmentId}
+                  submissionReviewId={finalActiveSubmissionReviewId}
+                />
+              ) : (
+                <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
+              )
+            ) : selectedFile && submissionData?.submission_files ? (
+              <CodeFile
+                ref={codeFileRef}
+                key={selectedFile.id}
+                files={submissionData.submission_files}
+                activeFileId={selectedFileId}
+                onFileSelect={handleSelectFile}
+                openFileIds={openFileIds.length > 0 ? openFileIds : undefined}
+                onFileClose={handleCloseFile}
               />
             ) : (
-              <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
-            )
-          ) : selectedFile ? (
-            <CodeFile key={selectedFile.id} file={selectedFile} />
-          ) : (
-            <Text>Select a file or artifact to view.</Text>
-          )}
-        </Box>
+              <Text>Select a file or artifact to view.</Text>
+            )}
+          </Box>
+        </Flex>
       </Flex>
     </>
   );
