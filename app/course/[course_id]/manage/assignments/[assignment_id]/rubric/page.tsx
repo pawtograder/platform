@@ -212,6 +212,7 @@ function hydratedRubricCriteriaToYamlRubric(criteria: HydratedRubricCriteria[]):
     data: criteria.data,
     description: valOrUndefined(criteria.description),
     is_additive: criteria.is_additive,
+    is_deduction_only: criteria.is_deduction_only,
     name: criteria.name,
     total_points: criteria.total_points,
     max_checks_per_submission: valOrUndefined(criteria.max_checks_per_submission),
@@ -276,6 +277,7 @@ function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCrit
     id: criteria.id || -1,
     name: criteria.name,
     description: valOrNull(criteria.description),
+    is_deduction_only: criteria.is_deduction_only || false,
     ordinal: index,
     rubric_id: 0,
     assignment_id: 0,
@@ -1145,6 +1147,7 @@ function InnerRubricPage() {
         }
         const criteriaCopy: Omit<HydratedRubricCriteria, "id" | "created_at" | "rubric_checks"> = {
           name: criteriaData.name,
+          is_deduction_only: criteriaData.is_deduction_only || false,
           description: criteriaData.description,
           ordinal: criteriaData.ordinal,
           data: criteriaData.data,
@@ -1809,6 +1812,36 @@ parts:
             is_annotation: false
             is_required: false
             is_comment_required: true
+            points: 2
+            student_visibility: if_applied
+      - description: This is an example of deduction-only scoring. Students start at 0 points
+          and can only lose points (down to -total_points). No positive points are ever
+          awarded. This is useful for penalty-only grading schemes.
+        is_additive: false
+        is_deduction_only: true
+        name: Deduction-only penalties
+        total_points: 20
+        checks:
+          - name: Late submission
+            description: Deduct points for late submissions
+            is_annotation: false
+            is_required: false
+            is_comment_required: false
+            points: 5
+            student_visibility: always
+          - name: Missing required file
+            description: Deduct points if required files are missing
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 10
+            student_visibility: always
+          - name: Code quality violation
+            description: Deduct points for code quality issues
+            is_annotation: true
+            is_required: false
+            is_comment_required: true
+            max_annotations: 5
             points: 2
             student_visibility: if_applied
 is_private: false

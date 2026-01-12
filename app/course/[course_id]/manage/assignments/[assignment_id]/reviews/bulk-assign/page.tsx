@@ -1037,47 +1037,49 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const toReview = useCallback(
     (result: AssignmentResult, part?: RubricPart) => {
       const reviewAssignments: DraftReviewAssignment[] = [];
-      result.assignments?.entries().forEach((entry) => {
-        const user: UserRoleWithConflictsAndName = entry[0];
-        const submissions: SubmissionWithGrading[] = entry[1];
-        submissions.forEach((submission) => {
-          // Get all group members or just the single submitter
-          const groupMembers = submission.assignment_groups?.assignment_groups_members || [
-            { profile_id: submission.profile_id }
-          ];
+      Array.from(result.assignments?.entries() || []).forEach(
+        (entry: [UserRoleWithConflictsAndName, SubmissionWithGrading[]]) => {
+          const user: UserRoleWithConflictsAndName = entry[0];
+          const submissions: SubmissionWithGrading[] = entry[1];
+          submissions.forEach((submission) => {
+            // Get all group members or just the single submitter
+            const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+              { profile_id: submission.profile_id }
+            ];
 
-          // Find UserRoleWithConflictsAndName for each group member
-          const submitters: UserRoleWithConflictsAndName[] = [];
-          for (const member of groupMembers) {
-            const memberUserRole = userRoles.find(
-              (item) => item.private_profile_id === member.profile_id
-            ) as unknown as UserRoleWithConflictsAndName | undefined;
-            if (!memberUserRole) {
+            // Find UserRoleWithConflictsAndName for each group member
+            const submitters: UserRoleWithConflictsAndName[] = [];
+            for (const member of groupMembers) {
+              const memberUserRole = userRoles.find(
+                (item) => item.private_profile_id === member.profile_id
+              ) as unknown as UserRoleWithConflictsAndName | undefined;
+              if (!memberUserRole) {
+                toaster.error({
+                  title: "Error drafting reviews",
+                  description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+                });
+                return;
+              }
+              submitters.push(memberUserRole);
+            }
+
+            if (submitters.length === 0) {
               toaster.error({
                 title: "Error drafting reviews",
-                description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+                description: `No valid submitters found for submission #${submission.id}`
               });
               return;
             }
-            submitters.push(memberUserRole);
-          }
 
-          if (submitters.length === 0) {
-            toaster.error({
-              title: "Error drafting reviews",
-              description: `No valid submitters found for submission #${submission.id}`
+            reviewAssignments.push({
+              assignee: user,
+              submitters: submitters,
+              submission: submission,
+              part: part
             });
-            return;
-          }
-
-          reviewAssignments.push({
-            assignee: user,
-            submitters: submitters,
-            submission: submission,
-            part: part
           });
-        });
-      });
+        }
+      );
       return reviewAssignments;
     },
     [userRoles]

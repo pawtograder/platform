@@ -967,6 +967,311 @@ export type Database = {
           }
         ];
       };
+      audit_20260112: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260113: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260114: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260115: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260116: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260117: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260118: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260119: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_legacy: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "audit_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       autograder: {
         Row: {
           class_id: number | null;
@@ -5846,6 +6151,7 @@ export type Database = {
           description: string | null;
           id: number;
           is_additive: boolean;
+          is_deduction_only: boolean;
           max_checks_per_submission: number | null;
           min_checks_per_submission: number | null;
           name: string;
@@ -5862,6 +6168,7 @@ export type Database = {
           description?: string | null;
           id?: number;
           is_additive: boolean;
+          is_deduction_only?: boolean;
           max_checks_per_submission?: number | null;
           min_checks_per_submission?: number | null;
           name: string;
@@ -5878,6 +6185,7 @@ export type Database = {
           description?: string | null;
           id?: number;
           is_additive?: boolean;
+          is_deduction_only?: boolean;
           max_checks_per_submission?: number | null;
           min_checks_per_submission?: number | null;
           name?: string;
@@ -9880,6 +10188,7 @@ export type Database = {
         Args: { p_name: string; p_section_id: number; p_updated_by?: string };
         Returns: boolean;
       };
+      audit_maintain_partitions: { Args: never; Returns: undefined };
       authorize_for_admin: { Args: { p_user_id?: string }; Returns: boolean };
       authorize_for_private_discussion_thread: {
         Args: { p_root: number };
@@ -9972,6 +10281,7 @@ export type Database = {
           queue_depth: number;
         }[];
       };
+      call_cache_invalidate: { Args: { tags: string[] }; Returns: undefined };
       call_edge_function_internal: {
         Args: {
           headers?: Json;
