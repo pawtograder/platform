@@ -425,12 +425,14 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     await page.goto(`/course/${course.id}`);
     await page.waitForLoadState("networkidle");
   }
-  // If there is a "Choose timezone" dialog, select "Use course time zone" and close it
-  const timezoneDialogTitle = page.getByText("Choose Your Time Zone Preference");
-  if (await timezoneDialogTitle.isVisible()) {
-    const dialog = await page.getByRole("dialog", { name: "Choose Your Time Zone" });
-    await dialog.getByText("Use course time zone").click();
-    await dialog.getByText("Close").click();
+
+  // If timezone modal appears, dismiss it with Escape (Close button is hard to target reliably)
+  const timezoneDialog = page.getByRole("dialog", { name: "Choose Your Time Zone Preference" });
+  const isVisible = await timezoneDialog.isVisible({ timeout: 2000 }).catch(() => false);
+
+  if (isVisible) {
+    await page.keyboard.press("Escape");
+    await timezoneDialog.waitFor({ state: "hidden", timeout: 3000 });
   }
 }
 
