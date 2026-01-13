@@ -11,9 +11,7 @@ test.use({ timezoneId: "America/Los_Angeles" });
 let course: Course;
 let student: TestingUser | undefined;
 
-test.describe("Time zone modal and indicator", () => {
-  test.describe.configure({ mode: "serial" });
-
+test.describe("Time zone dialog and indicator", () => {
   test.beforeAll(async () => {
     course = await createClass(); // default course.time_zone is America/New_York
     [student] = await createUsersInClass([
@@ -27,88 +25,76 @@ test.describe("Time zone modal and indicator", () => {
     ]);
   });
 
-  test("Opens modal when no preference and time zones differ; persists selection", async ({ page }) => {
+  test("Opens dialog when no preference and time zones differ; persists selection", async ({ page }) => {
     // Clear localStorage BEFORE any navigation
     await page.context().clearCookies();
     await page.addInitScript(() => {
       localStorage.removeItem("pawtograder-timezone-pref");
     });
 
-    // NOW log in - the addInitScript will run on navigation
-    await loginAsUser(page, student!, course);
+    await loginAsUser(page, student!, course, false);
 
-    // Modal should appear since course tz != browser tz and no saved pref
-    await expect(page.getByRole("dialog", { name: "Choose Your Time Zone Preference" })).toBeVisible();
+    const timezoneDialog = page.getByRole("dialog", { name: "Choose Your Time Zone Preference" });
+    await expect(timezoneDialog).toBeVisible();
 
-    // Verify localStorage is empty before selection
     let pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBeNull();
 
-    // Choose local/browser time zone
-    await page.getByLabel("Use your local time zone").click();
+    // Click the visible text
+    await page.getByText("Use your local time zone", { exact: true }).click();
 
-    // Verify mode is set but NOT yet persisted (only persisted on dismiss)
-    pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
-    expect(pref).toBeNull(); // Still null until we close the modal
+    await page.keyboard.press("Escape");
+    await timezoneDialog.waitFor({ state: "hidden", timeout: 3000 });
 
-    // Close the modal
-    await page.getByRole("button", { name: "Close" }).click();
-    await expect(page.getByRole("dialog", { name: "Choose Your Time Zone Preference" })).not.toBeVisible();
-
-    // NOW it should be persisted
     pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("browser");
 
-    // Indicator should reflect Local Time Zone
     await expect(page.getByRole("button", { name: /Local Time Zone \(.+\)/ })).toBeVisible();
   });
 
   test("Preference persists across page reloads", async ({ page }) => {
-    // Log in again (localStorage should still have "browser" from previous test in serial mode)
+    // Set preference explicitly
+    await page.addInitScript(() => {
+      localStorage.setItem("pawtograder-timezone-pref", "browser");
+    });
+
     await loginAsUser(page, student!, course);
 
-    // Modal should NOT appear because we have a saved preference
     await expect(page.getByRole("dialog", { name: "Choose Your Time Zone Preference" })).not.toBeVisible();
-
-    // Indicator should still show Local Time Zone
     await expect(page.getByRole("button", { name: /Local Time Zone \(.+\)/ })).toBeVisible();
 
-    // Verify localStorage still has our preference
     const pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("browser");
   });
 
-  test("Indicator opens modal and toggles back to course time zone", async ({ page }) => {
+  test("Indicator opens dialog and toggles back to course time zone", async ({ page }) => {
+    // Set preference explicitly
+    await page.addInitScript(() => {
+      localStorage.setItem("pawtograder-timezone-pref", "browser");
+    });
+
     await loginAsUser(page, student!, course);
 
-    // Verify we're starting with browser timezone from previous tests
     let pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("browser");
 
-    // Indicator should show Local; click to open modal via indicator
     await page.getByRole("button", { name: /Local Time Zone \(.+\)/ }).click();
     await expect(page.getByRole("dialog", { name: "Choose Your Time Zone Preference" })).toBeVisible();
 
-    // Switch to course time zone
-    await page.getByLabel("Use course time zone").click();
+    // Click the visible text
+    await page.getByText("Use course time zone", { exact: true }).click();
 
-    // According to your code, setMode saves immediately to localStorage
-    // So it should be persisted right away
     pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("course");
 
-    // Close the modal
-    await page.getByRole("button", { name: "Close" }).click();
+    await page.keyboard.press("Escape");
 
-    // Indicator should now show Course Time Zone
     await expect(page.getByRole("button", { name: /Course Time Zone \(.+\)/ })).toBeVisible();
 
-    // Verify persistence one more time
     pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("course");
   });
-
-  test("Manually setting localStorage prevents modal from showing", async ({ context }) => {
+  test("Manually setting localStorage prevents dialog from showing", async ({ context }) => {
     // Create a new context to simulate a fresh browser session
     const newPage = await context.newPage();
 
@@ -118,9 +104,9 @@ test.describe("Time zone modal and indicator", () => {
     });
 
     // Now log in
-    await loginAsUser(newPage, student!, course);
+    await loginAsUser(newPage, student!, course, false);
 
-    // Modal should NOT appear because we have a preference
+    // Dialog should NOT appear because we have a preference
     await expect(newPage.getByRole("dialog", { name: "Choose Your Time Zone Preference" })).not.toBeVisible();
 
     // Indicator should show Course Time Zone
@@ -129,7 +115,7 @@ test.describe("Time zone modal and indicator", () => {
     await newPage.close();
   });
 
-  test("Modal does not appear when browser and course timezones are the same", async ({ browser }) => {
+  test("Dialog does not appear when browser and course timezones are the same", async ({ browser }) => {
     // Create a context with the SAME timezone as the course
     const contextWithNYTime = await browser.newContext({
       timezoneId: "America/New_York" // Same as course default
@@ -141,9 +127,9 @@ test.describe("Time zone modal and indicator", () => {
       localStorage.removeItem("pawtograder-timezone-pref");
     });
 
-    await loginAsUser(newPage, student!, course);
+    await loginAsUser(newPage, student!, course, false);
 
-    // Modal should NOT appear because timezones match
+    // Dialog should NOT appear because timezones match
     await expect(newPage.getByRole("dialog", { name: "Choose Your Time Zone Preference" })).not.toBeVisible();
 
     // Should default to course timezone

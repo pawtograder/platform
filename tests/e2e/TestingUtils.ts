@@ -416,7 +416,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
   }
 }
-export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
+export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
   await page.goto("/");
   await signInWithMagicLinkAndRetry(page, testingUser);
 
@@ -426,13 +426,16 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     await page.waitForLoadState("networkidle");
   }
 
-  // If timezone modal appears, dismiss it with Escape (Close button is hard to target reliably)
-  const timezoneDialog = page.getByRole("dialog", { name: "Choose Your Time Zone Preference" });
-  const isVisible = await timezoneDialog.isVisible({ timeout: 2000 }).catch(() => false);
+  // Only dismiss timezone dialog if requested
+  if (dismissTimezoneDialog) {
+    // If timezone dialog appears, dismiss it with Escape (Close button is hard to target reliably)
+    const timezoneDialog = page.getByRole("dialog", { name: "Choose Your Time Zone Preference" });
+    const isVisible = await timezoneDialog.isVisible({ timeout: 2000 }).catch(() => false);
 
-  if (isVisible) {
-    await page.keyboard.press("Escape");
-    await timezoneDialog.waitFor({ state: "hidden", timeout: 3000 });
+    if (isVisible) {
+      await page.keyboard.press("Escape");
+      await timezoneDialog.waitFor({ state: "hidden", timeout: 3000 });
+    }
   }
 }
 
