@@ -505,7 +505,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
-    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
+    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*))")
     .eq("repository", repository)
     .maybeSingle();
   if (repoError) {
