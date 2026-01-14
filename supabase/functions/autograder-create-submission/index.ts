@@ -60,7 +60,19 @@ async function safeCleanupRejectedSubmission(params: {
   submissionId: number;
 }) {
   const { adminSupabase, submissionId } = params;
+  // Break circular-ish references: submissions.grading_review_id -> submission_reviews
+  await adminSupabase
+    .from("submissions")
+    .update({ grading_review_id: null, is_active: false })
+    .eq("id", submissionId);
+
+  // Delete any auto-created review row(s) for this submission.
+  await adminSupabase.from("submission_reviews").delete().eq("submission_id", submissionId);
+
+  // Remove files (these are the only child rows we definitely created in this path).
   await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+
+  // Finally, remove the submission row itself.
   await adminSupabase.from("submissions").delete().eq("id", submissionId);
 }
 
