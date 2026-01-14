@@ -693,6 +693,79 @@ export type Database = {
           }
         ];
       };
+      assignment_handout_file_hashes: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          combined_hash: string;
+          created_at: string;
+          file_hashes: Json;
+          id: number;
+          sha: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          combined_hash: string;
+          created_at?: string;
+          file_hashes?: Json;
+          id?: number;
+          sha: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          combined_hash?: string;
+          created_at?: string;
+          file_hashes?: Json;
+          id?: number;
+          sha?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_self_review_settings: {
         Row: {
           allow_early: boolean | null;
@@ -8016,6 +8089,7 @@ export type Database = {
           grading_review_id: number | null;
           id: number;
           is_active: boolean;
+          is_empty_submission: boolean;
           is_not_graded: boolean;
           ordinal: number;
           profile_id: string | null;
@@ -8035,6 +8109,7 @@ export type Database = {
           grading_review_id?: number | null;
           id?: number;
           is_active?: boolean;
+          is_empty_submission?: boolean;
           is_not_graded?: boolean;
           ordinal?: number;
           profile_id?: string | null;
@@ -8054,6 +8129,7 @@ export type Database = {
           grading_review_id?: number | null;
           id?: number;
           is_active?: boolean;
+          is_empty_submission?: boolean;
           is_not_graded?: boolean;
           ordinal?: number;
           profile_id?: string | null;

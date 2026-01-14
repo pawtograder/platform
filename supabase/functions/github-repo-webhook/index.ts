@@ -12,8 +12,16 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createHash } from "node:crypto";
+import micromatch from "npm:micromatch";
+import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from "../_shared/GitHubWrapper.ts";
+import {
+  createCheckRun,
+  getFileFromRepo,
+  getOctoKit,
+  triggerWorkflow,
+  updateCheckRun
+} from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -61,6 +69,73 @@ if (Deno.env.get("SENTRY_DSN")) {
   });
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+function sha256Hex(buf: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(buf);
+  return hash.digest("hex");
+}
+
+function computeCombinedHashFromFileHashes(file_hashes: Record<string, string>): string {
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return sha256Hex(Buffer.from(combinedInput, "utf-8"));
+}
+
+async function computeHandoutFileHashesForCommit(params: {
+  templateRepo: string;
+  commitSha: string;
+  expectedFiles: string[];
+  scope: Sentry.Scope;
+}): Promise<{ file_hashes: Record<string, string>; combined_hash: string }> {
+  const { templateRepo, commitSha, expectedFiles, scope } = params;
+  const octokit = await getOctoKit(templateRepo, scope);
+  if (!octokit) {
+    throw new Error(`No octokit found for repository ${templateRepo}`);
+  }
+  const [owner, repo] = templateRepo.split("/");
+
+  // Resolve commit -> tree sha
+  const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+    owner,
+    repo,
+    commit_sha: commitSha
+  });
+  const treeSha = commit.tree.sha;
+
+  // List all files in tree
+  const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+    owner,
+    repo,
+    tree_sha: treeSha,
+    recursive: "true"
+  });
+
+  const wantedPaths = (tree.tree || [])
+    .filter((item) => item.type === "blob" && !!item.path && !!item.sha)
+    .map((item) => ({ path: item.path!, sha: item.sha! }))
+    .filter(({ path }) => expectedFiles.some((pattern) => micromatch.isMatch(path, pattern)));
+
+  // Hash file contents for all wanted paths
+  const file_hashes: Record<string, string> = {};
+  for (const { path, sha } of wantedPaths) {
+    const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
+      owner,
+      repo,
+      file_sha: sha
+    });
+    if (blob.encoding !== "base64") {
+      throw new Error(`Unexpected blob encoding for ${path}: ${blob.encoding}`);
+    }
+    const bytes = Buffer.from(blob.content, "base64");
+    file_hashes[path] = sha256Hex(bytes);
+  }
+
+  const combined_hash = computeCombinedHashFromFileHashes(file_hashes);
+  return { file_hashes, combined_hash };
+}
 
 // Extend CheckRunStatus locally to track idempotent step markers without using 'any'
 type ExtendedCheckRunStatus = CheckRunStatus & {
@@ -443,7 +518,7 @@ async function handlePushToTemplateRepo(
     const { error: assignmentUpdateError } = await adminSupabase
       .from("assignments")
       .update({
-        latest_template_sha: payload.commits[0].id
+        latest_template_sha: payload.after || payload.head_commit?.id || payload.commits?.[0]?.id
       })
       .eq("id", assignment.id);
     if (assignmentUpdateError) {
@@ -468,6 +543,61 @@ async function handlePushToTemplateRepo(
       scope.setTag("error_context", "Failed to store assignment handout commit");
       Sentry.captureException(error, scope);
       throw error;
+    }
+  }
+
+  // Store handout (template repo) file hashes for empty-submission detection.
+  // This is keyed by the commit SHA of the template repo (handout).
+  // We compute hashes only for the expected submission files (from Pawtograder config).
+  const commitSha = payload.after || payload.head_commit?.id || payload.commits?.[0]?.id;
+  if (!commitSha) {
+    scope.setTag("handout_hashes_skipped", "no_commit_sha");
+    return;
+  }
+  for (const assignment of assignments) {
+    try {
+      const { data: graderConfig, error: graderConfigError } = await adminSupabase
+        .from("autograder")
+        .select("config")
+        .eq("id", assignment.id)
+        .maybeSingle();
+      if (graderConfigError) {
+        Sentry.captureException(graderConfigError, scope);
+        continue;
+      }
+      const pawtograderConfig = (graderConfig?.config as unknown as PawtograderConfig) || null;
+      const expectedFiles = pawtograderConfig?.submissionFiles
+        ? [
+            ...(pawtograderConfig.submissionFiles.files || []),
+            ...(pawtograderConfig.submissionFiles.testFiles || [])
+          ]
+        : [];
+      if (!assignment.template_repo || expectedFiles.length === 0) {
+        continue;
+      }
+
+      const { file_hashes, combined_hash } = await computeHandoutFileHashesForCommit({
+        templateRepo: assignment.template_repo,
+        commitSha,
+        expectedFiles,
+        scope
+      });
+
+      const { error: upsertError } = await adminSupabase.from("assignment_handout_file_hashes").upsert(
+        {
+          assignment_id: assignment.id,
+          sha: commitSha,
+          combined_hash,
+          file_hashes,
+          class_id: assignment.class_id
+        },
+        { onConflict: "assignment_id,sha" }
+      );
+      if (upsertError) {
+        Sentry.captureException(upsertError, scope);
+      }
+    } catch (e) {
+      Sentry.captureException(e, scope);
     }
   }
 }

@@ -31,6 +31,30 @@ import { decode } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
 
+function sha256Hex(buf: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(buf);
+  return hash.digest("hex");
+}
+
+function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
+  file_hashes: Record<string, string>;
+  combined_hash: string;
+} {
+  const file_hashes: Record<string, string> = {};
+  for (const f of files) {
+    file_hashes[f.name] = sha256Hex(f.contents);
+  }
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return {
+    file_hashes,
+    combined_hash: sha256Hex(Buffer.from(combinedInput, "utf-8"))
+  };
+}
+
 // Retry helper with exponential backoff
 async function retryWithExponentialBackoff<T>(
   operation: () => Promise<T>,
@@ -1264,6 +1288,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             return { name: stripTopDir(file.path), contents };
           })
         );
+        const { combined_hash: submissionCombinedHash } = computeCombinedFileHash(submittedFilesWithContents);
         // Add files to supabase
         const { error: fileError } = await adminSupabase.from("submission_files").insert(
           submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
@@ -1278,6 +1303,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         if (fileError) {
           throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
         }
+
+        // Empty submission detection:
+        // If the submitted expected files match ANY recorded handout version for the assignment,
+        // mark the submission as empty.
+        try {
+          const { data: match, error: matchError } = await adminSupabase
+            .from("assignment_handout_file_hashes")
+            .select("id")
+            .eq("assignment_id", repoData.assignment_id)
+            .eq("combined_hash", submissionCombinedHash)
+            .limit(1)
+            .maybeSingle();
+          if (matchError) {
+            Sentry.captureException(matchError, scope);
+          }
+          const isEmpty = !!match;
+          const { error: updateError } = await adminSupabase
+            .from("submissions")
+            .update({ is_empty_submission: isEmpty })
+            .eq("id", submission_id);
+          if (updateError) {
+            Sentry.captureException(updateError, scope);
+          }
+        } catch (e) {
+          // Never fail submission creation over this auxiliary flag.
+          Sentry.captureException(e, scope);
+        }
+
         if (isE2ERun) {
           return {
             grader_url: "not-a-real-url",
