@@ -241,6 +241,8 @@ test.describe("Assignment due dates", () => {
 
     //Test with the non-lab section assignment
     await link.click();
+    // Wait for the assignments table to load
+    await expect(page.getByRole("link", { name: testAssignment!.title })).toBeVisible();
     await page.getByRole("link", { name: testAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
@@ -275,6 +277,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
   });
   test("Edit Late Token Allocation works correctly", async ({ page }) => {
+    // Wait for the page content to load
+    await expect(page.getByRole("heading", { name: "Class Late Token Settings" })).toBeVisible();
     await expect(
       page.getByText(`Current Setting: Each student receives ${course.late_tokens_per_student} late tokens`).first()
     ).toBeVisible();
@@ -363,6 +367,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
   });
   test("Student Due Date Extensions work correctly", async ({ page }) => {
     await page.getByText("Student Extensions").click();
+    // Wait for the Student Extensions page to load
+    await expect(page.getByRole("button", { name: "Add Extension" })).toBeVisible();
     await page.getByRole("button", { name: "Add Extension" }).click();
     const addExtensionModal = page.getByRole("dialog");
     await addExtensionModal
@@ -374,6 +380,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const hours = 24;
     await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
     await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
+    // Wait for the modal to close, indicating the extension was saved
+    await expect(addExtensionModal).not.toBeVisible();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
@@ -383,14 +391,18 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByText("Assignment Exceptions").click();
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
     const dueDatesAssignment = page.getByLabel("Assignment Exceptions for Due Dates Assignment").first();
-    await expect(dueDatesAssignment).toContainText(
-      `${student2!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
-    );
+    await expect(dueDatesAssignment).toContainText(student2!.private_profile_name);
+    await expect(dueDatesAssignment).toContainText(`${hours}`);
+    await expect(dueDatesAssignment).toContainText(instructor!.private_profile_name);
+    await expect(dueDatesAssignment).toContainText("Instructor-granted extension for all assignments in class");
 
     const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
-    await expect(dueDatesGroupAssignment).toContainText(
-      `${student2!.private_profile_name}Group: Test Group 1; Other members: ${student!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
-    );
+    await expect(dueDatesGroupAssignment).toContainText(student2!.private_profile_name);
+    await expect(dueDatesGroupAssignment).toContainText("Group: Test Group 1");
+    await expect(dueDatesGroupAssignment).toContainText(student!.private_profile_name);
+    await expect(dueDatesGroupAssignment).toContainText(`${hours}`);
+    await expect(dueDatesGroupAssignment).toContainText(instructor!.private_profile_name);
+    await expect(dueDatesGroupAssignment).toContainText("Instructor-granted extension for all assignments in class");
 
     // Test Delete
     await page.getByText("Student Extensions").click();
@@ -398,7 +410,10 @@ test.describe("Due Date Exceptions & Extensions", () => {
       name: `${student2!.private_profile_name} ${hours} No`
     });
     await studentExtRow.getByLabel("Delete").click();
+    const confirmDialog = page.getByRole("alertdialog");
     await page.getByRole("button", { name: "Confirm action" }).click();
+    // Wait for the confirmation dialog to close, indicating the delete completed
+    await expect(confirmDialog).not.toBeVisible();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`

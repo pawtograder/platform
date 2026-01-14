@@ -210,12 +210,13 @@ test.describe("Assignment Leaderboard", () => {
     // Navigate to assignment page
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}`);
 
-    // Wait for the leaderboard to be visible
+    // Wait for the leaderboard to be visible and loaded
     await expect(page.getByText("🏆 Leaderboard")).toBeVisible({ timeout: 10000 });
+    const leaderboardTable = page.locator("table").filter({ hasText: "Rank" });
+    await expect(leaderboardTable).toBeVisible();
 
     // Student 3 currently has lowest score (70)
     // The "You" badge should be visible for student 3
-    const leaderboardTable = page.locator("table").filter({ hasText: "Rank" });
     await expect(leaderboardTable.getByText("You")).toBeVisible();
 
     // Create a new submission with a higher score for student 3
@@ -224,8 +225,9 @@ test.describe("Assignment Leaderboard", () => {
     // Reload the page
     await page.reload();
 
-    // Wait for the leaderboard to be visible again
+    // Wait for the leaderboard to be visible again and loaded
     await expect(page.getByText("🏆 Leaderboard")).toBeVisible({ timeout: 10000 });
+    await expect(leaderboardTable).toBeVisible();
 
     // Now student 3 should have the highest score (99/100)
     await expect(page.getByText("99/100")).toBeVisible();

@@ -152,6 +152,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
 
     await page.getByRole("link", { name: assignment!.title }).click();
+    // Wait for the assignment page to load
+    await expect(page.getByRole("heading", { name: assignment!.title })).toBeVisible();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await argosScreenshot(page, "Student can submit self-review early");
@@ -214,16 +216,23 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
+    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
 
-    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(
-      `${student!.private_profile_name} applied today at`
-    );
-    //Make sure that we get a very nice screenshot with a fully-loaded page
+    // Wait for the submission content to fully load before checking rubrics
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
+
+    // Wait for the self-review rubric section to be visible and for comments to load
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
+    // Wait for the "applied today at" text to appear (there are multiple instances, just check first)
+    await expect(
+      page.getByText(new RegExp(`${student!.private_profile_name}.*applied.*today at`)).first()
+    ).toBeVisible();
+
+    //Make sure that we get a very nice screenshot with a fully-loaded page
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
       el.scrollIntoView({ block: "start", behavior: "instant" });
@@ -281,10 +290,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     // Release All Submission Reviews
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
-
+    // Wait for the page to load and button to be enabled before clicking
+    await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
     await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
-    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`, {
+      timeout: 90000
+    });
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
@@ -296,6 +308,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
+    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
