@@ -822,6 +822,7 @@ export type Database = {
           meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
+          permit_empty_submissions: boolean;
           regrade_deadline: string | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
@@ -856,6 +857,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          permit_empty_submissions?: boolean;
           regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
@@ -890,6 +892,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          permit_empty_submissions?: boolean;
           regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;

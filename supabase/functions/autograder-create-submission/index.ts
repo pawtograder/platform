@@ -55,6 +55,15 @@ function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
   };
 }
 
+async function safeCleanupRejectedSubmission(params: {
+  adminSupabase: SupabaseClient<Database>;
+  submissionId: number;
+}) {
+  const { adminSupabase, submissionId } = params;
+  await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+  await adminSupabase.from("submissions").delete().eq("id", submissionId);
+}
+
 // Retry helper with exponential backoff
 async function retryWithExponentialBackoff<T>(
   operation: () => Promise<T>,
@@ -1326,8 +1335,49 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           if (updateError) {
             Sentry.captureException(updateError, scope);
           }
+
+          // If the assignment prohibits empty submissions, reject after determining emptiness.
+          // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
+          const isGraderOrInstructor =
+            checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
+          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+            if (!isE2ERun) {
+              await handleGitHubApiCall(
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "Empty submission rejected",
+                      summary: "This assignment does not permit empty submissions.",
+                      text: "Your submission appears to match the handout (starter) files exactly. Please make sure you have committed your changes before submitting."
+                    }
+                  }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
+            }
+            try {
+              await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+            } catch (cleanupErr) {
+              Sentry.captureException(cleanupErr, scope);
+            }
+            throw new UserVisibleError(
+              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              400
+            );
+          }
         } catch (e) {
-          // Never fail submission creation over this auxiliary flag.
+          // Do not fail submission creation over DB read/update issues,
+          // but DO preserve user-facing rejections we intentionally throw.
+          if (e instanceof UserVisibleError) {
+            throw e;
+          }
           Sentry.captureException(e, scope);
         }
 
