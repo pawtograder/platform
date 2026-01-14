@@ -567,10 +567,7 @@ async function handlePushToTemplateRepo(
       }
       const pawtograderConfig = (graderConfig?.config as unknown as PawtograderConfig) || null;
       const expectedFiles = pawtograderConfig?.submissionFiles
-        ? [
-            ...(pawtograderConfig.submissionFiles.files || []),
-            ...(pawtograderConfig.submissionFiles.testFiles || [])
-          ]
+        ? [...(pawtograderConfig.submissionFiles.files || []), ...(pawtograderConfig.submissionFiles.testFiles || [])]
         : [];
       if (!assignment.template_repo || expectedFiles.length === 0) {
         continue;
