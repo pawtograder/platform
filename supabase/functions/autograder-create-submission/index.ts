@@ -61,10 +61,7 @@ async function safeCleanupRejectedSubmission(params: {
 }) {
   const { adminSupabase, submissionId } = params;
   // Break circular-ish references: submissions.grading_review_id -> submission_reviews
-  await adminSupabase
-    .from("submissions")
-    .update({ grading_review_id: null, is_active: false })
-    .eq("id", submissionId);
+  await adminSupabase.from("submissions").update({ grading_review_id: null, is_active: false }).eq("id", submissionId);
 
   // Delete any auto-created review row(s) for this submission.
   await adminSupabase.from("submission_reviews").delete().eq("submission_id", submissionId);
