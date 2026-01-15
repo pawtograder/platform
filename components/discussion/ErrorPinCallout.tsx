@@ -7,17 +7,41 @@ import type { ErrorPinMatch } from "@/hooks/useErrorPinMatches";
 
 interface ErrorPinCalloutProps {
   matches: ErrorPinMatch[];
+  /** If true, shows just the links without the wrapper box and header. Useful when embedding in a custom container. */
+  linksOnly?: boolean;
 }
 
 /**
  * Component that displays error pin matches as a callout near test results.
  * Shows links to relevant discussion threads when a submission matches error pin rules.
  */
-export function ErrorPinCallout({ matches }: ErrorPinCalloutProps) {
+export function ErrorPinCallout({ matches, linksOnly = false }: ErrorPinCalloutProps) {
   const { course_id } = useParams();
 
   if (!matches || matches.length === 0) {
     return null;
+  }
+
+  const links = matches.map((match) => (
+    <Link
+      key={match.error_pin_id}
+      href={`/course/${course_id}/discussion/${match.discussion_thread_id}`}
+      color="blue.600"
+      _dark={{ color: "blue.300" }}
+      fontSize="sm"
+      display="flex"
+      alignItems="center"
+      gap={1}
+      mb={1}
+      _hover={{ textDecoration: "underline" }}
+    >
+      {match.thread_subject}
+      <Icon as={FaExternalLinkAlt} fontSize="xs" />
+    </Link>
+  ));
+
+  if (linksOnly) {
+    return <Box>{links}</Box>;
   }
 
   return (
@@ -37,23 +61,7 @@ export function ErrorPinCallout({ matches }: ErrorPinCalloutProps) {
             Looking for troubleshooting help? Check out these related discussion posts that we have auto-matched to the
             errors in this submission:
           </Text>
-          {matches.map((match) => (
-            <Link
-              key={match.error_pin_id}
-              href={`/course/${course_id}/discussion/${match.discussion_thread_id}`}
-              color="blue.600"
-              _dark={{ color: "blue.300" }}
-              fontSize="sm"
-              display="flex"
-              alignItems="center"
-              gap={1}
-              mb={1}
-              _hover={{ textDecoration: "underline" }}
-            >
-              {match.thread_subject}
-              <Icon as={FaExternalLinkAlt} fontSize="xs" />
-            </Link>
-          ))}
+          {links}
         </Box>
       </HStack>
     </Box>

@@ -513,6 +513,61 @@ function TestResults() {
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
+  const hasBuildError = submission.grader_results?.lint_output === "Gradle build failed";
+
+  // Get all unique error pin matches for prominent display on build errors
+  const getAllMatches = () => {
+    const allMatches: import("@/hooks/useErrorPinMatches").ErrorPinMatch[] = [];
+    matches.forEach((matchList) => {
+      allMatches.push(...matchList);
+    });
+    // Deduplicate by error_pin_id
+    return allMatches.filter(
+      (match, index, self) => index === self.findIndex((m) => m.error_pin_id === match.error_pin_id)
+    );
+  };
+
+  // If there's a build error and we have error pins, show them very prominently
+  if (hasBuildError) {
+    const uniqueMatches = getAllMatches();
+    return (
+      <Box>
+        <Heading size="md" mt={2} color="fg.error">
+          Build Failed
+        </Heading>
+        <Box mt={2} p={2} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
+          <Text fontSize="sm" color="fg.error">
+            The autograder failed to build your code. Check the Results tab for details.
+          </Text>
+        </Box>
+        {/* Show error pins very prominently for build errors */}
+        {uniqueMatches.length > 0 && (
+          <Box
+            mt={3}
+            p={3}
+            bg="blue.50"
+            borderRadius="md"
+            border="2px solid"
+            borderColor="blue.400"
+            _dark={{ bg: "blue.900", borderColor: "blue.500" }}
+          >
+            <HStack gap={2} align="flex-start">
+              <Icon as={FaInfo} color="blue.500" mt={0.5} />
+              <Box flex="1">
+                <Text fontWeight="bold" fontSize="sm" color="blue.700" _dark={{ color: "blue.200" }} mb={1}>
+                  Troubleshooting Help
+                </Text>
+                <Text fontSize="xs" color="blue.600" _dark={{ color: "blue.300" }} mb={2}>
+                  Your error matches common issues:
+                </Text>
+                <ErrorPinCallout matches={uniqueMatches} linksOnly />
+              </Box>
+            </HStack>
+          </Box>
+        )}
+      </Box>
+    );
+  }
 
   return (
     <Box>

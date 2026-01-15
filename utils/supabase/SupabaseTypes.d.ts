@@ -2759,7 +2759,6 @@ export type Database = {
       };
       error_pin_submission_matches: {
         Row: {
-          class_id: number;
           error_pin_id: number;
           grader_result_test_id: number | null;
           id: number;
@@ -2767,7 +2766,6 @@ export type Database = {
           submission_id: number;
         };
         Insert: {
-          class_id: number;
           error_pin_id: number;
           grader_result_test_id?: number | null;
           id?: number;
@@ -2775,7 +2773,6 @@ export type Database = {
           submission_id: number;
         };
         Update: {
-          class_id?: number;
           error_pin_id?: number;
           grader_result_test_id?: number | null;
           id?: number;
@@ -2783,13 +2780,6 @@ export type Database = {
           submission_id?: number;
         };
         Relationships: [
-          {
-            foreignKeyName: "error_pin_submission_matches_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
           {
             foreignKeyName: "error_pin_submission_matches_error_pin_id_fkey";
             columns: ["error_pin_id"];
@@ -11021,6 +11011,8 @@ export type Database = {
           id: number;
           max_submissions_count: number;
           max_submissions_period_secs: number;
+          submissions_remaining: number;
+          submissions_used: number;
         }[];
       };
       get_system_notification_stats: {
