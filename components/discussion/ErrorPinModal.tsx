@@ -1,29 +1,27 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useForm, Controller, useFieldArray } from "react-hook-form";
-import { useQuery } from "@tanstack/react-query";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignments } from "@/hooks/useCourseController";
+import { createClient } from "@/utils/supabase/client";
+import { Json } from "@/utils/supabase/SupabaseTypes";
 import {
+  Box,
+  Button as ChakraButton,
   Dialog,
   Field,
   HStack,
   Icon,
   Input,
-  Stack,
   NativeSelect,
-  Text,
-  Textarea,
-  Box,
-  Button as ChakraButton,
-  VStack
+  Stack,
+  Text
 } from "@chakra-ui/react";
-import { Button } from "@/components/ui/button";
-import { BsX, BsPlus, BsTrash } from "react-icons/bs";
+import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { useCourseController, useAssignments } from "@/hooks/useCourseController";
-import { toaster } from "@/components/ui/toaster";
-import { createClient } from "@/utils/supabase/client";
-import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useMemo, useState } from "react";
+import { Controller, useFieldArray, useForm } from "react-hook-form";
+import { BsPlus, BsTrash, BsX } from "react-icons/bs";
 
 type ErrorPinRuleTarget =
   | "grader_output_student"
@@ -85,9 +83,8 @@ const MATCH_TYPES: { value: MatchType; label: string; supportsRange: boolean }[]
 
 export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id, existingPinId }: ErrorPinModalProps) {
   const { course_id } = useParams();
-  const courseController = useCourseController();
   const assignments = useAssignments();
-  const { profile } = useUserProfile();
+  const { private_profile_id } = useClassProfiles();
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
 
@@ -184,12 +181,13 @@ export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id
       const supabase = createClient();
       const { data, error } = await supabase.rpc("preview_error_pin_matches", {
         p_assignment_id: assignmentId,
-        p_rules: rules,
+        p_rules: rules as unknown as Json,
         p_rule_logic: watch("rule_logic")
       });
 
       if (error) throw error;
-      setPreviewCount(data?.match_count || 0);
+      const result = data as { match_count?: number; submission_ids?: number[] } | null;
+      setPreviewCount(result?.match_count || 0);
     } catch (error) {
       toaster.error({
         title: "Error",
@@ -209,7 +207,7 @@ export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id
       return;
     }
 
-    if (!profile?.id) {
+    if (!private_profile_id) {
       toaster.error({
         title: "Error",
         description: "User profile not found"
@@ -224,17 +222,17 @@ export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id
         discussion_thread_id,
         assignment_id: data.assignment_id,
         class_id: Number(course_id),
-        created_by: profile.id,
+        created_by: private_profile_id,
         rule_logic: data.rule_logic,
         enabled: data.enabled
       };
 
-      const { data: result, error } = await supabase.rpc("save_error_pin", {
-        p_error_pin: pinData,
+      const { error } = await supabase.rpc("save_error_pin", {
+        p_error_pin: pinData as unknown as Json,
         p_rules: data.rules.map((r, idx) => ({
           ...r,
           ordinal: idx
-        }))
+        })) as unknown as Json
       });
 
       if (error) throw error;
@@ -356,7 +354,6 @@ export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id
                   )}
 
                   {fields.map((field, index) => {
-                    const rule = rules[index];
                     const matchType = watch(`rules.${index}.match_type`);
                     const target = watch(`rules.${index}.target`);
                     const supportsRange = MATCH_TYPES.find((mt) => mt.value === matchType)?.supportsRange || false;

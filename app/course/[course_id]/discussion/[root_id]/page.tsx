@@ -25,7 +25,7 @@ import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbta
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { ErrorPinModal } from "@/components/discussion/ErrorPinModal";
 import { ErrorPinIndicator } from "@/components/discussion/ErrorPinIndicator";
-import { useModalManager } from "@/hooks/useModalManager";
+import useModalManager from "@/hooks/useModalManager";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -143,10 +143,10 @@ function ThreadActions({
       {canPin && (
         <Tooltip content="Manage Error Pins">
           <HStack gap={1}>
-            <ErrorPinIndicator discussion_thread_id={thread.id} onClick={() => errorPinModal.open(thread.id)} />
+            <ErrorPinIndicator discussion_thread_id={thread.id} onClick={() => errorPinModal.openModal(thread.id)} />
             <Button
               aria-label="Manage Error Pins"
-              onClick={() => errorPinModal.open(thread.id)}
+              onClick={() => errorPinModal.openModal(thread.id)}
               variant="ghost"
               size="sm"
             >
@@ -171,12 +171,12 @@ function ThreadActions({
       {errorPinModal.isOpen && (
         <ErrorPinModal
           isOpen={errorPinModal.isOpen}
-          onClose={errorPinModal.close}
+          onClose={errorPinModal.closeModal}
           onSuccess={() => {
-            errorPinModal.close();
+            errorPinModal.closeModal();
             // Refetch error pins
           }}
-          discussion_thread_id={errorPinModal.data || thread.id}
+          discussion_thread_id={errorPinModal.modalData || thread.id}
         />
       )}
     </Box>
