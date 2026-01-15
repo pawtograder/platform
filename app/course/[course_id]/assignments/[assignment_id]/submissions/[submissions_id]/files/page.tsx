@@ -1024,6 +1024,7 @@ export default function FilesView() {
     setSelectedFileId(fileIdParam ? Number(fileIdParam) : null);
     setSelectedArtifactId(artifactIdParam ? Number(artifactIdParam) : null);
     // Only run once on mount; subsequent changes are managed locally without navigation
+    // Scrolling is handled by the dedicated useEffect below
   }, [searchParams]);
 
   useEffect(() => {
@@ -1117,6 +1118,83 @@ export default function FilesView() {
     scrollToHash();
   }, [selectedFileId, selectedArtifactId, scrollToHash]);
 
+  // Scroll to top of file/artifact when navigating via URL params (file_id or artifact_id)
+  useEffect(() => {
+    if (isSwitching) return; // Wait until content is rendered
+    if (typeof window === "undefined") return;
+
+    // Only scroll if there's no hash (hash scrolling is handled separately)
+    const hash = window.location.hash;
+    if (hash) return;
+
+    // Determine which selector to use based on which ID is set (using !== null to handle 0 correctly)
+    const selector =
+      selectedFileId !== null
+        ? `[data-file-id="${selectedFileId}"]`
+        : selectedArtifactId !== null
+          ? `[data-artifact-id="${selectedArtifactId}"]`
+          : null;
+
+    if (!selector) return; // No valid ID to scroll to
+
+    // Scroll function that finds the element and scrolls to it
+    const scrollToTop = (element: HTMLElement) => {
+      const container = getScrollableAncestor(element);
+      if (container) {
+        // Scroll container so element is at the top
+        const containerRect = container.getBoundingClientRect();
+        const elRect = element.getBoundingClientRect();
+        const scrollTop = container.scrollTop + (elRect.top - containerRect.top);
+        container.scrollTo({ top: scrollTop, behavior: "auto" });
+      } else {
+        // Scroll window so element is at the top
+        const elTop = element.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({ top: elTop, behavior: "auto" });
+      }
+    };
+
+    // Retry logic to handle cases where element isn't rendered yet
+    let attempts = 0;
+    const maxAttempts = 60; // up to ~3s at 50ms intervals
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let rafId: number | null = null;
+    let scrollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryScroll = () => {
+      const targetElement = document.querySelector(selector);
+      if (targetElement instanceof HTMLElement) {
+        // Element found, scroll to it
+        rafId = requestAnimationFrame(() => {
+          scrollTimeoutId = setTimeout(() => {
+            scrollToTop(targetElement);
+          }, 50);
+        });
+        return;
+      }
+
+      // Element not found yet, retry if we haven't exceeded max attempts
+      if (attempts++ < maxAttempts) {
+        timeoutId = setTimeout(tryScroll, 50);
+      }
+    };
+
+    // Start the retry loop
+    tryScroll();
+
+    // Cleanup function
+    return () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      if (scrollTimeoutId !== null) {
+        clearTimeout(scrollTimeoutId);
+      }
+    };
+  }, [isSwitching, selectedFileId, selectedArtifactId, getScrollableAncestor]);
+
   // After switching to a new file, wait for content to render and then scroll to the hash exactly once per file+hash
   useEffect(() => {
     if (isSwitching) return; // Still switching, wait until content area is shown
@@ -1175,18 +1253,22 @@ export default function FilesView() {
           {isSwitching ? (
             <Skeleton height="70vh" width="100%" />
           ) : selectedArtifact && selectedArtifactId !== null ? (
-            selectedArtifact.data !== null ? (
-              <ArtifactWithComments
-                key={selectedArtifact.id}
-                artifact={selectedArtifact as SubmissionArtifact}
-                reviewAssignmentId={activeReviewAssignmentId}
-                submissionReviewId={finalActiveSubmissionReviewId}
-              />
-            ) : (
-              <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
-            )
+            <Box data-artifact-id={selectedArtifact.id} scrollMarginTop="80px">
+              {selectedArtifact.data !== null ? (
+                <ArtifactWithComments
+                  key={selectedArtifact.id}
+                  artifact={selectedArtifact as SubmissionArtifact}
+                  reviewAssignmentId={activeReviewAssignmentId}
+                  submissionReviewId={finalActiveSubmissionReviewId}
+                />
+              ) : (
+                <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
+              )}
+            </Box>
           ) : selectedFile ? (
-            <CodeFile key={selectedFile.id} file={selectedFile} />
+            <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
+              <CodeFile key={selectedFile.id} file={selectedFile} />
+            </Box>
           ) : (
             <Text>Select a file or artifact to view.</Text>
           )}

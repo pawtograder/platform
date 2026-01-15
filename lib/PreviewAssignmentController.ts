@@ -46,6 +46,7 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
         ordinal: crit.ordinal,
         data: crit.data ?? null,
         is_additive: crit.is_additive,
+        is_deduction_only: crit.is_deduction_only,
         total_points: crit.total_points,
         max_checks_per_submission: crit.max_checks_per_submission,
         min_checks_per_submission: crit.min_checks_per_submission,

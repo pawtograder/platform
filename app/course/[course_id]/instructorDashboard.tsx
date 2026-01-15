@@ -1,9 +1,10 @@
+import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
+import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
-import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
-import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import { createClient } from "@/utils/supabase/server";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -27,6 +28,7 @@ import * as Sentry from "@sentry/nextjs";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
   <DataListRoot
@@ -234,14 +236,15 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     <VStack spaceY={0} align="stretch" p={2}>
       {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
-      <Heading size="xl">Course Dashboard</Heading>
-
       {/* Calendar Schedule Section */}
       {hasCalendar && (
         <Box>
           <CalendarScheduleSummary />
         </Box>
       )}
+
+      {/* Assigned Lab Sections Section */}
+      <AssignedLabSections />
 
       {/* Review Assignments Section */}
       {reviewAssignmentsSummary && reviewAssignmentsSummary.length > 0 && (

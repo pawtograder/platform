@@ -216,6 +216,8 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
         ...commentsCSS,
         "& .line-number": {
           width: "40px",
+          minWidth: "40px",
+          flexShrink: 0,
           textAlign: "right",
           padding: "0 5px",
           marginRight: "10px",

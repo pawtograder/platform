@@ -13,6 +13,7 @@ import {
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "./useSubmission";
+import { useNavigationProgress } from "@/components/ui/navigation-progress";
 
 export type SubmissionReviewContextType = {
   activeReviewAssignmentId: number | undefined;
@@ -50,6 +51,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const assignmentController = useAssignmentController();
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
   const [clientActiveRubricId, setClientActiveRubricId] = useState<number | undefined>(undefined);
+  const { startNavigation } = useNavigationProgress();
 
   const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
   const selectedReviewIdParam = searchParams.get("selected_review_id");
@@ -227,6 +229,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     params.delete("ignore_review");
     params.delete("selected_review_id");
     const qs = params.toString();
+    startNavigation();
     router.push(qs ? `${pathname}?${qs}` : pathname);
   };
 
@@ -235,6 +238,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     if (id === undefined || id === null) {
       params.delete("selected_review_id");
       const qs = params.toString();
+      startNavigation();
       router.push(qs ? `${pathname}?${qs}` : pathname);
       return;
     }
@@ -267,6 +271,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       params.delete("review_assignment_id");
     }
     const qs = params.toString();
+    startNavigation();
     router.push(qs ? `${pathname}?${qs}` : pathname);
   };
 
@@ -285,6 +290,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       }
     }
     const qs = params.toString();
+    startNavigation();
     router.push(qs ? `${pathname}?${qs}` : pathname);
   };
 

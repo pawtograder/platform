@@ -1337,7 +1337,9 @@ export function RubricCriteria({
   const [selectedCheck, setSelectedCheck] = useState<HydratedRubricCheck>();
   let pointsText = "";
   if (criteria.total_points) {
-    if (isAdditive) {
+    if (criteria.is_deduction_only) {
+      pointsText = `-${totalPoints}/${criteria.total_points}`;
+    } else if (isAdditive) {
       pointsText = `${totalPoints}/${criteria.total_points}`;
     } else {
       pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;

@@ -2,6 +2,8 @@ import { Box } from "@chakra-ui/react";
 
 import React from "react";
 
+import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
+import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { fetchCourseControllerData, getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
@@ -9,7 +11,6 @@ import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
-import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -65,6 +66,7 @@ const ProtectedLayout = async ({
               <Box pt="0" ml="0" mr="0">
                 {children}
               </Box>
+              <FloatingHelpRequestWidget />
             </OfficeHoursControllerProvider>
           </CourseControllerProvider>
         </TimeZoneProvider>

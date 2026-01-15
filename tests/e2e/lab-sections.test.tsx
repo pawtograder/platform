@@ -75,6 +75,7 @@ test.describe("Lab Sections Page", () => {
     await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
     await expect(page.getByRole("menuitem", { name: "Lab Sections" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Lab Sections" }).click();
+    await page.getByRole("link", { name: "Manage lab sections" }).click();
   });
   test("Instructors can view lab section contents", async ({ page }) => {
     // Check Lab Sections Page Contents

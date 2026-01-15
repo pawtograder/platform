@@ -1261,15 +1261,15 @@ export class CourseController {
 
     // Find the most recent lab section meeting before the assignment's original due date
     const assignmentDueDate = new Date(assignment.due_date);
+    // Convert assignment due date to YYYY-MM-DD string for date-only comparison
+    const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
     const labMeetingResult = this.labSectionMeetings.list();
     const relevantMeetings = labMeetingResult.data
       .filter(
         (meeting) =>
-          meeting.lab_section_id === labSectionId &&
-          !meeting.cancelled &&
-          new Date(meeting.meeting_date) < assignmentDueDate
+          meeting.lab_section_id === labSectionId && !meeting.cancelled && meeting.meeting_date < assignmentDueDateStr
       )
-      .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
+      .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
 
     if (relevantMeetings.length === 0) {
       return new Date(assignment.due_date);

@@ -123,6 +123,9 @@
         "is_additive": {
           "type": "boolean"
         },
+        "is_deduction_only": {
+          "type": "boolean"
+        },
         "max_checks_per_submission": {
           "type": "number"
         },
@@ -136,7 +139,7 @@
           "type": "number"
         }
       },
-      "required": ["checks", "name"],
+      "required": ["checks", "is_deduction_only", "name"],
       "type": "object"
     },
     "YmlRubricPartType": {

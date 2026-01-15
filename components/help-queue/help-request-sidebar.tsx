@@ -64,35 +64,28 @@ export function HelpRequestSidebar({
 
   // Get requests to show in sidebar
   const requestsForSidebar = useMemo(() => {
-    if (isManageMode) {
-      // In manage mode, show requests from queues the TA is working
-      // For now, show all requests - can be filtered by active assignments later
-      return allHelpRequests.filter(
-        (r) => r.status === "open" || r.status === "in_progress" || r.assignee === private_profile_id
-      );
-    } else {
-      // In student mode, show requests from current queue
-      if (!currentQueue) return [];
-      return allHelpRequests.filter((r) => r.help_queue === currentQueue.id);
-    }
-  }, [allHelpRequests, currentQueue, isManageMode, private_profile_id]);
+    // In manage mode, show requests from the current queue only
+    // In student mode, also show requests from current queue
+    if (!currentQueue) return [];
+    return allHelpRequests.filter((r) => r.help_queue === currentQueue.id);
+  }, [allHelpRequests, currentQueue]);
 
-  // Group and sort requests: currently working, then open, then closed
-  const { workingRequests, openRequests, closedRequests } = useMemo(() => {
+  // Group and sort requests: currently working, then open, then resolved
+  const { workingRequests, openRequests, resolvedRequests } = useMemo(() => {
     const working: typeof requestsForSidebar = [];
     const open: typeof requestsForSidebar = [];
-    const closed: typeof requestsForSidebar = [];
+    const resolved: typeof requestsForSidebar = [];
 
     requestsForSidebar.forEach((request) => {
       const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
-      const isClosed = request.status === "closed" || request.status === "resolved";
+      const isResolved = request.status === "closed" || request.status === "resolved";
 
       if (isAssignedToMe && (request.status === "open" || request.status === "in_progress")) {
         working.push(request);
-      } else if (!isClosed && (request.status === "open" || request.status === "in_progress")) {
+      } else if (!isResolved && (request.status === "open" || request.status === "in_progress")) {
         open.push(request);
-      } else if (isClosed) {
-        closed.push(request);
+      } else if (isResolved) {
+        resolved.push(request);
       }
     });
 
@@ -102,10 +95,10 @@ export function HelpRequestSidebar({
     // Sort open by oldest first
     open.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-    // Sort closed by newest first
-    closed.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    // Sort resolved by newest first
+    resolved.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    return { workingRequests: working, openRequests: open, closedRequests: closed };
+    return { workingRequests: working, openRequests: open, resolvedRequests: resolved };
   }, [requestsForSidebar, isManageMode, private_profile_id]);
 
   // Create mapping of request ID to student profile IDs
@@ -150,7 +143,7 @@ export function HelpRequestSidebar({
       const el = scrollRef.current;
       if (el) el.scrollTop = 0;
     }
-  }, [requestId, currentQueue?.id, workingRequests.length, openRequests.length, closedRequests.length]);
+  }, [requestId, currentQueue?.id, workingRequests.length, openRequests.length, resolvedRequests.length]);
 
   if (!isOpen) {
     return (
@@ -172,7 +165,7 @@ export function HelpRequestSidebar({
             </Button>
           </Tooltip>
           <Text mt="1" fontSize="2xs" color="fg.muted" textAlign="center">
-            {workingRequests.length + openRequests.length + closedRequests.length}
+            {workingRequests.length + openRequests.length + resolvedRequests.length}
           </Text>
         </Box>
       </Box>
@@ -206,8 +199,8 @@ export function HelpRequestSidebar({
               {sidebarTitle}
             </Text>
             <Text color="fg.muted" fontSize="2xs">
-              {workingRequests.length + openRequests.length + closedRequests.length} request
-              {workingRequests.length + openRequests.length + closedRequests.length === 1 ? "" : "s"}
+              {workingRequests.length + openRequests.length + resolvedRequests.length} request
+              {workingRequests.length + openRequests.length + resolvedRequests.length === 1 ? "" : "s"}
             </Text>
           </Box>
           <Tooltip content="Hide sidebar">
@@ -226,109 +219,153 @@ export function HelpRequestSidebar({
           lastScrollTopRef.current = (e.target as HTMLDivElement).scrollTop;
         }}
       >
-        {/* Currently Working */}
-        {workingRequests.map((request) => {
-          const queue = helpQueues.find((q) => q.id === request.help_queue);
-          const students = requestStudentsMap[request.id] || [];
-          const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
-
-          return (
-            <Box
-              key={request.id}
-              borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
-              borderLeftColor={isAssignedToMe ? "green.500" : "transparent"}
-              position="relative"
-            >
-              <RequestRow
-                request={request}
-                href={
-                  isManageMode
-                    ? `/course/${course_id}/manage/office-hours/request/${request.id}`
-                    : `/course/${course_id}/office-hours/${request.help_queue}/${request.id}`
-                }
-                selected={request.id === requestId}
-                queue={queue}
-                students={students}
-                variant="compact"
-              />
-              {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
+        {/* Currently Working Section */}
+        {workingRequests.length > 0 && (
+          <>
+            <Box px="4" py="2" bg="green.50" borderBottomWidth="1px" borderColor="border.muted">
+              <HStack gap="2" align="center">
+                <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="green.700">
+                  Working
+                </Text>
+                <Badge colorPalette="green" variant="solid" size="sm">
+                  {workingRequests.length}
+                </Badge>
+              </HStack>
             </Box>
-          );
-        })}
+            {workingRequests.map((request) => {
+              const queue = helpQueues.find((q) => q.id === request.help_queue);
+              const students = requestStudentsMap[request.id] || [];
+              const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
+
+              return (
+                <Box
+                  key={request.id}
+                  borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
+                  borderLeftColor={isAssignedToMe ? "green.500" : "transparent"}
+                  position="relative"
+                >
+                  <RequestRow
+                    request={request}
+                    href={
+                      isManageMode
+                        ? `/course/${course_id}/manage/office-hours/request/${request.id}`
+                        : `/course/${course_id}/office-hours/${request.help_queue}/${request.id}`
+                    }
+                    selected={request.id === requestId}
+                    queue={queue}
+                    students={students}
+                    variant="compact"
+                  />
+                  {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
+                </Box>
+              );
+            })}
+          </>
+        )}
 
         {/* Separator between working and open */}
-        {workingRequests.length > 0 && openRequests.length > 0 && (
+        {workingRequests.length > 0 && (
           <Box px="4" py="2">
             <Separator />
           </Box>
         )}
 
-        {/* Open Requests */}
-        {openRequests.map((request) => {
-          const queue = helpQueues.find((q) => q.id === request.help_queue);
-          const students = requestStudentsMap[request.id] || [];
-          const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
+        {/* Open Requests Section - Always show */}
+        <Box px="4" py="2" bg="bg.info" borderBottomWidth="1px" borderColor="border.emphasized">
+          <HStack gap="2" align="center">
+            <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="fg.info">
+              Open
+            </Text>
+            <Badge colorPalette="blue" variant="solid" size="sm">
+              {openRequests.length}
+            </Badge>
+          </HStack>
+        </Box>
+        {openRequests.length === 0 ? (
+          <Box px="4" py="2" color="fg.muted" fontSize="xs">
+            No open requests
+          </Box>
+        ) : (
+          openRequests.map((request) => {
+            const queue = helpQueues.find((q) => q.id === request.help_queue);
+            const students = requestStudentsMap[request.id] || [];
+            const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
 
-          return (
-            <Box
-              key={request.id}
-              borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
-              borderLeftColor={isAssignedToMe ? "green.500" : "transparent"}
-              position="relative"
-            >
-              <RequestRow
-                request={request}
-                href={
-                  isManageMode
-                    ? `/course/${course_id}/manage/office-hours/request/${request.id}`
-                    : `/course/${course_id}/office-hours/${request.help_queue}/${request.id}`
-                }
-                selected={request.id === requestId}
-                queue={queue}
-                students={students}
-                variant="compact"
-              />
-              {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
-            </Box>
-          );
-        })}
+            return (
+              <Box
+                key={request.id}
+                borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
+                borderLeftColor={isAssignedToMe ? "green.500" : "transparent"}
+                position="relative"
+              >
+                <RequestRow
+                  request={request}
+                  href={
+                    isManageMode
+                      ? `/course/${course_id}/manage/office-hours/request/${request.id}`
+                      : `/course/${course_id}/office-hours/${request.help_queue}/${request.id}`
+                  }
+                  selected={request.id === requestId}
+                  queue={queue}
+                  students={students}
+                  variant="compact"
+                />
+                {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
+              </Box>
+            );
+          })
+        )}
 
-        {/* Separator between open and closed */}
-        {(workingRequests.length > 0 || openRequests.length > 0) && closedRequests.length > 0 && (
+        {/* Separator between open and resolved */}
+        {resolvedRequests.length > 0 && (
           <Box px="4" py="2">
             <Separator />
           </Box>
         )}
 
-        {/* Closed Requests */}
-        {closedRequests.map((request) => {
-          const queue = helpQueues.find((q) => q.id === request.help_queue);
-          const students = requestStudentsMap[request.id] || [];
-          const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
-
-          return (
-            <Box
-              key={request.id}
-              borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
-              borderLeftColor={isAssignedToMe ? "green.500" : "transparent"}
-              position="relative"
-            >
-              <RequestRow
-                request={request}
-                href={
-                  isManageMode
-                    ? `/course/${course_id}/manage/office-hours/request/${request.id}`
-                    : `/course/${course_id}/office-hours/${request.help_queue}/${request.id}`
-                }
-                selected={request.id === requestId}
-                queue={queue}
-                students={students}
-                variant="compact"
-              />
-              {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
+        {/* Resolved Requests Section */}
+        {resolvedRequests.length > 0 && (
+          <>
+            <Box px="4" py="2" bg="bg.subtle" borderBottomWidth="1px" borderColor="border.muted">
+              <HStack gap="2" align="center">
+                <Text fontWeight="semibold" fontSize="xs" textTransform="uppercase" color="fg.emphasized">
+                  Resolved
+                </Text>
+                <Badge colorPalette="gray" variant="solid" size="sm">
+                  {resolvedRequests.length}
+                </Badge>
+              </HStack>
             </Box>
-          );
-        })}
+            {resolvedRequests.map((request) => {
+              const queue = helpQueues.find((q) => q.id === request.help_queue);
+              const students = requestStudentsMap[request.id] || [];
+              const isAssignedToMe = isManageMode && private_profile_id && request.assignee === private_profile_id;
+
+              return (
+                <Box
+                  key={request.id}
+                  borderLeftWidth={isAssignedToMe ? "3px" : "0px"}
+                  borderLeftColor={isAssignedToMe ? "bg.info" : "transparent"}
+                  position="relative"
+                >
+                  <RequestRow
+                    request={request}
+                    href={
+                      isManageMode
+                        ? `/course/${course_id}/manage/office-hours/request/${request.id}`
+                        : `/course/${course_id}/office-hours/${request.help_queue}/${request.id}`
+                    }
+                    selected={request.id === requestId}
+                    queue={queue}
+                    students={students}
+                    variant="compact"
+                  />
+                  {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
+                </Box>
+              );
+            })}
+          </>
+        )}
       </Box>
     </Box>
   );

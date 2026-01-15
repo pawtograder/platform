@@ -1,7 +1,6 @@
 import { Survey, SurveyResponse } from "@/types/survey";
 import { createClient } from "@/utils/supabase/server";
 import {
-  Accordion,
   Box,
   Button,
   CardBody,
@@ -19,7 +18,6 @@ import {
 } from "@chakra-ui/react";
 import { format } from "date-fns";
 
-import { CalendarAccordionTrigger } from "@/components/calendar/calendar-accordion-trigger";
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
@@ -171,20 +169,18 @@ export default async function StudentDashboard({
     <VStack spaceY={0} align="stretch" p={2}>
       {identities.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
-      <Heading size="xl">Course Dashboard</Heading>
-
-      {/* Compact Section Info */}
+      {/* Section Cards */}
       {(classSection || labSection) && (
-        <CardRoot>
-          <CardBody>
-            <HStack gap={4} align="flex-start" flexWrap="wrap">
-              {/* Course Section */}
-              {classSection && (
-                <Box flex={1} minW="200px">
-                  <Text fontSize="xs" color="fg.muted" mb={1} fontWeight="medium">
-                    Your Course Section
-                  </Text>
-                  <Text fontWeight="semibold" fontSize="sm" mb={1}>
+        <HStack gap={4} align="stretch" flexWrap="wrap">
+          {/* Course Section Card */}
+          {classSection && (
+            <CardRoot flex={1} minW="200px" h="100%">
+              <CardBody p={3} h="100%" display="flex" flexDirection="column">
+                <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">
+                  Course Section
+                </Text>
+                <VStack align="start" gap={1} flex={1}>
+                  <Text fontWeight="medium" fontSize="sm">
                     {classSection.name}
                   </Text>
                   {classSection.meeting_times && (
@@ -197,16 +193,20 @@ export default async function StudentDashboard({
                       📍 {classSection.meeting_location}
                     </Text>
                   )}
-                </Box>
-              )}
+                </VStack>
+              </CardBody>
+            </CardRoot>
+          )}
 
-              {/* Lab Section */}
-              {labSection && (
-                <Box flex={1} minW="200px">
-                  <Text fontSize="xs" color="fg.muted" mb={1} fontWeight="medium">
-                    Your Lab Section
-                  </Text>
-                  <Text fontWeight="semibold" fontSize="sm" mb={1}>
+          {/* Lab Section Card */}
+          {labSection && (
+            <CardRoot flex={1} minW="200px" h="100%">
+              <CardBody p={3} h="100%" display="flex" flexDirection="column">
+                <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">
+                  Lab Section
+                </Text>
+                <VStack align="start" gap={1} flex={1}>
+                  <Text fontWeight="medium" fontSize="sm">
                     {labSection.name}
                   </Text>
                   {labSection.day_of_week && (
@@ -226,26 +226,15 @@ export default async function StudentDashboard({
                       👤 {labLeaders.join(", ")}
                     </Text>
                   )}
-                </Box>
-              )}
-            </HStack>
-          </CardBody>
-        </CardRoot>
+                </VStack>
+              </CardBody>
+            </CardRoot>
+          )}
+        </HStack>
       )}
 
       {/* Calendar Schedule Section */}
-      {hasCalendar && (
-        <Accordion.Root collapsible defaultValue={[]}>
-          <Accordion.Item value="schedule">
-            <CalendarAccordionTrigger />
-            <Accordion.ItemContent>
-              <Accordion.ItemBody>
-                <CalendarScheduleSummary />
-              </Accordion.ItemBody>
-            </Accordion.ItemContent>
-          </Accordion.Item>
-        </Accordion.Root>
-      )}
+      {hasCalendar && <CalendarScheduleSummary />}
       <Box>
         <Heading size="lg" mb={4}>
           Upcoming Assignments

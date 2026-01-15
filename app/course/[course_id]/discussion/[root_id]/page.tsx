@@ -1,5 +1,6 @@
 "use client";
 
+import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
 import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
@@ -140,6 +141,8 @@ function ThreadActions({
           <FaReply />
         </Button>
       </Tooltip>
+      {/* Discord link - shown if thread has a Discord message (staff only see it) */}
+      <DiscordDiscussionMessageLink threadId={thread.id} />
       {/* <Tooltip content="Emote">
         <Button aria-label="Emote" variant="ghost" size="sm">
           <FaSmile />

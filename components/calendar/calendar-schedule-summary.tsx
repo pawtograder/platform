@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarEvent, useAllCalendarEvents } from "@/hooks/useCalendarEvents";
-import { Box, Button, Card, Flex, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Card, Flex, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import CalendarSubscribeButton from "./calendar-subscribe-button";
@@ -20,7 +20,7 @@ import {
   isSameDay
 } from "date-fns";
 import { useMemo, useState, useEffect, useRef } from "react";
-import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
+import { BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
 import { isUrl, CalendarColorPalette } from "./calendar-utils";
 import { useCalendarColorsFromEvents } from "./CalendarColorContext";
 import { useParams, useRouter } from "next/navigation";
@@ -1034,6 +1034,25 @@ function EventsList({
     });
   }, [startDate, endDate, hasWeekendEvents]);
 
+  // Auto-scroll to current time when viewing today
+  // Must be called before any conditional returns (React hooks rules)
+  useEffect(() => {
+    if (containerRef.current && viewMode === "today" && offset === 0) {
+      // Wait for next tick to ensure DOM is fully rendered and sized
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          const now = new Date();
+          const currentHour = now.getHours() + now.getMinutes() / 60;
+          if (currentHour >= START_HOUR && currentHour <= END_HOUR) {
+            // Show 2 hours before current time
+            const scrollTop = (currentHour - START_HOUR - 2) * HOUR_HEIGHT;
+            containerRef.current.scrollTop = Math.max(0, scrollTop);
+          }
+        }
+      });
+    }
+  }, [viewMode, offset, dayEvents.length, containerWidth]); // Re-run when events or container size changes
+
   if (events.length === 0) {
     return (
       <Box py={4} textAlign="center">
@@ -1324,128 +1343,123 @@ export default function CalendarScheduleSummary() {
   }, [viewMode]);
 
   return (
-    <Card.Root width="100%">
-      <Card.Header pb={2}>
-        <Flex justify="space-between" align="center" wrap="wrap" gap={2}>
-          <HStack gap={2}>
-            <Icon as={BsCalendar} color="blue.500" />
-            <Heading size="sm">Schedule</Heading>
-          </HStack>
+    <Box position="relative" width="100%">
+      <Card.Root width="100%">
+        {/* Floating subscription button */}
+        <Box position="absolute" top={2} right={2} zIndex={10}>
+          <CalendarSubscribeButton iconOnly />
+        </Box>
 
-          <HStack gap={2}>
-            <CalendarSubscribeButton />
-          </HStack>
-        </Flex>
-      </Card.Header>
-
-      <Card.Body pt={0} ref={cardBodyRef}>
-        <VStack align="stretch" gap={3}>
-          {/* View mode tabs */}
-          <HStack gap={1} justify="center">
-            {(["today", "week", "month"] as ViewMode[]).map((mode) => (
-              <Button
-                key={mode}
-                size="xs"
-                variant={viewMode === mode ? "solid" : "ghost"}
-                colorPalette={viewMode === mode ? "blue" : "gray"}
-                onClick={() => handleViewChange(mode)}
-                textTransform="capitalize"
-              >
-                {mode}
-              </Button>
-            ))}
-          </HStack>
-
-          {/* Navigation and range label */}
-          <Flex justify="space-between" align="center">
-            <Button size="xs" variant="ghost" onClick={handlePrev} aria-label="Previous">
-              <Icon as={BsChevronLeft} />
-            </Button>
-
-            <HStack gap={2}>
-              <Text fontSize="sm" fontWeight="medium">
-                {rangeLabel}
-              </Text>
-              {offset !== 0 && (
-                <Button size="xs" variant="outline" onClick={handleReset}>
-                  {viewMode === "today" ? "Today" : viewMode === "week" ? "This Week" : "This Month"}
+        <Card.Body pt={0} ref={cardBodyRef}>
+          <VStack align="stretch" gap={0}>
+            {/* View mode tabs */}
+            <HStack gap={1} justify="center" mt={0}>
+              {(["today", "week", "month"] as ViewMode[]).map((mode) => (
+                <Button
+                  key={mode}
+                  size="xs"
+                  variant={viewMode === mode ? "solid" : "ghost"}
+                  colorPalette={viewMode === mode ? "blue" : "gray"}
+                  onClick={() => handleViewChange(mode)}
+                  textTransform="capitalize"
+                >
+                  {mode}
                 </Button>
-              )}
+              ))}
             </HStack>
 
-            <Button size="xs" variant="ghost" onClick={handleNext} aria-label="Next">
-              <Icon as={BsChevronRight} />
-            </Button>
-          </Flex>
+            {/* Navigation and range label */}
+            <Flex justify="space-between" align="center" gap={2}>
+              <Button size="xs" variant="ghost" onClick={handlePrev} aria-label="Previous">
+                <Icon as={BsChevronLeft} />
+              </Button>
 
-          {/* Legend */}
-          {stats.total > 0 && (
-            <HStack justify="center" wrap="wrap" gap={3} fontSize="xs">
-              {/* Office Hours Queues */}
-              {stats.uniqueQueues.map((queueName) => {
-                const colors = getOfficeHoursColor(queueName);
-                return (
-                  <HStack key={`queue-${queueName}`} gap={1}>
-                    <Box w={3} h={3} bg={colors.legend || colors.border} borderRadius="sm" />
-                    <Text color="fg.muted">{queueName}</Text>
+              <HStack gap={2}>
+                <Text fontSize="sm" fontWeight="medium">
+                  {rangeLabel}
+                </Text>
+                {offset !== 0 && (
+                  <Button size="xs" variant="outline" onClick={handleReset}>
+                    {viewMode === "today" ? "Today" : viewMode === "week" ? "This Week" : "This Month"}
+                  </Button>
+                )}
+              </HStack>
+
+              <Button size="xs" variant="ghost" onClick={handleNext} aria-label="Next">
+                <Icon as={BsChevronRight} />
+              </Button>
+            </Flex>
+
+            {/* Legend */}
+            {stats.total > 0 && (
+              <HStack justify="center" wrap="wrap" gap={2} fontSize="xs">
+                {/* Office Hours Queues */}
+                {stats.uniqueQueues.map((queueName) => {
+                  const colors = getOfficeHoursColor(queueName);
+                  return (
+                    <HStack key={`queue-${queueName}`} gap={1}>
+                      <Box w={3} h={3} bg={colors.legend || colors.border} borderRadius="sm" />
+                      <Text color="fg.muted">{queueName}</Text>
+                    </HStack>
+                  );
+                })}
+
+                {/* Assignments */}
+                {stats.assignmentsCount > 0 && (
+                  <HStack gap={1}>
+                    <Box w={3} h={3} bg="orange.500" borderRadius="sm" />
+                    <Text color="fg.muted">
+                      Assignments {stats.assignmentsCount > 1 && `(${stats.assignmentsCount})`}
+                    </Text>
                   </HStack>
-                );
-              })}
+                )}
 
-              {/* Assignments */}
-              {stats.assignmentsCount > 0 && (
-                <HStack gap={1}>
-                  <Box w={3} h={3} bg="orange.500" borderRadius="sm" />
-                  <Text color="fg.muted">
-                    Assignments {stats.assignmentsCount > 1 && `(${stats.assignmentsCount})`}
-                  </Text>
-                </HStack>
-              )}
+                {/* Lab Sections */}
+                {stats.labMeetingsCount > 0 && (
+                  <HStack gap={1}>
+                    <Box w={3} h={3} bg="green.500" borderRadius="sm" />
+                    <Text color="fg.muted">
+                      Lab Sections {stats.labMeetingsCount > 1 && `(${stats.labMeetingsCount})`}
+                    </Text>
+                  </HStack>
+                )}
 
-              {/* Lab Sections */}
-              {stats.labMeetingsCount > 0 && (
-                <HStack gap={1}>
-                  <Box w={3} h={3} bg="green.500" borderRadius="sm" />
-                  <Text color="fg.muted">
-                    Lab Sections {stats.labMeetingsCount > 1 && `(${stats.labMeetingsCount})`}
-                  </Text>
-                </HStack>
-              )}
+                {/* Other Events */}
+                {stats.otherEventsCount > 0 && (
+                  <HStack gap={1}>
+                    <Box w={3} h={3} bg="yellow.500" borderRadius="sm" />
+                    <Text color="fg.muted">Events {stats.otherEventsCount > 1 && `(${stats.otherEventsCount})`}</Text>
+                  </HStack>
+                )}
+              </HStack>
+            )}
 
-              {/* Other Events */}
-              {stats.otherEventsCount > 0 && (
-                <HStack gap={1}>
-                  <Box w={3} h={3} bg="yellow.500" borderRadius="sm" />
-                  <Text color="fg.muted">Events {stats.otherEventsCount > 1 && `(${stats.otherEventsCount})`}</Text>
-                </HStack>
-              )}
-            </HStack>
-          )}
-
-          {/* Events list */}
-          <Box
-            ref={scrollableContainerRef}
-            maxH="600px"
-            overflowY="auto"
-            overflowX="hidden"
-            width="100%"
-            minW={0}
-            boxSizing="border-box"
-          >
-            <EventsList
-              events={filteredEvents}
-              viewMode={viewMode}
-              emptyMessage={emptyMessage}
-              getEventColor={getEventColor}
-              startDate={startDate}
-              endDate={endDate}
-              containerRef={cardBodyRef}
-              scrollableContainerRef={scrollableContainerRef}
-              offset={offset}
-            />
-          </Box>
-        </VStack>
-      </Card.Body>
-    </Card.Root>
+            {/* Events list */}
+            <Box
+              ref={scrollableContainerRef}
+              maxH="600px"
+              overflowY="auto"
+              overflowX="hidden"
+              width="100%"
+              minW={0}
+              boxSizing="border-box"
+              mt={-0.5}
+            >
+              <EventsList
+                events={filteredEvents}
+                viewMode={viewMode}
+                emptyMessage={emptyMessage}
+                getEventColor={getEventColor}
+                startDate={startDate}
+                endDate={endDate}
+                containerRef={cardBodyRef}
+                scrollableContainerRef={scrollableContainerRef}
+                offset={offset}
+              />
+            </Box>
+          </VStack>
+        </Card.Body>
+      </Card.Root>
+    </Box>
   );
 }

@@ -1,10 +1,10 @@
 import { createClient } from "@/utils/supabase/server";
-import { Box, Heading, Stack, Text, Badge, HStack, Link as ChakraLink } from "@chakra-ui/react";
-import Link from "next/link";
+import { Badge, Box, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
-import { TopicIcon } from "./TopicIcon";
-import { DiscussionStatusIndicator } from "./DiscussionStatusIndicator";
+import Link from "@/components/ui/link";
 import { DiscussionPinnedHeader } from "./DiscussionPinnedHeader";
+import { DiscussionStatusIndicator } from "./DiscussionStatusIndicator";
+import { TopicIcon } from "./TopicIcon";
 
 type DiscussionSummaryProps = {
   courseId: number;
@@ -254,11 +254,7 @@ export async function DiscussionSummary({ courseId, userId }: DiscussionSummaryP
     <Box>
       <HStack justify="space-between" align="center" mb={4}>
         <Heading size="lg">Discussion Activity</Heading>
-        <Link href={`/course/${courseId}/discussion`}>
-          <ChakraLink color="blue.500" textDecoration="underline" fontSize="sm">
-            View all →
-          </ChakraLink>
-        </Link>
+        <Link href={`/course/${courseId}/discussion`}>View all →</Link>
       </HStack>
 
       <Stack spaceY={4}>

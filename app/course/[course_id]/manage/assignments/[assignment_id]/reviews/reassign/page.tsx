@@ -471,63 +471,65 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   const toReviewWithOriginalParts = useCallback(
     (result: AssignmentResult) => {
       const reviewAssignments: DraftReviewAssignment[] = [];
-      result.assignments?.entries().forEach((entry) => {
-        const user: UserRoleWithConflictsAndName = entry[0];
-        const submissions: SubmissionWithGrading[] = entry[1];
-        submissions.forEach((submission) => {
-          // Get all group members or just the single submitter
-          const groupMembers = submission.assignment_groups?.assignment_groups_members || [
-            { profile_id: submission.profile_id }
-          ];
+      Array.from(result.assignments?.entries() || []).forEach(
+        (entry: [UserRoleWithConflictsAndName, SubmissionWithGrading[]]) => {
+          const user: UserRoleWithConflictsAndName = entry[0];
+          const submissions: SubmissionWithGrading[] = entry[1];
+          submissions.forEach((submission) => {
+            // Get all group members or just the single submitter
+            const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+              { profile_id: submission.profile_id }
+            ];
 
-          // Find UserRoleWithConflictsAndName for each group member
-          const submitters: UserRoleWithConflictsAndName[] = [];
-          for (const member of groupMembers) {
-            const memberUserRole = userRoles?.data.find((item) => {
-              return item.private_profile_id === member.profile_id;
-            });
-            if (!memberUserRole) {
+            // Find UserRoleWithConflictsAndName for each group member
+            const submitters: UserRoleWithConflictsAndName[] = [];
+            for (const member of groupMembers) {
+              const memberUserRole = userRoles?.data.find((item) => {
+                return item.private_profile_id === member.profile_id;
+              });
+              if (!memberUserRole) {
+                toaster.error({
+                  title: "Error drafting reviews",
+                  description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+                });
+                return;
+              }
+              submitters.push(memberUserRole);
+            }
+
+            if (submitters.length === 0) {
               toaster.error({
                 title: "Error drafting reviews",
-                description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+                description: `No valid submitters found for submission #${submission.id}`
               });
               return;
             }
-            submitters.push(memberUserRole);
-          }
 
-          if (submitters.length === 0) {
-            toaster.error({
-              title: "Error drafting reviews",
-              description: `No valid submitters found for submission #${submission.id}`
-            });
-            return;
-          }
+            // Get the original rubric parts for this submission
+            const originalParts = originalRubricParts.get(submission.id) || [];
 
-          // Get the original rubric parts for this submission
-          const originalParts = originalRubricParts.get(submission.id) || [];
-
-          if (originalParts.length > 0) {
-            // Create separate assignments for each original rubric part
-            originalParts.forEach((part) => {
+            if (originalParts.length > 0) {
+              // Create separate assignments for each original rubric part
+              originalParts.forEach((part) => {
+                reviewAssignments.push({
+                  assignee: user,
+                  submitters: submitters,
+                  submission: submission,
+                  part: part
+                });
+              });
+            } else {
+              // No specific parts were originally assigned, create assignment without parts
               reviewAssignments.push({
                 assignee: user,
                 submitters: submitters,
                 submission: submission,
-                part: part
+                part: undefined
               });
-            });
-          } else {
-            // No specific parts were originally assigned, create assignment without parts
-            reviewAssignments.push({
-              assignee: user,
-              submitters: submitters,
-              submission: submission,
-              part: undefined
-            });
-          }
-        });
-      });
+            }
+          });
+        }
+      );
       return reviewAssignments;
     },
     [userRoles, originalRubricParts]
