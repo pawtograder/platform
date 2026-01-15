@@ -34,7 +34,7 @@ export function ErrorPinCallout({ matches }: ErrorPinCalloutProps) {
         <Icon as={FaExclamationCircle} color="blue.500" mt={0.5} />
         <Box flex="1">
           <Text fontWeight="semibold" fontSize="sm" mb={1}>
-            Related Discussion Posts:
+            Looking for troubleshooting help? Check out these related discussion posts that we have auto-matched to the errors in this submission:
           </Text>
           {matches.map((match) => (
             <Link

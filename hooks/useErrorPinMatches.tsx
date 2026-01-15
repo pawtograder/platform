@@ -1,7 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { createClient } from "@/utils/supabase/client";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export interface ErrorPinMatch {
   error_pin_id: number;
@@ -14,6 +14,7 @@ interface UseErrorPinMatchesReturn {
   matches: Map<number | null, ErrorPinMatch[]>;
   isLoading: boolean;
   error: Error | null;
+  refetch: () => Promise<void>;
 }
 
 /**
@@ -21,41 +22,60 @@ interface UseErrorPinMatchesReturn {
  * Calls the get_error_pin_matches_for_submission RPC which uses lazy caching.
  *
  * @param submission_id - The submission ID to fetch matches for
- * @returns Object with matches (keyed by grader_result_test_id), loading state, and error
+ * @returns Object with matches (keyed by grader_result_test_id), loading state, error, and refetch function
  */
 export function useErrorPinMatches(submission_id: number | null | undefined): UseErrorPinMatchesReturn {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["error_pin_matches", submission_id],
-    queryFn: async () => {
-      if (!submission_id) return null;
+  const [data, setData] = useState<ErrorPinMatch[] | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
 
+  const fetchMatches = useCallback(async () => {
+    if (!submission_id) {
+      setData(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
       const supabase = createClient();
       const { data: result, error: rpcError } = await supabase.rpc("get_error_pin_matches_for_submission", {
         p_submission_id: submission_id
       });
 
       if (rpcError) throw rpcError;
-      return result as ErrorPinMatch[] | null;
-    },
-    enabled: !!submission_id,
-    staleTime: 5 * 60 * 1000 // 5 minutes - matches are cached in DB
-  });
+      setData(result as ErrorPinMatch[] | null);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error("Failed to fetch error pin matches"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [submission_id]);
+
+  useEffect(() => {
+    fetchMatches();
+  }, [fetchMatches]);
 
   // Group matches by grader_result_test_id for easy lookup
-  const matches = new Map<number | null, ErrorPinMatch[]>();
-  if (data) {
-    for (const match of data) {
-      const testId = match.grader_result_test_id;
-      if (!matches.has(testId)) {
-        matches.set(testId, []);
+  const matches = useMemo(() => {
+    const matchMap = new Map<number | null, ErrorPinMatch[]>();
+    if (data) {
+      for (const match of data) {
+        const testId = match.grader_result_test_id;
+        if (!matchMap.has(testId)) {
+          matchMap.set(testId, []);
+        }
+        matchMap.get(testId)!.push(match);
       }
-      matches.get(testId)!.push(match);
     }
-  }
+    return matchMap;
+  }, [data]);
 
   return {
     matches,
     isLoading,
-    error: error as Error | null
+    error,
+    refetch: fetchMatches
   };
 }

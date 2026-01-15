@@ -17,9 +17,9 @@ import {
   Stack,
   Text
 } from "@chakra-ui/react";
-import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { BsPlus, BsTrash, BsX } from "react-icons/bs";
 
@@ -95,6 +95,10 @@ export function ErrorPinModal({
   const { private_profile_id } = useClassProfiles();
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [previewSubmissions, setPreviewSubmissions] = useState<
+    Array<{ submission_id: number; student_name: string; created_at: string }>
+  >([]);
+  const [showAllSubmissions, setShowAllSubmissions] = useState(false);
 
   const {
     register,
@@ -129,33 +133,52 @@ export function ErrorPinModal({
   const rules = watch("rules");
 
   // Load existing pin data if editing
-  const { data: existingPin } = useQuery({
-    queryKey: ["error_pin", existingPinId],
-    queryFn: async () => {
-      if (!existingPinId) return null;
-      const supabase = createClient();
-      const { data: pin, error } = await supabase.from("error_pins").select("*").eq("id", existingPinId).single();
-      if (error) throw error;
-      return pin;
-    },
-    enabled: !!existingPinId
-  });
+  const [existingPin, setExistingPin] = useState<Database["public"]["Tables"]["error_pins"]["Row"] | null>(null);
+  const [existingRules, setExistingRules] = useState<Database["public"]["Tables"]["error_pin_rules"]["Row"][] | null>(
+    null
+  );
 
-  const { data: existingRules } = useQuery({
-    queryKey: ["error_pin_rules", existingPinId],
-    queryFn: async () => {
-      if (!existingPinId) return null;
-      const supabase = createClient();
-      const { data: rules, error } = await supabase
-        .from("error_pin_rules")
-        .select("*")
-        .eq("error_pin_id", existingPinId)
-        .order("ordinal");
-      if (error) throw error;
-      return rules;
-    },
-    enabled: !!existingPinId
-  });
+  const fetchExistingPin = useCallback(async () => {
+    if (!existingPinId) {
+      setExistingPin(null);
+      setExistingRules(null);
+      return;
+    }
+
+    const supabase = createClient();
+
+    // Fetch pin
+    const { data: pin, error: pinError } = await supabase
+      .from("error_pins")
+      .select("*")
+      .eq("id", existingPinId)
+      .single();
+
+    if (pinError) {
+      console.error("Error fetching error pin:", pinError);
+      return;
+    }
+    setExistingPin(pin);
+
+    // Fetch rules
+    const { data: rulesData, error: rulesError } = await supabase
+      .from("error_pin_rules")
+      .select("*")
+      .eq("error_pin_id", existingPinId)
+      .order("ordinal");
+
+    if (rulesError) {
+      console.error("Error fetching error pin rules:", rulesError);
+      return;
+    }
+    setExistingRules(rulesData);
+  }, [existingPinId]);
+
+  useEffect(() => {
+    if (isOpen && existingPinId) {
+      fetchExistingPin();
+    }
+  }, [isOpen, existingPinId, fetchExistingPin]);
 
   // Reset form when existing pin data loads
   useEffect(() => {
@@ -179,6 +202,8 @@ export function ErrorPinModal({
   const handleClose = () => {
     reset();
     setPreviewCount(null);
+    setPreviewSubmissions([]);
+    setShowAllSubmissions(false);
     setIsPreviewing(false);
     onClose();
   };
@@ -202,8 +227,14 @@ export function ErrorPinModal({
       });
 
       if (error) throw error;
-      const result = data as { match_count?: number; submission_ids?: number[] } | null;
+      const result = data as {
+        match_count?: number;
+        submission_ids?: number[];
+        recent_submissions?: Array<{ submission_id: number; student_name: string; created_at: string }>;
+      } | null;
       setPreviewCount(result?.match_count || 0);
+      setPreviewSubmissions(result?.recent_submissions || []);
+      setShowAllSubmissions(false);
     } catch (error) {
       toaster.error({
         title: "Error",
@@ -346,7 +377,7 @@ export function ErrorPinModal({
 
                 <Box>
                   <HStack justify="space-between" mb={2}>
-                    <Field.Label>Rules</Field.Label>
+                    <Text fontWeight="semibold" fontSize="sm">Rules</Text>
                     <ChakraButton
                       size="xs"
                       onClick={() =>
@@ -487,9 +518,44 @@ export function ErrorPinModal({
 
                 {previewCount !== null && (
                   <Box p={3} bg="blue.50" borderRadius="md" _dark={{ bg: "blue.900" }}>
-                    <Text fontWeight="semibold" color="blue.600" _dark={{ color: "blue.300" }}>
+                    <Text fontWeight="semibold" color="blue.600" _dark={{ color: "blue.300" }} mb={2}>
                       Preview: {previewCount} submission{previewCount !== 1 ? "s" : ""} would match this pin
                     </Text>
+                    {previewSubmissions.length > 0 && (
+                      <Box>
+                        <Text fontSize="sm" fontWeight="medium" mb={2} color="blue.700" _dark={{ color: "blue.200" }}>
+                          Most recent {showAllSubmissions ? previewSubmissions.length : Math.min(10, previewSubmissions.length)} matching submission
+                          {(showAllSubmissions ? previewSubmissions.length : Math.min(10, previewSubmissions.length)) !== 1 ? "s" : ""}:
+                        </Text>
+                        <Stack spaceY={1}>
+                          {(showAllSubmissions ? previewSubmissions : previewSubmissions.slice(0, 10)).map(
+                            (submission) => (
+                              <HStack key={submission.submission_id} justify="space-between" fontSize="sm">
+                                <Text color="blue.800" _dark={{ color: "blue.100" }}>
+                                  {submission.student_name}
+                                </Text>
+                                <Text color="blue.600" _dark={{ color: "blue.300" }} fontFamily="mono">
+                                  #{submission.submission_id}
+                                </Text>
+                              </HStack>
+                            )
+                          )}
+                        </Stack>
+                        {previewSubmissions.length > 10 && (
+                          <ChakraButton
+                            size="xs"
+                            variant="ghost"
+                            colorPalette="blue"
+                            onClick={() => setShowAllSubmissions(!showAllSubmissions)}
+                            mt={2}
+                          >
+                            {showAllSubmissions
+                              ? `Show less (first 10)`
+                              : `Show all ${previewSubmissions.length} submissions`}
+                          </ChakraButton>
+                        )}
+                      </Box>
+                    )}
                   </Box>
                 )}
               </Stack>

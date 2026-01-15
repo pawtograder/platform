@@ -20,11 +20,10 @@ import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/uti
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
-import { ErrorPinModal } from "@/components/discussion/ErrorPinModal";
+import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
 import { ErrorPinIndicator } from "@/components/discussion/ErrorPinIndicator";
 import useModalManager from "@/hooks/useModalManager";
 
@@ -98,7 +97,7 @@ function ThreadActions({
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
   const errorPinModal = useModalManager<number>();
-  const queryClient = useQueryClient();
+  const [errorPinRefreshTrigger, setErrorPinRefreshTrigger] = useState(0);
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
   const canEdit =
@@ -147,7 +146,11 @@ function ThreadActions({
       {canPin && (
         <Tooltip content="Manage Error Pins">
           <HStack gap={1}>
-            <ErrorPinIndicator discussion_thread_id={thread.id} onClick={() => errorPinModal.openModal(thread.id)} />
+            <ErrorPinIndicator
+              discussion_thread_id={thread.id}
+              onClick={() => errorPinModal.openModal(thread.id)}
+              refreshTrigger={errorPinRefreshTrigger}
+            />
             <Button
               aria-label="Manage Error Pins"
               onClick={() => errorPinModal.openModal(thread.id)}
@@ -173,12 +176,12 @@ function ThreadActions({
       </Tooltip> */}
       <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
       {errorPinModal.isOpen && (
-        <ErrorPinModal
+        <ErrorPinManageModal
           isOpen={errorPinModal.isOpen}
           onClose={errorPinModal.closeModal}
           onSuccess={() => {
             errorPinModal.closeModal();
-            queryClient.invalidateQueries({ queryKey: ["error_pins_count", thread.id] });
+            setErrorPinRefreshTrigger((prev) => prev + 1);
           }}
           discussion_thread_id={errorPinModal.modalData || thread.id}
           defaultAssignmentId={topicAssignmentId}

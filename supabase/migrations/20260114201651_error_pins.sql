@@ -62,7 +62,7 @@ CREATE TABLE error_pin_submission_matches (
 );
 
 -- Unique index that treats NULLs as equal (PostgreSQL 15+)
-CREATE UNIQUE INDEX idx_error_pin_submission_unique ON error_pin_submission_matches(error_pin_id, submission_id, grader_result_test_id NULLS NOT DISTINCT);
+CREATE UNIQUE INDEX idx_error_pin_submission_unique ON error_pin_submission_matches(error_pin_id, submission_id, grader_result_test_id) NULLS NOT DISTINCT;
 
 -- ============================================================================
 -- Indices for performance
@@ -360,6 +360,9 @@ DECLARE
     v_match_count int;
     v_result jsonb := '[]'::jsonb;
     v_match jsonb;
+    v_matching_test_id bigint;
+    v_has_grader_level_rule boolean;
+    v_first_test_id bigint;
 BEGIN
     -- Get assignment for this submission
     SELECT assignment_id INTO v_assignment_id
@@ -416,6 +419,10 @@ BEGIN
         IF v_pin_record.rule_logic = 'and' THEN
             -- AND logic: all rules must match
             v_all_rules_match := true;
+            v_matching_test_id := NULL;
+            v_has_grader_level_rule := false;
+            v_first_test_id := NULL;
+            
             FOR v_rule_record IN
                 SELECT * FROM error_pin_rules
                 WHERE error_pin_id = v_pin_record.id
@@ -423,6 +430,7 @@ BEGIN
             LOOP
                 v_rule_matches := false;
                 IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
+                    v_has_grader_level_rule := true;
                     v_rule_matches := evaluate_error_pin_rule(
                         v_rule_record.target,
                         v_rule_record.match_type,
@@ -449,6 +457,13 @@ BEGIN
                             v_test_id
                         ) THEN
                             v_rule_matches := true;
+                            -- Track the test_id that matched
+                            IF v_first_test_id IS NULL THEN
+                                v_first_test_id := v_test_id;
+                            ELSIF v_first_test_id != v_test_id THEN
+                                -- Different test matched, can't use specific test_id
+                                v_first_test_id := NULL;
+                            END IF;
                             EXIT;
                         END IF;
                     END LOOP;
@@ -460,9 +475,14 @@ BEGIN
             END LOOP;
             
             IF v_all_rules_match THEN
-                -- Insert match at submission level (no specific test)
+                -- If all rules are test-level and they all match the same test, use that test_id
+                -- Otherwise, use NULL (submission-level match)
+                IF NOT v_has_grader_level_rule AND v_first_test_id IS NOT NULL THEN
+                    v_matching_test_id := v_first_test_id;
+                END IF;
+                
                 INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
-                VALUES (v_pin_record.id, p_submission_id, NULL)
+                VALUES (v_pin_record.id, p_submission_id, v_matching_test_id)
                 ON CONFLICT (error_pin_id, submission_id, grader_result_test_id) DO NOTHING;
             END IF;
         ELSE
@@ -563,6 +583,9 @@ DECLARE
     v_rule_matches boolean;
     v_all_rules_match boolean;
     v_processed_count int := 0;
+    v_matching_test_id bigint;
+    v_has_grader_level_rule boolean;
+    v_first_test_id bigint;
 BEGIN
     -- Insert or update error_pin
     IF (p_error_pin->>'id')::bigint IS NOT NULL THEN
@@ -650,6 +673,10 @@ BEGIN
         IF v_pin_record.rule_logic = 'and' THEN
             -- AND logic: all rules must match
             v_all_rules_match := true;
+            v_matching_test_id := NULL;
+            v_has_grader_level_rule := false;
+            v_first_test_id := NULL;
+            
             FOR v_rule_record IN
                 SELECT * FROM error_pin_rules
                 WHERE error_pin_id = v_pin_id
@@ -657,6 +684,7 @@ BEGIN
             LOOP
                 v_rule_matches := false;
                 IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
+                    v_has_grader_level_rule := true;
                     v_rule_matches := evaluate_error_pin_rule(
                         v_rule_record.target,
                         v_rule_record.match_type,
@@ -683,6 +711,13 @@ BEGIN
                             v_test_id
                         ) THEN
                             v_rule_matches := true;
+                            -- Track the test_id that matched
+                            IF v_first_test_id IS NULL THEN
+                                v_first_test_id := v_test_id;
+                            ELSIF v_first_test_id != v_test_id THEN
+                                -- Different test matched, can't use specific test_id
+                                v_first_test_id := NULL;
+                            END IF;
                             EXIT;
                         END IF;
                     END LOOP;
@@ -694,8 +729,14 @@ BEGIN
             END LOOP;
             
             IF v_all_rules_match THEN
+                -- If all rules are test-level and they all match the same test, use that test_id
+                -- Otherwise, use NULL (submission-level match)
+                IF NOT v_has_grader_level_rule AND v_first_test_id IS NOT NULL THEN
+                    v_matching_test_id := v_first_test_id;
+                END IF;
+                
                 INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
-                VALUES (v_pin_id, v_submission_id, NULL)
+                VALUES (v_pin_id, v_submission_id, v_matching_test_id)
                 ON CONFLICT DO NOTHING;
                 v_processed_count := v_processed_count + 1;
             END IF;
@@ -931,9 +972,25 @@ BEGIN
             RAISE;
     END;
 
+    -- Get all matching submissions with student names, ordered by most recent first
+    -- We'll show the first 10 in the UI with an option to expand
     RETURN jsonb_build_object(
         'match_count', v_match_count,
-        'submission_ids', v_matching_submissions
+        'submission_ids', v_matching_submissions,
+        'recent_submissions', (
+            SELECT COALESCE(jsonb_agg(submission_data), '[]'::jsonb)
+            FROM (
+                SELECT jsonb_build_object(
+                    'submission_id', s.id,
+                    'student_name', COALESCE(p.name, 'Unknown'),
+                    'created_at', s.created_at
+                ) AS submission_data
+                FROM submissions s
+                LEFT JOIN profiles p ON p.id = s.profile_id
+                WHERE s.id = ANY(v_matching_submissions)
+                ORDER BY s.created_at DESC
+            ) recent_submissions_query
+        )
     );
 END;
 $$;

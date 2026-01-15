@@ -39,6 +39,8 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
@@ -739,6 +741,7 @@ export default function GraderResults() {
     }
   });
   const isObfuscatedGradesMode = useObfuscatedGradesMode();
+  const { matches: errorPinMatches } = useErrorPinMatches(Number(submissions_id));
   const [showHiddenOutput, setShowHiddenOutput] = useState(!isObfuscatedGradesMode);
   useEffect(() => {
     setShowHiddenOutput(!isObfuscatedGradesMode);
@@ -929,6 +932,12 @@ export default function GraderResults() {
         ))}
         {!hasBuildError && (
           <Tabs.Content value="tests">
+            {/* Show submission-level error pins (not tied to specific tests) */}
+            {errorPinMatches.has(null) && errorPinMatches.get(null)!.length > 0 && (
+              <Box mb={4}>
+                <ErrorPinCallout matches={errorPinMatches.get(null)!} />
+              </Box>
+            )}
             <Heading size="md">Lint Results: {data.grader_results?.lint_passed ? "Passed" : "Failed"}</Heading>
             {data.grader_results?.lint_output && (
               <Box borderWidth="1px" borderRadius="md" p={2}>
@@ -1034,6 +1043,8 @@ export default function GraderResults() {
                 const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
                 const showScore = result.max_score !== 0;
 
+                const testMatches = errorPinMatches.get(result.id) || [];
+
                 return (
                   <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
                     <CardHeader bg={`bg.${style}`} p={2}>
@@ -1041,6 +1052,11 @@ export default function GraderResults() {
                         {result.name} {showScore ? result.score + "/" + result.max_score : ""}
                       </Heading>
                     </CardHeader>
+                    {testMatches.length > 0 && (
+                      <Box px={4} pt={2}>
+                        <ErrorPinCallout matches={testMatches} />
+                      </Box>
+                    )}
                     {maybeWrappedResult(
                       <TestResultOutput
                         result={result}
