@@ -83,13 +83,7 @@ const MATCH_TYPES: { value: MatchType; label: string; supportsRange: boolean }[]
   { value: "range", label: "Range", supportsRange: true }
 ];
 
-export function ErrorPinModal({
-  isOpen,
-  onClose,
-  onSuccess,
-  discussion_thread_id,
-  existingPinId
-}: ErrorPinModalProps) {
+export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id, existingPinId }: ErrorPinModalProps) {
   const { course_id } = useParams();
   const courseController = useCourseController();
   const assignments = useAssignments();
@@ -127,11 +121,7 @@ export function ErrorPinModal({
     queryFn: async () => {
       if (!existingPinId) return null;
       const supabase = createClient();
-      const { data: pin, error } = await supabase
-        .from("error_pins")
-        .select("*")
-        .eq("id", existingPinId)
-        .single();
+      const { data: pin, error } = await supabase.from("error_pins").select("*").eq("id", existingPinId).single();
       if (error) throw error;
       return pin;
     },
@@ -383,12 +373,7 @@ export function ErrorPinModal({
                       >
                         <HStack justify="space-between" mb={2}>
                           <Text fontWeight="semibold">Rule {index + 1}</Text>
-                          <ChakraButton
-                            size="xs"
-                            variant="ghost"
-                            colorPalette="red"
-                            onClick={() => remove(index)}
-                          >
+                          <ChakraButton size="xs" variant="ghost" colorPalette="red" onClick={() => remove(index)}>
                             <Icon as={BsTrash} />
                           </ChakraButton>
                         </HStack>
@@ -467,7 +452,7 @@ export function ErrorPinModal({
                                 </Field.Root>
                               )}
 
-                              {(target.startsWith("test_") && target !== "test_score_range") && (
+                              {target.startsWith("test_") && target !== "test_score_range" && (
                                 <Field.Root>
                                   <Field.Label>Test Name Filter (Optional)</Field.Label>
                                   <Input

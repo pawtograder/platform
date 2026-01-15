@@ -19,7 +19,7 @@ interface UseErrorPinMatchesReturn {
 /**
  * Hook to fetch error pin matches for a submission.
  * Calls the get_error_pin_matches_for_submission RPC which uses lazy caching.
- * 
+ *
  * @param submission_id - The submission ID to fetch matches for
  * @returns Object with matches (keyed by grader_result_test_id), loading state, and error
  */
@@ -28,7 +28,7 @@ export function useErrorPinMatches(submission_id: number | null | undefined): Us
     queryKey: ["error_pin_matches", submission_id],
     queryFn: async () => {
       if (!submission_id) return null;
-      
+
       const supabase = createClient();
       const { data: result, error: rpcError } = await supabase.rpc("get_error_pin_matches_for_submission", {
         p_submission_id: submission_id
@@ -38,7 +38,7 @@ export function useErrorPinMatches(submission_id: number | null | undefined): Us
       return result as ErrorPinMatch[] | null;
     },
     enabled: !!submission_id,
-    staleTime: 5 * 60 * 1000, // 5 minutes - matches are cached in DB
+    staleTime: 5 * 60 * 1000 // 5 minutes - matches are cached in DB
   });
 
   // Group matches by grader_result_test_id for easy lookup

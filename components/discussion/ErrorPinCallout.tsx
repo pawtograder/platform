@@ -15,7 +15,7 @@ interface ErrorPinCalloutProps {
  */
 export function ErrorPinCallout({ matches }: ErrorPinCalloutProps) {
   const { course_id } = useParams();
-  
+
   if (!matches || matches.length === 0) {
     return null;
   }

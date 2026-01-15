@@ -17,7 +17,7 @@ interface ErrorPinIndicatorProps {
  */
 export function ErrorPinIndicator({ discussion_thread_id, onClick }: ErrorPinIndicatorProps) {
   const { course_id } = useParams();
-  
+
   const { data: pinCount = 0 } = useQuery({
     queryKey: ["error_pins_count", discussion_thread_id, course_id],
     queryFn: async () => {
@@ -28,7 +28,7 @@ export function ErrorPinIndicator({ discussion_thread_id, onClick }: ErrorPinInd
         .eq("discussion_thread_id", discussion_thread_id)
         .eq("class_id", Number(course_id))
         .eq("enabled", true);
-      
+
       if (error) throw error;
       return count || 0;
     },
@@ -40,12 +40,7 @@ export function ErrorPinIndicator({ discussion_thread_id, onClick }: ErrorPinInd
   }
 
   return (
-    <Badge
-      colorPalette="blue"
-      cursor="pointer"
-      onClick={onClick}
-      _hover={{ opacity: 0.8 }}
-    >
+    <Badge colorPalette="blue" cursor="pointer" onClick={onClick} _hover={{ opacity: 0.8 }}>
       <HStack gap={1}>
         <Icon as={FaExclamationCircle} fontSize="xs" />
         <Text fontSize="xs">

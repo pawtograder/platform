@@ -143,10 +143,7 @@ function ThreadActions({
       {canPin && (
         <Tooltip content="Manage Error Pins">
           <HStack gap={1}>
-            <ErrorPinIndicator
-              discussion_thread_id={thread.id}
-              onClick={() => errorPinModal.open(thread.id)}
-            />
+            <ErrorPinIndicator discussion_thread_id={thread.id} onClick={() => errorPinModal.open(thread.id)} />
             <Button
               aria-label="Manage Error Pins"
               onClick={() => errorPinModal.open(thread.id)}

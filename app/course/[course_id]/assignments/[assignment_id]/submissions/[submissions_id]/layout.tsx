@@ -513,7 +513,7 @@ function TestResults() {
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
-  
+
   return (
     <Box>
       <Heading size="md" mt={2}>
