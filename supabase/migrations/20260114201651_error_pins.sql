@@ -827,7 +827,21 @@ DECLARE
     v_all_rules_match boolean;
     v_matching_submissions bigint[] := '{}';
     v_match_count int := 0;
+    v_class_id bigint;
 BEGIN
+    -- Authorization check: ensure caller is instructor or grader for the assignment's class
+    SELECT class_id INTO v_class_id
+    FROM assignments
+    WHERE id = p_assignment_id;
+    
+    IF v_class_id IS NULL THEN
+        RAISE EXCEPTION 'Assignment not found';
+    END IF;
+    
+    IF NOT authorizeforclassgrader(v_class_id) THEN
+        RAISE EXCEPTION 'Only instructors and graders can preview error pin matches';
+    END IF;
+    
     -- Create temporary table for rules with ON COMMIT DROP to ensure cleanup
     CREATE TEMP TABLE temp_preview_rules (
         target error_pin_rule_target,

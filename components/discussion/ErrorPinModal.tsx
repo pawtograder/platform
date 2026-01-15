@@ -107,6 +107,7 @@ export function ErrorPinModal({
     watch,
     reset,
     setValue,
+    unregister,
     formState: { errors, isSubmitting }
   } = useForm<ErrorPinFormData>({
     defaultValues: {
@@ -198,6 +199,17 @@ export function ErrorPinModal({
       });
     }
   }, [existingPin, existingRules, reset]);
+
+  // Clear match_type when target changes to lint_failed
+  useEffect(() => {
+    rules.forEach((rule, index) => {
+      if (rule?.target === "lint_failed") {
+        // Clear match_type for lint_failed targets
+        unregister(`rules.${index}.match_type`);
+        setValue(`rules.${index}.match_type`, undefined as unknown as MatchType, { shouldValidate: false });
+      }
+    });
+  }, [rules, setValue, unregister]);
 
   const handleClose = () => {
     reset();
@@ -438,28 +450,26 @@ export function ErrorPinModal({
                             </NativeSelect.Root>
                           </Field.Root>
 
-                          <Field.Root>
-                            <Field.Label>Match Type</Field.Label>
-                            <NativeSelect.Root>
-                              <NativeSelect.Field {...register(`rules.${index}.match_type`)}>
-                                {MATCH_TYPES.filter((mt) => {
-                                  // Range targets only support range match type
-                                  if (isRangeTarget) {
-                                    return mt.value === "range";
-                                  }
-                                  // lint_failed doesn't need match type
-                                  if (target === "lint_failed") {
-                                    return false;
-                                  }
-                                  return true;
-                                }).map((mt) => (
-                                  <option key={mt.value} value={mt.value}>
-                                    {mt.label}
-                                  </option>
-                                ))}
-                              </NativeSelect.Field>
-                            </NativeSelect.Root>
-                          </Field.Root>
+                          {target !== "lint_failed" && (
+                            <Field.Root>
+                              <Field.Label>Match Type</Field.Label>
+                              <NativeSelect.Root>
+                                <NativeSelect.Field {...register(`rules.${index}.match_type`)}>
+                                  {MATCH_TYPES.filter((mt) => {
+                                    // Range targets only support range match type
+                                    if (isRangeTarget) {
+                                      return mt.value === "range";
+                                    }
+                                    return true;
+                                  }).map((mt) => (
+                                    <option key={mt.value} value={mt.value}>
+                                      {mt.label}
+                                    </option>
+                                  ))}
+                                </NativeSelect.Field>
+                              </NativeSelect.Root>
+                            </Field.Root>
+                          )}
 
                           {target !== "lint_failed" && (
                             <>
