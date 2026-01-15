@@ -21,8 +21,11 @@ import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Te
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
+import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
+import { ErrorPinModal } from "@/components/discussion/ErrorPinModal";
+import { ErrorPinIndicator } from "@/components/discussion/ErrorPinIndicator";
+import { useModalManager } from "@/hooks/useModalManager";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -91,6 +94,7 @@ function ThreadActions({
   setEditing: (editing: boolean) => void;
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
+  const errorPinModal = useModalManager<number>();
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
   const canEdit =
@@ -136,6 +140,24 @@ function ThreadActions({
           </Button>
         </Tooltip>
       )}
+      {canPin && (
+        <Tooltip content="Manage Error Pins">
+          <HStack gap={1}>
+            <ErrorPinIndicator
+              discussion_thread_id={thread.id}
+              onClick={() => errorPinModal.open(thread.id)}
+            />
+            <Button
+              aria-label="Manage Error Pins"
+              onClick={() => errorPinModal.open(thread.id)}
+              variant="ghost"
+              size="sm"
+            >
+              <FaExclamationCircle />
+            </Button>
+          </HStack>
+        </Tooltip>
+      )}
       <Tooltip content="Reply">
         <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
           <FaReply />
@@ -149,6 +171,17 @@ function ThreadActions({
         </Button>
       </Tooltip> */}
       <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
+      {errorPinModal.isOpen && (
+        <ErrorPinModal
+          isOpen={errorPinModal.isOpen}
+          onClose={errorPinModal.close}
+          onSuccess={() => {
+            errorPinModal.close();
+            // Refetch error pins
+          }}
+          discussion_thread_id={errorPinModal.data || thread.id}
+        />
+      )}
     </Box>
   );
 }

@@ -182,7 +182,11 @@ GRANT ALL ON TABLE error_pin_submission_matches TO authenticated;
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION evaluate_error_pin_rule(
-    p_rule error_pin_rules%ROWTYPE,
+    p_target error_pin_rule_target,
+    p_match_type text,
+    p_match_value text,
+    p_match_value_max text,
+    p_test_name_filter text,
     p_submission_id bigint,
     p_grader_result_id bigint,
     p_test_id bigint DEFAULT NULL
@@ -206,18 +210,18 @@ DECLARE
     v_test_hidden_output text;
 BEGIN
     -- Apply test_name_filter if specified
-    IF p_rule.test_name_filter IS NOT NULL AND p_test_id IS NOT NULL THEN
+    IF p_test_name_filter IS NOT NULL AND p_test_id IS NOT NULL THEN
         SELECT name INTO v_test_name
         FROM grader_result_tests
         WHERE id = p_test_id;
         
-        IF v_test_name IS NULL OR v_test_name !~ p_rule.test_name_filter THEN
+        IF v_test_name IS NULL OR v_test_name !~ p_test_name_filter THEN
             RETURN false;
         END IF;
     END IF;
 
     -- Evaluate based on target type
-    CASE p_rule.target
+    CASE p_target
         WHEN 'test_name' THEN
             IF p_test_id IS NULL THEN RETURN false; END IF;
             SELECT name INTO v_test_name FROM grader_result_tests WHERE id = p_test_id;
@@ -250,18 +254,18 @@ BEGIN
             SELECT score INTO v_test_score FROM grader_result_tests WHERE id = p_test_id;
             IF v_test_score IS NULL THEN RETURN false; END IF;
             -- Range matching handled separately below
-            IF p_rule.match_type = 'range' THEN
-                RETURN v_test_score >= p_rule.match_value::numeric 
-                   AND (p_rule.match_value_max IS NULL OR v_test_score <= p_rule.match_value_max::numeric);
+            IF p_match_type = 'range' THEN
+                RETURN v_test_score >= p_match_value::numeric 
+                   AND (p_match_value_max IS NULL OR v_test_score <= p_match_value_max::numeric);
             END IF;
             RETURN false;
 
         WHEN 'grader_score_range' THEN
             SELECT score INTO v_grader_score FROM grader_results WHERE id = p_grader_result_id;
             IF v_grader_score IS NULL THEN RETURN false; END IF;
-            IF p_rule.match_type = 'range' THEN
-                RETURN v_grader_score >= p_rule.match_value::numeric 
-                   AND (p_rule.match_value_max IS NULL OR v_grader_score <= p_rule.match_value_max::numeric);
+            IF p_match_type = 'range' THEN
+                RETURN v_grader_score >= p_match_value::numeric 
+                   AND (p_match_value_max IS NULL OR v_grader_score <= p_match_value_max::numeric);
             END IF;
             RETURN false;
 
@@ -297,18 +301,18 @@ BEGIN
     END CASE;
 
     -- Apply match type (skip for range and lint_failed which are handled above)
-    IF p_rule.target IN ('test_score_range', 'grader_score_range', 'lint_failed') THEN
+    IF p_target IN ('test_score_range', 'grader_score_range', 'lint_failed') THEN
         RETURN v_match_result;
     END IF;
 
-    CASE p_rule.match_type
+    CASE p_match_type
         WHEN 'contains' THEN
-            RETURN v_match_value ILIKE '%' || p_rule.match_value || '%';
+            RETURN v_match_value ILIKE '%' || p_match_value || '%';
         WHEN 'equals' THEN
-            RETURN v_match_value = p_rule.match_value;
+            RETURN v_match_value = p_match_value;
         WHEN 'regex' THEN
             BEGIN
-                RETURN v_match_value ~ p_rule.match_value;
+                RETURN v_match_value ~ p_match_value;
             EXCEPTION WHEN OTHERS THEN
                 RETURN false;
             END;
@@ -403,14 +407,31 @@ BEGIN
             LOOP
                 v_rule_matches := false;
                 IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
-                    v_rule_matches := evaluate_error_pin_rule(v_rule_record, p_submission_id, v_grader_result_id);
+                    v_rule_matches := evaluate_error_pin_rule(
+                        v_rule_record.target,
+                        v_rule_record.match_type,
+                        v_rule_record.match_value,
+                        v_rule_record.match_value_max,
+                        v_rule_record.test_name_filter,
+                        p_submission_id,
+                        v_grader_result_id
+                    );
                 ELSE
                     -- For test-level rules, check if any test matches
                     FOR v_test_id IN
                         SELECT id FROM grader_result_tests
                         WHERE grader_result_id = v_grader_result_id
                     LOOP
-                        IF evaluate_error_pin_rule(v_rule_record, p_submission_id, v_grader_result_id, v_test_id) THEN
+                        IF evaluate_error_pin_rule(
+                            v_rule_record.target,
+                            v_rule_record.match_type,
+                            v_rule_record.match_value,
+                            v_rule_record.match_value_max,
+                            v_rule_record.test_name_filter,
+                            p_submission_id,
+                            v_grader_result_id,
+                            v_test_id
+                        ) THEN
                             v_rule_matches := true;
                             EXIT;
                         END IF;
@@ -436,7 +457,15 @@ BEGIN
                 ORDER BY ordinal
             LOOP
                 IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
-                    v_rule_matches := evaluate_error_pin_rule(v_rule_record, p_submission_id, v_grader_result_id);
+                    v_rule_matches := evaluate_error_pin_rule(
+                        v_rule_record.target,
+                        v_rule_record.match_type,
+                        v_rule_record.match_value,
+                        v_rule_record.match_value_max,
+                        v_rule_record.test_name_filter,
+                        p_submission_id,
+                        v_grader_result_id
+                    );
                     IF v_rule_matches THEN
                         INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
                         VALUES (v_pin_record.id, p_submission_id, NULL, v_class_id)
@@ -449,7 +478,16 @@ BEGIN
                         SELECT id FROM grader_result_tests
                         WHERE grader_result_id = v_grader_result_id
                     LOOP
-                        v_rule_matches := evaluate_error_pin_rule(v_rule_record, p_submission_id, v_grader_result_id, v_test_id);
+                        v_rule_matches := evaluate_error_pin_rule(
+                            v_rule_record.target,
+                            v_rule_record.match_type,
+                            v_rule_record.match_value,
+                            v_rule_record.match_value_max,
+                            v_rule_record.test_name_filter,
+                            p_submission_id,
+                            v_grader_result_id,
+                            v_test_id
+                        );
                         IF v_rule_matches THEN
                             INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
                             VALUES (v_pin_record.id, p_submission_id, v_test_id, v_class_id)
@@ -604,14 +642,31 @@ BEGIN
             LOOP
                 v_rule_matches := false;
                 IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
-                    v_rule_matches := evaluate_error_pin_rule(v_rule_record, v_submission_id, v_grader_result_id);
+                    v_rule_matches := evaluate_error_pin_rule(
+                        v_rule_record.target,
+                        v_rule_record.match_type,
+                        v_rule_record.match_value,
+                        v_rule_record.match_value_max,
+                        v_rule_record.test_name_filter,
+                        v_submission_id,
+                        v_grader_result_id
+                    );
                 ELSE
                     -- For test-level rules, check if any test matches
                     FOR v_test_id IN
                         SELECT id FROM grader_result_tests
                         WHERE grader_result_id = v_grader_result_id
                     LOOP
-                        IF evaluate_error_pin_rule(v_rule_record, v_submission_id, v_grader_result_id, v_test_id) THEN
+                        IF evaluate_error_pin_rule(
+                            v_rule_record.target,
+                            v_rule_record.match_type,
+                            v_rule_record.match_value,
+                            v_rule_record.match_value_max,
+                            v_rule_record.test_name_filter,
+                            v_submission_id,
+                            v_grader_result_id,
+                            v_test_id
+                        ) THEN
                             v_rule_matches := true;
                             EXIT;
                         END IF;
@@ -637,7 +692,15 @@ BEGIN
                 ORDER BY ordinal
             LOOP
                 IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
-                    v_rule_matches := evaluate_error_pin_rule(v_rule_record, v_submission_id, v_grader_result_id);
+                    v_rule_matches := evaluate_error_pin_rule(
+                        v_rule_record.target,
+                        v_rule_record.match_type,
+                        v_rule_record.match_value,
+                        v_rule_record.match_value_max,
+                        v_rule_record.test_name_filter,
+                        v_submission_id,
+                        v_grader_result_id
+                    );
                     IF v_rule_matches THEN
                         INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
                         VALUES (v_pin_id, v_submission_id, NULL, v_class_id)
@@ -650,7 +713,16 @@ BEGIN
                         SELECT id FROM grader_result_tests
                         WHERE grader_result_id = v_grader_result_id
                     LOOP
-                        v_rule_matches := evaluate_error_pin_rule(v_rule_record, v_submission_id, v_grader_result_id, v_test_id);
+                        v_rule_matches := evaluate_error_pin_rule(
+                            v_rule_record.target,
+                            v_rule_record.match_type,
+                            v_rule_record.match_value,
+                            v_rule_record.match_value_max,
+                            v_rule_record.test_name_filter,
+                            v_submission_id,
+                            v_grader_result_id,
+                            v_test_id
+                        );
                         IF v_rule_matches THEN
                             INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
                             VALUES (v_pin_id, v_submission_id, v_test_id, v_class_id)
@@ -744,13 +816,30 @@ BEGIN
         FOR v_rule_record IN SELECT * FROM temp_preview_rules ORDER BY ordinal
         LOOP
             IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
-                v_rule_matches := evaluate_error_pin_rule(v_rule_record, v_submission_id, v_grader_result_id);
+                v_rule_matches := evaluate_error_pin_rule(
+                    v_rule_record.target,
+                    v_rule_record.match_type,
+                    v_rule_record.match_value,
+                    v_rule_record.match_value_max,
+                    v_rule_record.test_name_filter,
+                    v_submission_id,
+                    v_grader_result_id
+                );
             ELSE
                 FOR v_test_id IN
                     SELECT id FROM grader_result_tests
                     WHERE grader_result_id = v_grader_result_id
                 LOOP
-                    v_rule_matches := evaluate_error_pin_rule(v_rule_record, v_submission_id, v_grader_result_id, v_test_id);
+                    v_rule_matches := evaluate_error_pin_rule(
+                        v_rule_record.target,
+                        v_rule_record.match_type,
+                        v_rule_record.match_value,
+                        v_rule_record.match_value_max,
+                        v_rule_record.test_name_filter,
+                        v_submission_id,
+                        v_grader_result_id,
+                        v_test_id
+                    );
                     EXIT WHEN v_rule_matches;
                 END LOOP;
             END IF;

@@ -44,6 +44,8 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
@@ -510,6 +512,8 @@ function TestResults() {
   const testResults = submission.grader_results?.grader_result_tests;
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
+  const { matches } = useErrorPinMatches(submission.id);
+  
   return (
     <Box>
       <Heading size="md" mt={2}>
@@ -530,6 +534,7 @@ function TestResults() {
           icon = <Icon as={FaTimesCircle} color="fg.error" />;
         }
         const showScore = extraData?.hide_score !== "true" && test.max_score !== 0;
+        const testMatches = matches.get(test.id) || [];
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
@@ -538,9 +543,16 @@ function TestResults() {
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
               </Heading>
             </Link>
+            {testMatches.length > 0 && <ErrorPinCallout matches={testMatches} />}
           </Box>
         );
       })}
+      {/* Show matches for submission-level (no specific test) */}
+      {matches.has(null) && matches.get(null)!.length > 0 && (
+        <Box mt={2}>
+          <ErrorPinCallout matches={matches.get(null)!} />
+        </Box>
+      )}
     </Box>
   );
 }

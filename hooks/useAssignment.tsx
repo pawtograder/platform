@@ -373,6 +373,10 @@ export class AssignmentController {
   readonly rubricChecksController: TableController<"rubric_checks">;
   readonly rubricCheckReferencesController: TableController<"rubric_check_references">;
 
+  // Error pin table controllers
+  readonly errorPins: TableController<"error_pins">;
+  readonly errorPinRules: TableController<"error_pin_rules">;
+
   private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
     number,
     TableController<"review_assignment_rubric_parts">
@@ -473,6 +477,22 @@ export class AssignmentController {
       classRealTimeController,
       realtimeFilter: { assignment_id },
       initialData: initialData?.rubricCheckReferences
+    });
+
+    // Initialize error pin table controllers
+    this.errorPins = new TableController({
+      query: client.from("error_pins").select("*").eq("assignment_id", assignment_id),
+      client: client,
+      table: "error_pins",
+      classRealTimeController,
+      realtimeFilter: { assignment_id }
+    });
+
+    this.errorPinRules = new TableController({
+      query: client.from("error_pin_rules").select("*"),
+      client: client,
+      table: "error_pin_rules",
+      classRealTimeController
     });
   }
   close() {
