@@ -104,7 +104,11 @@ function ScoreLink({
   }
   return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
 }
-export default function AssignmentsTable() {
+export default function AssignmentsTable({
+  tableController: providedTableController
+}: {
+  tableController?: TableController<"submissions"> | null;
+} = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
   const { role: classRole } = useClassProfiles();
@@ -384,9 +388,17 @@ export default function AssignmentsTable() {
     [timeZone, course_id, assignment_id, assignment]
   );
 
-  const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
+  const [internalTableController, setInternalTableController] = useState<TableController<"submissions"> | null>(null);
+
+  // Use provided tableController if available, otherwise create our own
+  const tableController = providedTableController ?? internalTableController;
 
   useEffect(() => {
+    // Only create internal tableController if one wasn't provided
+    if (providedTableController) {
+      return;
+    }
+
     Sentry.addBreadcrumb({
       category: "tableController",
       message: "Creating TableController for submissions_with_grades_for_assignment_nice",
@@ -406,12 +418,12 @@ export default function AssignmentsTable() {
       table: "submissions_with_grades_for_assignment_nice" as any
     });
 
-    setTableController(tc);
+    setInternalTableController(tc);
 
     return () => {
       tc.close();
     };
-  }, [supabase, assignment_id, classRealTimeController]);
+  }, [supabase, assignment_id, classRealTimeController, providedTableController]);
 
   const {
     getHeaderGroups,
