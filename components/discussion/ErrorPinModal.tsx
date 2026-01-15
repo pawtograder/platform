@@ -19,7 +19,7 @@ import {
 } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { BsPlus, BsTrash, BsX } from "react-icons/bs";
 
@@ -59,6 +59,7 @@ interface ErrorPinModalProps {
   onSuccess: () => void;
   discussion_thread_id: number;
   existingPinId?: number;
+  defaultAssignmentId?: number | null;
 }
 
 const RULE_TARGETS: { value: ErrorPinRuleTarget; label: string }[] = [
@@ -81,7 +82,14 @@ const MATCH_TYPES: { value: MatchType; label: string; supportsRange: boolean }[]
   { value: "range", label: "Range", supportsRange: true }
 ];
 
-export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id, existingPinId }: ErrorPinModalProps) {
+export function ErrorPinModal({
+  isOpen,
+  onClose,
+  onSuccess,
+  discussion_thread_id,
+  existingPinId,
+  defaultAssignmentId
+}: ErrorPinModalProps) {
   const { course_id } = useParams();
   const assignments = useAssignments();
   const { private_profile_id } = useClassProfiles();
@@ -94,15 +102,23 @@ export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id
     control,
     watch,
     reset,
+    setValue,
     formState: { errors, isSubmitting }
   } = useForm<ErrorPinFormData>({
     defaultValues: {
-      assignment_id: null,
+      assignment_id: defaultAssignmentId ?? null,
       rule_logic: "and",
       enabled: true,
       rules: []
     }
   });
+
+  // Set default assignment when modal opens with defaultAssignmentId
+  useMemo(() => {
+    if (defaultAssignmentId && !existingPinId) {
+      setValue("assignment_id", defaultAssignmentId);
+    }
+  }, [defaultAssignmentId, existingPinId, setValue]);
 
   const { fields, append, remove } = useFieldArray({
     control,
@@ -142,7 +158,7 @@ export function ErrorPinModal({ isOpen, onClose, onSuccess, discussion_thread_id
   });
 
   // Reset form when existing pin data loads
-  useMemo(() => {
+  useEffect(() => {
     if (existingPin && existingRules) {
       reset({
         assignment_id: existingPin.assignment_id,

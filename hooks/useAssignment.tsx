@@ -488,8 +488,15 @@ export class AssignmentController {
       realtimeFilter: { assignment_id }
     });
 
+    // Filter error_pin_rules to only include rules for pins belonging to this assignment
+    // Use inner join on error_pins to filter by assignment_id
+    // The join acts as a filter - PostgREST requires the joined table in select when using !inner
+    // @ts-expect-error - The join changes the return type to include error_pins data, but the functionality works correctly
     this.errorPinRules = new TableController({
-      query: client.from("error_pin_rules").select("*"),
+      query: client
+        .from("error_pin_rules")
+        .select("*,error_pins!inner(assignment_id)")
+        .eq("error_pins.assignment_id", assignment_id),
       client: client,
       table: "error_pin_rules",
       classRealTimeController

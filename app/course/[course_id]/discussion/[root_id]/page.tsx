@@ -20,6 +20,7 @@ import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/uti
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
@@ -87,14 +88,17 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
 function ThreadActions({
   thread,
   editing,
-  setEditing
+  setEditing,
+  topicAssignmentId
 }: {
   thread: DiscussionThreadType;
   editing: boolean;
   setEditing: (editing: boolean) => void;
+  topicAssignmentId?: number | null;
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
   const errorPinModal = useModalManager<number>();
+  const queryClient = useQueryClient();
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
   const canEdit =
@@ -174,9 +178,10 @@ function ThreadActions({
           onClose={errorPinModal.closeModal}
           onSuccess={() => {
             errorPinModal.closeModal();
-            // Refetch error pins
+            queryClient.invalidateQueries({ queryKey: ["error_pins_count", thread.id] });
           }}
           discussion_thread_id={errorPinModal.modalData || thread.id}
+          defaultAssignmentId={topicAssignmentId}
         />
       )}
     </Box>
@@ -234,9 +239,12 @@ function DiscussionPost({ root_id }: { root_id: number }) {
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
   }
+
+  const topic = discussion_topics.find((t) => t.id === rootThread.topic_id);
+
   return (
     <>
-      <ThreadHeader thread={rootThread} topic={discussion_topics.find((t) => t.id === rootThread.topic_id)} />
+      <ThreadHeader thread={rootThread} topic={topic} />
       <Box>
         {editing ? (
           <>
@@ -268,7 +276,12 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         )}
       </Box>
       {rootThread.answer && <DiscussionThreadAnswer answer_id={rootThread.answer} />}
-      <ThreadActions thread={rootThread} editing={editing} setEditing={setEditing} />
+      <ThreadActions
+        thread={rootThread}
+        editing={editing}
+        setEditing={setEditing}
+        topicAssignmentId={topic?.assignment_id}
+      />
     </>
   );
 }

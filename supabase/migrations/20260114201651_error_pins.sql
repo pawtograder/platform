@@ -58,13 +58,29 @@ CREATE TABLE error_pin_submission_matches (
     error_pin_id bigint NOT NULL REFERENCES error_pins(id) ON DELETE CASCADE,
     submission_id bigint NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
     grader_result_test_id bigint REFERENCES grader_result_tests(id) ON DELETE CASCADE,
-    class_id bigint NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
-    matched_at timestamptz DEFAULT now() NOT NULL,
-    UNIQUE(error_pin_id, submission_id, grader_result_test_id)
+    matched_at timestamptz DEFAULT now() NOT NULL
 );
 
--- Index for fast lookup by submission
+-- Unique index that treats NULLs as equal (PostgreSQL 15+)
+CREATE UNIQUE INDEX idx_error_pin_submission_unique ON error_pin_submission_matches(error_pin_id, submission_id, grader_result_test_id NULLS NOT DISTINCT);
+
+-- ============================================================================
+-- Indices for performance
+-- ============================================================================
+
+-- error_pins: Fast lookup by assignment_id (main query pattern)
+CREATE INDEX idx_error_pins_assignment ON error_pins(assignment_id);
+
+-- error_pins: Covering index for enabled pins per assignment (most common query)
+CREATE INDEX idx_error_pins_assignment_enabled ON error_pins(assignment_id, enabled) WHERE enabled = true;
+
+-- error_pin_rules: Fast lookup by error_pin_id
+CREATE INDEX idx_error_pin_rules_pin ON error_pin_rules(error_pin_id);
+
+-- error_pin_submission_matches: Fast lookup by submission
 CREATE INDEX idx_error_pin_matches_submission ON error_pin_submission_matches(submission_id);
+
+-- error_pin_submission_matches: Fast lookup by error_pin
 CREATE INDEX idx_error_pin_matches_error_pin ON error_pin_submission_matches(error_pin_id);
 
 -- ============================================================================
@@ -144,9 +160,10 @@ FOR ALL
 USING (
   EXISTS (
     SELECT 1
-    FROM public.user_privileges up
-    WHERE up.user_id = auth.uid()
-      AND up.class_id = error_pin_submission_matches.class_id
+    FROM public.error_pins ep
+    JOIN public.user_privileges up ON up.class_id = ep.class_id
+    WHERE ep.id = error_pin_submission_matches.error_pin_id
+      AND up.user_id = auth.uid()
       AND up.role IN ('instructor', 'grader')
   )
 );
@@ -334,7 +351,6 @@ SET search_path TO public
 AS $$
 DECLARE
     v_assignment_id bigint;
-    v_class_id bigint;
     v_grader_result_id bigint;
     v_test_id bigint;
     v_pin_record error_pins%ROWTYPE;
@@ -345,8 +361,8 @@ DECLARE
     v_result jsonb := '[]'::jsonb;
     v_match jsonb;
 BEGIN
-    -- Get assignment and class for this submission
-    SELECT assignment_id, class_id INTO v_assignment_id, v_class_id
+    -- Get assignment for this submission
+    SELECT assignment_id INTO v_assignment_id
     FROM submissions
     WHERE id = p_submission_id;
     
@@ -445,8 +461,8 @@ BEGIN
             
             IF v_all_rules_match THEN
                 -- Insert match at submission level (no specific test)
-                INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
-                VALUES (v_pin_record.id, p_submission_id, NULL, v_class_id)
+                INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
+                VALUES (v_pin_record.id, p_submission_id, NULL)
                 ON CONFLICT (error_pin_id, submission_id, grader_result_test_id) DO NOTHING;
             END IF;
         ELSE
@@ -467,8 +483,8 @@ BEGIN
                         v_grader_result_id
                     );
                     IF v_rule_matches THEN
-                        INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
-                        VALUES (v_pin_record.id, p_submission_id, NULL, v_class_id)
+                        INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
+                        VALUES (v_pin_record.id, p_submission_id, NULL)
                         ON CONFLICT (error_pin_id, submission_id, grader_result_test_id) DO NOTHING;
                         EXIT; -- Found a match, done with this pin
                     END IF;
@@ -489,8 +505,8 @@ BEGIN
                             v_test_id
                         );
                         IF v_rule_matches THEN
-                            INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
-                            VALUES (v_pin_record.id, p_submission_id, v_test_id, v_class_id)
+                            INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
+                            VALUES (v_pin_record.id, p_submission_id, v_test_id)
                             ON CONFLICT (error_pin_id, submission_id, grader_result_test_id) DO NOTHING;
                             EXIT; -- Found a match for this rule
                         END IF;
@@ -538,7 +554,6 @@ AS $$
 DECLARE
     v_pin_id bigint;
     v_assignment_id bigint;
-    v_class_id bigint;
     v_submission_id bigint;
     v_rule jsonb;
     v_grader_result_id bigint;
@@ -559,7 +574,7 @@ BEGIN
             rule_logic = COALESCE(p_error_pin->>'rule_logic', 'and'),
             enabled = COALESCE((p_error_pin->>'enabled')::boolean, true)
         WHERE id = (p_error_pin->>'id')::bigint
-        RETURNING id, assignment_id, class_id INTO v_pin_id, v_assignment_id, v_class_id;
+        RETURNING id, assignment_id INTO v_pin_id, v_assignment_id;
     ELSE
         -- Insert new pin
         INSERT INTO error_pins (
@@ -578,7 +593,7 @@ BEGIN
             COALESCE(p_error_pin->>'rule_logic', 'and'),
             COALESCE((p_error_pin->>'enabled')::boolean, true)
         )
-        RETURNING id, assignment_id, class_id INTO v_pin_id, v_assignment_id, v_class_id;
+        RETURNING id, assignment_id INTO v_pin_id, v_assignment_id;
     END IF;
 
     -- Delete old rules
@@ -679,8 +694,8 @@ BEGIN
             END LOOP;
             
             IF v_all_rules_match THEN
-                INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
-                VALUES (v_pin_id, v_submission_id, NULL, v_class_id)
+                INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
+                VALUES (v_pin_id, v_submission_id, NULL)
                 ON CONFLICT DO NOTHING;
                 v_processed_count := v_processed_count + 1;
             END IF;
@@ -702,8 +717,8 @@ BEGIN
                         v_grader_result_id
                     );
                     IF v_rule_matches THEN
-                        INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
-                        VALUES (v_pin_id, v_submission_id, NULL, v_class_id)
+                        INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
+                        VALUES (v_pin_id, v_submission_id, NULL)
                         ON CONFLICT DO NOTHING;
                         v_processed_count := v_processed_count + 1;
                         EXIT; -- Found a match, done with this submission
@@ -724,8 +739,8 @@ BEGIN
                             v_test_id
                         );
                         IF v_rule_matches THEN
-                            INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id, class_id)
-                            VALUES (v_pin_id, v_submission_id, v_test_id, v_class_id)
+                            INSERT INTO error_pin_submission_matches (error_pin_id, submission_id, grader_result_test_id)
+                            VALUES (v_pin_id, v_submission_id, v_test_id)
                             ON CONFLICT DO NOTHING;
                             v_processed_count := v_processed_count + 1;
                             EXIT; -- Found a match for this rule
