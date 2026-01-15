@@ -766,12 +766,13 @@ DECLARE
     v_grader_result_id bigint;
     v_test_id bigint;
     v_rule jsonb;
-    v_rule_record error_pin_rules%ROWTYPE;
+    v_rule_record RECORD;
     v_rule_matches boolean;
+    v_all_rules_match boolean;
     v_matching_submissions bigint[] := '{}';
     v_match_count int := 0;
 BEGIN
-    -- Create temporary table for rules
+    -- Create temporary table for rules with ON COMMIT DROP to ensure cleanup
     CREATE TEMP TABLE temp_preview_rules (
         target error_pin_rule_target,
         match_type text,
@@ -779,82 +780,141 @@ BEGIN
         match_value_max text,
         test_name_filter text,
         ordinal smallint
-    );
+    ) ON COMMIT DROP;
 
-    -- Insert rules into temp table
-    FOR v_rule IN SELECT * FROM jsonb_array_elements(p_rules)
-    LOOP
-        INSERT INTO temp_preview_rules VALUES (
-            (v_rule->>'target')::error_pin_rule_target,
-            COALESCE(v_rule->>'match_type', 'contains'),
-            v_rule->>'match_value',
-            v_rule->>'match_value_max',
-            v_rule->>'test_name_filter',
-            COALESCE((v_rule->>'ordinal')::smallint, 0)
-        );
-    END LOOP;
-
-    -- Process each active submission
-    FOR v_submission_id IN
-        SELECT id FROM submissions
-        WHERE assignment_id = p_assignment_id
-          AND is_active = true
-    LOOP
-        -- Get grader result
-        SELECT id INTO v_grader_result_id
-        FROM grader_results
-        WHERE submission_id = v_submission_id
-        ORDER BY created_at DESC
-        LIMIT 1;
-        
-        IF v_grader_result_id IS NULL THEN
-            CONTINUE;
-        END IF;
-
-        -- Evaluate rules
-        v_rule_matches := false;
-        FOR v_rule_record IN SELECT * FROM temp_preview_rules ORDER BY ordinal
+    BEGIN
+        -- Insert rules into temp table
+        FOR v_rule IN SELECT * FROM jsonb_array_elements(p_rules)
         LOOP
-            IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
-                v_rule_matches := evaluate_error_pin_rule(
-                    v_rule_record.target,
-                    v_rule_record.match_type,
-                    v_rule_record.match_value,
-                    v_rule_record.match_value_max,
-                    v_rule_record.test_name_filter,
-                    v_submission_id,
-                    v_grader_result_id
-                );
-            ELSE
-                FOR v_test_id IN
-                    SELECT id FROM grader_result_tests
-                    WHERE grader_result_id = v_grader_result_id
-                LOOP
-                    v_rule_matches := evaluate_error_pin_rule(
-                        v_rule_record.target,
-                        v_rule_record.match_type,
-                        v_rule_record.match_value,
-                        v_rule_record.match_value_max,
-                        v_rule_record.test_name_filter,
-                        v_submission_id,
-                        v_grader_result_id,
-                        v_test_id
-                    );
-                    EXIT WHEN v_rule_matches;
-                END LOOP;
-            END IF;
-            
-            -- Apply logic (simplified - for preview, we use OR if any rule matches)
-            EXIT WHEN v_rule_matches;
+            INSERT INTO temp_preview_rules VALUES (
+                (v_rule->>'target')::error_pin_rule_target,
+                COALESCE(v_rule->>'match_type', 'contains'),
+                v_rule->>'match_value',
+                v_rule->>'match_value_max',
+                v_rule->>'test_name_filter',
+                COALESCE((v_rule->>'ordinal')::smallint, 0)
+            );
         END LOOP;
 
-        IF v_rule_matches THEN
-            v_matching_submissions := array_append(v_matching_submissions, v_submission_id);
-            v_match_count := v_match_count + 1;
-        END IF;
-    END LOOP;
+        -- Process each active submission
+        FOR v_submission_id IN
+            SELECT id FROM submissions
+            WHERE assignment_id = p_assignment_id
+              AND is_active = true
+        LOOP
+            -- Get grader result
+            SELECT id INTO v_grader_result_id
+            FROM grader_results
+            WHERE submission_id = v_submission_id
+            ORDER BY created_at DESC
+            LIMIT 1;
+            
+            IF v_grader_result_id IS NULL THEN
+                CONTINUE;
+            END IF;
 
-    DROP TABLE temp_preview_rules;
+            -- Evaluate rules based on logic (AND/OR) - same logic as save_error_pin
+            IF p_rule_logic = 'and' THEN
+                -- AND logic: all rules must match
+                v_all_rules_match := true;
+                FOR v_rule_record IN SELECT * FROM temp_preview_rules ORDER BY ordinal
+                LOOP
+                    v_rule_matches := false;
+                    IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
+                        v_rule_matches := evaluate_error_pin_rule(
+                            v_rule_record.target,
+                            v_rule_record.match_type,
+                            v_rule_record.match_value,
+                            v_rule_record.match_value_max,
+                            v_rule_record.test_name_filter,
+                            v_submission_id,
+                            v_grader_result_id
+                        );
+                    ELSE
+                        -- For test-level rules, check if any test matches
+                        FOR v_test_id IN
+                            SELECT id FROM grader_result_tests
+                            WHERE grader_result_id = v_grader_result_id
+                        LOOP
+                            IF evaluate_error_pin_rule(
+                                v_rule_record.target,
+                                v_rule_record.match_type,
+                                v_rule_record.match_value,
+                                v_rule_record.match_value_max,
+                                v_rule_record.test_name_filter,
+                                v_submission_id,
+                                v_grader_result_id,
+                                v_test_id
+                            ) THEN
+                                v_rule_matches := true;
+                                EXIT;
+                            END IF;
+                        END LOOP;
+                    END IF;
+                    IF NOT v_rule_matches THEN
+                        v_all_rules_match := false;
+                        EXIT;
+                    END IF;
+                END LOOP;
+                
+                IF v_all_rules_match THEN
+                    v_matching_submissions := array_append(v_matching_submissions, v_submission_id);
+                    v_match_count := v_match_count + 1;
+                END IF;
+            ELSE
+                -- OR logic: any rule must match
+                FOR v_rule_record IN SELECT * FROM temp_preview_rules ORDER BY ordinal
+                LOOP
+                    IF v_rule_record.target IN ('lint_output', 'lint_failed', 'grader_score_range', 'grader_output_student', 'grader_output_hidden') THEN
+                        v_rule_matches := evaluate_error_pin_rule(
+                            v_rule_record.target,
+                            v_rule_record.match_type,
+                            v_rule_record.match_value,
+                            v_rule_record.match_value_max,
+                            v_rule_record.test_name_filter,
+                            v_submission_id,
+                            v_grader_result_id
+                        );
+                        IF v_rule_matches THEN
+                            v_matching_submissions := array_append(v_matching_submissions, v_submission_id);
+                            v_match_count := v_match_count + 1;
+                            EXIT; -- Found a match, done with this submission
+                        END IF;
+                    ELSE
+                        -- Check at test level
+                        FOR v_test_id IN
+                            SELECT id FROM grader_result_tests
+                            WHERE grader_result_id = v_grader_result_id
+                        LOOP
+                            v_rule_matches := evaluate_error_pin_rule(
+                                v_rule_record.target,
+                                v_rule_record.match_type,
+                                v_rule_record.match_value,
+                                v_rule_record.match_value_max,
+                                v_rule_record.test_name_filter,
+                                v_submission_id,
+                                v_grader_result_id,
+                                v_test_id
+                            );
+                            IF v_rule_matches THEN
+                                v_matching_submissions := array_append(v_matching_submissions, v_submission_id);
+                                v_match_count := v_match_count + 1;
+                                EXIT; -- Found a match for this rule
+                            END IF;
+                        END LOOP;
+                        IF v_rule_matches THEN
+                            EXIT; -- Found a match, done with this submission
+                        END IF;
+                    END IF;
+                END LOOP;
+            END IF;
+        END LOOP;
+    EXCEPTION
+        WHEN OTHERS THEN
+            -- Ensure temp table is dropped even on exception
+            DROP TABLE IF EXISTS temp_preview_rules;
+            RAISE;
+    END;
 
     RETURN jsonb_build_object(
         'match_count', v_match_count,
