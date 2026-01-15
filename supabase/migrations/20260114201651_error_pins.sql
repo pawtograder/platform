@@ -226,8 +226,8 @@ DECLARE
     v_grader_output_hidden text;
     v_test_hidden_output text;
 BEGIN
-    -- Apply test_name_filter if specified
-    IF p_test_name_filter IS NOT NULL AND p_test_id IS NOT NULL THEN
+    -- Apply test_name_filter if specified (skip if NULL or empty string)
+    IF p_test_name_filter IS NOT NULL AND p_test_name_filter != '' AND p_test_id IS NOT NULL THEN
         SELECT name INTO v_test_name
         FROM grader_result_tests
         WHERE id = p_test_id;

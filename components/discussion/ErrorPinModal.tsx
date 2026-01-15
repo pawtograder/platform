@@ -232,9 +232,15 @@ export function ErrorPinModal({
     setIsPreviewing(true);
     try {
       const supabase = createClient();
+      // Convert empty strings to null for optional fields
+      const sanitizedRules = rules.map((r) => ({
+        ...r,
+        test_name_filter: r.test_name_filter?.trim() || null,
+        match_value_max: r.match_value_max?.trim() || null
+      }));
       const { data, error } = await supabase.rpc("preview_error_pin_matches", {
         p_assignment_id: assignmentId,
-        p_rules: rules as unknown as Json,
+        p_rules: sanitizedRules as unknown as Json,
         p_rule_logic: watch("rule_logic")
       });
 
@@ -290,7 +296,10 @@ export function ErrorPinModal({
         p_error_pin: pinData as unknown as Json,
         p_rules: data.rules.map((r, idx) => ({
           ...r,
-          ordinal: idx
+          ordinal: idx,
+          // Convert empty strings to null/undefined for optional fields
+          test_name_filter: r.test_name_filter?.trim() || null,
+          match_value_max: r.match_value_max?.trim() || null
         })) as unknown as Json
       });
 

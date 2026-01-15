@@ -519,6 +519,10 @@ export class AssignmentController {
     this.rubricChecksController.close();
     this.rubricCheckReferencesController.close();
 
+    // Close error pin table controllers
+    this.errorPins.close();
+    this.errorPinRules.close();
+
     for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
       controller.close();
     }
