@@ -3,16 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useAssignments } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
-import {
-  Box,
-  Button as ChakraButton,
-  Dialog,
-  HStack,
-  Icon,
-  Stack,
-  Text,
-  Badge
-} from "@chakra-ui/react";
+import { Box, Button as ChakraButton, Dialog, HStack, Icon, Stack, Text, Badge } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -106,7 +97,11 @@ export function ErrorPinManageModal({
 
   const handleDelete = useCallback(
     async (pinId: number) => {
-      if (!confirm("Are you sure you want to delete this error pin? This will also delete all associated rules and matching submissions.")) {
+      if (
+        !confirm(
+          "Are you sure you want to delete this error pin? This will also delete all associated rules and matching submissions."
+        )
+      ) {
         return;
       }
 
@@ -184,7 +179,9 @@ export function ErrorPinManageModal({
               ) : (
                 <Stack spaceY={3}>
                   <HStack justify="space-between" mb={2}>
-                    <Text fontWeight="semibold">{pins.length} Error Pin{pins.length !== 1 ? "s" : ""}</Text>
+                    <Text fontWeight="semibold">
+                      {pins.length} Error Pin{pins.length !== 1 ? "s" : ""}
+                    </Text>
                     <ChakraButton size="sm" colorPalette="green" onClick={handleCreateNew}>
                       <Icon as={BsPlus} mr={1} />
                       Create New Pin
@@ -192,13 +189,7 @@ export function ErrorPinManageModal({
                   </HStack>
 
                   {pins.map((pin) => (
-                    <Box
-                      key={pin.id}
-                      border="1px solid"
-                      borderColor="border.emphasized"
-                      borderRadius="md"
-                      p={4}
-                    >
+                    <Box key={pin.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={4}>
                       <HStack justify="space-between" mb={2}>
                         <HStack gap={2}>
                           <Text fontWeight="semibold">{getAssignmentTitle(pin.assignment_id)}</Text>
@@ -207,8 +198,12 @@ export function ErrorPinManageModal({
                           ) : (
                             <Badge colorPalette="gray">Disabled</Badge>
                           )}
-                          <Badge colorPalette="blue">{pin.rule_count} Rule{pin.rule_count !== 1 ? "s" : ""}</Badge>
-                          <Badge colorPalette="purple">{pin.match_count} Match{pin.match_count !== 1 ? "es" : ""}</Badge>
+                          <Badge colorPalette="blue">
+                            {pin.rule_count} Rule{pin.rule_count !== 1 ? "s" : ""}
+                          </Badge>
+                          <Badge colorPalette="purple">
+                            {pin.match_count} Match{pin.match_count !== 1 ? "es" : ""}
+                          </Badge>
                           <Text fontSize="sm" color="fg.muted">
                             Logic: {pin.rule_logic.toUpperCase()}
                           </Text>

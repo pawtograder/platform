@@ -377,7 +377,9 @@ export function ErrorPinModal({
 
                 <Box>
                   <HStack justify="space-between" mb={2}>
-                    <Text fontWeight="semibold" fontSize="sm">Rules</Text>
+                    <Text fontWeight="semibold" fontSize="sm">
+                      Rules
+                    </Text>
                     <ChakraButton
                       size="xs"
                       onClick={() =>
@@ -524,8 +526,15 @@ export function ErrorPinModal({
                     {previewSubmissions.length > 0 && (
                       <Box>
                         <Text fontSize="sm" fontWeight="medium" mb={2} color="blue.700" _dark={{ color: "blue.200" }}>
-                          Most recent {showAllSubmissions ? previewSubmissions.length : Math.min(10, previewSubmissions.length)} matching submission
-                          {(showAllSubmissions ? previewSubmissions.length : Math.min(10, previewSubmissions.length)) !== 1 ? "s" : ""}:
+                          Most recent{" "}
+                          {showAllSubmissions ? previewSubmissions.length : Math.min(10, previewSubmissions.length)}{" "}
+                          matching submission
+                          {(showAllSubmissions
+                            ? previewSubmissions.length
+                            : Math.min(10, previewSubmissions.length)) !== 1
+                            ? "s"
+                            : ""}
+                          :
                         </Text>
                         <Stack spaceY={1}>
                           {(showAllSubmissions ? previewSubmissions : previewSubmissions.slice(0, 10)).map(
