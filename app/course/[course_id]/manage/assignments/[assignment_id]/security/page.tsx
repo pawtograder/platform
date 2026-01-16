@@ -256,9 +256,7 @@ function GraderOutputModal({
                 <Alert.Indicator />
                 <Alert.Content>
                   <Alert.Title>No instructor output available</Alert.Title>
-                  <Alert.Description>
-                    This submission does not have instructor-visible grader output.
-                  </Alert.Description>
+                  <Alert.Description>This submission does not have instructor-visible grader output.</Alert.Description>
                 </Alert.Content>
               </Alert.Root>
             )}
@@ -349,17 +347,13 @@ export default function SecurityAuditPage() {
     setHasSearched(true);
     setIsSearching(true);
 
-    // Close existing controller if any
-    if (tableController) {
-      tableController.close();
-    }
-
     // Create new TableController with the search query
     const query = supabase
       .from("submission_files")
       .select(SUBMISSION_FILES_SELECT)
       .eq("submissions.assignment_id", Number(assignment_id))
-      .ilike("contents", `%${searchTerm}%`);
+      .eq("class_id", Number(course_id))
+      .like("contents", `%${searchTerm}%`);
 
     const tc = new TableController<"submission_files", typeof SUBMISSION_FILES_SELECT>({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -380,7 +374,7 @@ export default function SecurityAuditPage() {
     } finally {
       setIsSearching(false);
     }
-  }, [searchTerm, supabase, assignment_id, classRealTimeController, tableController]);
+  }, [searchTerm, supabase, assignment_id, course_id, classRealTimeController]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -471,9 +465,7 @@ export default function SecurityAuditPage() {
         accessorKey: "class_section_name",
         header: "Class Section",
         cell: ({ row }) => (
-          <Text data-testid={`result-class-section-${row.index}`}>
-            {row.original.class_section_name || "N/A"}
-          </Text>
+          <Text data-testid={`result-class-section-${row.index}`}>{row.original.class_section_name || "N/A"}</Text>
         )
       },
       {
@@ -481,9 +473,7 @@ export default function SecurityAuditPage() {
         accessorKey: "lab_section_name",
         header: "Lab Section",
         cell: ({ row }) => (
-          <Text data-testid={`result-lab-section-${row.index}`}>
-            {row.original.lab_section_name || "N/A"}
-          </Text>
+          <Text data-testid={`result-lab-section-${row.index}`}>{row.original.lab_section_name || "N/A"}</Text>
         )
       },
       {
@@ -735,10 +725,11 @@ export default function SecurityAuditPage() {
           <HStack justify="space-between">
             <Text fontWeight="medium">
               {transformedData.length} match{transformedData.length === 1 ? "" : "es"} found
-              {transformedData.length > 0 && (() => {
-                const uniqueSubmissionCount = new Set(transformedData.map((r) => r.submission_id)).size;
-                return ` across ${uniqueSubmissionCount} submission${uniqueSubmissionCount === 1 ? "" : "s"}`;
-              })()}
+              {transformedData.length > 0 &&
+                (() => {
+                  const uniqueSubmissionCount = new Set(transformedData.map((r) => r.submission_id)).size;
+                  return ` across ${uniqueSubmissionCount} submission${uniqueSubmissionCount === 1 ? "" : "s"}`;
+                })()}
             </Text>
             {transformedData.length > 0 && (
               <Button variant="outline" size="sm" onClick={exportToCSV} data-testid="security-export-csv">

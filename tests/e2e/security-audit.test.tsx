@@ -15,13 +15,13 @@ import { argosScreenshot } from "@argos-ci/playwright";
 
 /**
  * Security Audit Dashboard E2E Tests
- * 
+ *
  * These tests verify that the security audit dashboard correctly identifies
  * suspicious content in student submissions. The test data is intentionally
  * humorous, poking fun at the irony that Claude (the AI writing this test)
  * is building a tool to detect students who used Claude to write code that
  * contains detectable patterns.
- * 
+ *
  * The joke is multi-layered:
  * 1. Claude is writing a test for a tool that detects AI-generated code
  * 2. The "trojan horse" code references Claude in its comments
@@ -39,7 +39,7 @@ let assignment: Assignment;
 
 /**
  * Test data representing suspicious code patterns we want to detect.
- * 
+ *
  * The security audit dashboard is designed to catch students who might be
  * using prohibited libraries or attempting to access the file system in
  * ways that violate assignment rules. Many CS courses prohibit direct
@@ -178,12 +178,12 @@ public class NumberStats {
 
 test.beforeAll(async () => {
   course = await createClass({ name: "Security Audit Test Class" });
-  
-  const classSection = await createClassSection({ 
-    class_id: course.id, 
-    name: "Section A" 
+
+  const classSection = await createClassSection({
+    class_id: course.id,
+    name: "Section A"
   });
-  
+
   // Create users
   [instructor, student1, student2, student3, grader] = await createUsersInClass([
     {
@@ -225,7 +225,7 @@ test.beforeAll(async () => {
       useMagicLink: true
     }
   ]);
-  
+
   // Create a lab section for some students
   await createLabSectionWithStudents({
     class_id: course.id,
@@ -234,14 +234,14 @@ test.beforeAll(async () => {
     students: [student1, student2],
     name: "Lab Section Monday"
   });
-  
+
   // Create the assignment
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 7).toUTCString(),
     class_id: course.id,
     name: "Totally Normal Homework (Not A Trap)"
   });
-  
+
   // Create repositories and submissions with our test files
   const createSubmissionWithFile = async (
     studentProfileId: string,
@@ -250,7 +250,7 @@ test.beforeAll(async () => {
     graderScore?: { score: number; maxScore: number; instructorOutput?: string }
   ) => {
     const repoName = `pawtograder-playground/security-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    
+
     // Create repository
     const { data: repo, error: repoError } = await supabase
       .from("repositories")
@@ -263,9 +263,9 @@ test.beforeAll(async () => {
       })
       .select("id")
       .single();
-    
+
     if (repoError) throw new Error(`Failed to create repository: ${repoError.message}`);
-    
+
     // Create check run with randomized check_run_id to avoid collisions
     const randomCheckRunId = Math.floor(Math.random() * 1000000000);
     const { data: checkRun, error: checkRunError } = await supabase
@@ -280,9 +280,9 @@ test.beforeAll(async () => {
       })
       .select("id")
       .single();
-    
+
     if (checkRunError) throw new Error(`Failed to create check run: ${checkRunError.message}`);
-    
+
     // Create submission
     const { data: submission, error: submissionError } = await supabase
       .from("submissions")
@@ -299,22 +299,20 @@ test.beforeAll(async () => {
       })
       .select("id, ordinal")
       .single();
-    
+
     if (submissionError) throw new Error(`Failed to create submission: ${submissionError.message}`);
-    
+
     // Create the submission file with our test content
-    const { error: fileError } = await supabase
-      .from("submission_files")
-      .insert({
-        name: fileName,
-        contents: fileContents,
-        class_id: course.id,
-        submission_id: submission.id,
-        profile_id: studentProfileId
-      });
-    
+    const { error: fileError } = await supabase.from("submission_files").insert({
+      name: fileName,
+      contents: fileContents,
+      class_id: course.id,
+      submission_id: submission.id,
+      profile_id: studentProfileId
+    });
+
     if (fileError) throw new Error(`Failed to create submission file: ${fileError.message}`);
-    
+
     // Create grader results if score is provided
     if (graderScore) {
       const { data: graderResult, error: graderResultError } = await supabase
@@ -331,38 +329,32 @@ test.beforeAll(async () => {
         })
         .select("id")
         .single();
-      
+
       if (graderResultError) throw new Error(`Failed to create grader result: ${graderResultError.message}`);
-      
+
       // Create instructor-only output if provided
       if (graderScore.instructorOutput) {
-        const { error: outputError } = await supabase
-          .from("grader_result_output")
-          .insert({
-            grader_result_id: graderResult.id,
-            class_id: course.id,
-            output: graderScore.instructorOutput,
-            format: "text",
-            visibility: "instructor_only"
-          });
-        
+        const { error: outputError } = await supabase.from("grader_result_output").insert({
+          grader_result_id: graderResult.id,
+          class_id: course.id,
+          output: graderScore.instructorOutput,
+          format: "text",
+          visibility: "hidden" 
+        });
+
         if (outputError) throw new Error(`Failed to create grader result output: ${outputError.message}`);
       }
     }
-    
+
     return submission;
   };
-  
+
   // Create submissions for each student
   // Student 1 (Claude McCheaterson) - failed, blatant java.io file access
-  await createSubmissionWithFile(
-    student1.private_profile_id,
-    FILE_SYSTEM_ACCESS_CODE,
-    "DataProcessor.java",
-    {
-      score: 0,
-      maxScore: 100,
-      instructorOutput: `SECURITY VIOLATION: Prohibited file system access detected!
+  await createSubmissionWithFile(student1.private_profile_id, FILE_SYSTEM_ACCESS_CODE, "DataProcessor.java", {
+    score: 0,
+    maxScore: 100,
+    instructorOutput: `SECURITY VIOLATION: Prohibited file system access detected!
 
 Static analysis found the following violations:
 - import java.io.File
@@ -379,18 +371,13 @@ direct file I/O operations. The student appears to be attempting
 to read expected outputs from the autograder environment.
 
 ACTION REQUIRED: Academic integrity review recommended.`
-    }
-  );
-  
+  });
+
   // Student 2 (Backdoor Bobby) - partially passed, sneaky FileInputStream usage
-  await createSubmissionWithFile(
-    student2.private_profile_id,
-    SNEAKY_FILE_ACCESS_CODE,
-    "ConfigReader.java",
-    {
-      score: 30,
-      maxScore: 100,
-      instructorOutput: `WARNING: Prohibited java.io usage detected!
+  await createSubmissionWithFile(student2.private_profile_id, SNEAKY_FILE_ACCESS_CODE, "ConfigReader.java", {
+    score: 30,
+    maxScore: 100,
+    instructorOutput: `WARNING: Prohibited java.io usage detected!
 
 Found imports:
 - java.io.FileInputStream
@@ -404,20 +391,14 @@ intentional concealment of file access failures.
 
 Tests passed: 3/10
 Tests failed: 7/10 (file access denied in sandbox)`
-    }
-  );
-  
+  });
+
   // Student 3 (Honest Hannah) - passed, clean code without file I/O
-  await createSubmissionWithFile(
-    student3.private_profile_id,
-    LEGITIMATE_CODE,
-    "NumberStats.java",
-    {
-      score: 100,
-      maxScore: 100
-      // No instructor output - submission is clean
-    }
-  );
+  await createSubmissionWithFile(student3.private_profile_id, LEGITIMATE_CODE, "NumberStats.java", {
+    score: 100,
+    maxScore: 100
+    // No instructor output - submission is clean
+  });
 });
 
 // Clean up test data after all tests complete
@@ -440,276 +421,276 @@ test.afterAll(async () => {
 
 test.describe("Security Audit Dashboard - Detecting File System Access", () => {
   test.describe.configure({ mode: "serial" });
-  
+
   test("Instructor can access the security audit dashboard", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
-    
+
     // Navigate to the security audit page
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Verify the page loaded
     await expect(page.getByRole("heading", { name: "Security Audit Dashboard" })).toBeVisible();
     await expect(page.getByTestId("security-search-input")).toBeVisible();
     await expect(page.getByTestId("security-search-button")).toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit dashboard initial state");
   });
-  
+
   test("Search finds java.io.File usage in submissions", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for java.io.File - a prohibited import
     await page.getByTestId("security-search-input").fill("java.io.File");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Verify we found the match in Claude McCheaterson's submission
     await expect(page.getByText("Claude McCheaterson")).toBeVisible();
     await expect(page.getByText("claude-user@pawtograder.net")).toBeVisible();
     await expect(page.getByText("DataProcessor.java")).toBeVisible();
-    
+
     // Verify the matched content preview shows the import
     const matchedContent = page.getByTestId("result-matched-content-0");
     await expect(matchedContent).toContainText("java.io.File");
-    
+
     await argosScreenshot(page, "Security audit found java.io.File usage");
   });
-  
+
   test("Search finds FileInputStream across multiple students", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for FileInputStream - used by student2
     await page.getByTestId("security-search-input").fill("FileInputStream");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Should find Backdoor Bobby's submission
     await expect(page.getByText("Backdoor Bobby")).toBeVisible();
     await expect(page.getByText("ConfigReader.java")).toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit found FileInputStream usage");
   });
-  
+
   test("Search for FileReader finds only the violating student", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for FileReader - only in student1's code
     await page.getByTestId("security-search-input").fill("FileReader");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Should only find Claude McCheaterson, not the others
     await expect(page.getByText("Claude McCheaterson")).toBeVisible();
     await expect(page.getByText("Backdoor Bobby")).not.toBeVisible();
     await expect(page.getByText("Honest Hannah")).not.toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit FileReader single match");
   });
-  
+
   test("Search with no matches shows appropriate message", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for something that doesn't exist
     await page.getByTestId("security-search-input").fill("xyzzy_nothing_matches_this_string_42");
     await page.getByTestId("security-search-button").click();
-    
+
     // Should show no matches message
     await expect(page.getByText(/No matches found/)).toBeVisible({ timeout: 10000 });
-    
+
     await argosScreenshot(page, "Security audit no matches found");
   });
-  
+
   test("Export to CSV button works when results exist", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for java.io imports
     await page.getByTestId("security-search-input").fill("java.io");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Verify export button is visible
     const exportButton = page.getByTestId("security-export-csv");
     await expect(exportButton).toBeVisible();
-    
+
     // Set up download handler
     const downloadPromise = page.waitForEvent("download");
     await exportButton.click();
-    
+
     // Verify download started
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toContain("security_audit");
     expect(download.suggestedFilename()).toContain(".csv");
-    
+
     await argosScreenshot(page, "Security audit with export button");
   });
-  
+
   test("Search for autograder path finds file system snooping attempts", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for attempts to access the autograder directory
     await page.getByTestId("security-search-input").fill("/autograder/");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Should find both cheating students who tried to access autograder files
     await expect(page.getByText("Claude McCheaterson")).toBeVisible();
     await expect(page.getByText("Backdoor Bobby")).toBeVisible();
-    
+
     // Verify the file link goes to GitHub
     const fileLink = page.getByTestId("result-file-link-0");
     await expect(fileLink).toHaveAttribute("href", /github\.com/);
-    
+
     await argosScreenshot(page, "Security audit found autograder access attempts");
   });
-  
+
   test("Graders cannot access the security audit dashboard", async ({ page }) => {
     await loginAsUser(page, grader, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Should see access denied
     await expect(page.getByText("Access Denied")).toBeVisible();
     await expect(page.getByText("Only instructors can access")).toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit access denied for grader");
   });
-  
+
   test("Students cannot access the security audit dashboard", async ({ page }) => {
     await loginAsUser(page, student1, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Should see access denied or be redirected
     await expect(page.getByText("Access Denied")).toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit access denied for student");
   });
-  
+
   test("Results show class section and lab section correctly", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for java.io.File (matches student1 who has both sections assigned)
     await page.getByTestId("security-search-input").fill("java.io.File");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Verify section information is displayed
     await expect(page.getByTestId("result-class-section-0")).toContainText("Section A");
     await expect(page.getByTestId("result-lab-section-0")).toContainText("Lab Section Monday");
-    
+
     await argosScreenshot(page, "Security audit shows section information");
   });
-  
+
   test("Score column displays correct submission scores", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for FileWriter (Claude McCheaterson's submission with 0/100)
     await page.getByTestId("security-search-input").fill("FileWriter");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Verify score is displayed correctly for failed submission
     const scoreCell = page.getByTestId("result-score-0");
     await expect(scoreCell).toBeVisible();
     await expect(scoreCell).toContainText("0/100");
-    
+
     await argosScreenshot(page, "Security audit shows score column");
   });
-  
+
   test("View Output button opens modal with instructor output", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for BufferedReader (student1's file access violation)
     await page.getByTestId("security-search-input").fill("BufferedReader");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Click the View Output button
     const viewOutputButton = page.getByTestId("result-view-output-0");
     await expect(viewOutputButton).toBeVisible();
     await viewOutputButton.click();
-    
+
     // Verify modal appears with instructor output
     await expect(page.getByText("Grader Output - Claude McCheaterson")).toBeVisible();
     await expect(page.getByTestId("grader-output-content")).toBeVisible();
     await expect(page.getByTestId("grader-output-content")).toContainText("SECURITY VIOLATION");
     await expect(page.getByTestId("grader-output-content")).toContainText("file system access detected");
-    
+
     // Verify the View Full Grader Results button is present
     await expect(page.getByTestId("view-full-results-button")).toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit grader output modal");
   });
-  
+
   test("Modal shows 'no instructor output' message when submission has none", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for ArrayList (Honest Hannah's legitimate code - no instructor output)
     await page.getByTestId("security-search-input").fill("ArrayList");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Click the View Output button
     const viewOutputButton = page.getByTestId("result-view-output-0");
     await expect(viewOutputButton).toBeVisible();
     await viewOutputButton.click();
-    
+
     // Verify modal shows the "no instructor output" message
     await expect(page.getByText("No instructor output available")).toBeVisible();
-    
+
     await argosScreenshot(page, "Security audit modal with no instructor output");
   });
-  
+
   test("Partially failed submissions show intermediate scores", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
+
     // Search for ObjectInputStream (Backdoor Bobby's submission with 30/100)
     await page.getByTestId("security-search-input").fill("ObjectInputStream");
     await page.getByTestId("security-search-button").click();
-    
+
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
+
     // Verify Bobby's submission shows 30/100
     await expect(page.getByText("Backdoor Bobby")).toBeVisible();
     const scoreCell = page.getByTestId("result-score-0");
     await expect(scoreCell).toContainText("30/100");
-    
+
     // Click to view the output
     await page.getByTestId("result-view-output-0").click();
-    
+
     // Verify the instructor output contains the warning
     await expect(page.getByTestId("grader-output-content")).toContainText("WARNING: Prohibited java.io usage");
     await expect(page.getByTestId("grader-output-content")).toContainText("Tests passed: 3/10");
-    
+
     await argosScreenshot(page, "Security audit partial score with instructor output");
   });
 });
