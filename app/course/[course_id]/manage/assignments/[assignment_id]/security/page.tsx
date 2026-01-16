@@ -206,6 +206,15 @@ function GraderOutputModal({
               </Badge>
             </HStack>
             <HStack>
+              <Text fontWeight="bold">Submission:</Text>
+              <Link
+                href={`/course/${courseId}/assignments/${assignmentId}/submissions/${result.submission_id}`}
+                data-testid="submission-link"
+              >
+                #{result.submission_ordinal}
+              </Link>
+            </HStack>
+            <HStack>
               <Text fontWeight="bold">File:</Text>
               <Link
                 href={getGitHubFileLink(result.repository, result.sha, result.file_name)}
