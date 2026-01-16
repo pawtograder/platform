@@ -748,6 +748,47 @@ export async function createRepo(
 }
 
 /**
+ * Checks if a RequestError indicates a duplicate ruleset (by ID/name or "already exists" message)
+ */
+function checkIfDuplicateRulesetError(e: RequestError): boolean {
+  // Check error message for duplicate indicators
+  const message = e.message?.toLowerCase() || "";
+  if (message.includes("already exists") || message.includes("duplicate") || message.includes("name already")) {
+    return true;
+  }
+
+  // Check response.errors array for duplicate indicators
+  const errors = e.response?.data?.errors;
+  if (Array.isArray(errors)) {
+    for (const error of errors) {
+      const errorMessage =
+        typeof error === "string" ? error.toLowerCase() : (error?.message || error?.field || "").toLowerCase();
+
+      if (
+        errorMessage.includes("already exists") ||
+        errorMessage.includes("duplicate") ||
+        errorMessage.includes("name already") ||
+        errorMessage.includes("id already")
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // Check response.data.message for duplicate indicators
+  const responseMessage = e.response?.data?.message?.toLowerCase() || "";
+  if (
+    responseMessage.includes("already exists") ||
+    responseMessage.includes("duplicate") ||
+    responseMessage.includes("name already")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Creates a branch protection ruleset to prevent force pushes on the default branch
  * Uses GitHub's repository rulesets API (newer approach)
  */
@@ -794,11 +835,15 @@ export async function createBranchProtectionRuleset(
     scope?.setTag("ruleset_created", "true");
   } catch (e) {
     if (e instanceof RequestError) {
-      // If ruleset already exists or there's a conflict, that's okay
+      // Only suppress if this is explicitly a duplicate ruleset error
       if (e.status === 422 || e.status === 409) {
-        scope?.setTag("ruleset_already_exists", "true");
-        console.log(`Branch protection ruleset may already exist for ${org}/${repoName}`);
-        return;
+        const isDuplicateRuleset = checkIfDuplicateRulesetError(e);
+        if (isDuplicateRuleset) {
+          scope?.setTag("ruleset_already_exists", "true");
+          console.log(`Branch protection ruleset may already exist for ${org}/${repoName}`);
+          return;
+        }
+        // If it's 422/409 but not a duplicate error, rethrow so callers can handle it
       }
     }
     throw e;

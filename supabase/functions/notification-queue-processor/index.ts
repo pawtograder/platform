@@ -610,7 +610,8 @@ async function sendEmail(params: {
     await archiveMessage(adminSupabase, notification.msg_id, scope);
 
     // Log to Sentry if email was not sent successfully
-    if (!emailSent) {
+    // Skip reporting for expected cases like disabled users (noisy and not actionable)
+    if (!emailSent && skipReason !== "user_disabled_in_class") {
       scope.setContext("email_not_sent", {
         reason: skipReason,
         msg_id: notification.msg_id,
@@ -657,13 +658,45 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     notifications.forEach((notification) => {
       uniqueCourseIds.add(notification.message.class_id);
     });
+
+    // CRITICAL: Also fetch user/class combos from discussion_digest_items to ensure
+    // we have active user status for classes that may not be in the current queue
+    // This prevents incorrectly deleting digest items for users who are active in other classes
+    const { data: digestItemCombos, error: digestCombosError } = await adminSupabase
+      .schema("public")
+      .from("discussion_digest_items")
+      .select("user_id, class_id");
+
+    // Handle error gracefully - if we can't fetch digest combos, continue with queue-only processing
+    if (digestCombosError) {
+      scope.setContext("digest_combos_fetch_error", { error: digestCombosError.message });
+      Sentry.captureException(digestCombosError, scope);
+      console.error(`Error fetching digest item combos: ${digestCombosError.message}`);
+      // Continue processing - will use queue classes only
+    }
+
+    // Merge digest item user/class combos into unique sets
+    const digestUserIds = new Set<string>();
+    const digestClassIds = new Set<number>();
+    if (digestItemCombos) {
+      for (const combo of digestItemCombos) {
+        digestUserIds.add(combo.user_id);
+        digestClassIds.add(combo.class_id);
+      }
+    }
+
+    // Merge queue user IDs with digest user IDs
+    const allUserIds = new Set([...uniqueEmails, ...digestUserIds]);
+    // Merge queue class IDs with digest class IDs
+    const allClassIds = new Set([...uniqueCourseIds, ...digestClassIds]);
+
     const { data: emails, error: emailsError } = await adminSupabase
       .schema("public")
       .from("users")
       .select("email, user_id")
       .in(
         "user_id",
-        Array.from(uniqueEmails).filter((email) => email)
+        Array.from(allUserIds).filter((email) => email)
       );
     const { data: courses, error: coursesError } = await adminSupabase
       .schema("public")
@@ -671,11 +704,12 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       .select("name, id, slug")
       .in(
         "id",
-        Array.from(uniqueCourseIds).filter((id) => id)
+        Array.from(allClassIds).filter((id) => id)
       );
 
     // Fetch user roles with class sections and lab sections
     // CRITICAL: Only fetch active (non-disabled) user roles to prevent sending emails to disabled users
+    // Include both queue classes and digest item classes to ensure we have complete active user status
     const { data: userRoles, error: userRolesError } = await adminSupabase
       .schema("public")
       .from("user_roles")
@@ -691,11 +725,11 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       )
       .in(
         "user_id",
-        Array.from(uniqueEmails).filter((email) => email)
+        Array.from(allUserIds).filter((email) => email)
       )
       .in(
         "class_id",
-        Array.from(uniqueCourseIds).filter((id) => id)
+        Array.from(allClassIds).filter((id) => id)
       )
       .eq("disabled", false);
 
@@ -740,11 +774,12 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       }
     }
 
-    // Filter emails to only include users who have active roles in the relevant classes
+    // Filter emails to only include users who have active roles in any of the relevant classes
+    // Include both queue classes and digest item classes
     const filteredEmails =
       emails?.filter((email) => {
-        // Check if this user has an active role in any of the relevant classes
-        return Array.from(uniqueCourseIds).some((classId) => activeUserClassSet.has(`${email.user_id}|${classId}`));
+        // Check if this user has an active role in any of the relevant classes (queue or digest)
+        return Array.from(allClassIds).some((classId) => activeUserClassSet.has(`${email.user_id}|${classId}`));
       }) || [];
 
     // Fetch notification preferences for discussion digest mode
@@ -754,11 +789,11 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       .select("user_id, class_id, discussion_notification")
       .in(
         "user_id",
-        Array.from(uniqueEmails).filter((email) => email)
+        Array.from(allUserIds).filter((email) => email)
       )
       .in(
         "class_id",
-        Array.from(uniqueCourseIds).filter((id) => id)
+        Array.from(allClassIds).filter((id) => id)
       );
 
     if (notificationPrefsError) {
@@ -1044,13 +1079,22 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           emailScope.setContext("digest_meta", { user_id, class_id, count: digestItems.length });
 
           if (!recipient || !recipient.email) {
-            // User is disabled or has no email - delete items anyway
-            await adminSupabase
-              .schema("public")
-              .from("discussion_digest_items")
-              .delete()
-              .eq("user_id", user_id)
-              .eq("class_id", class_id);
+            // Check if we have explicit evidence the user is disabled in this class
+            // Since we fetch user roles for all digest item classes, if user/class combo is not in
+            // activeUserClassSet, it means they're disabled or don't have a role (explicit evidence)
+            const userClassKey = `${user_id}|${class_id}`;
+            if (!activeUserClassSet.has(userClassKey)) {
+              // User is disabled or doesn't have a role in this class - safe to delete items
+              await adminSupabase
+                .schema("public")
+                .from("discussion_digest_items")
+                .delete()
+                .eq("user_id", user_id)
+                .eq("class_id", class_id);
+            }
+            // If user IS in activeUserClassSet but recipient is null, it means they don't have an email
+            // In that case, we also delete the items since we can't send emails
+            // If user is not in activeUserClassSet, we've already deleted above
             continue;
           }
 

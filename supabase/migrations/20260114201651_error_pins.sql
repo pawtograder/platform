@@ -351,6 +351,7 @@ SET search_path TO public
 AS $$
 DECLARE
     v_assignment_id bigint;
+    v_class_id bigint;
     v_grader_result_id bigint;
     v_test_id bigint;
     v_pin_record error_pins%ROWTYPE;
@@ -364,12 +365,19 @@ DECLARE
     v_has_grader_level_rule boolean;
     v_first_test_id bigint;
 BEGIN
-    -- Get assignment for this submission
-    SELECT assignment_id INTO v_assignment_id
+    -- Authorization check: verify caller is submission owner or authorized instructor/TA
+    -- Get assignment and class for this submission
+    SELECT assignment_id, class_id INTO v_assignment_id, v_class_id
     FROM submissions
     WHERE id = p_submission_id;
     
-    IF v_assignment_id IS NULL THEN
+    IF v_assignment_id IS NULL OR v_class_id IS NULL THEN
+        RETURN v_result;
+    END IF;
+    
+    -- Check if user owns the submission OR is an instructor/grader for the course
+    -- Return empty result if unauthorized to prevent leaking which threads matched other students' submissions
+    IF NOT (authorize_for_submission(p_submission_id) OR authorizeforclassgrader(v_class_id)) THEN
         RETURN v_result;
     END IF;
 
@@ -587,6 +595,12 @@ DECLARE
     v_has_grader_level_rule boolean;
     v_first_test_id bigint;
 BEGIN
+    IF NOT authorizeforclassgrader(  
+        (SELECT class_id FROM assignments WHERE id = (p_error_pin->>'assignment_id')::bigint)  
+    ) THEN  
+        RAISE EXCEPTION 'Only instructors and graders can create or modify error pins';  
+    END IF;  
+  
     -- Insert or update error_pin
     IF (p_error_pin->>'id')::bigint IS NOT NULL THEN
         -- Update existing pin
@@ -1021,7 +1035,33 @@ SET search_path TO public
 AS $$
 DECLARE
     v_deleted_count int;
+    v_error_pin_created_by uuid;
+    v_error_pin_class_id bigint;
 BEGIN
+    -- Authorization check: verify caller is error pin owner or authorized instructor/TA/admin
+    -- Get error pin ownership and class information
+    SELECT created_by, class_id INTO v_error_pin_created_by, v_error_pin_class_id
+    FROM error_pins
+    WHERE id = p_error_pin_id;
+    
+    -- If error pin doesn't exist, return error
+    IF v_error_pin_created_by IS NULL OR v_error_pin_class_id IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error', 'Error pin not found'
+        );
+    END IF;
+    
+    -- Check if user is authorized: admin OR owns the error pin OR is instructor/grader for the class
+    IF NOT (
+        authorize_for_admin() 
+        OR authorizeforprofile(v_error_pin_created_by)
+        OR authorizeforclassgrader(v_error_pin_class_id)
+    ) THEN
+        RAISE EXCEPTION 'Access denied: Only error pin owners, instructors, graders, and admins can reset matches';
+    END IF;
+    
+    -- Perform the deletion
     DELETE FROM error_pin_submission_matches
     WHERE error_pin_id = p_error_pin_id;
     

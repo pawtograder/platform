@@ -3,7 +3,7 @@
 import { Field } from "@/components/ui/field";
 import { SelectContent, SelectItem, SelectRoot, SelectTrigger, SelectValueText } from "@/components/ui/select";
 import { toaster } from "@/components/ui/toaster";
-import { useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useDiscussionTopics } from "@/hooks/useCourseController";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { createListCollection } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
@@ -15,7 +15,6 @@ interface StaffThreadActionsProps {
 }
 
 export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadActionsProps) {
-  const { discussionThreadTeasers } = useCourseController();
   const topics = useDiscussionTopics();
   const [isUpdatingTopic, setIsUpdatingTopic] = useState(false);
   const supabase = useMemo(() => createClient(), []);
@@ -26,24 +25,23 @@ export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadAction
         return;
       }
 
+      const newTopicIdNum = Number(newTopicId);
+
+      // Validate parsed topic ID
+      if (Number.isNaN(newTopicIdNum) || newTopicIdNum <= 0) {
+        return;
+      }
+
       setIsUpdatingTopic(true);
       try {
-        const newTopicIdNum = Number(newTopicId);
-
-        // Update the root thread
-        await discussionThreadTeasers.update(thread.id, {
-          topic_id: newTopicIdNum
+        // Update the root thread and all children atomically via RPC
+        const { error } = await supabase.rpc("set_discussion_thread_topic", {
+          p_thread_id: thread.id,
+          p_topic_id: newTopicIdNum
         });
 
-        // Update all child threads (replies) to match the root topic
-        const { error: childrenError } = await supabase
-          .from("discussion_threads")
-          .update({ topic_id: newTopicIdNum })
-          .eq("root", thread.id)
-          .neq("id", thread.id); // Don't update the root thread again
-
-        if (childrenError) {
-          throw childrenError;
+        if (error) {
+          throw error;
         }
 
         toaster.success({
@@ -60,7 +58,7 @@ export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadAction
         setIsUpdatingTopic(false);
       }
     },
-    [thread.id, thread.topic_id, discussionThreadTeasers, supabase, onUpdateAction]
+    [thread.id, thread.topic_id, supabase, onUpdateAction]
   );
 
   // Sort topics for display
@@ -88,7 +86,7 @@ export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadAction
     <Field label="Topic" helperText="Change the topic category for this post">
       <SelectRoot
         collection={topicsCollection}
-        value={[thread.topic_id.toString()]}
+        value={thread.topic_id != null ? [thread.topic_id.toString()] : []}
         onValueChange={(details) => {
           const newValue = details.value[0];
           if (newValue) {

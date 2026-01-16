@@ -51,9 +51,17 @@ BEGIN
         FROM grader_result_tests
         WHERE id = p_test_id;
         
-        IF v_test_name IS NULL OR v_test_name !~ p_test_name_filter THEN
+        IF v_test_name IS NULL THEN
             RETURN false;
         END IF;
+        
+        BEGIN
+            IF v_test_name !~ p_test_name_filter THEN
+                RETURN false;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            RETURN false;
+        END;
     END IF;
 
     -- Evaluate based on target type
@@ -91,8 +99,12 @@ BEGIN
             IF v_test_score IS NULL THEN RETURN false; END IF;
             -- Range matching handled separately below
             IF p_match_type = 'range' THEN
-                RETURN v_test_score >= p_match_value::numeric 
-                   AND (p_match_value_max IS NULL OR v_test_score <= p_match_value_max::numeric);
+                BEGIN
+                    RETURN v_test_score >= p_match_value::numeric 
+                       AND (p_match_value_max IS NULL OR v_test_score <= p_match_value_max::numeric);
+                EXCEPTION WHEN OTHERS THEN
+                    RETURN false;
+                END;
             END IF;
             RETURN false;
 
@@ -100,8 +112,12 @@ BEGIN
             SELECT score INTO v_grader_score FROM grader_results WHERE id = p_grader_result_id;
             IF v_grader_score IS NULL THEN RETURN false; END IF;
             IF p_match_type = 'range' THEN
-                RETURN v_grader_score >= p_match_value::numeric 
-                   AND (p_match_value_max IS NULL OR v_grader_score <= p_match_value_max::numeric);
+                BEGIN
+                    RETURN v_grader_score >= p_match_value::numeric 
+                       AND (p_match_value_max IS NULL OR v_grader_score <= p_match_value_max::numeric);
+                EXCEPTION WHEN OTHERS THEN
+                    RETURN false;
+                END;
             END IF;
             RETURN false;
 
@@ -143,7 +159,8 @@ BEGIN
 
     CASE p_match_type
         WHEN 'contains' THEN
-            RETURN v_match_value ILIKE '%' || p_match_value || '%';
+            -- Escape SQL wildcards: backslash, percent, underscore
+            RETURN v_match_value ILIKE '%' || REPLACE(REPLACE(REPLACE(p_match_value, '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\';
         WHEN 'equals' THEN
             RETURN v_match_value = p_match_value;
         WHEN 'regex' THEN

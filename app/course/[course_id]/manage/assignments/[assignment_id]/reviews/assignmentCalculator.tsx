@@ -350,7 +350,18 @@ export class TAAssignmentSolver {
 
     // Phase 1: Use max flow to ensure everyone gets at least minAssignments
     const totalMinNeeded = Array.from(minNeeded.values()).reduce((a, b) => a + b, 0);
-    if (totalMinNeeded > 0 && currentUnassigned.length >= totalMinNeeded) {
+
+    // Early check: mathematically impossible if we need more assignments than we have submissions
+    if (totalMinNeeded > 0 && currentUnassigned.length < totalMinNeeded) {
+      return {
+        success: false,
+        error: `Not enough submissions to ensure minimum assignments for all graders. Need ${totalMinNeeded} assignments but only ${currentUnassigned.length} submissions available.`,
+        assignments: null,
+        taCapacities: this.taCapacities
+      };
+    }
+
+    if (totalMinNeeded > 0) {
       this.flow = new NetworkFlow();
 
       // Layer 1: Source to TAs (with capacity = minNeeded)

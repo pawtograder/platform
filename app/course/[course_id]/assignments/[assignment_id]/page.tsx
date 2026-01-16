@@ -160,10 +160,13 @@ export default function AssignmentPage() {
                 period ({submissionsRemaining} remaining).
               </strong>
               {submissionsRemaining === 0 && (
-                <strong>
-                  Any additional commits that you push to your repository will be ignored, but will still be timestamped
-                  and be viewed by course staff.
-                </strong>
+                <>
+                  <br />
+                  <strong>
+                    Any additional commits that you push to your repository will be ignored, but will still be
+                    timestamped and be viewed by course staff.
+                  </strong>
+                </>
               )}
             </Alert.Description>
           </Alert.Root>
