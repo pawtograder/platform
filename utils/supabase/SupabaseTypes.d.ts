@@ -967,39 +967,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260115: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260116: {
         Row: {
           class_id: number;
@@ -1199,6 +1166,39 @@ export type Database = {
         Relationships: [];
       };
       audit_20260122: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260123: {
         Row: {
           class_id: number;
           created_at: string;
@@ -11384,6 +11384,10 @@ export type Database = {
           inserts_per_second: number;
           operation: string;
         }[];
+      };
+      toggle_discussion_thread_author_anonymity: {
+        Args: { p_make_anonymous: boolean; p_thread_id: number };
+        Returns: undefined;
       };
       trigger_discord_role_sync_for_user: {
         Args: { p_class_id?: number };

@@ -13,6 +13,7 @@ import {
   HStack,
   Icon,
   Input,
+  Link,
   NativeSelect,
   Stack,
   Text
@@ -337,13 +338,20 @@ export function ErrorPinModal({
           <Dialog.Body>
             <form onSubmit={handleSubmit(onSubmit)}>
               <Stack spaceY={4}>
+                <Text fontSize="xs" color="fg.muted" mb={2} lineHeight="tall">
+                  Define rules that match specific patterns in student submissions (test outputs, scores, lint errors,
+                  etc.). When a student&apos;s submission matches your rules, they&apos;ll see a link to this discussion
+                  thread in their test results. Use the &quot;Preview Matches&quot; button to see which submissions
+                  would match before saving.
+                </Text>
+
                 <Field.Root invalid={!!errors.assignment_id}>
                   <Field.Label>Assignment</Field.Label>
                   <NativeSelect.Root>
                     <NativeSelect.Field
                       {...register("assignment_id", {
                         required: "Assignment is required",
-                        valueAsNumber: true
+                        setValueAs: (v) => (v === "" ? null : Number(v))
                       })}
                     >
                       <option value="">Select an assignment</option>
@@ -562,9 +570,16 @@ export function ErrorPinModal({
                                 <Text color="blue.800" _dark={{ color: "blue.100" }}>
                                   {submission.student_name}
                                 </Text>
-                                <Text color="blue.600" _dark={{ color: "blue.300" }} fontFamily="mono">
+                                <Link
+                                  href={`/course/${course_id}/assignments/${assignmentId}/submissions/${submission.submission_id}/results`}
+                                  color="blue.600"
+                                  _dark={{ color: "blue.300" }}
+                                  fontFamily="mono"
+                                  textDecoration="underline"
+                                  _hover={{ textDecoration: "none" }}
+                                >
                                   #{submission.submission_id}
-                                </Text>
+                                </Link>
                               </HStack>
                             )
                           )}

@@ -508,9 +508,10 @@ async function sendEmail(params: {
     lab_section_id: number | null;
     lab_section_name: string | null;
   }[];
+  activeUserClassSet: Set<string>;
   scope: Sentry.Scope;
 }) {
-  const { adminSupabase, transporter, notification, emails, courses, userRoles, scope } = params;
+  const { adminSupabase, transporter, notification, emails, courses, userRoles, activeUserClassSet, scope } = params;
 
   let emailSent = false;
   let skipReason: string | null = null;
@@ -540,6 +541,17 @@ async function sendEmail(params: {
     const recipient = findRecipient(emails, notification, scope);
     if (!recipient || !recipient.email) {
       skipReason = "no_valid_recipient";
+      return;
+    }
+
+    // CRITICAL: Verify user has an active (non-disabled) role in this specific class
+    const userClassKey = `${recipient.user_id}|${notification.message.class_id}`;
+    if (!activeUserClassSet.has(userClassKey)) {
+      skipReason = "user_disabled_in_class";
+      scope.setContext("user_disabled", {
+        user_id: recipient.user_id,
+        class_id: notification.message.class_id
+      });
       return;
     }
 
@@ -660,12 +672,14 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       );
 
     // Fetch user roles with class sections and lab sections
+    // CRITICAL: Only fetch active (non-disabled) user roles to prevent sending emails to disabled users
     const { data: userRoles, error: userRolesError } = await adminSupabase
       .schema("public")
       .from("user_roles")
       .select(
         `
         user_id,
+        class_id,
         class_section_id,
         lab_section_id,
         class_sections(name),
@@ -679,7 +693,8 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       .in(
         "class_id",
         Array.from(uniqueCourseIds).filter((id) => id)
-      );
+      )
+      .eq("disabled", false);
 
     if (emailsError) {
       scope.setContext("context_fetch_error", { type: "emails", unique_emails_count: uniqueEmails.size });
@@ -712,6 +727,22 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         lab_section_id: role.lab_section_id,
         lab_section_name: role.lab_sections?.name || null
       })) || [];
+
+    // Create a Set of active user_id+class_id combinations to filter emails
+    // This ensures we only send emails to users who have active (non-disabled) roles in the relevant classes
+    const activeUserClassSet = new Set<string>();
+    if (userRoles) {
+      for (const role of userRoles) {
+        activeUserClassSet.add(`${role.user_id}|${role.class_id}`);
+      }
+    }
+
+    // Filter emails to only include users who have active roles in the relevant classes
+    const filteredEmails =
+      emails?.filter((email) => {
+        // Check if this user has an active role in any of the relevant classes
+        return Array.from(uniqueCourseIds).some((classId) => activeUserClassSet.has(`${email.user_id}|${classId}`));
+      }) || [];
 
     // Fetch notification preferences for discussion digest mode
     const { data: notificationPrefs, error: notificationPrefsError } = await adminSupabase
@@ -827,12 +858,19 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       entry.msg_ids.push(n.msg_id);
     }
 
-    // Helper to find recipient by user_id
-    const recipientByUserId = (userId: string) => emails?.find((e) => e.user_id === userId) || null;
+    // Helper to find recipient by user_id and class_id
+    // Only returns recipient if they have an active (non-disabled) role in that class
+    const recipientByUserId = (userId: string, classId: number) => {
+      const key = `${userId}|${classId}`;
+      if (!activeUserClassSet.has(key)) {
+        return null; // User is disabled in this class
+      }
+      return filteredEmails?.find((e) => e.user_id === userId) || null;
+    };
 
     // Send digests
     for (const { user_id, class_id, items, msg_ids } of digests.values()) {
-      const recipient = recipientByUserId(user_id);
+      const recipient = recipientByUserId(user_id, class_id);
       const course = courses?.find((c) => c.id === class_id);
       type MaybeClonableScope = { clone?: () => Sentry.Scope };
       const baseScope = scope as unknown as MaybeClonableScope;
@@ -841,6 +879,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       emailScope.setContext("digest_meta", { user_id, class_id, count: items.length });
 
       if (!recipient || !recipient.email) {
+        // User is disabled or has no email - archive and skip
         await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
         continue;
       }
@@ -992,7 +1031,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           }
 
           // Send the digest
-          const recipient = recipientByUserId(user_id);
+          const recipient = recipientByUserId(user_id, class_id);
           const course = courses?.find((c) => c.id === class_id);
           type MaybeClonableScope = { clone?: () => Sentry.Scope };
           const baseScope = scope as unknown as MaybeClonableScope;
@@ -1002,7 +1041,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           emailScope.setContext("digest_meta", { user_id, class_id, count: digestItems.length });
 
           if (!recipient || !recipient.email) {
-            // No email - delete items anyway
+            // User is disabled or has no email - delete items anyway
             await adminSupabase
               .schema("public")
               .from("discussion_digest_items")
@@ -1113,9 +1152,10 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           adminSupabase,
           transporter,
           notification,
-          emails,
+          emails: filteredEmails,
           courses,
           userRoles: transformedUserRoles,
+          activeUserClassSet,
           scope: emailScope
         });
       })

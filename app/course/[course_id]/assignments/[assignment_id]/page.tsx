@@ -96,13 +96,7 @@ export default function AssignmentPage() {
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
-  // Type assertion needed until migration is applied and types are regenerated
-  const autograderRow = autograder?.[0] as
-    | (Database["public"]["Functions"]["get_submissions_limits"]["Returns"][number] & {
-        submissions_used?: number;
-        submissions_remaining?: number;
-      })
-    | undefined;
+  const autograderRow = autograder?.[0];
   const submissionsPeriod =
     autograderRow?.max_submissions_period_secs != null ? secondsToHours(autograderRow.max_submissions_period_secs) : 0;
   const maxSubmissions = autograderRow?.max_submissions_count;

@@ -20,11 +20,14 @@ import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/uti
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient } from "@/utils/supabase/client";
+import { toaster } from "@/components/ui/toaster";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
 import { ErrorPinIndicator } from "@/components/discussion/ErrorPinIndicator";
+import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
 import useModalManager from "@/hooks/useModalManager";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
@@ -145,21 +148,14 @@ function ThreadActions({
       )}
       {canPin && (
         <Tooltip content="Manage Error Pins">
-          <HStack gap={1}>
-            <ErrorPinIndicator
-              discussion_thread_id={thread.id}
-              onClick={() => errorPinModal.openModal(thread.id)}
-              refreshTrigger={errorPinRefreshTrigger}
-            />
-            <Button
-              aria-label="Manage Error Pins"
-              onClick={() => errorPinModal.openModal(thread.id)}
-              variant="ghost"
-              size="sm"
-            >
-              <FaExclamationCircle />
-            </Button>
-          </HStack>
+          <Button
+            aria-label="Manage Error Pins"
+            onClick={() => errorPinModal.openModal(thread.id)}
+            variant="ghost"
+            size="sm"
+          >
+            <FaExclamationCircle />
+          </Button>
         </Tooltip>
       )}
       <Tooltip content="Reply">
@@ -213,9 +209,25 @@ function DiscussionPost({ root_id }: { root_id: number }) {
   const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
   const [editing, setEditing] = useState(false);
   const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const authorProfile = useUserProfile(rootThread?.author);
+  const supabase = useMemo(() => createClient(), []);
+  const [isTogglingAnonymity, setIsTogglingAnonymity] = useState(false);
+
+  // Determine if the current author is using anonymous (public) profile
+  const isCurrentlyAnonymous = useMemo(() => {
+    if (!authorProfile || !authorProfile.private_profile_id || !rootThread) {
+      return false;
+    }
+    return rootThread.author !== authorProfile.private_profile_id;
+  }, [rootThread, authorProfile]);
+
+  const [anonymity, setAnonymity] = useState<string>(isCurrentlyAnonymous ? "anonymous" : "revealed");
+
   useEffect(() => {
     setVisibility(rootThread?.instructors_only ? "instructors_only" : "all");
-  }, [rootThread?.instructors_only]);
+    setAnonymity(isCurrentlyAnonymous ? "anonymous" : "revealed");
+  }, [rootThread?.instructors_only, isCurrentlyAnonymous]);
 
   const { readStatus, setUnread } = useDiscussionThreadReadStatus(root_id);
 
@@ -224,6 +236,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       setUnread(root_id, root_id, false);
     }
   }, [readStatus, setUnread, root_id]);
+
   const sendMessage = useCallback(
     async (message: string) => {
       await discussionThreadTeasers.update(root_id, {
@@ -235,9 +248,57 @@ function DiscussionPost({ root_id }: { root_id: number }) {
     },
     [root_id, discussionThreadTeasers, visibility]
   );
+
   const onClose = useCallback(() => {
     setEditing(false);
   }, [setEditing]);
+
+  const handleAnonymityChange = useCallback(
+    async (newAnonymity: string) => {
+      if (!rootThread || newAnonymity === anonymity || isTogglingAnonymity) {
+        return;
+      }
+
+      const makeAnonymous = newAnonymity === "anonymous";
+      if (makeAnonymous === isCurrentlyAnonymous) {
+        // Already in the desired state
+        return;
+      }
+
+      setIsTogglingAnonymity(true);
+      try {
+        const { error } = await supabase.rpc("toggle_discussion_thread_author_anonymity", {
+          p_thread_id: rootThread.id,
+          p_make_anonymous: makeAnonymous
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        toaster.success({
+          title: "Success",
+          description: `Post ${makeAnonymous ? "made anonymous" : "revealed identity"} successfully`
+        });
+        discussionThreadTeasers.refetchByIds([root_id]);
+      } catch (error) {
+        toaster.error({
+          title: "Error",
+          description: `Failed to toggle anonymity: ${error instanceof Error ? error.message : String(error)}`
+        });
+        // Revert the state on error
+        setAnonymity(anonymity);
+      } finally {
+        setIsTogglingAnonymity(false);
+      }
+    },
+    [rootThread, anonymity, isCurrentlyAnonymous, isTogglingAnonymity, supabase, discussionThreadTeasers, root_id]
+  );
+
+  const handleStaffActionUpdate = useCallback(() => {
+    // Refetch the thread data after staff actions
+    discussionThreadTeasers.refetchByIds([root_id]);
+  }, [discussionThreadTeasers, root_id]);
 
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
@@ -251,18 +312,40 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       <Box>
         {editing ? (
           <>
-            <HStack>
-              <Heading size="sm">Thread visibility:</Heading>
-              <RadioGroup.Root
-                value={visibility}
-                onValueChange={(value) => {
-                  setVisibility(value.value as unknown as "instructors_only" | "all");
-                }}
-              >
-                <Radio value="instructors_only">Staff only</Radio>
-                <Radio value="all">Entire Class</Radio>
-              </RadioGroup.Root>
-            </HStack>
+            <VStack align="start" gap="3">
+              <HStack>
+                <Heading size="sm">Thread visibility:</Heading>
+                <RadioGroup.Root
+                  value={visibility}
+                  onValueChange={(value) => {
+                    setVisibility(value.value as unknown as "instructors_only" | "all");
+                  }}
+                >
+                  <Radio value="instructors_only">Staff only</Radio>
+                  <Radio value="all">Entire Class</Radio>
+                </RadioGroup.Root>
+              </HStack>
+              {isGraderOrInstructor && (
+                <>
+                  <HStack>
+                    <Heading size="sm">Poster identity:</Heading>
+                    <RadioGroup.Root
+                      value={anonymity}
+                      onValueChange={(value) => {
+                        const newValue = value.value as string;
+                        setAnonymity(newValue);
+                        handleAnonymityChange(newValue);
+                      }}
+                      disabled={isTogglingAnonymity}
+                    >
+                      <Radio value="revealed">Reveal Identity</Radio>
+                      <Radio value="anonymous">Make Anonymous</Radio>
+                    </RadioGroup.Root>
+                  </HStack>
+                  <StaffThreadActions thread={rootThread} onUpdateAction={handleStaffActionUpdate} />
+                </>
+              )}
+            </VStack>
             <MessageInput
               sendMessage={sendMessage}
               enableEmojiPicker={true}

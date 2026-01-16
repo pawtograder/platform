@@ -159,13 +159,20 @@ export function ErrorPinManageModal({
             <Dialog.Header>
               <Dialog.Title>Manage Error Pins</Dialog.Title>
               <Dialog.CloseTrigger asChild>
-                <ChakraButton variant="ghost" colorPalette="red" size="sm">
+                <ChakraButton variant="ghost" colorPalette="red" size="sm" aria-label="Close Modal">
                   <Icon as={BsX} />
                 </ChakraButton>
               </Dialog.CloseTrigger>
             </Dialog.Header>
 
             <Dialog.Body>
+              <Text fontSize="xs" color="fg.muted" mb={4} lineHeight="tall">
+                Error Pins automatically link this discussion thread to student submissions that match specific error
+                patterns. When a student&apos;s submission matches your defined rules, they&apos;ll see a link to this
+                discussion thread directly in their test results, helping them find relevant help quickly. Create pins
+                by defining rules that match against test outputs, scores, lint errors, or other submission data.
+              </Text>
+
               {loading ? (
                 <Text>Loading pins...</Text>
               ) : pins.length === 0 ? (
