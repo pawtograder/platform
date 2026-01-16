@@ -293,6 +293,7 @@ export default function SecurityAuditPage() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedResult, setSelectedResult] = useState<SecurityAuditResult | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -346,6 +347,7 @@ export default function SecurityAuditPage() {
     }
 
     setHasSearched(true);
+    setIsSearching(true);
 
     // Close existing controller if any
     if (tableController) {
@@ -571,20 +573,26 @@ export default function SecurityAuditPage() {
       return;
     }
 
+    // Wait for the table controller to be ready, then get data
+    tableController.readyPromise.then(() => {
+      setIsSearching(false);
+    });
+
     const { data, unsubscribe } = tableController.list((newData) => {
       const results = transformToResults(newData as unknown as SubmissionFileWithSubmission[]);
       setTransformedData(results);
+      setIsSearching(false);
     });
 
-    // Set initial data
+    // Set initial data if already available
     const results = transformToResults(data as unknown as SubmissionFileWithSubmission[]);
     setTransformedData(results);
 
     return () => unsubscribe();
   }, [tableController, transformToResults]);
 
-  // Use the table controller table hook for table features
-  const { getHeaderGroups, isLoading } = useTableControllerTable({
+  // Use the table controller table hook for table features (we manage loading state manually)
+  const { getHeaderGroups } = useTableControllerTable({
     columns,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tableController: tableController as any,
@@ -695,7 +703,7 @@ export default function SecurityAuditPage() {
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !isLoading) {
+                    if (e.key === "Enter" && !isSearching) {
                       performSearch();
                     }
                   }}
@@ -704,8 +712,8 @@ export default function SecurityAuditPage() {
                 <Button
                   colorPalette="blue"
                   onClick={performSearch}
-                  loading={isLoading}
-                  disabled={isLoading || !searchTerm.trim()}
+                  loading={isSearching}
+                  disabled={isSearching || !searchTerm.trim()}
                   data-testid="security-search-button"
                 >
                   <Icon as={FaSearch} mr={2} />
@@ -720,14 +728,14 @@ export default function SecurityAuditPage() {
         </Card.Body>
       </Card.Root>
 
-      {isLoading && hasSearched && (
+      {isSearching && hasSearched && (
         <VStack py={8}>
           <Spinner size="lg" />
           <Text>Searching through all submission files...</Text>
         </VStack>
       )}
 
-      {!isLoading && hasSearched && (
+      {!isSearching && hasSearched && (
         <>
           <HStack justify="space-between">
             <Text fontWeight="medium">
@@ -804,7 +812,7 @@ export default function SecurityAuditPage() {
         </>
       )}
 
-      {!hasSearched && !isLoading && (
+      {!hasSearched && !isSearching && (
         <Card.Root>
           <Card.Body>
             <VStack py={8}>
