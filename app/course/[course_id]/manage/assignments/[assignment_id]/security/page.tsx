@@ -1,6 +1,15 @@
 "use client";
 
+import {
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import Link from "@/components/ui/link";
+import Markdown from "@/components/ui/markdown";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
@@ -16,6 +25,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Alert,
+  Badge,
   Box,
   Button,
   Card,
@@ -33,9 +43,9 @@ import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaDownload, FaExclamationTriangle, FaSearch, FaShieldAlt, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import { FaDownload, FaExclamationTriangle, FaEye, FaSearch, FaShieldAlt, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
-// The joined select query for submission_files with submissions
+// The joined select query for submission_files with submissions and grader_results
 const SUBMISSION_FILES_SELECT = `
   id,
   name,
@@ -47,9 +57,34 @@ const SUBMISSION_FILES_SELECT = `
     sha,
     repository,
     profile_id,
-    assignment_id
+    assignment_id,
+    grader_results(
+      id,
+      score,
+      max_score,
+      grader_result_output(
+        id,
+        output,
+        format,
+        visibility
+      )
+    )
   )
 ` as const;
+
+type GraderResultOutput = {
+  id: number;
+  output: string;
+  format: string;
+  visibility: string;
+};
+
+type GraderResult = {
+  id: number;
+  score: number;
+  max_score: number;
+  grader_result_output: GraderResultOutput[];
+};
 
 type SubmissionFileWithSubmission = Database["public"]["Tables"]["submission_files"]["Row"] & {
   submissions: {
@@ -59,6 +94,7 @@ type SubmissionFileWithSubmission = Database["public"]["Tables"]["submission_fil
     repository: string;
     profile_id: string | null;
     assignment_id: number;
+    grader_results: GraderResult | null;
   };
 };
 
@@ -76,6 +112,10 @@ type SecurityAuditResult = {
   sha: string;
   matched_content: string;
   match_line_number: number;
+  score: number | null;
+  max_score: number | null;
+  grader_result_id: number | null;
+  instructor_output: { id: number; output: string; format: string } | null;
 };
 
 function getMatchContext(
@@ -115,6 +155,112 @@ function getGitHubFileLink(repository: string, sha: string, fileName: string): s
   return `https://github.com/${repository}/blob/${sha}/${fileName}`;
 }
 
+// Modal component for viewing grader output
+function GraderOutputModal({
+  isOpen,
+  onClose,
+  result,
+  courseId,
+  assignmentId
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  result: SecurityAuditResult | null;
+  courseId: string | string[];
+  assignmentId: string | string[];
+}) {
+  if (!result) return null;
+
+  const formatOutput = (output: string, format: string) => {
+    if (format === "markdown") {
+      return <Markdown>{output}</Markdown>;
+    }
+    return (
+      <Box as="pre" fontSize="sm" whiteSpace="pre-wrap" overflowX="auto">
+        {output}
+      </Box>
+    );
+  };
+
+  return (
+    <DialogRoot
+      open={isOpen}
+      onOpenChange={(details) => {
+        if (!details.open) onClose();
+      }}
+      size="xl"
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            Grader Output - {result.student_name} (Submission #{result.submission_ordinal})
+          </DialogTitle>
+          <DialogCloseTrigger />
+        </DialogHeader>
+        <DialogBody pb={6}>
+          <VStack align="stretch" gap={4}>
+            <HStack>
+              <Text fontWeight="bold">Score:</Text>
+              <Badge colorPalette={result.score === result.max_score ? "green" : "red"}>
+                {result.score !== null ? `${result.score}/${result.max_score}` : "Not graded"}
+              </Badge>
+            </HStack>
+            <HStack>
+              <Text fontWeight="bold">File:</Text>
+              <Link
+                href={getGitHubFileLink(result.repository, result.sha, result.file_name)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {result.file_name}
+              </Link>
+            </HStack>
+            {result.instructor_output ? (
+              <Box>
+                <Text fontWeight="bold" mb={2}>
+                  Instructor Visible Output:
+                </Text>
+                <Box
+                  borderWidth="1px"
+                  borderRadius="md"
+                  p={4}
+                  bg="bg.muted"
+                  maxH="400px"
+                  overflowY="auto"
+                  data-testid="grader-output-content"
+                >
+                  {formatOutput(result.instructor_output.output, result.instructor_output.format)}
+                </Box>
+              </Box>
+            ) : (
+              <Alert.Root status="info">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>No instructor output available</Alert.Title>
+                  <Alert.Description>
+                    This submission does not have instructor-visible grader output.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+            )}
+            <Box>
+              <Link
+                href={`/course/${courseId}/assignments/${assignmentId}/submissions/${result.submission_id}/results`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline" size="sm" data-testid="view-full-results-button">
+                  View Full Grader Results
+                </Button>
+              </Link>
+            </Box>
+          </VStack>
+        </DialogBody>
+      </DialogContent>
+    </DialogRoot>
+  );
+}
+
 export default function SecurityAuditPage() {
   const { assignment_id, course_id } = useParams();
   const { assignment } = useAssignmentController();
@@ -128,6 +274,8 @@ export default function SecurityAuditPage() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+  const [selectedResult, setSelectedResult] = useState<SecurityAuditResult | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -227,6 +375,12 @@ export default function SecurityAuditPage() {
 
         const { snippet, lineNumber } = getMatchContext(file.contents, searchTerm);
 
+        // Extract grader results data
+        const graderResults = submission.grader_results;
+        const instructorOutput = graderResults?.grader_result_output?.find(
+          (output) => output.visibility === "instructor_only"
+        );
+
         results.push({
           id: file.id,
           student_name: userData?.name || "Unknown",
@@ -240,7 +394,17 @@ export default function SecurityAuditPage() {
           repository: submission.repository,
           sha: submission.sha,
           matched_content: snippet,
-          match_line_number: lineNumber
+          match_line_number: lineNumber,
+          score: graderResults?.score ?? null,
+          max_score: graderResults?.max_score ?? null,
+          grader_result_id: graderResults?.id ?? null,
+          instructor_output: instructorOutput
+            ? {
+                id: instructorOutput.id,
+                output: instructorOutput.output,
+                format: instructorOutput.format
+              }
+            : null
         });
       }
 
@@ -274,13 +438,21 @@ export default function SecurityAuditPage() {
         id: "class_section_name",
         accessorKey: "class_section_name",
         header: "Class Section",
-        cell: ({ row }) => row.original.class_section_name || "N/A"
+        cell: ({ row }) => (
+          <Text data-testid={`result-class-section-${row.index}`}>
+            {row.original.class_section_name || "N/A"}
+          </Text>
+        )
       },
       {
         id: "lab_section_name",
         accessorKey: "lab_section_name",
         header: "Lab Section",
-        cell: ({ row }) => row.original.lab_section_name || "N/A"
+        cell: ({ row }) => (
+          <Text data-testid={`result-lab-section-${row.index}`}>
+            {row.original.lab_section_name || "N/A"}
+          </Text>
+        )
       },
       {
         id: "submission_ordinal",
@@ -293,6 +465,22 @@ export default function SecurityAuditPage() {
           >
             #{row.original.submission_ordinal}
           </Link>
+        )
+      },
+      {
+        id: "score",
+        accessorKey: "score",
+        header: "Score",
+        cell: ({ row }) => (
+          <Text data-testid={`result-score-${row.index}`}>
+            {row.original.score !== null ? (
+              <Badge colorPalette={row.original.score === row.original.max_score ? "green" : "red"}>
+                {row.original.score}/{row.original.max_score}
+              </Badge>
+            ) : (
+              <Badge colorPalette="gray">Not graded</Badge>
+            )}
+          </Text>
         )
       },
       {
@@ -328,6 +516,24 @@ export default function SecurityAuditPage() {
           >
             {row.original.matched_content}
           </Text>
+        )
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              setSelectedResult(row.original);
+              setIsModalOpen(true);
+            }}
+            data-testid={`result-view-output-${row.index}`}
+          >
+            <Icon as={FaEye} mr={1} />
+            View Output
+          </Button>
         )
       }
     ],
@@ -399,6 +605,7 @@ export default function SecurityAuditPage() {
       "Lab Section": result.lab_section_name || "N/A",
       "Submission ID": result.submission_id,
       "Submission #": result.submission_ordinal,
+      Score: result.score !== null ? `${result.score}/${result.max_score}` : "Not graded",
       "File Name": result.file_name,
       "Line Number": result.match_line_number,
       "GitHub Link": getGitHubFileLink(result.repository, result.sha, result.file_name),
@@ -580,6 +787,18 @@ export default function SecurityAuditPage() {
           </Card.Body>
         </Card.Root>
       )}
+
+      {/* Modal for viewing grader output */}
+      <GraderOutputModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setSelectedResult(null);
+        }}
+        result={selectedResult}
+        courseId={course_id}
+        assignmentId={assignment_id}
+      />
     </VStack>
   );
 }

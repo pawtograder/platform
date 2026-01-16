@@ -189,7 +189,8 @@ test.beforeAll(async () => {
   const createSubmissionWithFile = async (
     studentProfileId: string,
     fileContents: string,
-    fileName: string
+    fileName: string,
+    graderScore?: { score: number; maxScore: number; instructorOutput?: string }
   ) => {
     const repoName = `pawtograder-playground/security-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     
@@ -256,26 +257,98 @@ test.beforeAll(async () => {
     
     if (fileError) throw new Error(`Failed to create submission file: ${fileError.message}`);
     
+    // Create grader results if score is provided
+    if (graderScore) {
+      const { data: graderResult, error: graderResultError } = await supabase
+        .from("grader_results")
+        .insert({
+          submission_id: submission.id,
+          class_id: course.id,
+          profile_id: studentProfileId,
+          score: graderScore.score,
+          max_score: graderScore.maxScore,
+          lint_output: "No lint errors",
+          lint_output_format: "text",
+          lint_passed: true
+        })
+        .select("id")
+        .single();
+      
+      if (graderResultError) throw new Error(`Failed to create grader result: ${graderResultError.message}`);
+      
+      // Create instructor-only output if provided
+      if (graderScore.instructorOutput) {
+        const { error: outputError } = await supabase
+          .from("grader_result_output")
+          .insert({
+            grader_result_id: graderResult.id,
+            class_id: course.id,
+            output: graderScore.instructorOutput,
+            format: "text",
+            visibility: "instructor_only"
+          });
+        
+        if (outputError) throw new Error(`Failed to create grader result output: ${outputError.message}`);
+      }
+    }
+    
     return submission;
   };
   
   // Create submissions for each student
+  // Student 1 (Claude McCheaterson) - failed submission with suspicious code and instructor output
   await createSubmissionWithFile(
     student1.private_profile_id,
     TROJAN_HORSE_CODE_CLAUDE_SIGNATURE,
-    "TotallyNormalHomework.java"
+    "TotallyNormalHomework.java",
+    {
+      score: 0,
+      maxScore: 100,
+      instructorOutput: `SECURITY ALERT: Suspicious code patterns detected!
+
+Analysis by automated plagiarism detection:
+- Found reference to CLAUDE_GENERATED_CODE signature
+- Detected suspicious URL: evil.example.com
+- Method name "sendGradesToMyPersonalServer" is a red flag
+- Comments indicate AI-assisted code generation
+
+Recommendation: Flag for academic integrity review.`
+    }
   );
   
+  // Student 2 (Backdoor Bobby) - partially passed, suspicious imports
   await createSubmissionWithFile(
     student2.private_profile_id,
     SUSPICIOUS_IMPORT_CODE,
-    "HelloWorld.java"
+    "HelloWorld.java",
+    {
+      score: 50,
+      maxScore: 100,
+      instructorOutput: `WARNING: Suspicious import statements detected!
+
+The following imports appear to be problematic:
+- com.evil.backdoor.GradeExfiltrator
+- com.anthropic.claude.AutoHomeworkSolver
+
+These don't exist in standard Java libraries and suggest:
+1. Student may have copy-pasted AI-generated code without cleaning up
+2. Possible attempt at grade manipulation
+
+Tests passed: 5/10
+Tests failed: 5/10 (missing expected output)`
+    }
   );
   
+  // Student 3 (Honest Hannah) - passed, legitimate code with no instructor output
   await createSubmissionWithFile(
     student3.private_profile_id,
     LEGITIMATE_CODE,
-    "Calculator.java"
+    "Calculator.java",
+    {
+      score: 100,
+      maxScore: 100
+      // No instructor output - submission is clean
+    }
   );
 });
 
@@ -455,5 +528,100 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await expect(page.getByTestId("result-lab-section-0")).toContainText("Lab Section Monday");
     
     await argosScreenshot(page, "Security audit shows section information");
+  });
+  
+  test("Score column displays correct submission scores", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
+    
+    // Search for Claude signature (Claude McCheaterson's submission with 0/100)
+    await page.getByTestId("security-search-input").fill("CLAUDE_GENERATED_CODE");
+    await page.getByTestId("security-search-button").click();
+    
+    // Wait for results
+    await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
+    
+    // Verify score is displayed correctly for failed submission
+    const scoreCell = page.getByTestId("result-score-0");
+    await expect(scoreCell).toBeVisible();
+    await expect(scoreCell).toContainText("0/100");
+    
+    await argosScreenshot(page, "Security audit shows score column");
+  });
+  
+  test("View Output button opens modal with instructor output", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
+    
+    // Search for Claude signature
+    await page.getByTestId("security-search-input").fill("CLAUDE_GENERATED_CODE");
+    await page.getByTestId("security-search-button").click();
+    
+    // Wait for results
+    await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
+    
+    // Click the View Output button
+    const viewOutputButton = page.getByTestId("result-view-output-0");
+    await expect(viewOutputButton).toBeVisible();
+    await viewOutputButton.click();
+    
+    // Verify modal appears with instructor output
+    await expect(page.getByText("Grader Output - Claude McCheaterson")).toBeVisible();
+    await expect(page.getByTestId("grader-output-content")).toBeVisible();
+    await expect(page.getByTestId("grader-output-content")).toContainText("SECURITY ALERT");
+    await expect(page.getByTestId("grader-output-content")).toContainText("suspicious code patterns detected");
+    
+    // Verify the View Full Grader Results button is present
+    await expect(page.getByTestId("view-full-results-button")).toBeVisible();
+    
+    await argosScreenshot(page, "Security audit grader output modal");
+  });
+  
+  test("Modal shows 'no instructor output' message when submission has none", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
+    
+    // Search for Calculator (Honest Hannah's legitimate code - no instructor output)
+    await page.getByTestId("security-search-input").fill("Calculator");
+    await page.getByTestId("security-search-button").click();
+    
+    // Wait for results
+    await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
+    
+    // Click the View Output button
+    const viewOutputButton = page.getByTestId("result-view-output-0");
+    await expect(viewOutputButton).toBeVisible();
+    await viewOutputButton.click();
+    
+    // Verify modal shows the "no instructor output" message
+    await expect(page.getByText("No instructor output available")).toBeVisible();
+    
+    await argosScreenshot(page, "Security audit modal with no instructor output");
+  });
+  
+  test("Partially failed submissions show intermediate scores", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
+    
+    // Search for backdoor (Backdoor Bobby's submission with 50/100)
+    await page.getByTestId("security-search-input").fill("GradeExfiltrator");
+    await page.getByTestId("security-search-button").click();
+    
+    // Wait for results
+    await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
+    
+    // Verify Bobby's submission shows 50/100
+    await expect(page.getByText("Backdoor Bobby")).toBeVisible();
+    const scoreCell = page.getByTestId("result-score-0");
+    await expect(scoreCell).toContainText("50/100");
+    
+    // Click to view the output
+    await page.getByTestId("result-view-output-0").click();
+    
+    // Verify the instructor output contains the warning
+    await expect(page.getByTestId("grader-output-content")).toContainText("WARNING: Suspicious import statements");
+    await expect(page.getByTestId("grader-output-content")).toContainText("Tests passed: 5/10");
+    
+    await argosScreenshot(page, "Security audit partial score with instructor output");
   });
 });
