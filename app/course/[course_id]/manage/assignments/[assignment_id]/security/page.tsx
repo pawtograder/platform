@@ -43,7 +43,7 @@ import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaDownload, FaExclamationTriangle, FaEye, FaSearch, FaShieldAlt, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import { FaDownload, FaEye, FaSearch, FaShieldAlt, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
 // The joined select query for submission_files with submissions and grader_results
 const SUBMISSION_FILES_SELECT = `
@@ -679,18 +679,10 @@ export default function SecurityAuditPage() {
         <Heading size="md">Security Audit Dashboard</Heading>
       </HStack>
 
-      <Alert.Root status="warning">
-        <Alert.Indicator>
-          <Icon as={FaExclamationTriangle} />
-        </Alert.Indicator>
-        <Alert.Content>
-          <Alert.Title>Security Tool</Alert.Title>
-          <Alert.Description>
-            This tool searches all submission file contents for a specific string match. Use it to detect potential
-            academic integrity violations, hidden backdoors, or other security concerns.
-          </Alert.Description>
-        </Alert.Content>
-      </Alert.Root>
+      <Text fontSize="sm" color="fg.muted">
+        Search all submission file contents for a specific string match to detect potential academic integrity
+        violations or security concerns.
+      </Text>
 
       <Card.Root>
         <Card.Body>
