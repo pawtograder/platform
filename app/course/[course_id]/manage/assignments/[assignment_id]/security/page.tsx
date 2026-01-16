@@ -94,7 +94,9 @@ type SubmissionFileWithSubmission = Database["public"]["Tables"]["submission_fil
     repository: string;
     profile_id: string | null;
     assignment_id: number;
-    grader_results: GraderResult | null;
+    // Note: grader_results is an array because the nested select doesn't use .single()
+    // A submission typically has one grader_result, so we take the first element
+    grader_results: GraderResult[] | null;
   };
 };
 
@@ -155,6 +157,14 @@ function getGitHubFileLink(repository: string, sha: string, fileName: string): s
   return `https://github.com/${repository}/blob/${sha}/${fileName}`;
 }
 
+// Helper to determine badge color for scores
+// Green: full score (but not 0/0), Red: partial/zero score, Gray: 0/0 edge case
+function getScoreBadgeColor(score: number | null, maxScore: number | null): "green" | "red" | "gray" {
+  if (score === null || maxScore === null) return "gray";
+  if (maxScore === 0) return "gray"; // 0/0 edge case
+  return score === maxScore ? "green" : "red";
+}
+
 // Modal component for viewing grader output
 function GraderOutputModal({
   isOpen,
@@ -201,7 +211,7 @@ function GraderOutputModal({
           <VStack align="stretch" gap={4}>
             <HStack>
               <Text fontWeight="bold">Score:</Text>
-              <Badge colorPalette={result.score === result.max_score ? "green" : "red"}>
+              <Badge colorPalette={getScoreBadgeColor(result.score, result.max_score)}>
                 {result.score !== null ? `${result.score}/${result.max_score}` : "Not graded"}
               </Badge>
             </HStack>
@@ -385,9 +395,10 @@ export default function SecurityAuditPage() {
 
         const { snippet, lineNumber } = getMatchContext(file.contents, searchTerm);
 
-        // Extract grader results data
-        const graderResults = submission.grader_results;
-        const instructorOutput = graderResults?.grader_result_output?.find(
+        // Extract grader results data - take first result since submissions typically have one
+        const graderResultsArray = submission.grader_results;
+        const graderResult = graderResultsArray && graderResultsArray.length > 0 ? graderResultsArray[0] : null;
+        const instructorOutput = graderResult?.grader_result_output?.find(
           (output) => output.visibility === "instructor_only"
         );
 
@@ -405,9 +416,9 @@ export default function SecurityAuditPage() {
           sha: submission.sha,
           matched_content: snippet,
           match_line_number: lineNumber,
-          score: graderResults?.score ?? null,
-          max_score: graderResults?.max_score ?? null,
-          grader_result_id: graderResults?.id ?? null,
+          score: graderResult?.score ?? null,
+          max_score: graderResult?.max_score ?? null,
+          grader_result_id: graderResult?.id ?? null,
           instructor_output: instructorOutput
             ? {
                 id: instructorOutput.id,
@@ -484,7 +495,7 @@ export default function SecurityAuditPage() {
         cell: ({ row }) => (
           <Text data-testid={`result-score-${row.index}`}>
             {row.original.score !== null ? (
-              <Badge colorPalette={row.original.score === row.original.max_score ? "green" : "red"}>
+              <Badge colorPalette={getScoreBadgeColor(row.original.score, row.original.max_score)}>
                 {row.original.score}/{row.original.max_score}
               </Badge>
             ) : (
@@ -721,8 +732,10 @@ export default function SecurityAuditPage() {
           <HStack justify="space-between">
             <Text fontWeight="medium">
               {transformedData.length} match{transformedData.length === 1 ? "" : "es"} found
-              {transformedData.length > 0 &&
-                ` across ${new Set(transformedData.map((r) => r.submission_id)).size} submission${new Set(transformedData.map((r) => r.submission_id)).size === 1 ? "" : "s"}`}
+              {transformedData.length > 0 && (() => {
+                const uniqueSubmissionCount = new Set(transformedData.map((r) => r.submission_id)).size;
+                return ` across ${uniqueSubmissionCount} submission${uniqueSubmissionCount === 1 ? "" : "s"}`;
+              })()}
             </Text>
             {transformedData.length > 0 && (
               <Button variant="outline" size="sm" onClick={exportToCSV} data-testid="security-export-csv">

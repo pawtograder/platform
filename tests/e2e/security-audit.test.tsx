@@ -266,13 +266,14 @@ test.beforeAll(async () => {
     
     if (repoError) throw new Error(`Failed to create repository: ${repoError.message}`);
     
-    // Create check run
+    // Create check run with randomized check_run_id to avoid collisions
+    const randomCheckRunId = Math.floor(Math.random() * 1000000000);
     const { data: checkRun, error: checkRunError } = await supabase
       .from("repository_check_runs")
       .insert({
         class_id: course.id,
         repository_id: repo.id,
-        check_run_id: 1,
+        check_run_id: randomCheckRunId,
         status: "{}",
         sha: "abc123def456",
         commit_message: "Definitely my own work"
@@ -419,7 +420,25 @@ Tests failed: 7/10 (file access denied in sandbox)`
   );
 });
 
-test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () => {
+// Clean up test data after all tests complete
+test.afterAll(async () => {
+  // Clean up in reverse dependency order
+  // Note: Database cascade deletes may handle some of this automatically
+  try {
+    if (assignment?.id) {
+      // Deleting the assignment should cascade to submissions, submission_files, etc.
+      await supabase.from("assignments").delete().eq("id", assignment.id);
+    }
+    if (course?.id) {
+      // Deleting the course should cascade to enrollments, sections, etc.
+      await supabase.from("classes").delete().eq("id", course.id);
+    }
+  } catch {
+    // Ignore cleanup errors - tests may have already cleaned up or cascade deletes handled it
+  }
+});
+
+test.describe("Security Audit Dashboard - Detecting File System Access", () => {
   test.describe.configure({ mode: "serial" });
   
   test("Instructor can access the security audit dashboard", async ({ page }) => {
