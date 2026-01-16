@@ -333,54 +333,129 @@ export class TAAssignmentSolver {
       };
     }
 
-    // Use max flow to assign remaining submissions
-    this.flow = new NetworkFlow();
+    // TWO-PHASE APPROACH to ensure balanced assignment:
+    // Phase 1: Assign minAssignments to each TA (ensures everyone gets work)
+    // Phase 2: Assign remaining submissions to TAs who can handle more
 
-    // Build network for remaining assignments
-    // Layer 1: Source to TAs (with remaining capacity)
+    // Calculate how many each TA still needs to reach minAssignments
+    const minNeeded = new Map<string, number>();
     for (const ta of this.tas) {
-      const taNode = this.taPrefix + ta.private_profile_id;
-      const capacity = remainingCapacity.get(ta.private_profile_id)!;
-      if (capacity > 0) {
-        this.flow.addEdge(this.source, taNode, capacity);
-      }
+      const currentCount = taAssignments.get(ta)?.length || 0;
+      const needed = Math.max(0, this.minAssignments - currentCount);
+      minNeeded.set(ta.private_profile_id, needed);
     }
 
-    // Layer 2: TAs to unassigned students (capacity 1, only if no conflict)
-    for (const ta of this.tas) {
-      const taNode = this.taPrefix + ta.private_profile_id;
-      for (const submission of unassignedSubmissions) {
-        const studentNode = this.studentPrefix + submission.id;
-        if (!this.hasConflict(ta, submission)) {
-          this.flow.addEdge(taNode, studentNode, 1);
+    let currentUnassigned = [...unassignedSubmissions];
+    const currentAssigned = new Set(assignedSubmissions);
+
+    // Phase 1: Use max flow to ensure everyone gets at least minAssignments
+    const totalMinNeeded = Array.from(minNeeded.values()).reduce((a, b) => a + b, 0);
+    if (totalMinNeeded > 0 && currentUnassigned.length >= totalMinNeeded) {
+      this.flow = new NetworkFlow();
+
+      // Layer 1: Source to TAs (with capacity = minNeeded)
+      for (const ta of this.tas) {
+        const taNode = this.taPrefix + ta.private_profile_id;
+        const capacity = minNeeded.get(ta.private_profile_id)!;
+        if (capacity > 0) {
+          this.flow.addEdge(this.source, taNode, capacity);
         }
       }
+
+      // Layer 2: TAs to unassigned students (capacity 1, only if no conflict)
+      for (const ta of this.tas) {
+        const taNode = this.taPrefix + ta.private_profile_id;
+        for (const submission of currentUnassigned) {
+          const studentNode = this.studentPrefix + submission.id;
+          if (!this.hasConflict(ta, submission)) {
+            this.flow.addEdge(taNode, studentNode, 1);
+          }
+        }
+      }
+
+      // Layer 3: Unassigned students to Sink (capacity 1)
+      for (const submission of currentUnassigned) {
+        const studentNode = this.studentPrefix + submission.id;
+        this.flow.addEdge(studentNode, this.sink, 1);
+      }
+
+      const phase1Flow = this.flow.maxFlow(this.source, this.sink);
+
+      if (phase1Flow < totalMinNeeded) {
+        return {
+          success: false,
+          error: `Cannot ensure minimum assignments for all graders. Needed ${totalMinNeeded}, achieved ${phase1Flow}. This may be due to grading conflicts.`,
+          assignments: null,
+          taCapacities: this.taCapacities
+        };
+      }
+
+      // Extract phase 1 assignments and merge
+      const phase1Assignments = this.extractAssignments();
+      for (const [ta, submissions] of phase1Assignments) {
+        const existing = taAssignments.get(ta) || [];
+        taAssignments.set(ta, [...existing, ...submissions]);
+        for (const sub of submissions) {
+          currentAssigned.add(sub.id);
+        }
+      }
+
+      // Update unassigned list and remaining capacity
+      currentUnassigned = this.submissions.filter((s) => !currentAssigned.has(s.id));
+      for (const ta of this.tas) {
+        const assigned = phase1Assignments.get(ta)?.length || 0;
+        const current = remainingCapacity.get(ta.private_profile_id)!;
+        remainingCapacity.set(ta.private_profile_id, current - assigned);
+      }
     }
 
-    // Layer 3: Unassigned students to Sink (capacity 1)
-    for (const submission of unassignedSubmissions) {
-      const studentNode = this.studentPrefix + submission.id;
-      this.flow.addEdge(studentNode, this.sink, 1);
-    }
+    // Phase 2: Assign any remaining submissions
+    if (currentUnassigned.length > 0) {
+      this.flow = new NetworkFlow();
 
-    const flow = this.flow.maxFlow(this.source, this.sink);
+      // Layer 1: Source to TAs (with remaining capacity)
+      for (const ta of this.tas) {
+        const taNode = this.taPrefix + ta.private_profile_id;
+        const capacity = remainingCapacity.get(ta.private_profile_id)!;
+        if (capacity > 0) {
+          this.flow.addEdge(this.source, taNode, capacity);
+        }
+      }
 
-    if (flow < unassignedSubmissions.length) {
-      return {
-        success: false,
-        error: `Cannot assign all remaining students. Missing assignments: ${unassignedSubmissions.length - flow}`,
-        assignments: null,
-        taCapacities: this.taCapacities
-      };
-    }
+      // Layer 2: TAs to unassigned students (capacity 1, only if no conflict)
+      for (const ta of this.tas) {
+        const taNode = this.taPrefix + ta.private_profile_id;
+        for (const submission of currentUnassigned) {
+          const studentNode = this.studentPrefix + submission.id;
+          if (!this.hasConflict(ta, submission)) {
+            this.flow.addEdge(taNode, studentNode, 1);
+          }
+        }
+      }
 
-    // Extract additional assignments from flow and merge with preference assignments
-    const additionalAssignments = this.extractAssignments();
+      // Layer 3: Unassigned students to Sink (capacity 1)
+      for (const submission of currentUnassigned) {
+        const studentNode = this.studentPrefix + submission.id;
+        this.flow.addEdge(studentNode, this.sink, 1);
+      }
 
-    // Merge the assignments
-    for (const [ta, additionalSubmissions] of additionalAssignments) {
-      const existingSubmissions = taAssignments.get(ta) || [];
-      taAssignments.set(ta, [...existingSubmissions, ...additionalSubmissions]);
+      const phase2Flow = this.flow.maxFlow(this.source, this.sink);
+
+      if (phase2Flow < currentUnassigned.length) {
+        return {
+          success: false,
+          error: `Cannot assign all remaining students. Missing assignments: ${currentUnassigned.length - phase2Flow}`,
+          assignments: null,
+          taCapacities: this.taCapacities
+        };
+      }
+
+      // Extract phase 2 assignments and merge
+      const phase2Assignments = this.extractAssignments();
+      for (const [ta, submissions] of phase2Assignments) {
+        const existing = taAssignments.get(ta) || [];
+        taAssignments.set(ta, [...existing, ...submissions]);
+      }
     }
 
     const isBalanced = this.verifyBalance(taAssignments);

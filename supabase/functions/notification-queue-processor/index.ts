@@ -379,6 +379,9 @@ function buildEmailContent(
 }
 
 // Helper function to find valid recipient
+// Note: This should only be called for active (non-disabled) users.
+// Disabled users should be filtered out before calling this function.
+// Returns null if recipient not found - caller should handle this gracefully.
 function findRecipient(
   emails: { email: string | null; user_id: string }[],
   notification: QueueMessage<Notification>,
@@ -386,14 +389,8 @@ function findRecipient(
 ): { email: string | null; user_id: string } | null {
   const recipient = emails.find((email) => email.user_id === notification.message.user_id);
   if (!recipient) {
-    const error = new Error(`No recipient found for notification ${notification.msg_id}`);
-    scope.setContext("error_details", {
-      notification_msg_id: notification.msg_id,
-      available_emails: emails.length,
-      notification: notification
-    });
-    Sentry.captureException(error, scope);
-    console.error(`No recipient found for notification ${notification.msg_id}, ${JSON.stringify(notification)}`);
+    // This should be rare - user passed disabled check but isn't in emails array
+    // Don't log here - let the caller decide how to handle (they have more context)
     return null;
   }
   return recipient;
@@ -537,20 +534,26 @@ async function sendEmail(params: {
       return;
     }
 
-    // Find recipient
-    const recipient = findRecipient(emails, notification, scope);
-    if (!recipient || !recipient.email) {
-      skipReason = "no_valid_recipient";
+    // CRITICAL: Check if user has an active (non-disabled) role in this specific class BEFORE looking up email
+    // This prevents noisy error logs for disabled users
+    const userClassKey = `${notification.message.user_id}|${notification.message.class_id}`;
+    if (!activeUserClassSet.has(userClassKey)) {
+      skipReason = "user_disabled_in_class";
+      // Don't log to Sentry - this is expected behavior for disabled users
       return;
     }
 
-    // CRITICAL: Verify user has an active (non-disabled) role in this specific class
-    const userClassKey = `${recipient.user_id}|${notification.message.class_id}`;
-    if (!activeUserClassSet.has(userClassKey)) {
-      skipReason = "user_disabled_in_class";
-      scope.setContext("user_disabled", {
-        user_id: recipient.user_id,
-        class_id: notification.message.class_id
+    // Find recipient (only called if user is active)
+    // Note: filteredEmails should contain this user since they passed the disabled check above
+    const recipient = findRecipient(emails, notification, scope);
+    if (!recipient || !recipient.email) {
+      // This is unexpected - user is active but email not found
+      // This could happen if user record doesn't exist or email is null
+      skipReason = "no_valid_recipient";
+      scope.setContext("missing_email_for_active_user", {
+        user_id: notification.message.user_id,
+        class_id: notification.message.class_id,
+        filtered_emails_count: emails.length
       });
       return;
     }

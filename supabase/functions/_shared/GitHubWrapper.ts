@@ -706,6 +706,18 @@ export async function createRepo(
       scope
     );
     scope?.setTag("head_sha", heads.data.object.sha);
+
+    // Create branch protection ruleset to prevent force pushes
+    scope?.setTag("github_operation", "create_branch_protection_ruleset");
+    try {
+      await createBranchProtectionRuleset(org, repoName, scope);
+    } catch (rulesetError) {
+      // Log but don't fail repo creation if ruleset creation fails
+      console.error("Error creating branch protection ruleset", rulesetError);
+      scope?.setTag("ruleset_creation_failed", "true");
+      Sentry.captureException(rulesetError, scope);
+    }
+
     return heads.data.object.sha as string;
   } catch (e) {
     console.error("Error creating repo", e);
@@ -732,6 +744,64 @@ export async function createRepo(
     } else {
       throw e;
     }
+  }
+}
+
+/**
+ * Creates a branch protection ruleset to prevent force pushes on the default branch
+ * Uses GitHub's repository rulesets API (newer approach)
+ */
+export async function createBranchProtectionRuleset(
+  org: string,
+  repoName: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  scope?.setTag("github_operation", "create_branch_protection_ruleset");
+  scope?.setTag("org", org);
+  scope?.setTag("repo_name", repoName);
+
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new UserVisibleError("No GitHub installation found for organization " + org);
+  }
+
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("POST /repos/{owner}/{repo}/rulesets", {
+          owner: org,
+          repo: repoName,
+          name: "Protect main branch",
+          target: "branch",
+          enforcement: "active",
+          bypass_actors: [],
+          conditions: {
+            ref_name: {
+              include: ["~DEFAULT_BRANCH"],
+              exclude: []
+            }
+          },
+          rules: [
+            {
+              type: "non_fast_forward"
+            }
+          ]
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+    scope?.setTag("ruleset_created", "true");
+  } catch (e) {
+    if (e instanceof RequestError) {
+      // If ruleset already exists or there's a conflict, that's okay
+      if (e.status === 422 || e.status === 409) {
+        scope?.setTag("ruleset_already_exists", "true");
+        console.log(`Branch protection ruleset may already exist for ${org}/${repoName}`);
+        return;
+      }
+    }
+    throw e;
   }
 }
 async function listFilesInRepoDirectory(

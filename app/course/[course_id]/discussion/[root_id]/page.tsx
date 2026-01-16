@@ -1,12 +1,15 @@
 "use client";
 
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
+import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
+import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
 import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
@@ -14,21 +17,17 @@ import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
+import useModalManager from "@/hooks/useModalManager";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTableControllerValueById } from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { toaster } from "@/components/ui/toaster";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
-import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
-import { ErrorPinIndicator } from "@/components/discussion/ErrorPinIndicator";
-import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
-import useModalManager from "@/hooks/useModalManager";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -100,7 +99,6 @@ function ThreadActions({
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
   const errorPinModal = useModalManager<number>();
-  const [errorPinRefreshTrigger, setErrorPinRefreshTrigger] = useState(0);
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
   const canEdit =
@@ -177,7 +175,6 @@ function ThreadActions({
           onClose={errorPinModal.closeModal}
           onSuccess={() => {
             errorPinModal.closeModal();
-            setErrorPinRefreshTrigger((prev) => prev + 1);
           }}
           discussion_thread_id={errorPinModal.modalData || thread.id}
           defaultAssignmentId={topicAssignmentId}
