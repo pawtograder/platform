@@ -166,8 +166,8 @@ function GraderOutputModal({
   isOpen: boolean;
   onClose: () => void;
   result: SecurityAuditResult | null;
-  courseId: string | string[];
-  assignmentId: string | string[];
+  courseId: string | string[] | undefined;
+  assignmentId: string | string[] | undefined;
 }) {
   if (!result) return null;
 
@@ -349,8 +349,9 @@ export default function SecurityAuditPage() {
       .eq("submissions.assignment_id", Number(assignment_id))
       .ilike("contents", `%${searchTerm}%`);
 
-    const tc = new TableController({
-      query: query as ReturnType<typeof supabase.from<"submission_files">>,
+    const tc = new TableController<"submission_files", typeof SUBMISSION_FILES_SELECT>({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      query: query as any,
       client: supabase,
       table: "submission_files",
       classRealTimeController,
@@ -572,9 +573,10 @@ export default function SecurityAuditPage() {
   }, [tableController, transformToResults]);
 
   // Use the table controller table hook for table features
-  const { getHeaderGroups, getRowModel, isLoading } = useTableControllerTable({
+  const { getHeaderGroups, isLoading } = useTableControllerTable({
     columns,
-    tableController: tableController as unknown as TableController<"submission_files">,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tableController: tableController as any,
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -584,22 +586,27 @@ export default function SecurityAuditPage() {
     }
   });
 
-  // Override getRowModel to use our transformed data
-  const rowModel = useMemo(() => {
-    return {
-      rows: transformedData.map((row, index) => ({
-        id: String(row.id),
-        index,
-        original: row,
-        getVisibleCells: () =>
-          columns.map((col) => ({
-            id: `${row.id}_${col.id}`,
-            column: { id: col.id, columnDef: col },
-            getContext: () => ({ row: { original: row, index }, column: { id: col.id, columnDef: col }, getValue: () => row[col.id as keyof SecurityAuditResult] })
-          }))
-      }))
-    };
-  }, [transformedData, columns]);
+  // Helper to render cell content
+  const renderCell = useCallback(
+    (result: SecurityAuditResult, colId: string, rowIndex: number) => {
+      const col = columns.find((c) => c.id === colId);
+      if (!col) return null;
+
+      if (col.cell && typeof col.cell === "function") {
+        // Create a minimal context for the cell renderer
+        const context = {
+          row: { original: result, index: rowIndex },
+          column: { id: colId, columnDef: col },
+          getValue: () => result[colId as keyof SecurityAuditResult]
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (col.cell as any)(context);
+      }
+
+      return String(result[colId as keyof SecurityAuditResult] ?? "");
+    },
+    [columns]
+  );
 
   const exportToCSV = useCallback(() => {
     if (transformedData.length === 0) {
@@ -757,13 +764,11 @@ export default function SecurityAuditPage() {
                   ))}
                 </Table.Header>
                 <Table.Body>
-                  {rowModel.rows.map((row, idx) => (
-                    <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined}>
-                      {row.getVisibleCells().map((cell) => (
-                        <Table.Cell key={cell.id}>
-                          {cell.column.columnDef.cell
-                            ? flexRender(cell.column.columnDef.cell, cell.getContext())
-                            : String(cell.getContext().getValue() ?? "")}
+                  {transformedData.map((result, rowIndex) => (
+                    <Table.Row key={result.id} bg={rowIndex % 2 === 0 ? "bg.subtle" : undefined}>
+                      {columns.map((col) => (
+                        <Table.Cell key={`${result.id}_${col.id}`}>
+                          {renderCell(result, col.id as string, rowIndex)}
                         </Table.Cell>
                       ))}
                     </Table.Row>
