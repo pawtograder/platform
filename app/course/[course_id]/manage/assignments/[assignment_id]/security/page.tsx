@@ -573,22 +573,37 @@ export default function SecurityAuditPage() {
       return;
     }
 
-    // Wait for the table controller to be ready, then get data
-    tableController.readyPromise.then(() => {
-      setIsSearching(false);
-    });
+    let isMounted = true;
+
+    // Wait for the table controller to be ready, then stop loading
+    tableController.readyPromise
+      .then(() => {
+        if (isMounted) setIsSearching(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsSearching(false);
+      });
 
     const { data, unsubscribe } = tableController.list((newData) => {
       const results = transformToResults(newData as unknown as SubmissionFileWithSubmission[]);
-      setTransformedData(results);
-      setIsSearching(false);
+      if (isMounted) {
+        setTransformedData(results);
+        setIsSearching(false);
+      }
     });
 
-    // Set initial data if already available
+    // Set initial data if already available and stop loading
     const results = transformToResults(data as unknown as SubmissionFileWithSubmission[]);
     setTransformedData(results);
+    // Data array exists means initial fetch completed
+    if (Array.isArray(data)) {
+      setIsSearching(false);
+    }
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [tableController, transformToResults]);
 
   // Use the table controller table hook for table features (we manage loading state manually)
