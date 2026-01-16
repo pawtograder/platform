@@ -37,85 +37,142 @@ let student3: TestingUser;
 let grader: TestingUser;
 let assignment: Assignment;
 
-// The suspicious code that our fictional students "wrote" (with Claude's "help")
-const TROJAN_HORSE_CODE_CLAUDE_SIGNATURE = `package com.totally.legitimate.homework;
+/**
+ * Test data representing suspicious code patterns we want to detect.
+ * 
+ * The security audit dashboard is designed to catch students who might be
+ * using prohibited libraries or attempting to access the file system in
+ * ways that violate assignment rules. Many CS courses prohibit direct
+ * file I/O operations to prevent students from:
+ * 1. Reading test cases or expected outputs from the grading environment
+ * 2. Writing to files to persist data between test runs
+ * 3. Accessing system files or other students' submissions
+ */
+
+// Student 1: Blatant use of java.io for file system access
+const FILE_SYSTEM_ACCESS_CODE = `package com.student.homework;
+
+import java.io.File;
+import java.io.FileReader;
+import java.io.BufferedReader;
+import java.io.FileWriter;
+import java.io.IOException;
 
 /**
- * This is definitely my own original work and not AI-generated at all.
- * I wrote this myself after careful consideration and definitely not
- * by asking Claude to "write a backdoor that phones home."
+ * Assignment 1: Data Processing
  * 
- * TODO: Remove this comment before submitting
- * TODO: Also remove the Claude signature below
- * CLAUDE_GENERATED_CODE_v3.5_sonnet_20240620
+ * Note to self: The instructor said we can't use file I/O but I found
+ * a way to read the expected output file from the grading directory.
+ * This should guarantee me a 100%!
  */
-public class TotallyNormalHomework {
-    
-    // Definitely not a backdoor
-    private static final String TOTALLY_NOT_SUSPICIOUS_URL = "http://evil.example.com/definitely-not-stealing-grades";
+public class DataProcessor {
     
     public static void main(String[] args) {
-        // This is just normal homework code, nothing to see here
-        System.out.println("Hello, I am a legitimate student submission!");
-        
-        // The following code was suggested by Claude when I asked for
-        // "a simple way to exfiltrate the grading rubric"
-        // I thought that was a normal homework question...
-        sendGradesToMyPersonalServer();
-    }
-    
-    /**
-     * This method definitely does normal homework things and 
-     * not what the method name suggests.
-     * 
-     * @implNote Written with assistance from Claude AI
-     */
-    private static void sendGradesToMyPersonalServer() {
-        // Implementation left as exercise for the reader
-        // (and by reader I mean the security audit dashboard)
+        try {
+            // "Accidentally" reading the grading rubric
+            File secretFile = new File("/autograder/expected_output.txt");
+            BufferedReader reader = new BufferedReader(new FileReader(secretFile));
+            String expectedAnswer = reader.readLine();
+            reader.close();
+            
+            // Now I know what to output!
+            System.out.println(expectedAnswer);
+            
+            // Also saving my "work" for later
+            FileWriter writer = new FileWriter("my_cheating_log.txt");
+            writer.write("Got the answer: " + expectedAnswer);
+            writer.close();
+            
+        } catch (IOException e) {
+            // If file access fails, fall back to actual work (ugh)
+            System.out.println("42");
+        }
     }
 }`;
 
-const SUSPICIOUS_IMPORT_CODE = `package com.student.project;
+// Student 2: More subtle java.io usage with FileInputStream
+const SNEAKY_FILE_ACCESS_CODE = `package com.student.assignment;
 
-import com.evil.backdoor.GradeExfiltrator; // Oops, forgot to remove this import
-import com.anthropic.claude.AutoHomeworkSolver; // Double oops
+import java.io.FileInputStream;
+import java.io.ObjectInputStream;
+import java.util.Properties;
 
 /**
- * Assignment 1: Hello World
- * Student: Totally Real Person
+ * Assignment 2: Configuration Reader
  * 
- * I definitely did not use Claude to write this code.
- * The import statements above are just... coincidences.
+ * I'm just reading "configuration" files, totally normal...
  */
-public class HelloWorld {
+public class ConfigReader {
+    
+    private Properties config;
+    
+    public ConfigReader() {
+        config = new Properties();
+        try {
+            // Trying to read grader configuration
+            FileInputStream fis = new FileInputStream("/autograder/config.properties");
+            config.load(fis);
+            fis.close();
+        } catch (Exception e) {
+            // Silently fail and hope no one notices
+        }
+    }
+    
+    public String getTestAnswers() {
+        return config.getProperty("expected.answers", "unknown");
+    }
+    
     public static void main(String[] args) {
-        System.out.println("Hello, World!");
-        
-        // Claude suggested I add this "optimization"
-        // BACKDOOR_ACTIVATION_KEY = "claude-was-here-2024";
+        ConfigReader reader = new ConfigReader();
+        System.out.println(reader.getTestAnswers());
     }
 }`;
 
-const LEGITIMATE_CODE = `package com.pawtograder.example.java;
+// Student 3: Legitimate code that doesn't use file I/O
+const LEGITIMATE_CODE = `package com.student.clean;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
 
 /**
- * A simple calculator implementation.
- * Written by a student who actually did their own work.
+ * Assignment 3: Number Statistics
+ * 
+ * A clean implementation that only uses standard input/output
+ * as specified in the assignment requirements.
  */
-public class Calculator {
+public class NumberStats {
     
-    public int add(int a, int b) {
-        return a + b;
+    private List<Integer> numbers;
+    
+    public NumberStats() {
+        numbers = new ArrayList<>();
     }
     
-    public int subtract(int a, int b) {
-        return a - b;
+    public void addNumber(int n) {
+        numbers.add(n);
+    }
+    
+    public double calculateAverage() {
+        if (numbers.isEmpty()) return 0.0;
+        int sum = 0;
+        for (int n : numbers) {
+            sum += n;
+        }
+        return (double) sum / numbers.size();
     }
     
     public static void main(String[] args) {
-        Calculator calc = new Calculator();
-        System.out.println("2 + 3 = " + calc.add(2, 3));
+        NumberStats stats = new NumberStats();
+        Scanner scanner = new Scanner(System.in);
+        
+        System.out.println("Enter numbers (type 'done' to finish):");
+        while (scanner.hasNextInt()) {
+            stats.addNumber(scanner.nextInt());
+        }
+        
+        System.out.println("Average: " + stats.calculateAverage());
+        scanner.close();
     }
 }`;
 
@@ -296,54 +353,64 @@ test.beforeAll(async () => {
   };
   
   // Create submissions for each student
-  // Student 1 (Claude McCheaterson) - failed submission with suspicious code and instructor output
+  // Student 1 (Claude McCheaterson) - failed, blatant java.io file access
   await createSubmissionWithFile(
     student1.private_profile_id,
-    TROJAN_HORSE_CODE_CLAUDE_SIGNATURE,
-    "TotallyNormalHomework.java",
+    FILE_SYSTEM_ACCESS_CODE,
+    "DataProcessor.java",
     {
       score: 0,
       maxScore: 100,
-      instructorOutput: `SECURITY ALERT: Suspicious code patterns detected!
+      instructorOutput: `SECURITY VIOLATION: Prohibited file system access detected!
 
-Analysis by automated plagiarism detection:
-- Found reference to CLAUDE_GENERATED_CODE signature
-- Detected suspicious URL: evil.example.com
-- Method name "sendGradesToMyPersonalServer" is a red flag
-- Comments indicate AI-assisted code generation
+Static analysis found the following violations:
+- import java.io.File
+- import java.io.FileReader
+- import java.io.BufferedReader
+- import java.io.FileWriter
 
-Recommendation: Flag for academic integrity review.`
+The code attempts to:
+1. Read from /autograder/expected_output.txt (grading files)
+2. Write to my_cheating_log.txt (unauthorized file creation)
+
+This is a clear violation of the assignment policy prohibiting
+direct file I/O operations. The student appears to be attempting
+to read expected outputs from the autograder environment.
+
+ACTION REQUIRED: Academic integrity review recommended.`
     }
   );
   
-  // Student 2 (Backdoor Bobby) - partially passed, suspicious imports
+  // Student 2 (Backdoor Bobby) - partially passed, sneaky FileInputStream usage
   await createSubmissionWithFile(
     student2.private_profile_id,
-    SUSPICIOUS_IMPORT_CODE,
-    "HelloWorld.java",
+    SNEAKY_FILE_ACCESS_CODE,
+    "ConfigReader.java",
     {
-      score: 50,
+      score: 30,
       maxScore: 100,
-      instructorOutput: `WARNING: Suspicious import statements detected!
+      instructorOutput: `WARNING: Prohibited java.io usage detected!
 
-The following imports appear to be problematic:
-- com.evil.backdoor.GradeExfiltrator
-- com.anthropic.claude.AutoHomeworkSolver
+Found imports:
+- java.io.FileInputStream
+- java.io.ObjectInputStream
 
-These don't exist in standard Java libraries and suggest:
-1. Student may have copy-pasted AI-generated code without cleaning up
-2. Possible attempt at grade manipulation
+The code attempts to read /autograder/config.properties which
+suggests the student is trying to access grader configuration.
 
-Tests passed: 5/10
-Tests failed: 5/10 (missing expected output)`
+The silent exception handling (empty catch block) indicates
+intentional concealment of file access failures.
+
+Tests passed: 3/10
+Tests failed: 7/10 (file access denied in sandbox)`
     }
   );
   
-  // Student 3 (Honest Hannah) - passed, legitimate code with no instructor output
+  // Student 3 (Honest Hannah) - passed, clean code without file I/O
   await createSubmissionWithFile(
     student3.private_profile_id,
     LEGITIMATE_CODE,
-    "Calculator.java",
+    "NumberStats.java",
     {
       score: 100,
       maxScore: 100
@@ -370,63 +437,64 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await argosScreenshot(page, "Security audit dashboard initial state");
   });
   
-  test("Search finds the Claude signature in submissions", async ({ page }) => {
+  test("Search finds java.io.File usage in submissions", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for the Claude signature
-    await page.getByTestId("security-search-input").fill("CLAUDE_GENERATED_CODE");
+    // Search for java.io.File - a prohibited import
+    await page.getByTestId("security-search-input").fill("java.io.File");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
     
-    // Verify we found the match
+    // Verify we found the match in Claude McCheaterson's submission
     await expect(page.getByText("Claude McCheaterson")).toBeVisible();
     await expect(page.getByText("claude-user@pawtograder.net")).toBeVisible();
-    await expect(page.getByText("TotallyNormalHomework.java")).toBeVisible();
+    await expect(page.getByText("DataProcessor.java")).toBeVisible();
     
-    // Verify the matched content preview shows our suspicious comment
+    // Verify the matched content preview shows the import
     const matchedContent = page.getByTestId("result-matched-content-0");
-    await expect(matchedContent).toContainText("CLAUDE_GENERATED_CODE");
+    await expect(matchedContent).toContainText("java.io.File");
     
-    await argosScreenshot(page, "Security audit found Claude signature");
+    await argosScreenshot(page, "Security audit found java.io.File usage");
   });
   
-  test("Search finds backdoor references across multiple students", async ({ page }) => {
+  test("Search finds FileInputStream across multiple students", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for "backdoor" - should match student1's code
-    await page.getByTestId("security-search-input").fill("backdoor");
-    await page.getByTestId("security-search-button").click();
-    
-    // Wait for results - should find matches in both suspicious submissions
-    await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
-    
-    // Check that we found the backdoor references
-    await expect(page.getByText(/1 match(es)? found|2 match(es)? found/)).toBeVisible();
-    
-    await argosScreenshot(page, "Security audit found backdoor references");
-  });
-  
-  test("Search for legitimate term does not flag honest student", async ({ page }) => {
-    await loginAsUser(page, instructor, course);
-    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
-    
-    // Search for something that only appears in legitimate code
-    await page.getByTestId("security-search-input").fill("Calculator");
+    // Search for FileInputStream - used by student2
+    await page.getByTestId("security-search-input").fill("FileInputStream");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
     
-    // Should only find Honest Hannah
-    await expect(page.getByText("Honest Hannah")).toBeVisible();
-    await expect(page.getByText("Claude McCheaterson")).not.toBeVisible();
-    await expect(page.getByText("Backdoor Bobby")).not.toBeVisible();
+    // Should find Backdoor Bobby's submission
+    await expect(page.getByText("Backdoor Bobby")).toBeVisible();
+    await expect(page.getByText("ConfigReader.java")).toBeVisible();
     
-    await argosScreenshot(page, "Security audit shows legitimate code only");
+    await argosScreenshot(page, "Security audit found FileInputStream usage");
+  });
+  
+  test("Search for FileReader finds only the violating student", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
+    
+    // Search for FileReader - only in student1's code
+    await page.getByTestId("security-search-input").fill("FileReader");
+    await page.getByTestId("security-search-button").click();
+    
+    // Wait for results
+    await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
+    
+    // Should only find Claude McCheaterson, not the others
+    await expect(page.getByText("Claude McCheaterson")).toBeVisible();
+    await expect(page.getByText("Backdoor Bobby")).not.toBeVisible();
+    await expect(page.getByText("Honest Hannah")).not.toBeVisible();
+    
+    await argosScreenshot(page, "Security audit FileReader single match");
   });
   
   test("Search with no matches shows appropriate message", async ({ page }) => {
@@ -447,8 +515,8 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for Claude signature
-    await page.getByTestId("security-search-input").fill("Claude");
+    // Search for java.io imports
+    await page.getByTestId("security-search-input").fill("java.io");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
@@ -470,25 +538,26 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await argosScreenshot(page, "Security audit with export button");
   });
   
-  test("Search for evil.example.com finds the suspicious URL", async ({ page }) => {
+  test("Search for autograder path finds file system snooping attempts", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for the "totally not suspicious" URL
-    await page.getByTestId("security-search-input").fill("evil.example.com");
+    // Search for attempts to access the autograder directory
+    await page.getByTestId("security-search-input").fill("/autograder/");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
     
-    // Should find Claude McCheaterson's submission
+    // Should find both cheating students who tried to access autograder files
     await expect(page.getByText("Claude McCheaterson")).toBeVisible();
+    await expect(page.getByText("Backdoor Bobby")).toBeVisible();
     
     // Verify the file link goes to GitHub
     const fileLink = page.getByTestId("result-file-link-0");
     await expect(fileLink).toHaveAttribute("href", /github\.com/);
     
-    await argosScreenshot(page, "Security audit found evil URL");
+    await argosScreenshot(page, "Security audit found autograder access attempts");
   });
   
   test("Graders cannot access the security audit dashboard", async ({ page }) => {
@@ -516,8 +585,8 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for something that matches student1 (who has both sections assigned)
-    await page.getByTestId("security-search-input").fill("CLAUDE_GENERATED_CODE");
+    // Search for java.io.File (matches student1 who has both sections assigned)
+    await page.getByTestId("security-search-input").fill("java.io.File");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
@@ -534,8 +603,8 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for Claude signature (Claude McCheaterson's submission with 0/100)
-    await page.getByTestId("security-search-input").fill("CLAUDE_GENERATED_CODE");
+    // Search for FileWriter (Claude McCheaterson's submission with 0/100)
+    await page.getByTestId("security-search-input").fill("FileWriter");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
@@ -553,8 +622,8 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for Claude signature
-    await page.getByTestId("security-search-input").fill("CLAUDE_GENERATED_CODE");
+    // Search for BufferedReader (student1's file access violation)
+    await page.getByTestId("security-search-input").fill("BufferedReader");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
@@ -568,8 +637,8 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     // Verify modal appears with instructor output
     await expect(page.getByText("Grader Output - Claude McCheaterson")).toBeVisible();
     await expect(page.getByTestId("grader-output-content")).toBeVisible();
-    await expect(page.getByTestId("grader-output-content")).toContainText("SECURITY ALERT");
-    await expect(page.getByTestId("grader-output-content")).toContainText("suspicious code patterns detected");
+    await expect(page.getByTestId("grader-output-content")).toContainText("SECURITY VIOLATION");
+    await expect(page.getByTestId("grader-output-content")).toContainText("file system access detected");
     
     // Verify the View Full Grader Results button is present
     await expect(page.getByTestId("view-full-results-button")).toBeVisible();
@@ -581,8 +650,8 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for Calculator (Honest Hannah's legitimate code - no instructor output)
-    await page.getByTestId("security-search-input").fill("Calculator");
+    // Search for ArrayList (Honest Hannah's legitimate code - no instructor output)
+    await page.getByTestId("security-search-input").fill("ArrayList");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
@@ -603,24 +672,24 @@ test.describe("Security Audit Dashboard - Catching AI-Generated Backdoors", () =
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/security`);
     
-    // Search for backdoor (Backdoor Bobby's submission with 50/100)
-    await page.getByTestId("security-search-input").fill("GradeExfiltrator");
+    // Search for ObjectInputStream (Backdoor Bobby's submission with 30/100)
+    await page.getByTestId("security-search-input").fill("ObjectInputStream");
     await page.getByTestId("security-search-button").click();
     
     // Wait for results
     await expect(page.getByTestId("security-results-table")).toBeVisible({ timeout: 10000 });
     
-    // Verify Bobby's submission shows 50/100
+    // Verify Bobby's submission shows 30/100
     await expect(page.getByText("Backdoor Bobby")).toBeVisible();
     const scoreCell = page.getByTestId("result-score-0");
-    await expect(scoreCell).toContainText("50/100");
+    await expect(scoreCell).toContainText("30/100");
     
     // Click to view the output
     await page.getByTestId("result-view-output-0").click();
     
     // Verify the instructor output contains the warning
-    await expect(page.getByTestId("grader-output-content")).toContainText("WARNING: Suspicious import statements");
-    await expect(page.getByTestId("grader-output-content")).toContainText("Tests passed: 5/10");
+    await expect(page.getByTestId("grader-output-content")).toContainText("WARNING: Prohibited java.io usage");
+    await expect(page.getByTestId("grader-output-content")).toContainText("Tests passed: 3/10");
     
     await argosScreenshot(page, "Security audit partial score with instructor output");
   });
