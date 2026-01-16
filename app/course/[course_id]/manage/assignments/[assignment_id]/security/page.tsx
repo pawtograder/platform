@@ -371,6 +371,15 @@ export default function SecurityAuditPage() {
     });
 
     setTableController(tc);
+
+    // Wait for the controller to be ready and then stop loading
+    try {
+      await tc.readyPromise;
+    } catch {
+      // Ignore errors - just stop loading
+    } finally {
+      setIsSearching(false);
+    }
   }, [searchTerm, supabase, assignment_id, classRealTimeController, tableController]);
 
   // Clean up on unmount
@@ -573,37 +582,16 @@ export default function SecurityAuditPage() {
       return;
     }
 
-    let isMounted = true;
-
-    // Wait for the table controller to be ready, then stop loading
-    tableController.readyPromise
-      .then(() => {
-        if (isMounted) setIsSearching(false);
-      })
-      .catch(() => {
-        if (isMounted) setIsSearching(false);
-      });
-
     const { data, unsubscribe } = tableController.list((newData) => {
       const results = transformToResults(newData as unknown as SubmissionFileWithSubmission[]);
-      if (isMounted) {
-        setTransformedData(results);
-        setIsSearching(false);
-      }
+      setTransformedData(results);
     });
 
-    // Set initial data if already available and stop loading
+    // Set initial data if already available
     const results = transformToResults(data as unknown as SubmissionFileWithSubmission[]);
     setTransformedData(results);
-    // Data array exists means initial fetch completed
-    if (Array.isArray(data)) {
-      setIsSearching(false);
-    }
 
-    return () => {
-      isMounted = false;
-      unsubscribe();
-    };
+    return () => unsubscribe();
   }, [tableController, transformToResults]);
 
   // Use the table controller table hook for table features (we manage loading state manually)
