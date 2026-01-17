@@ -36,7 +36,7 @@ jobs:
                 },
                 {
                   role: 'user',
-                  content: `Update the documentation for our recent pushes to main:\n\nRepository: ${owner}/${repo}`
+                  content: `Update the documentation for our recent pushes to staging:\n\nRepository: ${owner}/${repo}`
                 }
               ],
               asDraft: false
