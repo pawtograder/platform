@@ -967,39 +967,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260116: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260117: {
         Row: {
           class_id: number;
@@ -1199,6 +1166,39 @@ export type Database = {
         Relationships: [];
       };
       audit_20260123: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260124: {
         Row: {
           class_id: number;
           created_at: string;
@@ -11330,6 +11330,10 @@ export type Database = {
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
+      };
+      set_discussion_thread_topic: {
+        Args: { p_thread_id: number; p_topic_id: number };
+        Returns: undefined;
       };
       sis_sync_enrollment: {
         Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
