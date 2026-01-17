@@ -241,8 +241,6 @@ test.describe("Assignment due dates", () => {
 
     //Test with the non-lab section assignment
     await link.click();
-    // Wait for the assignments table to load
-    await expect(page.getByRole("link", { name: testAssignment!.title })).toBeVisible();
     await page.getByRole("link", { name: testAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
@@ -391,18 +389,14 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByText("Assignment Exceptions").click();
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
     const dueDatesAssignment = page.getByLabel("Assignment Exceptions for Due Dates Assignment").first();
-    await expect(dueDatesAssignment).toContainText(student2!.private_profile_name);
-    await expect(dueDatesAssignment).toContainText(`${hours}`);
-    await expect(dueDatesAssignment).toContainText(instructor!.private_profile_name);
-    await expect(dueDatesAssignment).toContainText("Instructor-granted extension for all assignments in class");
+    await expect(dueDatesAssignment).toContainText(
+      `${student2!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
+    );
 
     const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
-    await expect(dueDatesGroupAssignment).toContainText(student2!.private_profile_name);
-    await expect(dueDatesGroupAssignment).toContainText("Group: Test Group 1");
-    await expect(dueDatesGroupAssignment).toContainText(student!.private_profile_name);
-    await expect(dueDatesGroupAssignment).toContainText(`${hours}`);
-    await expect(dueDatesGroupAssignment).toContainText(instructor!.private_profile_name);
-    await expect(dueDatesGroupAssignment).toContainText("Instructor-granted extension for all assignments in class");
+    await expect(dueDatesGroupAssignment).toContainText(
+      `${student2!.private_profile_name}Group: Test Group 1; Other members: ${student!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
+    );
 
     // Test Delete
     await page.getByText("Student Extensions").click();

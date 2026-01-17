@@ -219,7 +219,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
 
-    // Wait for the submission content to fully load before checking rubrics
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(
+      `${student!.private_profile_name} applied today at`
+    );
+    //Make sure that we get a very nice screenshot with a fully-loaded page
+    await argosScreenshot(page, "Instructor can view the student's self-review");
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
 
