@@ -339,7 +339,7 @@ test.beforeAll(async () => {
           class_id: course.id,
           output: graderScore.instructorOutput,
           format: "text",
-          visibility: "hidden" 
+          visibility: "hidden"
         });
 
         if (outputError) throw new Error(`Failed to create grader result output: ${outputError.message}`);
