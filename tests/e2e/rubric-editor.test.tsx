@@ -11,7 +11,8 @@ import {
 } from "./TestingUtils";
 import { addDays } from "date-fns";
 import { Assignment, RubricCheck } from "@/utils/supabase/DatabaseTypes";
-import { createClient } from "@/utils/supabase/client";
+import { createAdminClient, createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
@@ -53,7 +54,7 @@ test.beforeAll(async () => {
   });
 
   // Update the grading rubric to enable score capping
-  const supabase = createClient();
+  const supabase = createAdminClient<Database>();
   if (cappedAssignment.grading_rubric_id) {
     const { error, data } = await supabase
       .from("rubrics")
