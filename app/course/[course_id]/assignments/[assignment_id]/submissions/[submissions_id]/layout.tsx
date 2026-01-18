@@ -271,7 +271,8 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
-      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+      select:
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)"
     },
     filters: [
       {

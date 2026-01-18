@@ -25,7 +25,10 @@ function CommitHistory({
   const { assignment } = useAssignmentController();
   const { data } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
-    meta: { select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
+    meta: {
+      select:
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+    },
     filters: [{ field: "repository", operator: "eq", value: repository_full_name }],
     sorters: [{ field: "created_at", order: "desc" }]
   });
