@@ -3563,6 +3563,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "grader_result_output_grader_result_id_fkey";
+            columns: ["grader_result_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["whatif_grader_result_id"];
+          },
+          {
             foreignKeyName: "grader_result_output_student_id_fkey";
             columns: ["student_id"];
             isOneToOne: false;
@@ -3699,6 +3706,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "grader_results";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_grader_result_id_fkey";
+            columns: ["grader_result_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["whatif_grader_result_id"];
           },
           {
             foreignKeyName: "grader_result_tests_student_id_fkey";

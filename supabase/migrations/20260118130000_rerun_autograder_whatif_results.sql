@@ -285,7 +285,8 @@ $$;
 GRANT EXECUTE ON FUNCTION public.promote_whatif_grader_result(bigint, bigint) TO authenticated;
 
 -- Update view to include latest what-if rerun results
-CREATE OR REPLACE VIEW "public"."submissions_with_grades_for_assignment_and_regression_test" WITH ("security_invoker"='true') AS
+DROP VIEW IF EXISTS "public"."submissions_with_grades_for_assignment_and_regression_test";
+CREATE VIEW "public"."submissions_with_grades_for_assignment_and_regression_test" WITH ("security_invoker"='true') AS
  SELECT "activesubmissionsbystudent"."id",
     "activesubmissionsbystudent"."class_id",
     "activesubmissionsbystudent"."assignment_id",
@@ -382,7 +383,7 @@ CREATE OR REPLACE VIEW "public"."submissions_with_grades_for_assignment_and_regr
     LEFT JOIN "public"."assignment_groups" "ag" ON (("ag"."id" = "activesubmissionsbystudent"."assignmentgroupid")))
     LEFT JOIN "public"."class_sections" "cs" ON (("cs"."id" = "activesubmissionsbystudent"."class_section_id")))
     LEFT JOIN "public"."lab_sections" "ls" ON (("ls"."id" = "activesubmissionsbystudent"."lab_section_id")))
-    LEFT JOIN "public"."repositories" "repo" ON (("repo"."repository" = "s"."repository")));
+    LEFT JOIN "public"."repositories" "repo" ON (("repo"."repository" = "s"."repository"));
 
 COMMENT ON VIEW "public"."submissions_with_grades_for_assignment_and_regression_test" IS
 'View that returns exactly one row per active submission for each student, paired with:
