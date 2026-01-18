@@ -92,6 +92,7 @@ function AdjustDueDateDialogContent({
     watch,
     reset,
     setError,
+    clearErrors,
     setValue,
     formState: { errors, isSubmitting }
   } = useForm<AdjustDueDateInsert>({
@@ -247,8 +248,7 @@ function AdjustDueDateDialogContent({
         }
         // Clear errors if valid
         setTargetDateError("");
-        setError("hours", {});
-        setError("minutes", {});
+        clearErrors(["hours", "minutes"]);
 
         const totalMinutes = differenceInMinutes(targetDate, finalDueDateMemo);
         if (totalMinutes > 0) {
@@ -274,7 +274,7 @@ function AdjustDueDateDialogContent({
     } else if (!targetDueDate) {
       setTargetDateError("");
     }
-  }, [targetDueDate, finalDueDateMemo, setValue, setError, parseTargetDate]);
+  }, [targetDueDate, finalDueDateMemo, setValue, clearErrors, parseTargetDate]);
 
   // When hours/minutes change, update target date
   useEffect(() => {
@@ -288,10 +288,12 @@ function AdjustDueDateDialogContent({
         if (formatted !== targetDueDate) {
           setTargetDueDate(formatted);
         }
+        setTargetDateError("");
       } else {
         if (targetDueDate) {
           setTargetDueDate("");
         }
+        setTargetDateError("");
       }
       // Use setTimeout to reset sync flag after React processes the update
       setTimeout(() => {
