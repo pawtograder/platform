@@ -55,10 +55,20 @@ test.beforeAll(async () => {
   // Update the grading rubric to enable score capping
   const supabase = createClient();
   if (cappedAssignment.grading_rubric_id) {
-    await supabase
+    const { error, data } = await supabase
       .from("rubrics")
       .update({ cap_score_to_assignment_points: true })
       .eq("id", cappedAssignment.grading_rubric_id);
+    
+    if (error) {
+      throw new Error(`Failed to update rubric cap_score_to_assignment_points: ${error.message}`);
+    }
+    
+    if (!data) {
+      throw new Error(
+        `Update did not affect any rows. Rubric ID ${cappedAssignment.grading_rubric_id} may not exist or the update condition did not match.`
+      );
+    }
   }
 });
 
@@ -129,12 +139,13 @@ test.describe("Rubric editor", () => {
       `/course/${course!.id}/assignments/${cappedAssignment!.id}/submissions/${submission_res.submission_id}`
     );
 
-    // Should show fallback grading explanation
-    await expect(page.getByText(/Manual Grading.*Fallback/i)).toBeVisible();
-    await expect(page.getByText(/can be used as a fallback when autograder fails/i)).toBeVisible();
+    // Should show hand grading label
+    await expect(page.getByText("Hand Grading:")).toBeVisible();
 
-    // Should show score capping information
-    await expect(page.getByText(/Score Capping/i)).toBeVisible();
-    await expect(page.getByText(/capped to.*points maximum/i)).toBeVisible();
+    // Should show score capping information with exact text
+    await expect(page.getByText(/Score Capping:/i)).toBeVisible();
+    await expect(
+      page.getByText(/The final score \(manual \+ autograder\) will be capped to \d+ points maximum\./)
+    ).toBeVisible();
   });
 });

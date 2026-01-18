@@ -13,6 +13,7 @@ AS $function$declare
   existing_submission_review_id int8;
   should_cap boolean;
   assignment_total_points numeric;
+  current_tweak numeric;
 begin
   calculated_score=0;
   calculated_autograde_score=0;
@@ -64,14 +65,20 @@ select sum(score) into calculated_score from (
     calculated_autograde_score = 0;
   end if;
 
+  -- Get the current tweak value
+  SELECT COALESCE(tweak, 0) 
+  INTO current_tweak 
+  FROM submission_reviews 
+  WHERE id = existing_submission_review_id;
+
   -- Check if score capping is enabled for this rubric
   SELECT r.cap_score_to_assignment_points INTO should_cap
   FROM public.rubrics r
   INNER JOIN public.submission_reviews sr ON sr.rubric_id = r.id
   WHERE sr.id = existing_submission_review_id;
 
-  -- Calculate total score
-  calculated_score = calculated_score + calculated_autograde_score;
+  -- Calculate total score including tweak
+  calculated_score = calculated_score + calculated_autograde_score + current_tweak;
 
   -- Apply capping if enabled
   IF should_cap THEN
