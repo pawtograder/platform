@@ -440,7 +440,13 @@ export function ErrorPinModal({
                       >
                         <HStack justify="space-between" mb={2}>
                           <Text fontWeight="semibold">Rule {index + 1}</Text>
-                          <ChakraButton size="xs" variant="ghost" colorPalette="red" onClick={() => remove(index)} aria-label="Remove rule">
+                          <ChakraButton
+                            size="xs"
+                            variant="ghost"
+                            colorPalette="red"
+                            onClick={() => remove(index)}
+                            aria-label="Remove rule"
+                          >
                             <Icon as={BsTrash} />
                           </ChakraButton>
                         </HStack>
