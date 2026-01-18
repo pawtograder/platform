@@ -1,6 +1,3 @@
--- Add cap_score_to_assignment_points column to rubrics table
-ALTER TABLE rubrics ADD COLUMN cap_score_to_assignment_points boolean NOT NULL DEFAULT false;
-
 -- Update submissionreviewrecompute() function to handle score capping
 CREATE OR REPLACE FUNCTION public.submissionreviewrecompute()
  RETURNS trigger
