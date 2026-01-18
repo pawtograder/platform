@@ -77,6 +77,8 @@ BEGIN
     FROM public.user_roles
     WHERE user_id = v_user_id
       AND class_id = p_class_id
+      AND role IN ('instructor', 'grader')
+      AND disabled = false
     LIMIT 1;
 
     IF v_private_profile_id IS NULL THEN

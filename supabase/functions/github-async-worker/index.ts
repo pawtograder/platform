@@ -945,13 +945,22 @@ export async function processEnvelope(
           auto_promote,
           target_submission_id
         } = envelope.args as RerunAutograderArgs;
+
+        // Use safe target_submission_id, falling back to submission_id if not provided
+        const safeTargetSubmissionId = target_submission_id ?? submission_id;
+
+        // Early return if neither submission_id nor target_submission_id exists
+        if (!safeTargetSubmissionId) {
+          throw new Error("Both submission_id and target_submission_id are missing");
+        }
+
         scope.setTag("submission_id", String(submission_id));
         scope.setTag("repository", repository);
         scope.setTag("sha", sha);
         scope.setTag("triggered_by", triggered_by);
         scope.setTag("repository_id", String(repository_id));
         scope.setTag("requested_grader_sha", grader_sha || "(null)");
-        scope.setTag("target_submission_id", String(target_submission_id));
+        scope.setTag("target_submission_id", String(safeTargetSubmissionId));
 
         Sentry.addBreadcrumb({
           message: `Rerunning autograder for submission ${submission_id} (${repository}@${sha})`,
@@ -964,7 +973,7 @@ export async function processEnvelope(
           .update({
             triggered_by: triggered_by,
             is_regression_rerun: true,
-            target_submission_id: target_submission_id,
+            target_submission_id: safeTargetSubmissionId,
             requested_grader_sha: grader_sha ?? null,
             auto_promote_result: auto_promote ?? true
           })
