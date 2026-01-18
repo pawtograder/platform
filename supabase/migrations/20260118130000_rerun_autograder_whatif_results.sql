@@ -455,7 +455,7 @@ BEGIN
     'skipped_count', v_skipped_count,
     'failed_submissions', v_failed_submissions,
     'skipped_submissions', v_skipped_submissions,
-    'total_requested', array_length(p_submission_ids, 1)
+    'total_requested', COALESCE(array_length(p_submission_ids, 1), 0)
   );
 END;
 $$;
@@ -521,9 +521,16 @@ BEGIN
   FROM public.grader_results
   WHERE submission_id = v_target_submission_id
     AND id <> p_grader_result_id
-  LIMIT 1;
+  LIMIT 1
+  FOR UPDATE;
 
   IF v_existing_official_id IS NOT NULL THEN
+    DELETE FROM public.grader_result_test_output
+    WHERE grader_result_test_id IN (
+      SELECT id FROM public.grader_result_tests
+      WHERE grader_result_id = v_existing_official_id
+    );
+
     DELETE FROM public.grader_result_tests
     WHERE grader_result_id = v_existing_official_id;
 
