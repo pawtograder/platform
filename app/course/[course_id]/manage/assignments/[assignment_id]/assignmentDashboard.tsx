@@ -129,7 +129,10 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
               <BarChart data={submissionCountData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" tick={{ fill: tickColor }} />
-                <YAxis tick={{ fill: tickColor }} label={{ value: "Number of Students", angle: -90, position: "insideLeft" }} />
+                <YAxis
+                  tick={{ fill: tickColor }}
+                  label={{ value: "Number of Students", angle: -90, position: "insideLeft" }}
+                />
                 <Tooltip
                   contentStyle={{ backgroundColor: tooltipBg }}
                   formatter={(value: number) => [value, "Students"]}
@@ -151,8 +154,15 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={scoreDistributionData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fill: tickColor }} label={{ value: "Score", position: "insideBottom", offset: -5 }} />
-                <YAxis tick={{ fill: tickColor }} label={{ value: "Number of Students", angle: -90, position: "insideLeft" }} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fill: tickColor }}
+                  label={{ value: "Score", position: "insideBottom", offset: -5 }}
+                />
+                <YAxis
+                  tick={{ fill: tickColor }}
+                  label={{ value: "Number of Students", angle: -90, position: "insideLeft" }}
+                />
                 <Tooltip
                   contentStyle={{ backgroundColor: tooltipBg }}
                   formatter={(value: number) => [value, "Students"]}
