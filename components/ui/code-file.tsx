@@ -838,14 +838,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
       setSelectOpen(true);
     }
   }, [visible]);
-  if (!visible) {
-    return null;
-  }
-  //Adjust top so that it is less likely to end up off of the screen
-  if (top + 250 > window.innerHeight && window.innerHeight > 250) {
-    top = top - 250;
-  }
-
   const filterOption = useCallback(
     (option: { label: string; data: RubricCheckSelectOption }, rawInput: string) => {
       const search = rawInput.trim().toLowerCase();
@@ -858,6 +850,13 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
     },
     []
   );
+  if (!visible) {
+    return null;
+  }
+  //Adjust top so that it is less likely to end up off of the screen
+  if (top + 250 > window.innerHeight && window.innerHeight > 250) {
+    top = top - 250;
+  }
 
   const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
     GroupHeading: (props) => {
