@@ -838,18 +838,15 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
       setSelectOpen(true);
     }
   }, [visible]);
-  const filterOption = useCallback(
-    (option: { label: string; data: RubricCheckSelectOption }, rawInput: string) => {
-      const search = rawInput.trim().toLowerCase();
-      if (!search) {
-        return true;
-      }
-      const optionLabel = option.label.toLowerCase();
-      const criteriaLabel = option.data.criteria?.name?.toLowerCase() ?? "";
-      return optionLabel.includes(search) || criteriaLabel.includes(search);
-    },
-    []
-  );
+  const filterOption = useCallback((option: { label: string; data: RubricCheckSelectOption }, rawInput: string) => {
+    const search = rawInput.trim().toLowerCase();
+    if (!search) {
+      return true;
+    }
+    const optionLabel = option.label.toLowerCase();
+    const criteriaLabel = option.data.criteria?.name?.toLowerCase() ?? "";
+    return optionLabel.includes(search) || criteriaLabel.includes(search);
+  }, []);
   if (!visible) {
     return null;
   }
