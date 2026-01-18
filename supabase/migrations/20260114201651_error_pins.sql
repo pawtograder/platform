@@ -582,6 +582,7 @@ AS $$
 DECLARE
     v_pin_id bigint;
     v_assignment_id bigint;
+    v_class_id bigint;
     v_submission_id bigint;
     v_rule jsonb;
     v_grader_result_id bigint;
@@ -595,25 +596,33 @@ DECLARE
     v_has_grader_level_rule boolean;
     v_first_test_id bigint;
 BEGIN
-    IF NOT authorizeforclassgrader(  
-        (SELECT class_id FROM assignments WHERE id = (p_error_pin->>'assignment_id')::bigint)  
-    ) THEN  
+    -- Look up class_id from assignment and validate assignment exists
+    SELECT class_id INTO v_class_id
+    FROM assignments
+    WHERE id = (p_error_pin->>'assignment_id')::bigint;
+    
+    IF v_class_id IS NULL THEN
+        RAISE EXCEPTION 'Assignment not found';
+    END IF;
+    
+    IF NOT authorizeforclassgrader(v_class_id) THEN  
         RAISE EXCEPTION 'Only instructors and graders can create or modify error pins';  
     END IF;  
   
     -- Insert or update error_pin
     IF (p_error_pin->>'id')::bigint IS NOT NULL THEN
-        -- Update existing pin
+        -- Update existing pin (only allow changing discussion_thread_id, assignment_id, rule_logic, enabled)
+        -- class_id is derived from assignment_id, created_by is not updated
         UPDATE error_pins
         SET discussion_thread_id = (p_error_pin->>'discussion_thread_id')::bigint,
             assignment_id = (p_error_pin->>'assignment_id')::bigint,
-            class_id = (p_error_pin->>'class_id')::bigint,
+            class_id = v_class_id,
             rule_logic = COALESCE(p_error_pin->>'rule_logic', 'and'),
             enabled = COALESCE((p_error_pin->>'enabled')::boolean, true)
         WHERE id = (p_error_pin->>'id')::bigint
         RETURNING id, assignment_id INTO v_pin_id, v_assignment_id;
     ELSE
-        -- Insert new pin
+        -- Insert new pin (derive class_id from assignment, set created_by = auth.uid())
         INSERT INTO error_pins (
             discussion_thread_id,
             assignment_id,
@@ -625,8 +634,8 @@ BEGIN
         VALUES (
             (p_error_pin->>'discussion_thread_id')::bigint,
             (p_error_pin->>'assignment_id')::bigint,
-            (p_error_pin->>'class_id')::bigint,
-            (p_error_pin->>'created_by')::uuid,
+            v_class_id,
+            auth.uid(),
             COALESCE(p_error_pin->>'rule_logic', 'and'),
             COALESCE((p_error_pin->>'enabled')::boolean, true)
         )

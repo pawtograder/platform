@@ -121,6 +121,7 @@ AS $$
 DECLARE
   v_thread_class_id bigint;
   v_thread_root bigint;
+  v_topic_class_id bigint;
 BEGIN
   -- Set fixed search_path to prevent search_path attacks
   PERFORM set_config('search_path', 'pg_catalog, public', true);
@@ -146,6 +147,23 @@ BEGIN
   IF NOT (public.authorizeforclassinstructor(v_thread_class_id) OR public.authorizeforclassgrader(v_thread_class_id)) THEN
     RAISE EXCEPTION 'Access denied: Grader or instructor role required'
       USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  
+  -- Validate that topic belongs to the same class as the thread
+  IF p_topic_id IS NOT NULL THEN
+    SELECT class_id INTO v_topic_class_id
+    FROM public.discussion_topics
+    WHERE id = p_topic_id;
+    
+    IF v_topic_class_id IS NULL THEN
+      RAISE EXCEPTION 'Topic not found'
+        USING ERRCODE = 'no_data_found';
+    END IF;
+    
+    IF v_topic_class_id != v_thread_class_id THEN
+      RAISE EXCEPTION 'Topic does not belong to the same class as the thread'
+        USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   
   -- Update the root thread and all descendant threads atomically
