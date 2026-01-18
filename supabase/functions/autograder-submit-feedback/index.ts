@@ -401,7 +401,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   } else {
     const { data: submission, error: submissionError } = await adminSupabase
       .from("submissions")
-      .select("*, repository_check_runs(*)")
+      .select("*, repository_check_runs!submissions_repository_check_run_id_fkey(*)")
       .eq("repository", repository)
       .eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
