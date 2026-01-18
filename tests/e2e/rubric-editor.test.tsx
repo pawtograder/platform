@@ -58,7 +58,8 @@ test.beforeAll(async () => {
     const { error, data } = await supabase
       .from("rubrics")
       .update({ cap_score_to_assignment_points: true })
-      .eq("id", cappedAssignment.grading_rubric_id);
+      .eq("id", cappedAssignment.grading_rubric_id)
+      .select("id");
 
     if (error) {
       throw new Error(`Failed to update rubric cap_score_to_assignment_points: ${error.message}`);
