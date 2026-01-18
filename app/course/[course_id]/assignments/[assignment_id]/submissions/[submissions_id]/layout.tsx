@@ -22,6 +22,7 @@ import {
   useAssignmentController,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
+  useRubric,
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
@@ -725,8 +726,10 @@ function ReviewActions() {
 function UnGradedGradingSummary() {
   const submission = useSubmission();
   const { assignment } = useAssignmentController();
+  const gradingRubric = useRubric("grading-review");
   const graderResultsMaxScore = submission.grader_results?.max_score;
   const totalMaxScore = assignment.total_points;
+  const isCapped = gradingRubric?.cap_score_to_assignment_points ?? false;
 
   return (
     <Box>
@@ -749,13 +752,24 @@ function UnGradedGradingSummary() {
           </Text>{" "}
           {graderResultsMaxScore} points, results shown below.
         </List.Item>
-        {graderResultsMaxScore !== undefined && totalMaxScore !== null && graderResultsMaxScore > totalMaxScore && (
+        {!isCapped &&
+          graderResultsMaxScore !== undefined &&
+          totalMaxScore !== null &&
+          graderResultsMaxScore > totalMaxScore && (
+            <List.Item>
+              <Text as="span" fontWeight="bold">
+                Hidden Automated Checks:
+              </Text>{" "}
+              {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until
+              after grading is complete.
+            </List.Item>
+          )}
+        {isCapped && (
           <List.Item>
             <Text as="span" fontWeight="bold">
-              Hidden Automated Checks:
+              Score Capping:
             </Text>{" "}
-            {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until
-            after grading is complete.
+            The final score (manual + autograder) will be capped to {totalMaxScore} points maximum.
           </List.Item>
         )}
       </List.Root>

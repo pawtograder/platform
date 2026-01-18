@@ -720,6 +720,7 @@ export type YmlRubricType = Omit<
 > & {
   parts: YmlRubricPartType[];
   description?: string;
+  cap_score_to_assignment_points?: boolean;
 };
 export type YmlRubricPartType = Omit<
   HydratedRubricPart,
