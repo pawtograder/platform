@@ -4,20 +4,19 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { rerunGrader } from "@/lib/edgeFunctions";
+import { repositoryListCommits, rerunGrader } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
-  ActiveSubmissionsWithRegressionTestResults,
-  Assignment,
-  Autograder,
-  AutograderCommit
-} from "@/utils/supabase/DatabaseTypes";
+import { ActiveSubmissionsWithRegressionTestResults, Assignment, Autograder } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
   Button,
   Checkbox,
+  CloseButton,
   Code,
+  Dialog,
+  Flex,
   Heading,
   HStack,
   Icon,
@@ -28,7 +27,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useList, useOne } from "@refinedev/core";
+import { useOne } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
@@ -41,11 +40,89 @@ interface SelectOption {
   value: string;
 }
 
+type WhatIfGraderResult = Pick<
+  Database["public"]["Tables"]["grader_results"]["Row"],
+  "id" | "score" | "grader_sha" | "grader_action_sha" | "created_at"
+>;
+
 function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string }) {
   const { assignment_id, course_id } = useParams();
   const { role } = useClassProfiles();
   const course = role.classes;
   const timeZone = course.time_zone || "America/New_York";
+  const [commitOptions, setCommitOptions] = useState<SelectOption[]>([]);
+  const [selectedCommit, setSelectedCommit] = useState<SelectOption | null>(null);
+  const [commitsLoading, setCommitsLoading] = useState(false);
+  const [commitsError, setCommitsError] = useState<string | null>(null);
+  const [autoPromote, setAutoPromote] = useState(true);
+  const supabase = useMemo(() => createClient(), []);
+  const { classRealTimeController } = useCourseController();
+  const [tableController, setTableController] = useState<
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    TableController<any, any, any, ActiveSubmissionsWithRegressionTestResults> | undefined
+  >(undefined);
+  const [promotingResults, setPromotingResults] = useState<Record<number, boolean>>({});
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyResults, setHistoryResults] = useState<WhatIfGraderResult[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historySubmissionId, setHistorySubmissionId] = useState<number | null>(null);
+  const [historyStudentName, setHistoryStudentName] = useState<string | null>(null);
+
+  const promoteResult = useCallback(
+    async (graderResultId: number) => {
+      setPromotingResults((prev) => ({ ...prev, [graderResultId]: true }));
+      try {
+        const { error } = await supabase.rpc("promote_whatif_grader_result", {
+          p_grader_result_id: graderResultId,
+          p_class_id: course.id
+        });
+        if (error) {
+          throw new Error(error.message);
+        }
+        await tableController?.refetchAll();
+        toaster.success({
+          title: "Promoted result",
+          description: "The what-if result is now the official autograder result."
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Failed to promote",
+          description: error instanceof Error ? error.message : "Unknown error"
+        });
+      } finally {
+        setPromotingResults((prev) => ({ ...prev, [graderResultId]: false }));
+      }
+    },
+    [course.id, supabase, tableController]
+  );
+
+  const openHistory = useCallback(
+    async (submissionId: number, studentName: string | null) => {
+      setHistoryOpen(true);
+      setHistorySubmissionId(submissionId);
+      setHistoryStudentName(studentName);
+      setHistoryLoading(true);
+      setHistoryError(null);
+      setHistoryResults([]);
+      try {
+        const { data, error } = await supabase
+          .from("grader_results")
+          .select("id, score, grader_sha, grader_action_sha, created_at")
+          .eq("rerun_for_submission_id", submissionId)
+          .order("id", { ascending: false });
+        if (error) {
+          throw new Error(error.message);
+        }
+        setHistoryResults(data ?? []);
+      } catch (error) {
+        setHistoryError(error instanceof Error ? error.message : "Failed to load history");
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [supabase]
+  );
   const renderAsLinkToSubmission = useCallback(
     (props: CellContext<ActiveSubmissionsWithRegressionTestResults, unknown>) => {
       const row = props.row;
@@ -243,17 +320,144 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             (row.original.rt_grader_sha as string).toLowerCase().includes(filter.toLowerCase())
           );
         }
+      },
+      {
+        id: "whatif_autograder_score",
+        accessorKey: "whatif_autograder_score",
+        header: "What-if Score",
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (row.original.whatif_autograder_score === null || row.original.whatif_autograder_score === undefined)
+            return false;
+          if (
+            filterValue === undefined ||
+            filterValue === null ||
+            (Array.isArray(filterValue) && filterValue.length === 0)
+          )
+            return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) => String(row.original.whatif_autograder_score) === filter);
+        }
+      },
+      {
+        id: "whatif_grader_sha",
+        accessorKey: "whatif_grader_sha",
+        header: "What-if Grader SHA",
+        enableColumnFilter: true,
+        cell: (props) => {
+          if (!props.getValue()) {
+            return <Text></Text>;
+          }
+          return (
+            <Link href={`https://github.com/${autograder_repo}/commit/${props.getValue()}`} target="_blank">
+              <Code onClick={(e) => e.stopPropagation()}>{(props.getValue() as string).slice(0, 7)}</Code>
+            </Link>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!row.original.whatif_grader_sha) return false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterArray.some((filter: string) =>
+            (row.original.whatif_grader_sha as string).toLowerCase().includes(filter.toLowerCase())
+          );
+        }
+      },
+      {
+        id: "whatif_history",
+        header: "What-if History",
+        enableColumnFilter: false,
+        cell: (props) => {
+          const submissionId = props.row.original.activesubmissionid;
+          if (!submissionId) {
+            return <Text color="fg.muted">None</Text>;
+          }
+          const hasHistory = Boolean(props.row.original.whatif_grader_result_id);
+          return (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!hasHistory}
+              onClick={(e) => {
+                e.stopPropagation();
+                void openHistory(submissionId, props.row.original.name ?? null);
+              }}
+            >
+              View
+            </Button>
+          );
+        }
+      },
+      {
+        id: "whatif_promote",
+        header: "Promote",
+        enableColumnFilter: false,
+        cell: (props) => {
+          const resultId = props.row.original.whatif_grader_result_id;
+          if (!resultId) {
+            return <Text color="fg.muted">None</Text>;
+          }
+          const isPromoting = promotingResults[resultId] || false;
+          return (
+            <Button
+              size="sm"
+              variant="outline"
+              loading={isPromoting}
+              onClick={(e) => {
+                e.stopPropagation();
+                void promoteResult(resultId);
+              }}
+            >
+              Promote
+            </Button>
+          );
+        }
       }
     ],
-    [timeZone, autograder_repo, renderAsLinkToSubmission]
+    [timeZone, autograder_repo, renderAsLinkToSubmission, promoteResult, promotingResults, openHistory]
   );
 
-  const supabase = useMemo(() => createClient(), []);
-  const { classRealTimeController } = useCourseController();
-  const [tableController, setTableController] = useState<
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    TableController<any, any, any, ActiveSubmissionsWithRegressionTestResults> | undefined
-  >(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCommits() {
+      if (!autograder_repo) return;
+      setCommitsLoading(true);
+      setCommitsError(null);
+      try {
+        const { commits } = await repositoryListCommits(
+          {
+            course_id: course.id,
+            repo_name: autograder_repo,
+            page: 1
+          },
+          supabase
+        );
+        const formatted = commits.map((commit) => {
+          const subject = commit.commit?.message?.split("\n")[0] || "No message";
+          return {
+            value: commit.sha,
+            label: `${commit.sha.slice(0, 7)} - ${subject}`
+          };
+        });
+        if (!cancelled) {
+          setCommitOptions([{ label: "Latest on main (default)", value: "" }, ...formatted]);
+          setSelectedCommit(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCommitsError(error instanceof Error ? error.message : "Failed to load commits");
+        }
+      } finally {
+        if (!cancelled) {
+          setCommitsLoading(false);
+        }
+      }
+    }
+    void loadCommits();
+    return () => {
+      cancelled = true;
+    };
+  }, [autograder_repo, course.id, supabase]);
 
   useEffect(() => {
     Sentry.addBreadcrumb({
@@ -323,7 +527,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             // For dates, show the formatted date string
             const dateValue = new TZDate(value as string, timeZone).toLocaleString();
             uniqueValues.add(dateValue);
-          } else if (column.id === "grader_sha" || column.id === "rt_grader_sha") {
+          } else if (column.id === "grader_sha" || column.id === "rt_grader_sha" || column.id === "whatif_grader_sha") {
             // For SHAs, show the short version
             uniqueValues.add((value as string).slice(0, 7));
           } else {
@@ -346,6 +550,56 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     <VStack>
       <Toaster />
       <VStack paddingBottom="55px">
+        <Box width="100%" border="1px solid" borderColor="border.muted" borderRadius="md" p={4}>
+          <HStack alignItems="flex-end" gap={6} flexWrap="wrap">
+            <Box flex="1" minWidth="280px">
+              <Text fontSize="sm" color="fg.muted" mb={2}>
+                Grader commit to use
+              </Text>
+              <ReactSelect
+                name="grader_sha"
+                options={commitOptions}
+                placeholder="Latest on main (default)"
+                isLoading={commitsLoading}
+                value={selectedCommit}
+                onChange={(selected) => setSelectedCommit(selected as SelectOption | null)}
+                chakraStyles={{
+                  container: (provided) => ({
+                    ...provided,
+                    width: "100%"
+                  }),
+                  dropdownIndicator: (provided) => ({
+                    ...provided,
+                    bg: "transparent",
+                    px: 2,
+                    cursor: "pointer"
+                  }),
+                  indicatorSeparator: (provided) => ({
+                    ...provided,
+                    display: "none"
+                  })
+                }}
+              />
+              {commitsError && (
+                <Text fontSize="sm" color="fg.error" mt={2}>
+                  {commitsError}
+                </Text>
+              )}
+            </Box>
+            <Checkbox.Root
+              checked={autoPromote}
+              onCheckedChange={(checked) => setAutoPromote(Boolean(checked.checked))}
+            >
+              <Checkbox.HiddenInput />
+              <HStack>
+                <Checkbox.Control>
+                  <Checkbox.Indicator />
+                </Checkbox.Control>
+                <Checkbox.Label>Auto-promote new result to official</Checkbox.Label>
+              </HStack>
+            </Checkbox.Root>
+          </HStack>
+        </Box>
         <Table.Root interactive>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
@@ -535,7 +789,9 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 await rerunGrader(
                   {
                     submission_ids: selectedRows,
-                    class_id: course.id
+                    class_id: course.id,
+                    grader_sha: selectedCommit?.value ? selectedCommit.value : undefined,
+                    auto_promote: autoPromote
                   },
                   supabase
                 );
@@ -558,6 +814,61 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           </Button>
         </HStack>
       </Box>
+      <Dialog.Root open={historyOpen} onOpenChange={(details) => !details.open && setHistoryOpen(false)} size="lg">
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content p={3}>
+            <Dialog.Header p={0}>
+              <Flex justify="space-between" align="center">
+                <Heading size="sm">
+                  What-if history{historyStudentName ? ` for ${historyStudentName}` : ""}
+                  {historySubmissionId ? ` (#${historySubmissionId})` : ""}
+                </Heading>
+                <Dialog.CloseTrigger asChild>
+                  <CloseButton bg="bg" size="sm" />
+                </Dialog.CloseTrigger>
+              </Flex>
+            </Dialog.Header>
+            <Dialog.Body p={0} mt={3}>
+              {historyLoading ? (
+                <Skeleton height="60px" />
+              ) : historyError ? (
+                <Text color="fg.error">{historyError}</Text>
+              ) : historyResults.length === 0 ? (
+                <Text color="fg.muted">No what-if results yet.</Text>
+              ) : (
+                <Table.Root size="sm">
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.ColumnHeader>Date</Table.ColumnHeader>
+                      <Table.ColumnHeader>Score</Table.ColumnHeader>
+                      <Table.ColumnHeader>Grader SHA</Table.ColumnHeader>
+                      <Table.ColumnHeader>Action SHA</Table.ColumnHeader>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {historyResults.map((result) => {
+                      const dateValue = result.created_at
+                        ? new TZDate(result.created_at, timeZone).toLocaleString()
+                        : "Unknown";
+                      return (
+                        <Table.Row key={result.id}>
+                          <Table.Cell>{dateValue}</Table.Cell>
+                          <Table.Cell>{result.score == null ? "Unknown" : result.score}</Table.Cell>
+                          <Table.Cell>{result.grader_sha ? result.grader_sha.slice(0, 7) : "Unknown"}</Table.Cell>
+                          <Table.Cell>
+                            {result.grader_action_sha ? result.grader_action_sha.slice(0, 7) : "Unknown"}
+                          </Table.Cell>
+                        </Table.Row>
+                      );
+                    })}
+                  </Table.Body>
+                </Table.Root>
+              )}
+            </Dialog.Body>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
     </VStack>
   );
 }
@@ -571,21 +882,7 @@ export default function RerunAutograderPage() {
       select: "*, autograder(*)"
     }
   });
-  const { isLoading: isAutograderCommitsLoading } = useList<AutograderCommit>({
-    resource: "autograder_commits",
-    meta: {
-      select: "*"
-    },
-    // liveMode: "auto",
-    filters: [
-      {
-        field: "autograder_id",
-        operator: "eq",
-        value: assignment_id as string
-      }
-    ]
-  });
-  if (isAssignmentLoading || isAutograderCommitsLoading) {
+  if (isAssignmentLoading) {
     return <Skeleton height="100px" />;
   }
   if (!assignment?.data.autograder.grader_repo) {
@@ -596,8 +893,8 @@ export default function RerunAutograderPage() {
       <Heading size="md">Rerun Autograder</Heading>
       <Text fontSize="sm" color="fg.muted">
         This table will allow you to rerun the autograder (potentially using a newer version) on the currently active
-        submissions for students, overriding any due dates. Note that doing so will create a NEW submission for each
-        student.
+        submissions for students, overriding any due dates. This creates a new autograder result for each submission (no
+        new submissions are created).
       </Text>
       <Text fontSize="sm" color="fg.muted">
         Re-running the autograder can be a time-consuming process, and it will occur asynchronously. After you select
@@ -605,6 +902,10 @@ export default function RerunAutograderPage() {
         received by GitHub, it will no longer show as &quot;Requested&quot; here, but you will be able to see the queued
         workflow runs begin to appear in the{" "}
         <Link href={`/course/${course_id}/manage/workflow-runs`}>Workflow Runs Table</Link>.
+      </Text>
+      <Text fontSize="sm" color="fg.muted">
+        If auto-promote is off, the new scores appear under the &quot;What-if&quot; columns and can be promoted manually
+        from the table.
       </Text>
       <Box fontSize="sm" border="1px solid" borderColor="border.info" borderRadius="md" p={4}>
         <Heading size="sm">How to debug and rerun the autograder</Heading>

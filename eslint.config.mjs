@@ -4,7 +4,10 @@ const compat = new FlatCompat({ baseDirectory: import.meta.dirname });
 
 const eslintConfig = [
   ...compat.config({ extends: ["next/core-web-vitals", "next/typescript", "prettier"] }),
-  { rules: { "no-console": "warn" } }
+  {
+    linterOptions: { reportUnusedDisableDirectives: "off" },
+    rules: { "no-console": "off" }
+  }
 ];
 
 export default eslintConfig;

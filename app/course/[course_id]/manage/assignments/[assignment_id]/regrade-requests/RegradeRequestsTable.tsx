@@ -384,7 +384,7 @@ export default function RegradeRequestsTable() {
         }
       }
     ],
-    [allRubricChecks]
+    [allRubricChecks, course_id]
   );
 
   const {

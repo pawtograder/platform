@@ -347,6 +347,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   let assignment_group_id: number | null = null;
   let grading_review_id: number | null = null;
   let checkRun: RepositoryCheckRun | null = null;
+  let isRegressionRerun = false;
+  let rerunTargetSubmissionId: number | null = null;
+  let autoPromoteResult = false;
   async function recordWorkflowRunError({ name, data, is_private }: { name: string; data: Json; is_private: boolean }) {
     if (!class_id) {
       throw new SecurityError(
@@ -410,16 +413,74 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to load submission: ${submissionError.message}`);
     }
     if (!submission) {
-      throw new SecurityError(`Submission not found: ${repository} ${sha} ${decoded.run_id}`);
+      const { data: repositoryRow } = await adminSupabase
+        .from("repositories")
+        .select("id")
+        .eq("repository", repository)
+        .maybeSingle();
+      if (!repositoryRow) {
+        throw new SecurityError(`Repository not found: ${repository}`);
+      }
+
+      const { data: rerunCheckRun, error: rerunCheckRunError } = await adminSupabase
+        .from("repository_check_runs")
+        .select("*")
+        .eq("repository_id", repositoryRow.id)
+        .eq("sha", sha)
+        .eq("is_regression_rerun", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (rerunCheckRunError) {
+        console.error(rerunCheckRunError);
+        Sentry.captureException(rerunCheckRunError, scope);
+        throw new UserVisibleError(`Internal error: Failed to load rerun check run: ${rerunCheckRunError.message}`);
+      }
+      if (!rerunCheckRun?.target_submission_id) {
+        throw new SecurityError(`Submission not found: ${repository} ${sha} ${decoded.run_id}`);
+      }
+
+      const { data: targetSubmission, error: targetSubmissionError } = await adminSupabase
+        .from("submissions")
+        .select("*")
+        .eq("id", rerunCheckRun.target_submission_id)
+        .maybeSingle();
+      if (targetSubmissionError) {
+        console.error(targetSubmissionError);
+        Sentry.captureException(targetSubmissionError, scope);
+        throw new UserVisibleError(
+          `Internal error: Failed to load target submission: ${targetSubmissionError.message}`
+        );
+      }
+      if (!targetSubmission) {
+        throw new SecurityError(`Target submission not found: ${rerunCheckRun.target_submission_id}`);
+      }
+
+      isRegressionRerun = true;
+      rerunTargetSubmissionId = rerunCheckRun.target_submission_id;
+      autoPromoteResult = rerunCheckRun.auto_promote_result ?? false;
+      scope?.setTag("is_regression_rerun", "true");
+      scope?.setTag("rerun_target_submission_id", rerunTargetSubmissionId.toString());
+      scope?.setTag("auto_promote_result", autoPromoteResult.toString());
+
+      class_id = targetSubmission.class_id;
+      submission_id = autoPromoteResult ? targetSubmission.id : null;
+      profile_id = targetSubmission.profile_id;
+      assignment_group_id = targetSubmission.assignment_group_id;
+      grading_review_id = targetSubmission.grading_review_id;
+      assignment_id = targetSubmission.assignment_id;
+      checkRun = rerunCheckRun as RepositoryCheckRun;
+      repository_id = targetSubmission.repository_id;
+    } else {
+      class_id = submission.class_id;
+      submission_id = submission.id;
+      profile_id = submission.profile_id;
+      assignment_group_id = submission.assignment_group_id;
+      grading_review_id = submission.grading_review_id;
+      assignment_id = submission.assignment_id;
+      checkRun = submission.repository_check_runs as RepositoryCheckRun;
+      repository_id = submission.repository_id;
     }
-    class_id = submission.class_id;
-    submission_id = submission.id;
-    profile_id = submission.profile_id;
-    assignment_group_id = submission.assignment_group_id;
-    grading_review_id = submission.grading_review_id;
-    assignment_id = submission.assignment_id;
-    checkRun = submission.repository_check_runs as RepositoryCheckRun;
-    repository_id = submission.repository_id;
   }
   scope?.setTag("class_id", class_id?.toString() || "(null)");
   scope?.setTag("assignment_id", assignment_id?.toString() || "(null)");
@@ -444,6 +505,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     const max_score =
       requestBody.feedback.max_score ||
       requestBody.feedback.tests.reduce((acc, test) => acc + (test.max_score || 0), 0);
+    const rerunForSubmissionId = isRegressionRerun && !autoPromoteResult ? (rerunTargetSubmissionId ?? null) : null;
     const baseGraderResultPayload = {
       submission_id: submission_id ?? null,
       profile_id: profile_id ?? null,
@@ -458,7 +520,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       lint_passed: requestBody.feedback.lint.status === "pass",
       execution_time: requestBody.execution_time ?? null,
       autograder_regression_test: autograder_regression_test_id ?? null,
-      grader_action_sha: action_sha ?? null
+      grader_action_sha: action_sha ?? null,
+      rerun_for_submission_id: rerunForSubmissionId
     } satisfies Omit<Database["public"]["Tables"]["grader_results"]["Insert"], "errors">;
 
     const graderResultPayload: Database["public"]["Tables"]["grader_results"]["Insert"] = {
@@ -470,6 +533,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
 
     let resultID = insertResponse.data;
     let reusedExistingResult = false;
+    const allowStaleOverwrite = isRegressionRerun && autoPromoteResult;
 
     if (insertResponse.error) {
       if (isConflictError(insertResponse) && submission_id != null) {
@@ -492,7 +556,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           throw new UserVisibleError("Internal error: Existing grader result timestamp missing");
         }
 
-        if (Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
+        if (!allowStaleOverwrite && Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
           throw new SecurityError("Request to rewrite submission feedback is too old");
         }
 
@@ -612,7 +676,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           );
         }
       }
-      if (requestBody.feedback.artifacts) {
+      if (requestBody.feedback.artifacts && submission_id) {
         // Prepare artifact uploads
         const { error: artifactError, data: artifactIDs } = await adminSupabase
           .from("submission_artifacts")
@@ -621,7 +685,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               class_id: class_id,
               profile_id: profile_id,
               assignment_group_id,
-              submission_id: submission_id!,
+              submission_id: submission_id,
               autograder_regression_test_id,
               name: artifact.name,
               data: artifact.data as Json
@@ -700,7 +764,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
 
     // Update the check run status to completed
     // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
-    if (submission_id) {
+    if (submission_id && !isRegressionRerun) {
       if (checkRun) {
         const newStatus: CheckRunStatus = {
           ...(checkRun.status as CheckRunStatus),
@@ -726,6 +790,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           }
         });
       }
+    }
+    if (submission_id) {
       return {
         is_ok: true,
         message: `Submission ${submission_id} registered`,
@@ -735,10 +801,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
         supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""
       };
     } else {
+      const detailsUrl = isRegressionRerun
+        ? `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/rerun-autograder`
+        : `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/autograder/regression-test-run/${resultID}`;
+      const message = isRegressionRerun
+        ? `Rerun result ${resultID.id} registered`
+        : `Regression test run ${resultID.id} registered`;
       return {
         is_ok: true,
-        message: `Regression test run ${resultID} registered`,
-        details_url: `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/autograder/regression-test-run/${resultID}`,
+        message,
+        details_url: detailsUrl,
         artifacts: artifactUploadLinks,
         supabase_url: Deno.env.get("SUPABASE_URL") || "",
         supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""

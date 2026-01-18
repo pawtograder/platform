@@ -934,24 +934,39 @@ export async function processEnvelope(
         return true;
       }
       case "rerun_autograder": {
-        const { submission_id, repository, sha, repository_check_run_id, triggered_by, repository_id } =
-          envelope.args as RerunAutograderArgs;
+        const {
+          submission_id,
+          repository,
+          sha,
+          repository_check_run_id,
+          triggered_by,
+          repository_id,
+          grader_sha,
+          auto_promote,
+          target_submission_id
+        } = envelope.args as RerunAutograderArgs;
         scope.setTag("submission_id", String(submission_id));
         scope.setTag("repository", repository);
         scope.setTag("sha", sha);
         scope.setTag("triggered_by", triggered_by);
         scope.setTag("repository_id", String(repository_id));
+        scope.setTag("requested_grader_sha", grader_sha || "(null)");
+        scope.setTag("target_submission_id", String(target_submission_id));
 
         Sentry.addBreadcrumb({
           message: `Rerunning autograder for submission ${submission_id} (${repository}@${sha})`,
           level: "info"
         });
 
-        // Update repository_check_runs with triggered_by
+        // Update repository_check_runs with rerun metadata
         const { error: updateError } = await adminSupabase
           .from("repository_check_runs")
           .update({
-            triggered_by: triggered_by
+            triggered_by: triggered_by,
+            is_regression_rerun: true,
+            target_submission_id: target_submission_id,
+            requested_grader_sha: grader_sha ?? null,
+            auto_promote_result: auto_promote ?? true
           })
           .eq("id", repository_check_run_id);
 

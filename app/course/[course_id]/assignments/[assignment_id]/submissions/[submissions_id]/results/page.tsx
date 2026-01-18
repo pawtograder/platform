@@ -783,7 +783,7 @@ export default function GraderResults() {
     id: Number(submissions_id),
     meta: {
       select:
-        "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
+        "*, assignments(*), grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
     }
   });
   const isObfuscatedGradesMode = useObfuscatedGradesMode();

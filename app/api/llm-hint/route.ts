@@ -20,7 +20,7 @@ type GradrResultTestWithGraderResults = GetResult<
         extra_data,
         class_id,
         grader_results!inner (
-          submissions!inner (
+          submissions!grader_results_submission_id_fkey!inner (
             id,
             class_id,
             assignment_id,
@@ -307,7 +307,7 @@ export async function POST(request: NextRequest) {
         extra_data,
         class_id,
         grader_results!inner (
-          submissions!inner (
+          submissions!grader_results_submission_id_fkey!inner (
             id,
             class_id,
             assignment_id,
