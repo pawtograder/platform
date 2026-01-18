@@ -15,7 +15,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { TopicIcon } from "@/components/discussion/TopicIcon";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { Badge, Box, HStack, Icon, Spacer, Stack, Text } from "@chakra-ui/react";
+import { Badge, Box, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -142,13 +142,59 @@ export function PostRow({
             bg={selected ? "bg.muted" : isUnread ? "bg.info" : "bg"}
             _hover={{ bg: "bg.subtle" }}
           >
-            <Stack spaceY="1">
-              <HStack gap="2" align="flex-start">
-                <Box pt="0.5">{statusIndicator}</Box>
-                <Box pt="0.5">
-                  <TopicIcon name={topic?.icon} color={topicColor} boxSize="3" />
-                </Box>
-                <Stack spaceY="0.5" flex="1" minW={0}>
+            <Stack spaceY="0.25">
+              <HStack gap="2" align="flex-start" w="100%">
+                <Stack spaceY="0.5" align="center" pt="0.5" flexShrink={0}>
+                  {statusIndicator}
+                  {thread.ordinal && (
+                    <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+                      #{thread.ordinal}
+                    </Text>
+                  )}
+                </Stack>
+                <Stack spaceY="0.25" flex="1" minW={0} overflow="hidden">
+                  <Box w="100%" overflow="hidden">
+                    <Text
+                      fontWeight="semibold"
+                      fontSize="sm"
+                      truncate
+                      display="block"
+                      w="100%"
+                      overflow="hidden"
+                      textOverflow="ellipsis"
+                      whiteSpace="nowrap"
+                    >
+                      {thread.subject}
+                    </Text>
+                  </Box>
+                  <HStack gap="1" flexShrink={0}>
+                    <Button
+                      aria-label={likeStatus ? "Unlike" : "Like"}
+                      variant="ghost"
+                      size="sm"
+                      loading={likeLoading}
+                      onClick={toggleLike}
+                    >
+                      <Icon as={likeStatus ? FaHeart : FaRegHeart} />
+                    </Button>
+                    <Tooltip
+                      content={
+                        isFollowing
+                          ? "Unfollow post - You'll stop receiving notifications for replies to this post and it will be removed from My Feed"
+                          : "Follow post - You'll receive email notifications for all replies to this post and it will appear in My Feed"
+                      }
+                      showArrow
+                    >
+                      <Button
+                        aria-label={isFollowing ? "Unfollow" : "Follow"}
+                        variant="ghost"
+                        size="sm"
+                        onClick={toggleFollow}
+                      >
+                        <Icon as={isFollowing ? FaStar : FaRegStar} />
+                      </Button>
+                    </Tooltip>
+                  </HStack>
                   <HStack gap="1.5" minW={0} wrap="wrap">
                     {thread.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="2.5" />}
                     {showTopicBadge && topic && (
@@ -156,9 +202,6 @@ export function PostRow({
                         {topic.topic}
                       </Badge>
                     )}
-                    <Text fontWeight="semibold" fontSize="sm" truncate>
-                      {thread.subject}
-                    </Text>
                     {thread.is_question && !thread.answer && (
                       <Icon as={FaQuestionCircle} color="red.500" boxSize="3" aria-label="Unanswered" />
                     )}
@@ -206,23 +249,30 @@ export function PostRow({
           bg={selected ? "bg.muted" : isUnread ? "bg.info" : "bg"}
           _hover={{ bg: "bg.subtle" }}
         >
-          <Box pt="1">{statusIndicator}</Box>
+          <Stack spaceY="0.5" align="center" pt="1">
+            {statusIndicator}
+            {thread.ordinal && (
+              <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+                #{thread.ordinal}
+              </Text>
+            )}
+          </Stack>
 
           <Box pt="0.5">
             <TopicIcon name={topic?.icon} color={topicColor} boxSize="4" />
           </Box>
 
-          <Stack spaceY="1" flex="1" minW={0}>
-            <HStack gap="2" minW={0}>
+          <Stack spaceY="0.25" flex="1" minW={0}>
+            <Text fontWeight="semibold" truncate>
+              {thread.subject}
+            </Text>
+            <HStack gap="2" minW={0} wrap="wrap">
               {thread.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="3" />}
               {showTopicBadge && topic && (
                 <Badge colorPalette={topic.color} variant="subtle" flexShrink={0}>
                   {topic.topic}
                 </Badge>
               )}
-              <Text fontWeight="semibold" truncate>
-                {thread.subject}
-              </Text>
               {thread.is_question && !thread.answer && (
                 <Badge colorPalette="red" variant="subtle">
                   Unanswered
@@ -233,9 +283,7 @@ export function PostRow({
                   Answered
                 </Badge>
               )}
-              <Spacer />
             </HStack>
-
             <HStack gap="3" fontSize="xs" color="fg.muted" wrap="wrap">
               <Text color="fg.muted" fontWeight="medium">
                 {userProfile?.name ?? ""}

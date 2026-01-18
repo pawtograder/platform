@@ -967,171 +967,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260112: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260113: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260114: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260115: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260116: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260117: {
         Row: {
           class_id: number;
@@ -1199,6 +1034,171 @@ export type Database = {
         Relationships: [];
       };
       audit_20260119: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260120: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260121: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260122: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260123: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260124: {
         Row: {
           class_id: number;
           created_at: string;
@@ -2713,6 +2713,211 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "users";
             referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      error_pin_rules: {
+        Row: {
+          error_pin_id: number;
+          id: number;
+          match_type: string;
+          match_value: string;
+          match_value_max: string | null;
+          ordinal: number;
+          target: Database["public"]["Enums"]["error_pin_rule_target"];
+          test_name_filter: string | null;
+        };
+        Insert: {
+          error_pin_id: number;
+          id?: number;
+          match_type?: string;
+          match_value: string;
+          match_value_max?: string | null;
+          ordinal?: number;
+          target: Database["public"]["Enums"]["error_pin_rule_target"];
+          test_name_filter?: string | null;
+        };
+        Update: {
+          error_pin_id?: number;
+          id?: number;
+          match_type?: string;
+          match_value?: string;
+          match_value_max?: string | null;
+          ordinal?: number;
+          target?: Database["public"]["Enums"]["error_pin_rule_target"];
+          test_name_filter?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "error_pin_rules_error_pin_id_fkey";
+            columns: ["error_pin_id"];
+            isOneToOne: false;
+            referencedRelation: "error_pins";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      error_pin_submission_matches: {
+        Row: {
+          error_pin_id: number;
+          grader_result_test_id: number | null;
+          id: number;
+          matched_at: string;
+          submission_id: number;
+        };
+        Insert: {
+          error_pin_id: number;
+          grader_result_test_id?: number | null;
+          id?: number;
+          matched_at?: string;
+          submission_id: number;
+        };
+        Update: {
+          error_pin_id?: number;
+          grader_result_test_id?: number | null;
+          id?: number;
+          matched_at?: string;
+          submission_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "error_pin_submission_matches_error_pin_id_fkey";
+            columns: ["error_pin_id"];
+            isOneToOne: false;
+            referencedRelation: "error_pins";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pin_submission_matches_grader_result_test_id_fkey";
+            columns: ["grader_result_test_id"];
+            isOneToOne: false;
+            referencedRelation: "grader_result_tests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pin_submission_matches_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pin_submission_matches_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pin_submission_matches_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "error_pin_submission_matches_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
+      error_pins: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          created_at: string;
+          created_by: string;
+          discussion_thread_id: number;
+          enabled: boolean;
+          id: number;
+          rule_logic: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          created_at?: string;
+          created_by: string;
+          discussion_thread_id: number;
+          enabled?: boolean;
+          id?: number;
+          rule_logic?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string;
+          discussion_thread_id?: number;
+          enabled?: boolean;
+          id?: number;
+          rule_logic?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "error_pins_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pins_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pins_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pins_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pins_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "error_pins_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pins_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "error_pins_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "error_pins_discussion_thread_id_fkey";
+            columns: ["discussion_thread_id"];
+            isOneToOne: false;
+            referencedRelation: "discussion_threads";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -10672,6 +10877,19 @@ export type Database = {
         Args: { p_rows: Json[] };
         Returns: undefined;
       };
+      evaluate_error_pin_rule: {
+        Args: {
+          p_grader_result_id: number;
+          p_match_type: string;
+          p_match_value: string;
+          p_match_value_max: string;
+          p_submission_id: number;
+          p_target: Database["public"]["Enums"]["error_pin_rule_target"];
+          p_test_id?: number;
+          p_test_name_filter: string;
+        };
+        Returns: boolean;
+      };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
@@ -10708,6 +10926,10 @@ export type Database = {
           state: string;
           trip_count: number;
         }[];
+      };
+      get_error_pin_matches_for_submission: {
+        Args: { p_submission_id: number };
+        Returns: Json;
       };
       get_github_api_metrics_recent: {
         Args: { p_window_seconds?: number };
@@ -10789,6 +11011,8 @@ export type Database = {
           id: number;
           max_submissions_count: number;
           max_submissions_period_secs: number;
+          submissions_remaining: number;
+          submissions_used: number;
         }[];
       };
       get_system_notification_stats: {
@@ -11039,6 +11263,10 @@ export type Database = {
         };
         Returns: number;
       };
+      preview_error_pin_matches: {
+        Args: { p_assignment_id: number; p_rule_logic?: string; p_rules: Json };
+        Returns: Json;
+      };
       process_calendar_announcements: { Args: never; Returns: Json };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
@@ -11082,6 +11310,10 @@ export type Database = {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;
       };
+      reset_error_pin_matches: {
+        Args: { p_error_pin_id: number };
+        Returns: Json;
+      };
       safe_broadcast: {
         Args: {
           p_channel: string;
@@ -11091,9 +11323,17 @@ export type Database = {
         };
         Returns: undefined;
       };
+      save_error_pin: {
+        Args: { p_error_pin: Json; p_rules: Json };
+        Returns: Json;
+      };
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
+      };
+      set_discussion_thread_topic: {
+        Args: { p_thread_id: number; p_topic_id: number };
+        Returns: undefined;
       };
       sis_sync_enrollment: {
         Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
@@ -11148,6 +11388,10 @@ export type Database = {
           inserts_per_second: number;
           operation: string;
         }[];
+      };
+      toggle_discussion_thread_author_anonymity: {
+        Args: { p_make_anonymous: boolean; p_thread_id: number };
+        Returns: undefined;
       };
       trigger_discord_role_sync_for_user: {
         Args: { p_class_id?: number };
@@ -11254,6 +11498,17 @@ export type Database = {
       discord_resource_type: "help_request" | "regrade_request" | "discussion_thread";
       discussion_discord_notification_type: "all" | "followed_only" | "none";
       discussion_notification_type: "immediate" | "digest" | "disabled";
+      error_pin_rule_target:
+        | "grader_output_student"
+        | "grader_output_hidden"
+        | "lint_output"
+        | "test_name"
+        | "test_part"
+        | "test_output"
+        | "test_hidden_output"
+        | "test_score_range"
+        | "grader_score_range"
+        | "lint_failed";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -11430,6 +11685,18 @@ export const Constants = {
       discord_resource_type: ["help_request", "regrade_request", "discussion_thread"],
       discussion_discord_notification_type: ["all", "followed_only", "none"],
       discussion_notification_type: ["immediate", "digest", "disabled"],
+      error_pin_rule_target: [
+        "grader_output_student",
+        "grader_output_hidden",
+        "lint_output",
+        "test_name",
+        "test_part",
+        "test_output",
+        "test_hidden_output",
+        "test_score_range",
+        "grader_score_range",
+        "lint_failed"
+      ],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",

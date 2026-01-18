@@ -373,6 +373,10 @@ export class AssignmentController {
   readonly rubricChecksController: TableController<"rubric_checks">;
   readonly rubricCheckReferencesController: TableController<"rubric_check_references">;
 
+  // Error pin table controllers
+  readonly errorPins: TableController<"error_pins">;
+  readonly errorPinRules: TableController<"error_pin_rules">;
+
   private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
     number,
     TableController<"review_assignment_rubric_parts">
@@ -474,6 +478,29 @@ export class AssignmentController {
       realtimeFilter: { assignment_id },
       initialData: initialData?.rubricCheckReferences
     });
+
+    // Initialize error pin table controllers
+    this.errorPins = new TableController({
+      query: client.from("error_pins").select("*").eq("assignment_id", assignment_id),
+      client: client,
+      table: "error_pins",
+      classRealTimeController,
+      realtimeFilter: { assignment_id }
+    });
+
+    // Filter error_pin_rules to only include rules for pins belonging to this assignment
+    // Use inner join on error_pins to filter by assignment_id
+    // The join acts as a filter - PostgREST requires the joined table in select when using !inner
+    // @ts-expect-error - The join changes the return type to include error_pins data, but the functionality works correctly
+    this.errorPinRules = new TableController({
+      query: client
+        .from("error_pin_rules")
+        .select("*,error_pins!inner(assignment_id)")
+        .eq("error_pins.assignment_id", assignment_id),
+      client: client,
+      table: "error_pin_rules",
+      classRealTimeController
+    });
   }
   close() {
     this.reviewAssignments.close();
@@ -491,6 +518,10 @@ export class AssignmentController {
     this.rubricCriteriaController.close();
     this.rubricChecksController.close();
     this.rubricCheckReferencesController.close();
+
+    // Close error pin table controllers
+    this.errorPins.close();
+    this.errorPinRules.close();
 
     for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
       controller.close();

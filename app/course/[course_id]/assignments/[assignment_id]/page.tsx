@@ -100,6 +100,8 @@ export default function AssignmentPage() {
   const submissionsPeriod =
     autograderRow?.max_submissions_period_secs != null ? secondsToHours(autograderRow.max_submissions_period_secs) : 0;
   const maxSubmissions = autograderRow?.max_submissions_count;
+  const submissionsUsed = autograderRow?.submissions_used ?? 0;
+  const submissionsRemaining = autograderRow?.submissions_remaining ?? 0;
 
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
@@ -142,11 +144,30 @@ export default function AssignmentPage() {
       />
       {submissionsPeriod && maxSubmissions ? (
         <Box w="925px">
-          <Alert.Root status="info" flexDirection="column" size="md">
+          <Alert.Root
+            status={submissionsRemaining === 0 ? "warning" : submissionsRemaining <= 1 ? "warning" : "info"}
+            flexDirection="column"
+            size="md"
+          >
             <Alert.Title>Submission Limit for this assignment</Alert.Title>
             <Alert.Description>
               This assignment has a submission limit of {maxSubmissions} submission{maxSubmissions !== 1 ? "s" : ""} per{" "}
-              {submissionsPeriod} hour{submissionsPeriod !== 1 ? "s" : ""}.
+              {submissionsPeriod} hour{submissionsPeriod !== 1 ? "s" : ""}. Submissions that receive a score of
+              &quot;0&quot; do NOT count towards the limit.
+              <br />
+              <strong>
+                You have used {submissionsUsed} of {maxSubmissions} submission{maxSubmissions !== 1 ? "s" : ""} this
+                period ({submissionsRemaining} remaining).
+              </strong>
+              {submissionsRemaining === 0 && (
+                <>
+                  <br />
+                  <strong>
+                    Any additional commits that you push to your repository will be ignored, but will still be
+                    timestamped and be viewed by course staff.
+                  </strong>
+                </>
+              )}
             </Alert.Description>
           </Alert.Root>
         </Box>
