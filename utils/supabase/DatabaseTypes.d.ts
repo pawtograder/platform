@@ -169,7 +169,7 @@ export type AssignmentWithRepositoryAndSubmissionsAndGraderResults = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, submissions(*, grader_results(*)), repositories(*)"
+  "*, submissions(*, grader_results!grader_results_submission_id_fkey(*)), repositories(*)"
 >;
 export type SubmissionFileWithComments = GetResult<
   Database["public"],
@@ -234,21 +234,21 @@ export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+  "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)"
 >;
 export type SubmissionWithGraderResultsAndFiles = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
 export type SubmissionWithGraderResultsAndErrors = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
+  "*, assignments(*), grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
 >;
 export type GraderResultTest = GetResult<
   Database["public"],
@@ -636,7 +636,7 @@ export type RepositoryWithSubmissionsAndGraderResults = GetResult<
   Database["public"]["Tables"]["repositories"]["Row"],
   "repositories",
   Database["public"]["Tables"]["repositories"]["Relationships"],
-  "*, submissions(*, grader_results(*))"
+  "*, submissions(*, grader_results!grader_results_submission_id_fkey(*))"
 >;
 
 export type PollQuestionWithAnswers = GetResult<

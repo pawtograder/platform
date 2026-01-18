@@ -17,7 +17,7 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
   );
   const { data: repoData } = await supabase
     .from("repositories")
-    .select("*, repository_check_runs(*)")
+    .select("*, repository_check_runs!repository_check_run_repository_id_fkey(*)")
     .eq("repository", repository)
     .eq("repository_check_runs.sha", sha)
     .single();

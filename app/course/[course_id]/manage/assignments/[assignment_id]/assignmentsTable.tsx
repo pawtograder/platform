@@ -1104,7 +1104,7 @@ async function exportGrades({
 
   const { data: autograder_test_results, error: autograder_test_results_error } = await supabase
     .from("grader_result_tests")
-    .select("*, submissions!inner(id, assignment_id, is_active)")
+    .select("*, submissions!grader_result_tests_submission_id_fkey!inner(id, assignment_id, is_active)")
     .eq("submissions.is_active", true)
     .eq("submissions.assignment_id", assignment_id);
   if (autograder_test_results_error) {
