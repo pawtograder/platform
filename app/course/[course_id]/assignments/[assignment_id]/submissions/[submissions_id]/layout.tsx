@@ -426,7 +426,7 @@ function generateSubmissionMarkdown(
       if (review.completed_at) {
         lines.push(`- **Completed:** ${format(new Date(review.completed_at), "MMMM d, yyyy 'at' h:mm a")}`);
       }
-      if (review.tweak) {
+      if (review.tweak != null) {
         lines.push(`- **Score Tweak:** ${review.tweak}`);
       }
       lines.push("");
@@ -1167,6 +1167,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     assignment_group_id: submission.assignment_group_id
   });
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
@@ -1268,7 +1269,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
-          {isGraderOrInstructor && <ExportSubmissionMetadataButton submission={submission} />}
+          {isInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>
       </Flex>
 
