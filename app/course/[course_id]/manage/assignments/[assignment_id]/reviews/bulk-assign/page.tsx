@@ -1157,6 +1157,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
+    if (!result.success || !result.assignments) {
+      return [];
+    }
 
     // Treat empty selection as selecting all parts
     const isAllPartsSelected =
@@ -1209,6 +1212,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       ).solve();
       if (result.error) {
         toaster.error({ title: "Error drafting reviews", description: result.error });
+      }
+      if (!result.success || !result.assignments) {
+        return [];
       }
       returnResult.push(toReview(result, selectedParts[x]));
     }

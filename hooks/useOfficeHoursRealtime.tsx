@@ -474,19 +474,28 @@ export function OfficeHoursControllerProvider({
   children: React.ReactNode;
 }) {
   const controller = useRef<OfficeHoursController | null>(null);
-  const client = createClient();
+  // Memoize client to prevent recreating on every render
+  const clientRef = useRef<SupabaseClient<Database> | null>(null);
+  if (!clientRef.current) {
+    clientRef.current = createClient();
+  }
+  const client = clientRef.current;
   const { classRealTimeController } = useCourseController();
   const [officeHoursRealTimeController, setOfficeHoursRealTimeController] =
     useState<OfficeHoursRealTimeController | null>(null);
   useEffect(() => {
-    setOfficeHoursRealTimeController(
-      new OfficeHoursRealTimeController({
-        client,
-        classId,
-        profileId,
-        isStaff: role === "instructor" || role === "grader"
-      })
-    );
+    const newController = new OfficeHoursRealTimeController({
+      client,
+      classId,
+      profileId,
+      isStaff: role === "instructor" || role === "grader"
+    });
+    setOfficeHoursRealTimeController(newController);
+
+    // Cleanup: close the controller when deps change or on unmount
+    return () => {
+      newController.close();
+    };
   }, [client, classId, profileId, role]);
 
   // Initialize controller with required dependencies

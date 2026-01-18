@@ -1226,7 +1226,6 @@ export class CourseController {
   getStudentLabSectionId(studentPrivateProfileId: string): number | null {
     const result = this.userRolesWithProfiles.list();
     const userRole = result.data.find((role) => role.private_profile_id === studentPrivateProfileId);
-    // lab_section_id should be available on UserRoleWithUser after database types regeneration
     return userRole?.lab_section_id || null;
   }
 

@@ -1,12 +1,15 @@
 "use client";
 
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
+import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
+import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
 import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
@@ -14,14 +17,16 @@ import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
+import useModalManager from "@/hooks/useModalManager";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTableControllerValueById } from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
@@ -84,13 +89,16 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
 function ThreadActions({
   thread,
   editing,
-  setEditing
+  setEditing,
+  topicAssignmentId
 }: {
   thread: DiscussionThreadType;
   editing: boolean;
   setEditing: (editing: boolean) => void;
+  topicAssignmentId?: number | null;
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
+  const errorPinModal = useModalManager<number>();
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
   const canEdit =
@@ -136,6 +144,18 @@ function ThreadActions({
           </Button>
         </Tooltip>
       )}
+      {canPin && (
+        <Tooltip content="Manage Error Pins">
+          <Button
+            aria-label="Manage Error Pins"
+            onClick={() => errorPinModal.openModal(thread.id)}
+            variant="ghost"
+            size="sm"
+          >
+            <FaExclamationCircle />
+          </Button>
+        </Tooltip>
+      )}
       <Tooltip content="Reply">
         <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
           <FaReply />
@@ -149,6 +169,17 @@ function ThreadActions({
         </Button>
       </Tooltip> */}
       <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
+      {errorPinModal.isOpen && (
+        <ErrorPinManageModal
+          isOpen={errorPinModal.isOpen}
+          onClose={errorPinModal.closeModal}
+          onSuccess={() => {
+            errorPinModal.closeModal();
+          }}
+          discussion_thread_id={errorPinModal.modalData || thread.id}
+          defaultAssignmentId={topicAssignmentId}
+        />
+      )}
     </Box>
   );
 }
@@ -175,9 +206,25 @@ function DiscussionPost({ root_id }: { root_id: number }) {
   const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
   const [editing, setEditing] = useState(false);
   const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const authorProfile = useUserProfile(rootThread?.author);
+  const supabase = useMemo(() => createClient(), []);
+  const [isTogglingAnonymity, setIsTogglingAnonymity] = useState(false);
+
+  // Determine if the current author is using anonymous (public) profile
+  const isCurrentlyAnonymous = useMemo(() => {
+    if (!authorProfile || !authorProfile.private_profile_id || !rootThread) {
+      return false;
+    }
+    return rootThread.author !== authorProfile.private_profile_id;
+  }, [rootThread, authorProfile]);
+
+  const [anonymity, setAnonymity] = useState<string>(isCurrentlyAnonymous ? "anonymous" : "revealed");
+
   useEffect(() => {
     setVisibility(rootThread?.instructors_only ? "instructors_only" : "all");
-  }, [rootThread?.instructors_only]);
+    setAnonymity(isCurrentlyAnonymous ? "anonymous" : "revealed");
+  }, [rootThread?.instructors_only, isCurrentlyAnonymous]);
 
   const { readStatus, setUnread } = useDiscussionThreadReadStatus(root_id);
 
@@ -186,6 +233,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       setUnread(root_id, root_id, false);
     }
   }, [readStatus, setUnread, root_id]);
+
   const sendMessage = useCallback(
     async (message: string) => {
       await discussionThreadTeasers.update(root_id, {
@@ -197,31 +245,104 @@ function DiscussionPost({ root_id }: { root_id: number }) {
     },
     [root_id, discussionThreadTeasers, visibility]
   );
+
   const onClose = useCallback(() => {
     setEditing(false);
   }, [setEditing]);
 
+  const handleAnonymityChange = useCallback(
+    async (newAnonymity: string) => {
+      if (!rootThread || newAnonymity === anonymity || isTogglingAnonymity) {
+        return;
+      }
+
+      const makeAnonymous = newAnonymity === "anonymous";
+      if (makeAnonymous === isCurrentlyAnonymous) {
+        // Already in the desired state
+        return;
+      }
+
+      setIsTogglingAnonymity(true);
+      try {
+        const { error } = await supabase.rpc("toggle_discussion_thread_author_anonymity", {
+          p_thread_id: rootThread.id,
+          p_make_anonymous: makeAnonymous
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        toaster.success({
+          title: "Success",
+          description: `Post ${makeAnonymous ? "made anonymous" : "revealed identity"} successfully`
+        });
+        discussionThreadTeasers.refetchByIds([root_id]);
+      } catch (error) {
+        toaster.error({
+          title: "Error",
+          description: `Failed to toggle anonymity: ${error instanceof Error ? error.message : String(error)}`
+        });
+        // Revert the state on error
+        setAnonymity(anonymity);
+      } finally {
+        setIsTogglingAnonymity(false);
+      }
+    },
+    [rootThread, anonymity, isCurrentlyAnonymous, isTogglingAnonymity, supabase, discussionThreadTeasers, root_id]
+  );
+
+  const handleStaffActionUpdate = useCallback(() => {
+    // Refetch the thread data after staff actions
+    discussionThreadTeasers.refetchByIds([root_id]);
+  }, [discussionThreadTeasers, root_id]);
+
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
   }
+
+  const topic = discussion_topics.find((t) => t.id === rootThread.topic_id);
+
   return (
     <>
-      <ThreadHeader thread={rootThread} topic={discussion_topics.find((t) => t.id === rootThread.topic_id)} />
+      <ThreadHeader thread={rootThread} topic={topic} />
       <Box>
         {editing ? (
           <>
-            <HStack>
-              <Heading size="sm">Thread visibility:</Heading>
-              <RadioGroup.Root
-                value={visibility}
-                onValueChange={(value) => {
-                  setVisibility(value.value as unknown as "instructors_only" | "all");
-                }}
-              >
-                <Radio value="instructors_only">Staff only</Radio>
-                <Radio value="all">Entire Class</Radio>
-              </RadioGroup.Root>
-            </HStack>
+            <VStack align="start" gap="3">
+              <HStack>
+                <Heading size="sm">Thread visibility:</Heading>
+                <RadioGroup.Root
+                  value={visibility}
+                  onValueChange={(value) => {
+                    setVisibility(value.value as unknown as "instructors_only" | "all");
+                  }}
+                >
+                  <Radio value="instructors_only">Staff only</Radio>
+                  <Radio value="all">Entire Class</Radio>
+                </RadioGroup.Root>
+              </HStack>
+              {isGraderOrInstructor && (
+                <>
+                  <HStack>
+                    <Heading size="sm">Poster identity:</Heading>
+                    <RadioGroup.Root
+                      value={anonymity}
+                      onValueChange={(value) => {
+                        const newValue = value.value as string;
+                        setAnonymity(newValue);
+                        handleAnonymityChange(newValue);
+                      }}
+                      disabled={isTogglingAnonymity}
+                    >
+                      <Radio value="revealed">Reveal Identity</Radio>
+                      <Radio value="anonymous">Make Anonymous</Radio>
+                    </RadioGroup.Root>
+                  </HStack>
+                  <StaffThreadActions thread={rootThread} onUpdateAction={handleStaffActionUpdate} />
+                </>
+              )}
+            </VStack>
             <MessageInput
               sendMessage={sendMessage}
               enableEmojiPicker={true}
@@ -238,7 +359,12 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         )}
       </Box>
       {rootThread.answer && <DiscussionThreadAnswer answer_id={rootThread.answer} />}
-      <ThreadActions thread={rootThread} editing={editing} setEditing={setEditing} />
+      <ThreadActions
+        thread={rootThread}
+        editing={editing}
+        setEditing={setEditing}
+        topicAssignmentId={topic?.assignment_id}
+      />
     </>
   );
 }
