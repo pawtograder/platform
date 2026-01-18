@@ -59,11 +59,11 @@ test.beforeAll(async () => {
       .from("rubrics")
       .update({ cap_score_to_assignment_points: true })
       .eq("id", cappedAssignment.grading_rubric_id);
-    
+
     if (error) {
       throw new Error(`Failed to update rubric cap_score_to_assignment_points: ${error.message}`);
     }
-    
+
     if (!data) {
       throw new Error(
         `Update did not affect any rows. Rubric ID ${cappedAssignment.grading_rubric_id} may not exist or the update condition did not match.`

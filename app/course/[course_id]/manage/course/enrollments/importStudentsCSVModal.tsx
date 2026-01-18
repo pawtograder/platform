@@ -355,7 +355,6 @@ const ImportStudentsCSVModal = () => {
       }));
 
       // Call the bulk import RPC
-      // Note: Type assertion needed until migration is applied and types are regenerated
       type BulkImportResult = {
         enrolled_directly: number;
         invitations_created: number;
@@ -363,16 +362,12 @@ const ImportStudentsCSVModal = () => {
         errors: Array<{ identifier: string | number; error: string }>;
       };
 
-      const { data: result, error: rpcError } = (await supabase.rpc(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        "bulk_csv_import_enrollment" as any,
-        {
-          p_class_id: Number(course_id),
-          p_import_mode: importMode,
-          p_enrollment_data: enrollmentData,
-          p_notify: notifyOnAdd
-        }
-      )) as { data: BulkImportResult | null; error: { message: string } | null };
+      const { data: result, error: rpcError } = (await supabase.rpc("bulk_csv_import_enrollment", {
+        p_class_id: Number(course_id),
+        p_import_mode: importMode ?? "",
+        p_enrollment_data: enrollmentData,
+        p_notify: notifyOnAdd
+      })) as { data: BulkImportResult | null; error: { message: string } | null };
 
       if (rpcError) {
         toaster.create({
